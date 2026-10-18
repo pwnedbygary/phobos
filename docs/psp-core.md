@@ -17426,3 +17426,160 @@ PSP from round 8's medians, `scenes/` the two states' frames for the plugin's ca
 above, `build-fix/` the fix round's program, `EBOOT-run-2026-10-18.PBP` the one the owner ran); `results-r9/` (the
 owner's run as the coordinator pulled it, with the device's sums, his first look and the captures). Nothing was run on
 the RP6.
+
+## Part 112: psp-measure round 10 — lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective and turned, mipmaps, narrow strips, the CPU beside the GE
+
+On branch `cursor/psp-measure-round10-2b67` (PR PRNUMBER), from master `d428d91f9` (#276, part 110: round 9 and its
+results). Round 10 of `tools/psp-measure`, for the owner's PSP: the cases #269's refit with round 9 (`c0d9c14a2`, part
+106) still misses, as its agent (1fd9133c) specified them from each failing scene's terms and a log of the PRIMs' state
+as the games set it. The cases are synthetic: no game's lists, textures or vertices are in the program (`pspmeasure.elf`
+is public), only the parameters the log shows (sizes, formats, filters, palette loads, light kinds and factors). Nothing
+in the core changes: the program, its test, the test programs' copy of it. Clean room as part 107: our own code;
+pspsdk's headers and uOFW's reading of the driver; no PPSSPP or JPCSP.
+
+### Where the refit misses
+
+- **Super Monkey Ball Adventure's story, −30%**: mostly the PSP's CPU competing with the GE for RAM: round 8's copy of
+  its lists (time-scenes 5) is 9 to 13% short with the CPU idle. Killzone's courtyard (−12 to −14%, its copy within 0 to
+  3%) and later moments (−14 to −34%), and the rest of Ghost of Sparta's menu's miss (−10.8%) and its later scenes
+  (−17%, −20%), point the same way. Round 8's cpu-contention had one pattern (a thread reading RAM: the GE's
+  RAM-textured layers 2.12 times as long, its VRAM-textured ones about the same).
+- **Activision Hits Remixed's 3D menu, its first list −19%** (2.35 million bus clocks a list on the PSP, the refit's
+  pipeline 1.90): bound by its front end in the model, its lights spotlights with their shine (specular), two a PRIM, on
+  some PRIMs a directional light with its shine too. Round 8's time-vertices had one directional light with its shine
+  cost 20.7 clocks a vertex (the model 1.49) but four 1.2 each, and no spot or point light with shine; round 6's four
+  fading point lights with their shine (time-primitives 13) are 25.5% short.
+- **Its second list, +56%** (3.48 ms on the PSP): 720 triangles reading a CLUT32 texture (512x512 in VRAM, the 8888
+  buffer the first list drew) in tiles of 32x34 pixels, each drawn three times with the palette shifted and loaded
+  again, into 5650. On the PSP the tiles' texels cost next to nothing, where the refit fetches each tile's 4,352 bytes;
+  no round had timed CLUT32 in triangles.
+- **Its copyright screen, its second list −24%**: its picture (CLUT8 512x256, RAM, swizzled) drawn twice as two 3D
+  triangles over 480x272, bilinear and blended, into 5650, in about what one sprite of it takes (round 8's time-scenes
+  2), where the refit, by round 9's rows, reads only 72% of a triangle's pixels wide. Round 9's two triangles drew into
+  8888 (and fit that rule within 1%).
+- **What the refit leaves out**: triangles in perspective (round 8's time-textures 13 to 15, round 6's time-fill 39:
+  about half the time the refit gives the same at w 1), turned a quarter (time-textures 16 to 18: 39 to 53% over), a big
+  texture's mipmaps (time-textures 10 to 12: 75 to 80% short), and 8-texel CLUT8 strips from VRAM (round 8's time-strips
+  21, round 9's time-tristrips 35: −50%).
+
+### What round 10 measures
+
+Every test is round 8's kind (`timeCases8`: each list queued alone, timed to its finish callback, every run kept), at
+222/111 and 333/166 MHz, 8 runs a size (16 for the lights) unless said; `manifest10.txt` lists every case.
+
+- **`time-anchors2`** (first, 10 cases): six of round 9's anchors (round 8's time-strips 2 and 37, time-textures 13 and
+  19, time-vertices 0, time-scenes 0), built by round 8's code at its sizes; then time-strips 37's strips (RAM 8888
+  512x512 swizzled, 32 wide) with the texture 0, 256, 512 and 768 bytes past a 1 KiB boundary: round 9 drew it 2% faster
+  than round 8, its texture on a boundary where round 8's was 256 bytes past one (part 110's guess, tested within one
+  session here).
+- **`time-lights`** (39): round 8's strips of culled triangles (float normals and positions) lit by 1, 2, 3 or 4
+  directional lights, point lights or spotlights, diffuse alone and with their shine (round 8's cases 15 to 23 among
+  them), the lights as round 8's `lightsOn` has them (falling off (1, 0.5, 0.25); spots toward −z, exponent 4, cutoff
+  0.5; the shine's power 8); one and four directional lights shining at powers 1 and 64; four directional lights, only
+  light 0 shining, only light 3, lights 0 and 1; one point light shining, not falling off and falling off as the game's
+  (0.145, 0, 0.145); the game's mixes (spotlights of exponent 21.1 and cutoff 0.925, falling off as the game's): the two
+  spots shining, the two and a directional light all shining, the three none; the first mix skinned (2 weights, 8-bit);
+  then strips drawn as the game draws them (9 vertices of 12 bytes: 8-bit texture coordinates and normals, 16-bit
+  positions; triangles 16x20 pixels; a CLUT4 64x64 RAM texture, swizzled, bilinear, modulated; the depth test passing
+  and writing; the alpha test; into 8888) with the second mix, and unlit: 1,024 and 4,096 strips; 1,024, 4,096 and
+  16,384 triangles otherwise.
+- **`time-clut32`** (22): the menu's tiles as the log shows them: 15 x 8 tiles of 32x34 pixels over 480x272, each a 3D
+  strip of two triangles (20-byte vertices: float texture coordinates and position) reading its own texels 1:1 from a
+  CLUT32 512x512 texture in VRAM's first megabyte (not swizzled, nearest), three passes (palette shifts 0, 8 and 16; the
+  second and third blended with fixed factors, added), a 1 KiB palette load before each pass but the first of each tile
+  after the first (241 a list, as the log has it), into 5650. Then one thing at a time: one pass, no palette load after
+  the first (the texels alone); the same bytes as 8888; a CLUT8 texture; three passes without the loads; three passes
+  and the loads without a texture; one pass as sprites in through mode; into 8888; swizzled; from RAM; tiles 16x17 and
+  64x68; an 8888 buffer filled (480x272, no texture) just before in the list and read by the tiles, against the same
+  fill before tiles reading VRAM's first megabyte (whether a buffer just drawn reads cheaper); bilinear. A layer is all
+  120 tiles (1 and 2). Then round 9's strips 8 to 512 wide as triangles from the CLUT32 texture over 512x256 into 8888
+  (round 8's time-strips has its sprites).
+- **`time-widetri`** (18): the copyright screen's pass as the log shows it: a palette load (256 colors, 8888), a
+  TEX_FLUSH and one 3D strip of two triangles (24-byte vertices) over 480x272 reading the CLUT8 512x256 texture (RAM,
+  swizzled), bilinear, modulated, blended (source alpha, 1 − source alpha), the alpha test on and the depth test off,
+  into 5650. Then into 8888; nearest; not blended, no alpha test; as two triangles in through mode; as one sprite; round
+  8's time-scenes 2 as it was (an anchor); 480 texels across (1:1, not 512 over 480 pixels); an 8888 512x256 texture;
+  round 9's time-tristrips 34 (two triangles 512 wide over 512x256, through mode, nearest) into 5650, and as it was (an
+  anchor); the triangles split from top left to bottom right (the game's strip splits from bottom left to top right);
+  round 9's case 34 into 5551 and 4444, and one sprite 512 wide into each of the four formats. A layer is one pass (1
+  and 2).
+- **`time-perspective`** (48): two triangles over the target's top-left 256x256 under the lens, each corner at the
+  distance (w) said, 256x256 texels of a texture (RAM 8888 256x256 swizzled; VRAM 8888 512x512 as round 8's case 15; RAM
+  CLUT8 256x256 swizzled): w 1 at the left to 1, 1.25, 1.5, 2 and 4 at the right, and 1 at the top to 2 at the bottom
+  (each row at one w); squares 64 and 128 pixels wide (narrow rows and wide) at w 1 and 1 to 2; w 2 everywhere (flat,
+  but not at w 1), and 2 to 1 (the far side at the left). Then in through mode, texel for pixel, squares 32, 64, 128 and
+  256 wide of two triangles over the 256x256, as they are and each turned a quarter (u down the screen), from RAM 8888
+  swizzled and not, and VRAM 8888.
+- **`time-mipmaps`** (22): round 8's time-textures 9 to 12 as they were (anchors: RAM 8888 256x256 swizzled shrunk 2:1
+  onto 128x128 in 3D, without and with its levels 128 and 64: the level chosen, level 1 set, linear between levels);
+  level 1 alone (a texture of its own at its place, 128x128, 1:1); the level chosen, bilinear within it; nearest, the
+  two nearest levels blended; the same seven in CLUT8. Then Super Monkey Ball's small textures: CLUT4 64x64 with 7
+  levels and 64x32 with 6 (RAM, swizzled), in 3D strips of 6 vertices (four triangles of 15 pixels, 20-byte vertices)
+  each over the whole texture, tiling 512x256, depth tested, into 8888: trilinear (TEX_FILTER 7, 1) with the level
+  chosen less 2.625 (TEX_LEVEL 0xd6, the game's); nearest within the level chosen; bilinear and nearest without levels;
+  4,096 and 16,384 triangles.
+- **`time-vram8`** (60): strips 4, 8, 12, 16 and 24 texels wide over 512x256, 1:1, as sprites and as triangles, CLUT8
+  and CLUT4 512x512, from VRAM's first megabyte not swizzled and swizzled, and from RAM swizzled.
+- **`time-contention`** (197): the CPU beside the GE. Ten lists, each at two sizes: A an 8888 512x512 texture (RAM,
+  swizzled) in one sprite 512 wide over 512x128 a layer (wide reads: round 8's time-strips 41, half a layer); B the same
+  in VRAM; C 512x256 without a texture; D a strip of culled triangles, 24-byte vertices (16-bit texture coordinates and
+  normals, float positions) from RAM; E1 NOPs; E2 Super Monkey Ball's CALLed lists (round 8's time-scenes 5); F 480x272
+  32-bit copied from RAM to VRAM; G a new CLUT8 32x32 texture before each sprite (round 9's time-loads 3); H the game's
+  small trilinear strips (time-mipmaps 14); I Ghost of Sparta's kind (strips of 10 vertices of 36 bytes, 3 float
+  weights, skinned by 3 bones, lit by 3 directional lights; CLUT4 and CLUT8 textures of 64x64 and 128x128 in RAM in
+  turn, a new one with its palette every 45 strips; bilinear; depth tested). Each alone, and while a thread runs one of
+  17 patterns: arithmetic alone (64 additions a turn); a line's 16 words read within 8 KiB (the data cache's hits); a
+  line read streaming over 1 MiB (a miss each), flat out and slowed by an empty loop between lines to a half, a quarter
+  and an eighth of that (the loop's turns measured as each clock setting begins); a line written streaming over 1 MiB
+  (write-backs), flat out and a quarter; 64 KiB copied a turn (memcpy); a step of a chain of pointers 64 bytes apart
+  over 1 MiB (one miss at a time); 16 words read through the uncached mirror; a line read, and one written, in VRAM's
+  last 256 KiB through the cache; a game's mix (12 additions, 2 reads and 2 writes a turn at random words) over 16, 64
+  and 256 KiB and 1 MiB. Each pattern alone for 10 ms too. A run's four words: the list's time to its finish callback
+  and `sceGeListEnQueue`'s return (alone: the thread's 10 ms, 0), the thread's turns, and their time.
+- **`time-contention2`** (54): the streaming reads, flat out and slowed, with each list and alone, at 333/222/166 (the
+  CPU at 222 MHz with the bus at 166): the bus apart from the CPU's clock.
+
+### How it runs
+
+- About two minutes on the PSP, three at most: its lists are about 70 seconds of the GE's time by rounds 8 and 9's
+  rates, with some 12,900 runs' own overhead and the lists' building; about 0.2 MB. It changes the clocks as round 8
+  does and puts them back after each test.
+- Its files are new names in `results/ge` beside rounds 2 to 9's, none overwritten (a test whose file is there is
+  skipped, as ever).
+- Every wait for the GE keeps to 5 seconds: a list not finished by then is a stall (recorded, the GE reset, the test
+  goes on). The contention thread runs at a priority above the program's own (nothing of the program's runs between a
+  list's start and its finish), started before the list is queued but waiting on a semaphore until it is, and stops
+  itself at the finish callback's flag, at its 10 ms alone, or at 5 seconds whatever happens: it can't hold the PSP. Its
+  memory is a 1 MiB array of its own and VRAM's last 256 KiB (which no GE test uses); what it wrote through the cache is
+  written back and invalidated after each run, so no line of it lands later on anything else.
+- The owner: copy `EBOOT.PBP` over the old one in `PSP/GAME/PSPMEASURE`, keeping `results/`; ARK's clock settings at
+  Auto; the charger in; the GE profiler plugin off (it times the same lists); run "Round 10" (the menu's first line);
+  send `results/ge` back.
+
+### The test
+
+"psp measure" (tests/psp/measure.cpp) runs round 10 after round 9, through the menu (every line one further down), and
+checks its nine files as round 9's: whole records, as many as the tables give (time-anchors2 42, time-lights 230,
+time-clut32 88, time-widetri 72, time-perspective 192, time-mipmaps 88, time-vram8 240, time-contention 754,
+time-contention2 104 at 333/222/166 alone), each test's settings in turn with the clocks the core grants, every run
+finished; the contention thread's turns and their time wherever it ran, and nothing where it didn't; and
+`manifest10.txt`. The core's times are this branch's GE timing, so they say nothing of the PSP's.
+
+### Checks
+
+- The program builds without a warning (`-Wall`) with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0) and
+  round 9's flags; a build from the committed source (its `git archive`) gives the committed `pspmeasure.elf` and the
+  owner's EBOOT byte for byte.
+- "psp measure" alone (the sanitized test program, `PHOBOS_TESTS_ONLY`), rounds 2 to 10 through the menu: 1 group, 0
+  failures. Its first run found three things, put right: the contention test's runs of a list alone gave the thread's
+  turns as 0xffffffff (`runTimed`'s, set after the program's 0); the test waited for `time-contention`'s file while
+  `time-contention2` still ran; and the core finishes culled triangles, NOPs and copies before the thread's first turn
+  (the check lets those be). In the core every case draws the pixels it says: a 512x256 layer 131,072 pixels' time,
+  256x256 65,536, the tiles 130,560 a pass (the three-pass cases three times one, the filled buffer twice), the culled
+  light strips none and the drawn ones theirs.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/round10/`: `SPECS-1fd9133c.md` (the cases as #269's agent specified them),
+`build/` (the program as tested), `EBOOT.PBP` and its sha256, `measure-r10.log` (the local test). Nothing was run on the
+RP6.

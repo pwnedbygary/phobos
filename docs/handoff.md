@@ -35,6 +35,35 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP measure, round 10: lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective, mipmaps, the CPU beside the GE — 2026-10-18
+
+Branch `cursor/psp-measure-round10-2b67` (PR PRNUMBER, draft), from master `d428d91f9` (#276, part 110);
+docs/psp-core.md, part 112.
+- **Why**: #269's refit with round 9 (`c0d9c14a2`) leaves three scenes outside 15%: Super Monkey Ball −30% (mostly the
+  PSP's CPU competing with the GE for RAM), Activision Hits' 3D menu (its first list −19%: spotlights with their shine;
+  its second +56%: CLUT32 triangles, a format no round timed) and its copyright screen (−24%: two wide triangles into
+  5650). #269's agent (1fd9133c) specified the cases from each scene's terms and a log of the games' PRIM state
+  (`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-1fd9133c.md`); synthetic, nothing of a game's lists, textures or
+  vertices in the program.
+- **What**: a new first menu line, round 10 (about 0.2 MB, `manifest10.txt`): `time-anchors2` (six of round 9's anchors;
+  time-strips 37's texture at four alignments), `time-lights` (39: 1 to 4 lights of each kind, diffuse and shining; the
+  shine's power, which lights shine, fall-off; the game's mixes, skinned; strips drawn as the game draws them),
+  `time-clut32` (22: the menu's tiles as logged, one thing at a time changed; CLUT32 strips as triangles),
+  `time-widetri` (18: the copyright screen's pass, one thing at a time changed; round 9's wide triangles and a sprite
+  into each 16-bit format), `time-perspective` (48: w 1 to 1.25/1.5/2/4 across and 1 to 2 down, three textures; squares
+  in through mode turned a quarter), `time-mipmaps` (22: round 8's mipmap cases, level 1 alone, the filters, CLUT8;
+  Super Monkey Ball's small trilinear CLUT4 strips), `time-vram8` (60: strips 4 to 24 wide, CLUT8 and CLUT4, VRAM and
+  RAM), `time-contention` (197: ten GE lists, each alone and beside a thread running one of 17 memory patterns, and each
+  pattern alone) and `time-contention2` (54: the streaming reads at 333/222/166). About two minutes on the PSP, three at
+  most.
+- **Safety**: new names only; the clocks put back after each test; every GE wait 5 s with the reset path; the contention
+  thread (above the program's priority, as the spec asks) stops at the finish callback's flag, its 10 ms alone, or 5 s
+  whatever happens; its memory its own (1 MiB, and VRAM's last 256 KiB), written back and invalidated after each run.
+- **Test**: "psp measure" runs round 10 after round 9 and checks every record; `tests/psp/programs/pspmeasure.elf`
+  rebuilt.
+- **Next**: the owner runs round 10 (the EBOOT through the coordinator); its files go to
+  `tests/psp/measurements/ge-round10` with part 112's results and #269's refit.
+
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 
 Branch `cursor/psp-measure-round9-2b67` (PR #276, draft), on master `14e8065dc` (#270, part 107, merged; this branch

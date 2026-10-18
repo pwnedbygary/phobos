@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-9) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-10) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 10: the GE's triangles, lights, the CPU beside it (0.2 MB)
    - Round 9: the GE's triangles, textures, vertices (about 0.1 MB)
    - Round 8: the GE's time again, and the CPU's (about 1 MB)
    - Round 7: the GE's anti-aliased lines (about 1.5 MB)
@@ -80,7 +81,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `main.c` | The menu, starting afresh, and leaving. |
 | `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
-| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8 and 9. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
+| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8, 9 and 10 (round 10's with a thread reading and writing memory beside the GE). Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
 | `cpu.c` | Round 8's tests of the CPU alone: its loops in assembly (memory's in C), memory, system and driver calls, the clocks granted. Its waits for the GE are timed as `ge.c`'s are, sharing its reset (`geReset`). |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
@@ -346,15 +347,52 @@ Round 9 takes about a minute, two at most (its lists about 35 seconds of the GE'
 own overhead and building the lists the rest); it changes the clocks as round 8 does. The owner ran it on 2026-10-18
 (`tests/psp/measurements/ge-round9`); part 110 says what it showed.
 
+Round 10 (about 0.2 MB, `manifest10.txt`) takes the cases #269's refit with round 9 still misses, as its agent
+specified them from the games' logged state (docs/psp-core.md, part 112; synthetic lists, textures and vertices, none
+a game's). Its timed lists are round 8's kind, at 222/111 and 333/166 MHz:
+
+- **Anchors** (`time-anchors2`), first: six of round 9's anchors, and round 8's time-strips 37 with its texture 0,
+  256, 512 and 768 bytes past a 1 KiB boundary (round 9 drew it 2% faster than round 8; its texture's place the likely
+  cause).
+- **Lights** (`time-lights`): round 8's culled strips lit by 1 to 4 directional lights, point lights and spotlights,
+  diffuse and with their shine; the shine's power; which of four lights shine; a point light's fall-off; Activision
+  Hits Remixed's menu's mixes of spotlights and a directional light, skinned too; strips drawn as that game draws
+  them, lit and unlit (its first list is 19% short in the refit).
+- **CLUT32** (`time-clut32`): that menu's second list's tiles, 32x34 pixels reading a VRAM CLUT32 texture 1:1 in three
+  passes with palette loads, into 5650, and one thing at a time changed (one pass, as 8888, as CLUT8, no loads, no
+  texture, sprites, into 8888, swizzled, from RAM, other tile sizes, a buffer drawn just before, bilinear); round 9's
+  strips as triangles from the CLUT32 texture. No round had timed CLUT32 in triangles.
+- **Wide triangles into 16-bit** (`time-widetri`): its copyright screen's pass, two triangles over 480x272 reading a
+  CLUT8 512x256 texture, bilinear, blended, into 5650, and one thing at a time changed; round 9's two wide triangles
+  and one sprite into 8888, 5650, 5551 and 4444.
+- **Perspective and turned** (`time-perspective`): two triangles over 256x256 under the lens, w 1 at the left to 1,
+  1.25, 1.5, 2 and 4 at the right and 1 to 2 down, from three textures; squares 64 and 128 wide; w 2, and 2 to 1;
+  squares 32 to 256 wide in through mode, as they are and turned a quarter (u down the screen), from three textures.
+- **Mipmaps** (`time-mipmaps`): round 8's 256x256 texture shrunk 2:1 with and without its levels, level 1 alone,
+  bilinear within a level, levels blended; the same in CLUT8; Super Monkey Ball's small CLUT4 textures (64x64, 7
+  levels; 64x32, 6) in small 3D strips, trilinear with the game's level bias, against nearest and no levels.
+- **Narrow strips** (`time-vram8`): strips 4 to 24 texels wide, sprites and triangles, CLUT8 and CLUT4, from VRAM
+  not swizzled and swizzled and from RAM swizzled.
+- **The CPU beside the GE** (`time-contention`, `time-contention2`): ten GE lists (RAM and VRAM textures read wide,
+  fills, vertices from RAM, NOPs, Super Monkey Ball's CALLed lists, RAM-to-VRAM copies, a new texture each sprite,
+  that game's small trilinear strips, Ghost of Sparta's skinned lit strips), each alone and while a thread at a
+  higher priority runs one of 17 patterns till the list's finish callback (arithmetic; reads within the data cache;
+  streaming reads flat out and slowed to a half, a quarter and an eighth; streaming writes; copies; a chain of
+  pointers; uncached reads; VRAM reads and writes; a game's mix over 16 KiB to 1 MiB), and each pattern alone for 10
+  ms: the GE's time, the thread's turns and their time. The streaming reads again at 333/222/166, the bus apart from
+  the CPU. The thread stops after 5 seconds whatever happens, so a stalled GE is reset as ever.
+
+Round 10 takes about two minutes, three at most (its lists about 70 seconds of the GE's time by rounds 8 and 9's
+rates, the runs' own overhead and building the lists the rest); it changes the clocks as round 8 does.
+
 ### How the GE's comparison works
 
-The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
-menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4
-again over counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, leaving), and
-checks every file is written (that the stall check got past its stall, and the timing records of rounds 6, 8 and 9
+The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its menu as
+a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4 again over
+counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, round 10, leaving), and
+checks every file is written (that the stall check got past its stall, and the timing records of rounds 6, 8, 9 and 10
 are whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder, and for round
-6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a closer
-look):
+6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a closer look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs
