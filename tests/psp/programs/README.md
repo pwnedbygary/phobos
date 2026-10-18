@@ -29,7 +29,8 @@ again on 2026-10-12 with round 7 (part 78), in pspdev's Docker image
 (`ghcr.io/pspdev/pspdev@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f`), and on
 2026-10-16 with round 8 (part 107) with pspdev's v20261001 release for macOS on arm64 (its psp-gcc 15.2.0), and
 again on 2026-10-18 with round 8's time-lists giving its stall addresses cached (part 107) with the same release (the
-round 8 source as it was rebuilds to the earlier file byte for byte), the rest left as they were. They hold no Sony code, no game and no firmware. Their parts come from:
+round 8 source as it was rebuilds to the earlier file byte for byte), the rest left as they were. They hold no Sony
+code, no game and no firmware. Their parts come from:
 - Phobos's own sources (the programs in `tools/psp-test-programs` and `tools/psp-measure`);
 - pspsdk, the free PSP SDK, including its GU samples (pspsdk's BSD-style license; see the pspsdk sources);
 - newlib, pspdev's C library (BSD-style licenses; see the newlib sources).

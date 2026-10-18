@@ -3921,7 +3921,8 @@ enum { ListSpacing = 16384, Called = 250000 };  //words between case 1's lists i
 //Cases 2 and 3: where each piece of the list ends (the last: past its END), as cached addresses (timed's, not
 //TIMED's): sceGeListSync(id, 1) says the GE has reached the stall address only when the address it was given is the
 //GE's own, which the driver keeps with its top three bits cut (uOFW's sceGeListSync), so an uncached one never
-//matches; the GE reads the list the same either way. (Round 8 gave TIMED's: case 3 waited 5 s for each piece.)
+//matches; the GE reads the list the same either way. (Round 8 gave TIMED's: case 3's first wait ran out the run's 5 s,
+//its other moves came at once, and awaitFinishes, on the same budget, took the GE still drawing them for a stall.)
 static unsigned int pieceEnds[64];
 static void buildLists(int c, int size) {
   for(int k = 0; k < (c == 1 ? size : 1); k++) {

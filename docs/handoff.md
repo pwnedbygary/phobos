@@ -37,8 +37,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP measure, round 8: the GE's time where part 76's model misses the owner's captures, and the CPU's — 2026-10-16
 
-Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`; masters `5442acb8b`, `03eca2a69`, `dd63f4ffb` and
-`230c0a731` merged in); docs/psp-core.md, part 107.
+Branch `cursor/psp-measure-round8-2b67` (PR #270; from master `a8d5640f5`; masters `5442acb8b`, `03eca2a69`,
+`dd63f4ffb`, `230c0a731` and `fe3deab82` merged in); docs/psp-core.md, part 107.
 - **Why**: part 76's model of the GE's time (behind the option "GE Timing" on #269) misses the owner's captures by
   −59% to +138%. Counting its terms over each scene puts the misses on what round 6 never measured: textures read
   from VRAM in strips (Killzone's 512x512 CLUT32 buffer, 79% of its GE time; Activision Hits' menus), a big CLUT8
@@ -49,15 +49,22 @@ Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`; masters `5442a
   the captured scenes', the CPU beside the GE) and cpu.c's tests of the CPU (ALU, latencies, memory, system and
   driver calls, the clocks the power service grants) and of the display as the program starts (what it holds, and
   which frame buffers set at once the firmware refuses: part 108); `manifest8.txt` lists every case. About 3
-  minutes on the PSP, about 1 MB of results. newlib's heap is held to 1 MiB, so the CPU's memory tests get 8 MiB.
+  minutes on the PSP; it wrote 167 KB. newlib's heap is held to 1 MiB, so the CPU's memory tests get 8 MiB.
 - **Test**: "psp measure" runs round 8 too and checks every record; `tests/psp/programs/pspmeasure.elf` rebuilt.
 - **Results** (the owner's PSP, 2026-10-18; `tests/psp/measurements/ge-round8`, part 107): round 6 repeats within
-  0.15% (median); wide texture reads (256 distinct texels across) cost 5 to 7.6 times as much a pixel; a PRIM about
-  60 clocks; a texture reload about 374; the SIGNAL's lead about 83 queue entries (a primitive and each vertex), not 16
-  primitives; a CPU thread reading RAM makes the GE's RAM-textured drawing 2.12 times as long. `time-lists`' case 3
-  stalled on the program's uncached stall addresses: fixed (`pspmeasure.elf` rebuilt), for a later run of that test.
+  0.15% (median); wide texture reads (256 distinct texels across) cost about 4 to 7.5 times as much a pixel; a PRIM
+  about 60 clocks; a texture reload about 374; the SIGNAL's lead about 83 queue entries (a primitive and each vertex),
+  not 16 primitives; a CPU thread reading RAM makes the GE's RAM-textured drawing 2.12 times as long; the bus is
+  granted at half the PLL whatever is asked. `time-lists`' case 3 never saw "stall reached" on the program's uncached
+  stall addresses, ran out its run's 5 s and was taken for a stall (67 of its 80 records empty): fixed
+  (`pspmeasure.elf` rebuilt); round 9's `time-lists2` (#276), the same cases with the fix, has all 80 on his PSP.
+- **Review** (`~/phobos-work/scratch/review-270/REVIEW.md`, approve with should-fixes): part 107's account put right
+  (the record count, the stall's story, the jump's range, the bus clock, the textures' conditions, TEX_MODE, the pixel
+  rate's, the sizes; no run of round 8 again asked of the owner), comments in `ge.c`, `cpu.c` and `measure.h`;
+  `pspmeasure.elf` unchanged. `cpu.c`'s GE waits without a deadline, a program change, go with #276.
 - **Next**: the fit is on #269 (part 106: `tools/psp-measure/ge-fit.py`, `ge-terms.py`); `measured8` once this
-  program and that model are both in; Phobos's "stall reached" (both addresses masked) as a small PR of its own.
+  program and that model are both in; Phobos's "stall reached" (both addresses masked), and its bus set to half the
+  PLL for a user-level request, each a small PR of its own.
 
 ## PSP display: the frame buffer set for the next vertical sync shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second) — 2026-10-16
 
