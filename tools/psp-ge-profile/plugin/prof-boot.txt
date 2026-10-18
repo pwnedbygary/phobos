@@ -1,0 +1,22 @@
+# Phobos GE profiler settings for a capture from the game's start (Activision Hits Remixed's copyright screen). Copy
+# this over ms0:/PHOBOS/prof.txt (same name, prof.txt) for that game only, then back. See README.md in
+# tools/psp-ge-profile.
+
+mode = capture
+
+# The capture starts 4 seconds after the plugin does (where 0.2.0's whole boot capture began, the disc readable by
+# then) and runs 12 seconds: the copyright screen is about its seconds 3 to 7.
+start = 4
+length = 12
+
+# The buttons still work afterwards.
+buttons = L+R+SELECT
+delay = 1
+
+# Those 12 seconds are the game loading its modules too: less memory than a capture during play takes, and more kept
+# free, leave it about 430 KB where 0.2.0's capture (192 KB) left about 380.
+buffer = 128
+keep = 320
+
+# On-screen notices: on or off.
+notices = on
