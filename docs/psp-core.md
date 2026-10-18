@@ -16713,7 +16713,7 @@ round 8 files, `r8dump.py` to read them, `EBOOT.PBP` as built); `results-1018/` 
 
 ## Part 110: psp-measure round 9 — triangles reading narrow textures, a texture's loads and the cache's reuse, vertex formats, time-lists again
 
-On branch `cursor/psp-measure-round9-2b67` (PR #NNN), stacked on #270's `cursor/psp-measure-round8-2b67`
+On branch `cursor/psp-measure-round9-2b67` (PR #276), stacked on #270's `cursor/psp-measure-round8-2b67`
 (`0d2060a2a`: part 107, round 8's results and `time-lists`' fix). Round 9 of `tools/psp-measure`, for the owner's
 PSP: what the fit of rounds 6 and 8 (#269, part 106) still guesses where its gate misses. Nothing in the core changes:
 the program, its test, the test programs' copy of it. Clean room as part 107: our own code; pspsdk's headers and

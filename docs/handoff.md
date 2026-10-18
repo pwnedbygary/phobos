@@ -37,7 +37,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 
-Branch `cursor/psp-measure-round9-2b67` (PR #NNN, draft), stacked on #270's `cursor/psp-measure-round8-2b67`
+Branch `cursor/psp-measure-round9-2b67` (PR #276, draft), stacked on #270's `cursor/psp-measure-round8-2b67`
 (`0d2060a2a`); docs/psp-core.md, part 110.
 - **Why**: #269's gate passes 5 of its 9 judged scenes at 15% (part 106). Too fast: Ghost of Sparta's menu −21%,
   Super Monkey Ball's story −31% (a texture set costs the PSP about the same at 1, 4 or 16 KiB, where the model
