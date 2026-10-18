@@ -51,8 +51,13 @@ Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`; masters `5442a
   which frame buffers set at once the firmware refuses: part 108); `manifest8.txt` lists every case. About 3
   minutes on the PSP, about 1 MB of results. newlib's heap is held to 1 MiB, so the CPU's memory tests get 8 MiB.
 - **Test**: "psp measure" runs round 8 too and checks every record; `tests/psp/programs/pspmeasure.elf` rebuilt.
-- **Next**: the owner runs round 8 (charger in; ARK's clock settings at Auto) and sends `results/`; then the fit
-  (`ge-fit.py`, `GE::Cost`, `measured8`) with the runner's per-list counts (`--ge-terms`), on #269.
+- **Results** (the owner's PSP, 2026-10-18; `tests/psp/measurements/ge-round8`, part 107): round 6 repeats within
+  0.15% (median); wide texture reads (256 distinct texels across) cost 5 to 7.6 times as much a pixel; a PRIM about
+  60 clocks; a texture reload about 374; the SIGNAL's lead about 83 queue entries (a primitive and each vertex), not 16
+  primitives; a CPU thread reading RAM makes the GE's RAM-textured drawing 2.12 times as long. `time-lists`' case 3
+  stalled on the program's uncached stall addresses: fixed (`pspmeasure.elf` rebuilt), for a later run of that test.
+- **Next**: the fit is on #269 (part 106: `tools/psp-measure/ge-fit.py`, `ge-terms.py`); `measured8` once this
+  program and that model are both in; Phobos's "stall reached" (both addresses masked) as a small PR of its own.
 
 ## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
 

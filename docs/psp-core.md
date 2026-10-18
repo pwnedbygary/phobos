@@ -16499,9 +16499,11 @@ On branch `cursor/psp-measure-round8-2b67` (PR #270), from master `a8d5640f5` (p
 `230c0a731` (part 105, #268) merged in. Round 8 of `tools/psp-measure`, for the owner's PSP: what round 6 left of the
 GE's time, chosen by where part 76's model (fitted to round 6, ported behind the option "GE Timing" on #269) misses the
 owner's captures of games (part 103), and the CPU's own time, which in every captured scene that syncs is 7 to 9 times
-Phobos's. Nothing in the core changes: the program, its test, and the test programs' copy of it. The owner approved the
-plan (the design's section 4, the CPU block with it); the fit that follows the results (`ge-fit.py`, `GE::Cost`, a
-`measured8` test) and the runner's counts for it (`--ge-terms`) come after them.
+Phobos's. Nothing in the core changes: the program, its test, the test programs' copy of it, and the PSP's results
+(below). The owner approved the plan (the design's section 4, the CPU block with it). The fit that follows the results
+went with the model it fits (#269, part 106: `tools/psp-measure/ge-fit.py`, and `ge-terms.py` for the runner's counts
+in place of a `--ge-terms` option, so the core carries no counting code); the `measured8` test needs this program and
+that model both, so it comes after them.
 
 ### Where the model misses, term by term
 
@@ -16614,6 +16616,80 @@ list's finish (time-signals2's signal callback too), the CPU's loops taking time
 first (333/333/166) granted; display-start's seven words and five attempts, the next-vblank one taken. The core's
 GE times are the default timing's, so the times themselves say nothing yet; the fit compares them.
 
+### What the PSP showed (the owner's run, 2026-10-18)
+
+The owner ran rounds 8, 7 and 6 on his PSP-1000 (`tests/psp/measurements/ge-round8`, 19 files, kept as round 6's
+are). Times below are in the GE's bus clocks (microseconds times the bus's MHz) unless they say otherwise.
+
+- **Repeatable**: round 6 again gave all 28 pictures byte for byte as in `ge-round6`; its 906 timed cases' medians
+  moved 0.15% at the median (90% within 1.3%, 99% within 7.7%; the worst, 13.9%, 18-20 microsecond transfers, a
+  microsecond or two of the timer; over 1 ms the median 0.10%, the worst 6.5%); the driver's statuses read the same,
+  the finish 538.0 against 537.2 ms (part 1) and 269.9 against 268.7 ms (part 2). There's no earlier PSP run of round 7
+  to set its files beside (part 78's open questions stand: aa-alpha the same as the core's, aa-blend 1 pixel a level
+  off, aa-slopes 117 pixels, aa-axes 259, aa-3d 1008, aa-textured 1882).
+- **Wide texture reads** (`time-strips`): a texture's time per pixel jumps 5 to 7.6 times once a sprite's row spans
+  256 distinct texels (16- and 32-bit texels; 8-bit indices between 256 and 512): VRAM 8888 and CLUT32 1.4-1.6
+  clocks a pixel narrow, 8.4 wide; 5650 1.0, then 4.1; RAM swizzled 8888 1.9-2.0, then 12.4; RAM unswizzled 8888 7.5,
+  then 57. Wide, per byte: about 2.9 (RAM swizzled), 14 (RAM unswizzled), 1.8-2.0 (VRAM). Round 6 measured VRAM
+  (1.93 a byte) with a 256-wide sprite: the wide side. Killzone's and Activision Hits' CLUT32 strips 32 texels wide
+  take about 1.4 clocks a pixel, not about 8. The distinct texels are the fewer of the span and the texture's width:
+  a 64-texel texture repeated over 256 pixels is narrow (`time-texcache`'s 64x64 swizzled 8888, 0.92 a pixel).
+- **Other textures** (`time-textures`): triangles aren't sprites: a 256x256 swizzled texture over 256x256 pixels in
+  3D takes 3.9 clocks a pixel, a 256-wide sprite of it 13.3 (sprites read along rows; triangles seem to go in
+  blocks). Unswizzled textures from RAM go by their size or row pitch (64x64, 16 KiB: 0.36 a byte; 512 wide, 1 MiB,
+  narrow: 1.73). Shrunk 2:1 a texture costs about 1.9 times its 1:1 time a pixel, 4:1 about 3.6 times, stretched 1:2
+  about half: about the square root of the texels a pixel, not the texels.
+- **The front end** (`time-vertices`, `time-state`): a PRIM command about 60 clocks (one PRIM for each 8x8 sprite:
+  95-98 clocks a sprite; many sprites to a PRIM, round 6's time-sizes, 25); 0.5 a vertex's byte; 35 an indexed vertex,
+  with no cache of vertices (the same three again cost as much); a skinning weight about 6.5 a vertex; a point or spot
+  light about 11; a directional light about nothing.
+- **State** (`time-state`): TEX_FLUSH or a texture changed reloads a 1 KiB texture for about 374 clocks (unswizzled)
+  or 170 (swizzled), not round 6's 1444 and 614; a 256-color palette 252 (0.25 a byte); TEX_MODE flushes (its 280 is
+  the reload); a matrix about 50; CALL and RET together about 51; a blend or depth function, the alpha test, TEX_SYNC
+  about nothing.
+- **Pixels** (`time-pixels`): the depth, alpha, stencil and color tests, blending and the texture functions add
+  nothing beside a texture's fetching; a failing depth test still fetches. A cached texture, depth tested and blended:
+  0.80 clocks a pixel into 8888, 0.34 into 5650; clear mode the same (the depth costs only in 32-bit).
+- **The SIGNAL** (`time-signals2`): when the back end keeps up, the finish comes a fixed 12 microseconds after the
+  signal callback at 222 MHz (8 at 333: the callback's own CPU time); otherwise the front end gets at most about 28
+  sprites of 64x64 or 20.5 triangles ahead: about 83 entries counting each primitive and each of its vertices (84.6 for
+  sprites, 81.8 for triangles), not 16 primitives (part 106's provisional `GE::Cost::Queue`).
+- **The scenes** (`time-scenes`): Killzone's scene list 12.4 ms at 222/111, its full-screen list 1.59 ms; the GE
+  follows the bus's clock alone (333/222/166 as 333/166).
+- **The CPU beside the GE** (`cpu-contention`): a CPU thread reading RAM makes the GE's layers textured from RAM take
+  2.12 times as long (from VRAM about the same); the GE drawing from RAM slows the CPU's reads of RAM by 26%
+  (streaming) and 67% (a chain of pointers).
+- **`time-lists`' stalls**: a fault of the program's, over a driver rule Phobos doesn't keep. Case 3 waits for
+  `sceGeListSync(id, 1)` to say 3 (the GE has reached the stall address) before each move; uOFW's driver says 3 only
+  when the stall address as the program gave it equals the GE's list address, which it keeps with the top three bits
+  cut, and the program gave the uncached mirror's (0x4...), so it never did: each wait ran out (5 s) and the stall
+  check reset the GE; after three, `timeCases8` gave up on the test, so case 4 and every case at 333/166, 333/222/166
+  and 266/133 were never run (71 of its 80 records empty). The program now gives cached addresses (`ge.c`'s
+  `pieceEnds`; `pspmeasure.elf` rebuilt): a later run of `time-lists` alone (its files deleted, round 8 again) gives
+  the rest. Phobos masks both addresses and says 3 there, so the core ran case 3 through; keeping the address as given
+  is a small kernel change of its own, with a test, apart from this part.
+- **The display as a program starts** (`display-start`, for part 108): the frame buffer reads address 0, width 0,
+  format 3 (8888), for the next vblank and at once alike, and `sceDisplayIsForeground` 0. From there (put back before
+  each try): 512 wide in 8888 or in 5650 at once, 0x80000107; the start's width and format with VRAM's address at
+  once, 0x80000104; 0, 0, 0 at once, 0x80000107; 512 in 8888 for the next vblank, 0, after which the width reads 512 at
+  once and the address 0 until the vblank.
+- **The CPU's clocks** (`cpu-clocks`; noted only: the CPU's timing is a project of its own): the CPU's speed follows
+  its own clock exactly (a loop 13.7 ms at 333 MHz, 20.6 at 222, 24.1 at 189, 45.8 at 99); granted 333/222/166 (read
+  back as 221/166), 266/133 (265/133), 190/95 and 299/166; two requests refused with 0x800001FE.
+- **The CPU's own time** (noted for that project; 333/166, each test's median): an addition a cycle, dependent or
+  not, as are loads that don't depend on each other; a load from the address the last one loaded, or a store, about
+  3; a taken branch with its delay slot, or a load used by the next instruction, about 4. A chain of pointers takes 5
+  cycles a step within 16 KiB (the data cache) and 73 (219 ns) over 32 KiB to 8 MiB alike (no second cache); through
+  RAM's uncached addresses 55 to 58, in the scratchpad 5, in VRAM 44 (37 uncached). Calls: `sceKernelGetSystemTimeLow`
+  0.56 microseconds, a semaphore's signal and poll 2.3, `sceKernelDelayThread(0)` 120, a thread switch there and back
+  19, `sceKernelDcacheWritebackAll` 10.6, `sceGeListEnQueue` about 14 (about 4,650 cycles: round 6's 5,200 from its
+  return), `sceGeListUpdateStallAddr` with the list left waiting 0.53, `sceGeDrawSync(1)` 0.67,
+  `sceDisplaySetFrameBuf` 0.95. `cpu-latency` and the other clocks are kept for that project.
+
+The fit of the GE timing's model to rounds 6 and 8 (`tools/psp-measure/ge-terms.py` and `ge-fit.py`) and the model it
+changes are part 106's, on #269; a `measured8` test, the core's run of round 8 beside these files, needs both this
+program and that model, and comes once both are in.
+
 ### Checks
 
 - `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
@@ -16629,4 +16705,6 @@ GE times are the default timing's, so the times themselves say nothing yet; the 
 
 `~/phobos-work/scratch/psp-ge-profile/phase3/` (`terms.hpp` and `terms.patch`, the scratch counts, applied to
 #269's runner only for its build; `out/terms-*.log`, the tables above); `round8/` (the test's logs, `ours/` the core's
-round 8 files, `r8dump.py` to read them, `EBOOT.PBP` as built). Nothing was run on the RP6.
+round 8 files, `r8dump.py` to read them, `EBOOT.PBP` as built); `results-1018/` (the owner's run as he sent it),
+`refit/` (`r8.py`, `repeat6.py` and `FINDINGS-1.md`: the results above), `r8fix/` (the program rebuilt with
+`time-lists`' fix, and its `EBOOT.PBP` for the PSP). Nothing was run on the RP6.

@@ -3918,7 +3918,11 @@ static const TimedCase listCases[] = {
   {"N CALLs of a list drawing one 4x4 sprite (then its RET)", "calls", 4, {16, 64, 256, 1024}},
 };
 enum { ListSpacing = 16384, Called = 250000 };  //words between case 1's lists in timed; where the CALLed list is
-static unsigned int pieceEnds[64];  //cases 2 and 3: where each piece of the list ends (the last: past its END)
+//Cases 2 and 3: where each piece of the list ends (the last: past its END), as cached addresses (timed's, not
+//TIMED's): sceGeListSync(id, 1) says the GE has reached the stall address only when the address it was given is the
+//GE's own, which the driver keeps with its top three bits cut (uOFW's sceGeListSync), so an uncached one never
+//matches; the GE reads the list the same either way. (Round 8 gave TIMED's: case 3 waited 5 s for each piece.)
+static unsigned int pieceEnds[64];
 static void buildLists(int c, int size) {
   for(int k = 0; k < (c == 1 ? size : 1); k++) {
     sceGuStart(GU_SEND, timed + k * ListSpacing);
@@ -3931,13 +3935,13 @@ static void buildLists(int c, int size) {
       for(int i = 0; i < 64; i++) {
         timedSprite(0, (i & 15) * 16, 256, (i & 15) * 16 + 16, 0, 0, 0, 0, 0xffffffff);
         int piece = (i + 1) / (64 / size) - 1;
-        if((i + 1) % (64 / size) == 0 && piece < size - 1) pieceEnds[piece] = (unsigned int)TIMED + sceGuCheckList();
+        if((i + 1) % (64 / size) == 0 && piece < size - 1) pieceEnds[piece] = (unsigned int)timed + sceGuCheckList();
       }
     } else {
       for(int i = 0; i < size; i++) sceGuCallList(timed + Called);
     }
     int bytes = sceGuFinish();
-    if(c == 2 || c == 3) pieceEnds[size - 1] = (unsigned int)TIMED + bytes;
+    if(c == 2 || c == 3) pieceEnds[size - 1] = (unsigned int)timed + bytes;
   }
   if(c == 4) {  //the CALLed list (GU_CALL's ends with RET)
     sceGuStart(GU_CALL, timed + Called);
