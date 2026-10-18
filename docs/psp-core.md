@@ -16694,8 +16694,10 @@ program and that model, and comes once both are in.
 
 - `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
   573 groups, 0 failures; "psp measure" alone, with the final program, again; with master `dd63f4ffb` (parts 103 and
-  104) merged in, 579 groups, 0 failures; with master `230c0a731` (part 105), 582 groups, 0 failures. The program
-  builds without a warning (`-Wall`).
+  104) merged in, 579 groups, 0 failures; with master `230c0a731` (part 105), 582 groups, 0 failures; with round 8's
+  results and `time-lists`' fix (`pspmeasure.elf` rebuilt), 582 groups, 0 failures. The program builds without a
+  warning (`-Wall`). GitHub's checks don't run while the branch conflicts with master (part 109's docs since
+  `92eddbfea`): master is merged in at this pull request's turn to land.
 - The core's round 8 files read as its model has them: every CPU loop a cycle an instruction at 333 MHz whatever the
   clock (cpu-alu's 16384 passes of 67 instructions in 3,297 microseconds), a chain of pointers as fast over 8 MiB as
   over 1 KiB, a 512x256 layer 295 microseconds at 111 MHz whatever its texture: what the PSP's files will be set
