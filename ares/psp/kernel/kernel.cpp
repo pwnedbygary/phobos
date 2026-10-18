@@ -71,6 +71,7 @@ namespace ares::PlayStationPortable {
 #include "rtc.cpp"
 #include "modules.cpp"
 #include "spins.cpp"
+#include "geprofile.cpp"
 #include "serialization.cpp"
 
 Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
@@ -970,6 +971,7 @@ auto Kernel::power() -> void {
   interrupting = false;
   callKind = Call::Plain;
   callID = 0;
+  callProfile = 0;
   interruptsEnabled = true;
   rescheduleAfter = false;
   callResumesGe = false;

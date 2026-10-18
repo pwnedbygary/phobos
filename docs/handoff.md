@@ -37,10 +37,10 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
 
-Branch `cursor/psp-ge-sync-spin-2b67` (from master `a8d5640f5`, masters `5442acb8b` and `03eca2a69` merged in: #264,
-#265, #274); docs/psp-core.md, part 105. The GE timing design's first step (approved by the owner): part 76's GE
-timing made polling games slower on the host (Resistance 59.9 to 40.4 and Need for Speed: Shift 45.3 to 32.9 on the
-RP6 at 5x; Shift asks `sceGeDrawSync(1)` some 7000 times a frame).
+Branch `cursor/psp-ge-sync-spin-2b67` (from master `a8d5640f5`, masters `5442acb8b`, `03eca2a69` and `dd63f4ffb`
+merged in: #264, #265, #274, #266, #267); docs/psp-core.md, part 105. The GE timing design's first step (approved by
+the owner): part 76's GE timing made polling games slower on the host (Resistance 59.9 to 40.4 and Need for Speed:
+Shift 45.3 to 32.9 on the RP6 at 5x; Shift asks `sceGeDrawSync(1)` some 7000 times a frame).
 - **The change** (kernel/ge.cpp, spins.cpp, kernel.cpp, kernel.hpp): the looks (mode 1, or a mode or list refused)
   are calm; their spin handlers answer through the same functions as the calls (`geDrawLook()`, `geListLook()`); mode
   0, which waits, isn't a spin. Exact as part 91's: the GE's state changes only in a system call or between the CPU's
@@ -49,6 +49,94 @@ RP6 at 5x; Shift asks `sceGeDrawSync(1)` some 7000 times a frame).
   after every eighth of a frame: the two looks and a stalled list; a loop counting its turns not skipped); "ge FINISH
   after a quiet function" dispatches the looks as calm.
 - **Left**: nothing changes much with today's GE; it matters with the PSP's GE timing (the setting, next).
+
+## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's captures' 333/166, read before the game ran — 2026-10-16
+
+Branch `cursor/psp-power-clock-2b67`, on master `a8d5640f5` (part 101, #263), masters `5442acb8b` (#264, #265),
+`03eca2a69` (#274) and `a014706e9` (part 103, #266) merged in; draft PR #267. docs/psp-core.md, part 104, has the
+evidence. Clean room: uOFW and ARK-4's sources; no PPSSPP or JPCSP. Save states unchanged.
+- **The question** (part 103): the owner's captures of Activision Hits' boot read 333/166, Phobos 222/111.
+- **The game** asks, as it starts, for a CPU of 333 and a bus of 166 with the separate setters, and nothing else in
+  1200 frames (traced). uOFW's power service refuses both at a game's startup PLL of 222 (set by its Init callback
+  before the game's program starts), as Phobos did. The captures' 333/166 are the reboot's clocks, read while Init
+  was still loading the program (the plugin counts from its own start, before the program loads; the game's first GE
+  call came 4.0 and 4.23 s in); boot1's capture read 222/111 in the copyright screen, whose lists took the same time
+  throughout. ARK with its clock settings at Auto, as the owner had them, passes the setters through untouched (its
+  clock code read). Phobos's 222/111 is the owner's PSP's.
+- **The change** (power.cpp): `scePowerSetBusClockFrequency` up to half the PLL (was: nothing over 111), so at a PLL
+  of 333 it now grants 112-166 and at 266 112-133, and at 190 refuses 96-111, which it granted;
+  `scePowerSetClockFrequency` refuses a bus above half the PLL asked for. "power clocks" tests both, at 333, 266, 222
+  and 190, and the game's start. The review replayed every power call the 266 games make in their first 1200 frames
+  through master's and this branch's rules: no answer changed.
+- **For the GE timing work**: the copyright screen is at 222/111 on both, compared unscaled; ARK's clock settings
+  stay at Auto for the owner's captures.
+- **Checks**: tests/psp sanitized: 579 groups, 0 failures; CI green.
+
+## PSP GE: how the games drive the GE on a PSP and in Phobos — tools/psp-ge-profile's plugin on the owner's PSP, the same records from the core (the runner's --ge-profile) — 2026-10-16
+
+Branch `cursor/psp-ge-profile-2b67`, on master `a8d5640f5` (part 101, #263), masters `5442acb8b` (#264, #265) and
+`03eca2a69` (#274: the progress section, its chart of the GE's list time given Killzone's 24.3 ms) merged in.
+docs/psp-core.md, part 103, has the evidence; tools/psp-ge-profile/README.md the owner's steps and how the plugin
+works. Clean room: pspsdk's headers and libraries, uOFW, ARK-4's README, wiki, `systemctrl.h` and (for how it loads
+plugins) its plugin loader's and launcher's sources; no PPSSPP, no JPCSP. Save states unchanged; nothing of the PSP's
+behaviour changes.
+- **Why**: Phobos's GE time (part 64's geTime()) is Sony's peaks, four pixels a bus clock; Chains of Olympus paces its
+  loop by the GE and draws its menu's scene 2-3 times a vblank in Phobos, each drawn by Vulkan. Whether a PSP draws it
+  once decides accuracy and that work. Nothing had measured a PSP's GE in a game.
+- **The plugin** (`tools/psp-ge-profile/plugin`, 0.2.4): a kernel PRX for ARK-4 that patches the GE driver's and the
+  display's syscalls (`sctrlHENPatchSyscall`) and records every call (entry and return times, thread, arguments,
+  result, the GE's state), the FINISH/SIGNAL callbacks and the vblanks (the sub-interrupt monitor) into kernel memory,
+  written after the capture; a dry mode that counts; notices on screen; `PHOBOS/trace.txt`. `decoder/geprof.py`:
+  per vblank and per second, each list's GE time, the GE's busy share, the CPU blocked in syncs and waits, flips and
+  displayed frames. `hello/`: a load test (modules that only append a line), used while bringing it up.
+- **The PSP's answer** (the owner's PSP-1000, 6.61, ARK 4.20.69 r205; Chains of Olympus UCAS40198, an ISO; dry runs,
+  10 s on the menus): 357 sceGeListEnQueue, 357 sceGeListSync, 357 sceDisplaySetFrameBuf, 600 vblanks, no vblank
+  wait, no GE callback: 35.7 loops a second, 0.6 a vblank. All 17 hooks in, 24 ns a call idle, 1.85 us capturing.
+- **The core's recorder** (`ares/psp/kernel/geprofile.cpp`, `GeProfile` in kernel.hpp; hooks in ge.cpp, display.cpp,
+  threads.cpp, interrupts.cpp): the same records from Phobos's HLE in the PSP's time (a call from its start to its
+  return, or to its thread going on after a wait; the callbacks as they run; the vblanks), plus the model's charges
+  (kind 64: pixels, primitives, cycles, the GE's done time). Off with no profile: a pointer tested at each place, about
+  ten instructions a profiled call (five rounds a side, the emulation thread's instructions a frame: coo-diff 101.625 M
+  on master, 101.555 M on the branch, −0.07%; smba-story 416.008 M, 415.874 M, −0.03%; within the rounds' spread).
+  The runner: `--ge-profile FILE`, `--ge-profile-from F`
+  (tools/psp-runner/README.md). The decoder: the charges per list and over the window, `--counts`, the same tables
+  for both.
+- **Phobos's tables** (the six scenes from their states, software renderer, 10 s): none waits for the vblank; all draw
+  as fast as the model's GE allows, busy 86-100%: coo-diff 159.5 frames a second (2.66 a vblank), gos-menu 247 (4.1),
+  smba-story 435 (7.3), kz-gp 258 (4.3; one frame buffer), a2-gp 253 (4.2), ahr-legal's copyright screen 851 (14).
+  Every charge set by its pixels.
+- **The comparison** (the dry runs, then the owner's captures of all six scenes' games; Army of Two's of other
+  moments than its state's): each game's loop is the same on both (Army of Two's but for the vblank wait the PSP's
+  next-vblank flip brings, #271), but a PSP's GE takes 4.4 to 12 times what the model charges for a list (coo-diff
+  27.6 ms against 6.24; gos-menu 29.6 against 4.05; smba-story 23.6 against 1.98; Killzone's scene list 24.3 or 27.3
+  against 3.57; Army of Two 31.9 or 32.7 against 3.49; Activision Hits' copyright screen 4.46 against 0.59), so the
+  PSP draws 0.4 to 1.8 frames a vblank where Phobos draws 2.7 to 14. A first fit over three scenes: 0.875 bus clocks
+  a pixel and 104 a primitive (the model's peaks: 0.25 and 4.74), within 11% for those three. In the scenes that
+  sync, the PSP's CPU part of a loop is 7 to 9 times Phobos's; it paces none of them (Killzone's GE is busy 89 and
+  98% of its windows).
+- **The review's fix round**: the decoder ends a FINISH's list at the queue's head (the driver is first in, first
+  out; Killzone's FINISH can come from below its list, which the address matching misread), counts the lists queued
+  before a capture by where their FINISHes fall, counts a one-buffer game's frames by its calls, and files interrupt
+  handlers' calls under `interrupt`: of the owner's twelve captures and Phobos's six profiles, only Killzone's
+  figures moved (above; Phobos's profile now has every list charged and 59.9 frames shown a second). Plugin 0.2.4
+  (untested on a PSP, as 0.2.1 to 0.2.3): the captures' 192 KB buffer as the default, the boot capture from 4 s with
+  128 KB, its result notice kept up, interrupt-context calls, files opened as new ones and removed if their writing
+  fails, the trace capped at 256 KB. The recorder: a wait whose callbacks run first ends where its thread goes on,
+  sceGeSetCallback's functions read only as the function reads them, a profile ends at a program's restart, the PSP's
+  hooks word, no end of 0. The runner: `--ge-profile-from` alone is an error, a WAV failure no longer skips the
+  profile.
+- **Tests**: tests/psp 579 groups, 0 failures, sanitized (container overflows not checked, as part 101 ran it: the
+  movie player's file read trips that check), with the new "ge profile" (the calls, the wait to its
+  thread going on, the FINISH's callback, the vblank and the model's charge, record by record; the file byte by
+  byte; nothing recorded without a profile, the machine ending the same to the cycle, its registers, memory and
+  state; a state loaded mid-callback; sceGeSetCallback with no slot free), "ge profile: calls whose callbacks run in
+  them" and "ge profile: a callback notified in the wait" (the review's), and the loadExec test's profile ending;
+  three mutants of the recorder caught; the plugin's and the load test's host tests (a boot capture's notice through
+  the control loop, interrupt-context calls, a failed write, the trace's cap); the decoder's 23.
+- **Left**: geTime() unchanged here. Part 76's model, fitted to round 6's timings on this PSP and left unmerged, is
+  the starting point: a design (that model checked against these captures, the GE's sync calls skipped through when a
+  game polls them, a round 8 for what round 6 left) waits for the owner's approval. The CPU's 7 to 9 times is a
+  question of its own.
 
 ## README: a development progress section, generated from docs/progress/data.json — 2026-10-17
 

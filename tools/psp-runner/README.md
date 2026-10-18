@@ -83,6 +83,10 @@ the runner refuses anything else):
   `[frame] savedata: ...` on standard output (below)
 - `--trace-io` — each file request (IoFileMgrForUser's functions) with its answer, and each
   asynchronous request as it's done, as a line `[frame] io: ...` on standard output (below)
+- `--ge-profile FILE` — how the game drives the GE and the display, written as a capture of
+  `tools/psp-ge-profile`'s (below), which its decoder reads as it reads one its plugin made on a PSP
+- `--ge-profile-from F` — the frame the GE profile starts at (default 1, the run's first); it goes
+  with `--ge-profile`, and alone is an error
 - `--report FILE` — the run as JSON (below): for comparing runs by what ran, not only by their
   speed
 - `--start-time SECONDS` — the PSP's clock starts there (seconds since 1970, up to 4294967295)
@@ -171,6 +175,26 @@ as the thread wakes. For example (LittleBigPlanet's install copying the last pie
 [001556] io: 25942744 us 08C12774 fios mediathread: sceIoLseekAsync fd 5 ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC @0x0 offset 4194304 whence 0 -> 0 (due in 100 us, result 0x400000)
 [001556] io: 25942844 us 08C12774 fios mediathread: sceIoWriteAsync fd 5 ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC @0x400000 from 0x953a320 size 0x26b17 hash 6f3bfbe7 -> 0 (due in 39721 us, result 0x26b17)
 [001558] io: 25982565 us: done fd 5 ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC @0x426b17 -> 0x26b17
+```
+
+With `--ge-profile FILE`, the kernel records from the start of frame `--ge-profile-from` to the
+run's end what `tools/psp-ge-profile`'s plugin records on a PSP (that tool's README, "The capture
+file"; `ares/psp/kernel/geprofile.cpp`): each call to sceGe_user's list, sync, break, continue
+and callback functions and to the display's frame buffer and vertical blank waits, with its
+arguments, result, thread and the GE's state, from where it's made to where it returns (a wait
+to where its thread goes on); each FINISH and SIGNAL callback as it runs; each vertical blank;
+and, Phobos's own, each piece of GE time the model charges (its pixels, primitives and cycles,
+and when the GE is done with all it has). Times are the PSP's clock in microseconds, as
+sceKernelGetSystemTimeLow gives them. A program that starts itself again (sceKernelLoadExec)
+ends the profile there, as its clock and threads start again: one profile is one program's, and
+the summary says at which frame. The file is written as the run ends (even if the WAV can't be),
+and a summary line (`ge profile:`) gives its records and the PSP's time it covers. `geprof.py FILE`
+then prints the same tables as for a capture from the PSP; with no profile, nothing is recorded,
+at the cost of a test of a pointer at each place that would record.
+
+```sh
+psp-runner coo.chd --load-state coo-diff.state --frames 900 --ge-profile coo-diff.bin --ge-profile-from 301
+tools/psp-ge-profile/decoder/geprof.py coo-diff.bin
 ```
 
 The frames the PNGs name are the frames the runner ran: after the run of a frame that asks for
