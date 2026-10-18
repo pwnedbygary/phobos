@@ -16448,7 +16448,8 @@ driver's behaviour, nothing of PPSSPP or JPCSP. Save states are unchanged (layou
 
 `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
 574 groups, 0 failures (the new group's list first put where the test machine keeps its stubs, which drew
-nothing: moved to the GE tests' addresses, about 174,000 looks a list, 4.7 ms each). CI runs tests/allegrex,
+nothing: moved to the GE tests' addresses, about 174,000 looks a list, 4.7 ms each); with master `dd63f4ffb` merged
+in (parts 103 and 104), 580 groups, 0 failures, the GE profile's groups among them. CI runs tests/allegrex,
 tests/psp/ares and the builds.
 
 ### What it changes
