@@ -332,7 +332,7 @@
       "show_values": true,
       "categories": ["Chains of Olympus, difficulty menu", "Ghost of Sparta, main menu", "Super Monkey Ball, Story Mode", "Killzone, gameplay", "Activision Hits, copyright screen"],
       "series": [
-        { "name": "PSP-1000 (measured)", "tone": "info", "values": [27.6, 29.6, 23.6, 23.4, 4.46] },
+        { "name": "PSP-1000 (measured)", "tone": "info", "values": [27.6, 29.6, 23.6, 24.3, 4.46] },
         { "name": "Phobos's GE model", "tone": "warning", "values": [6.24, 4.05, 1.98, 3.57, 0.59] }
       ],
       "alt": "For the same scenes' display lists, a PSP-1000's GE took {ge-list-time:PSP-1000 (measured):min} to {ge-list-time:PSP-1000 (measured):max} ms where Phobos's model charged {ge-list-time:Phobos's GE model:min} to {ge-list-time:Phobos's GE model:max} ms: 4 to 12 times less.",

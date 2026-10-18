@@ -222,7 +222,7 @@ auto Kernel::sceKernelSetCompilerVersion() -> void {
 //The firmware the PSP runs, as pspsdk's pspsysmem.h numbers it (0x02070110 is 2.71): 6.61, the owner's PSP's, on
 //which pspautotests' threads/tls/partition read "firmware 6.06" (its major and minor bytes).
 auto Kernel::sceKernelDevkitVersion() -> void {
-  result(0x0606'0110);
+  result(DevkitVersion);
 }
 
 //Later SDKs' memory blocks: blocks of the user partition by another name, as pspautotests' sysmem/memblock recorded

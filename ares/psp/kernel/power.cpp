@@ -15,7 +15,8 @@
 namespace {
   //psppower.h's PSP_POWER_CB_* bits: on the charger, a battery in, and its charge (a percentage) in the low 7 bits
   constexpr u32 PowerOnCharger = 0x1000, PowerBattery = 0x80, PowerBatteryFull = 100;
-  //the PLL runs at one of four speeds; a speed asked for is taken to the next of them (PPSSPP's notes)
+  //a game's PLL runs at one of four speeds, the use mask uOFW's power.c sets for games (190, 222, 266, 333); a speed
+  //asked for is taken to the next of them (its clockFrequency.c)
   auto pllSpeed(u32 mhz) -> u32 {
     if(mhz <= 190) return 190;
     if(mhz <= 222) return 222;
@@ -79,15 +80,16 @@ auto Kernel::scePowerCheckWlanCoexistenceClock() -> void {
   result(1);
 }
 
-//(PLL, CPU, bus, in MHz): the PLL is set to the next of its four speeds, the bus to half of it. Out of range:
-//refused.
+//(PLL, CPU, bus, in MHz): the PLL is set to the next of its four speeds, the bus to half of it. Out of range
+//refused, as uOFW's reading of the power service checks them: a PLL of 19 to 333, a CPU of 1 to 333 and a bus of 1 to
+//167, the CPU no faster than the PLL and the bus no faster than half of it.
 //Changing the PLL takes the PSP a while (PPSSPP's measurements: 150 ms, but 15.7 between 190 and 222 MHz and 16.6
 //between 266 and 333), in which the calling thread waits.
 auto Kernel::scePowerSetClockFrequency() -> void {
   u32 pll = arg(0), speed = arg(1), bus = arg(2);
   if(pll < 19 || pll < speed || pll > 333) return result(ErrorInvalidValue);
   if(!speed || speed > 333) return result(ErrorInvalidValue);
-  if(!bus || bus > 166) return result(ErrorInvalidValue);
+  if(!bus || bus > 167 || pll < 2 * bus) return result(ErrorInvalidValue);
   u32 before = powerState.pll;
   powerState.pll = pllSpeed(pll);
   powerState.bus = powerState.pll / 2;
@@ -107,9 +109,11 @@ auto Kernel::scePowerSetCpuClockFrequency() -> void {
   result(0);
 }
 
-//(MHz): the bus follows the PLL whatever is asked (half its speed); only the range is checked.
+//(MHz): the bus follows the PLL whatever a game asks (half its speed, as uOFW's reading of the power service sets it
+//for all but the system's own programs); only the range is checked, up to half the PLL's speed. Activision Hits
+//Remixed asks for 166 (and the CPU for 333) as it starts, both refused at a PLL of 222 (docs/psp-core.md, part 104).
 auto Kernel::scePowerSetBusClockFrequency() -> void {
-  if(!arg(0) || arg(0) > 111) return result(ErrorInvalidValue);
+  if(!arg(0) || arg(0) > powerState.pll / 2) return result(ErrorInvalidValue);
   result(0);
 }
 

@@ -1,0 +1,10 @@
+# psp-ge-profile's exports: only what the module loader needs. No module_stop: the module can't be stopped
+# (PSP_MODULE_NO_STOP), as a game thread may be asleep inside one of its hooks at any time.
+PSP_BEGIN_EXPORTS
+
+PSP_EXPORT_START(syslib, 0, 0x8000)
+PSP_EXPORT_FUNC_HASH(module_start)
+PSP_EXPORT_VAR_HASH(module_info)
+PSP_EXPORT_END
+
+PSP_END_EXPORTS
