@@ -35,6 +35,56 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP display: the frame buffer set for the next vertical sync shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second) — 2026-10-16
+
+Branch `cursor/psp-display-latch-2b67` (draft PR #271; from master `5442acb8b`, masters `03eca2a69`, `dd63f4ffb`,
+`230c0a731` and `92eddbfea` merged in: #274, #266, #267, #268, #272, #273); docs/psp-core.md, part 108. Clean room:
+pspautotests' display/setframebuf and isstate, round 8's display-start (part 107), pspsdk's pspdisplay.h; no PPSSPP
+or JPCSP. Save states: layout 33 (#269 takes 33 too: the second to land renumbers to 34).
+- **Why**: Army of Two flips from its list's SIGNAL callback for the next sync, then asks which frame buffer is shown
+  and waits for the blank while its flip isn't yet: two flips and a wait a frame, 30/20 fps on the owner's PSP.
+  Phobos took every frame buffer at once, so the game never waited: master draws 251 frames a second for 60 shown.
+- **Change** (display.cpp): sceDisplaySetFrameBuf's sync 1 sets the address shown from the next blank's start, or,
+  set in a blank before its vertical sync (631.5 us in), from that sync; the width and format at once (pspautotests'
+  setframebuf, isstate; round 8's display-start); sceDisplayGetFrameBuf's which 1 reads the one coming, 0 the one
+  shown; the screen shows the last one set in the frame after the blank, as before (its picture taken as the blank
+  starts: one set in the blank before its sync, after that, shows a frame later than on a PSP, as on master). Layout
+  33 keeps one waiting (13 bytes); a state with one due past the next blank's start is refused.
+- **Effect** (34 scenes x Software, Vulkan, Vulkan-fast against master; their display calls traced): 31 the same in
+  every frame. Army of Two: 120 frames a second drawn instead of 251 (gameplay; menu 194), two a blank, a blank
+  waited for every second one, a new picture each (with #269's PSP timing, both merged: 30/20 fps, two flips and a
+  wait a frame, as on the PSP); Death Jr. II's character screen: pictures the same, the VRAM in alternate frames and
+  the RAM not (its handler's and main thread's reads before the sync find the old buffer). The first try (the next
+  blank's start for every next-sync flip) also showed Death Jr. II's gameplay, Sonic Rivals, Disaster Report 3's
+  intro and Twisted Metal's logos a blank late: now master's. In those 34 scenes no picture repeats where master's
+  doesn't (Army of Two's intro does, in the library check: each of its video's pictures held two frames, master's one
+  to three); no wait past the next blank. Games that read sceDisplayGetFrameBuf(0) after a next-sync flip are the
+  ones that can change: Army of Two, Death Jr. II, Sonic Rivals here.
+- **Library check** (the coordinator's: 266 games, Software and Vulkan-fast, the clock fixed, against `230c0a731`):
+  0 newly failing; two real differences, in both renderers, this change's doing and not faults: Army of Two shows
+  master's very pictures 4 frames later (its loading frames now wait for the blank, so EALogo.bik opens 58,550 us
+  later; each video picture then held two frames); Sonic Rivals 2 presents master's frame buffer at all 3,600 frames,
+  but its flip from a GE FINISH callback reads back as not shown yet, as on a PSP, so its second list is queued at
+  the next blank and its animation sampled at other moments (1,739 pictures byte for byte master's; the boot
+  notice's fade, frames 190-201, a frame ahead of master's; the rest the title screen's sub-pixel motion).
+- **Checks**: tests/psp/run-tests.sh (sanitized): 577 groups, 0 failures; the new test fails with sync 1 taken at
+  once. With master `dd63f4ffb` merged in: 580 groups, 0 failures (583 with `230c0a731`; 610 with `92eddbfea`
+  and the review's fixes); the GE profile records each frame buffer call with the latch (Army of Two's two a frame,
+  as the PSP's capture has them).
+- **Review fixes** (review of `96383388d`: approve with should-fixes, no blockers): master `92eddbfea` merged, its
+  two system.cpp conflicts keeping both sides (the frame from presentedFrameBuffer() under #272's renderer checks):
+  Army of Two's first 400 frames and Sonic Rivals 2's first 600, Software and Vulkan-fast, #271's every picture with
+  the GE thread off and on. New tests catch the review's four surviving mutants (the latch dropped from
+  sceDisplaySetFrameBuf, sceDisplayIsForeground or events(), or made 0.3 ms before the sync) and system.cpp's two
+  uses of presentedFrameBuffer() (a pretend GPU: the frame read back and presented); the new state fields are in
+  "state fields", and the loader refuses one due past the next blank's start; round 8's display-start is cited.
+- **Left out** (follow-ups): setframebuf's refusals and the start's format, with a library check of their own (round
+  8's display-start: a PSP starts at address 0, width 0, format 3, Phobos at format 0; not in the foreground; every
+  frame buffer set at once refused from there, 0x80000107, or 0x80000104 for the start's width of 0, the display
+  left as it was; one for the next vblank taken); when a PSP takes one set as a blank starts (at that sync here,
+  unrecorded: a set at a blank's start read back before and after the sync would say); perhaps the picture taken at
+  the sync rather than as the blank starts.
+
 ## PSP GE on a thread of its own, exact: option "GE Thread" (Off, the default, and On; the app doesn't offer it yet), the emulation thread waiting only where the GE could still change what it reads — 2026-10-17
 
 Branch `cursor/psp-ge-thread-2b67` (GE round 4, part B, first PR), on master `a8d5640f5` with `5442acb8b` (#265),

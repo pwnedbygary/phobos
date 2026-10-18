@@ -847,10 +847,10 @@ static auto blitPicture(Memory& memory, u32 buffer, u32 firstRow) -> bool {
 
 //Runs a sample that never waits until the screen has swapped twice more (both buffers drawn again).
 static auto swapTwice(KernelMachine& m) -> bool {
-  u32 swaps = 0, shown = m.kernel.display.frameBuffer;
+  u32 swaps = 0, shown = m.kernel.presentedFrameBuffer();
   for(u32 slice = 0; slice < 2000 && swaps < 2; slice++) {
     m.kernel.run(100'000);
-    if(m.kernel.display.frameBuffer != shown) swaps++, shown = m.kernel.display.frameBuffer;
+    if(m.kernel.presentedFrameBuffer() != shown) swaps++, shown = m.kernel.presentedFrameBuffer();
   }
   return swaps == 2;
 }

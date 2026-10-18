@@ -160,9 +160,10 @@ auto System::run() -> void {
   //has it, which finishes what the GPU drew there.
   bool drawn = false;
   u32 at = 1;  //(the picture's size, times the PSP's)
-  if(drawing.renderer && gpu && kernel.display.frameBuffer) {
+  u32 frameBuffer = kernel.presentedFrameBuffer();  //(the one the frame after this blank shows)
+  if(drawing.renderer && gpu && frameBuffer) {
     auto& display = kernel.display;
-    u32 physical = display.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
+    u32 physical = frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
     u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
     at = std::min(shown, gpu->resolution());
     if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMSize) {
@@ -219,9 +220,10 @@ auto System::present() -> bool {
   if(!gpu || !gpu->presents()) return false;
   auto& display = kernel.display;
   u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
-  u32 physical = display.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
+  u32 frameBuffer = kernel.presentedFrameBuffer();
+  u32 physical = frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
   bool fromTarget = false;
-  if(ge.drawer().renderer && display.frameBuffer && physical >= Memory::VRAMBase &&
+  if(ge.drawer().renderer && frameBuffer && physical >= Memory::VRAMBase &&
      physical - Memory::VRAMBase < Memory::VRAMSize) {
     fromTarget = gpu->show(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height);
   }
@@ -611,7 +613,8 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
 //the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
-//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 32
+//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 33
+//since the display keeps a frame buffer set for the next vertical blank, shown from its start (part 108); 32
 //since an open memory stick file emptied as it was opened keeps the PSP's length of it and its host file's length,
 //the host file keeping the bytes past them until it's cut (part 95); 31 since the kernel keeps sceVaudio's hold on the
 //SRC channel, its buffers' format, effect and level control (part 82; 29 and 30 are skipped, other branches' layouts,
@@ -654,11 +657,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //files opened in the order of their numbers, 15 to 23 with the GE having nothing left to draw, 15 to 24 with no file's
 //PGD decryption set up (each read as it is), 15 to 25 with no error for an aborted message and no save deleted from a
 //list, 15 to 26 with no glyph held by a font nor being read into one, 15 to 27 with no module's imported variables
-//known (none linked, as those builds left them), 15 to 28 with sceVaudio holding nothing, and 15 to 31 with no file
-//emptied as it was opened keeping its host file's bytes; 29 and 30 (other branches' layouts) and older layouts are
-//refused.
+//known (none linked, as those builds left them), 15 to 28 with sceVaudio holding nothing, 15 to 31 with no file
+//emptied as it was opened keeping its host file's bytes, and 15 to 32 with no frame buffer waiting for a vertical
+//blank; 29 and 30 (other branches' layouts) and older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 32;
+static constexpr u32 StateVersion = 33;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.

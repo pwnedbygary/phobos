@@ -813,7 +813,8 @@ static auto hello() -> void {
       CHECK(display.pixelFormat, 3);
       bool lit = false;
       for(u32 y = 0; y < 8; y++) {
-        for(u32 x = 0; x < 200; x++) lit |= m.system.memory.read(4, display.frameBuffer + (y * 512 + x) * 4) != 0;
+        u32 shown = m.kernel.presentedFrameBuffer();  //(set for the next vertical sync, which may not have come)
+        for(u32 x = 0; x < 200; x++) lit |= m.system.memory.read(4, shown + (y * 512 + x) * 4) != 0;
       }
       CHECK(lit, true);
     }
