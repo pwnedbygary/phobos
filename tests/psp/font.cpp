@@ -1499,21 +1499,22 @@ static auto fontsGlyphStates() -> void {
   f.m.kernel.audio.vaudio.reserved = false;
   u32 vaudio = 0;
   while(vaudio < now.size() && now[vaudio] == withVaudio[vaudio]) vaudio++;
-  //(layout 33's: the GE's cached texture, its front end's time and a SIGNAL met, 22 bytes)
+  //(layout 33's: the GE's cached texture, its front end's time, a SIGNAL met and its pipeline, the queue empty: 50
+  //bytes)
   f.m.kernel.ge.cachedTexture.address = 1;
   auto withCached = kernelState(f.m);
   f.m.kernel.ge.cachedTexture.address = 0;
   u32 cached = 0;
   while(cached < now.size() && now[cached] == withCached[cached]) cached++;
-  CHECK(variables + 4 <= at && at + 8 <= now.size() && vaudio + 15 <= now.size() && cached + 22 <= now.size(), true);
-  if(variables + 4 > at || at + 8 > now.size() || vaudio + 15 > now.size() || cached + 22 > now.size()) return;
+  CHECK(variables + 4 <= at && at + 8 <= now.size() && vaudio + 15 <= now.size() && cached + 50 <= now.size(), true);
+  if(variables + 4 > at || at + 8 > now.size() || vaudio + 15 > now.size() || cached + 50 > now.size()) return;
   //(each field taken out from the last, so the places before it hold: sceVaudio's 15 bytes are layout 31's)
   auto without = [](std::vector<u8> bytes, std::vector<std::pair<u32, u32>> fields) {
     std::sort(fields.begin(), fields.end(), [](auto& x, auto& y) { return x.first > y.first; });
     for(auto [place, size] : fields) bytes.erase(bytes.begin() + place, bytes.begin() + place + size);
     return bytes;
   };
-  auto older = without(now, {{at, 8}, {vaudio, 15}, {variables, 4}, {cached, 22}});
+  auto older = without(now, {{at, 8}, {vaudio, 15}, {variables, 4}, {cached, 50}});
   KernelMachine n;
   prepare(n);
   u32 current = n.kernel.stateLayout;
@@ -1526,7 +1527,7 @@ static auto fontsGlyphStates() -> void {
 
   //layout 26 with a call part way through (sceFontNewLib, waiting in its alloc): no glyph's fields of the call's (32
   //bytes), nor of the font it would be opening (8), nor the program's count of imported variables (4), nor sceVaudio
-  //(15), nor the GE's cached texture, front end's time and SIGNAL met (22)
+  //(15), nor the GE's cached texture, front end's time, SIGNAL met and pipeline (50)
   KernelMachine p;
   prepare(p);
   memoryFunctions(p);
@@ -1561,7 +1562,7 @@ static auto fontsGlyphStates() -> void {
   cached = where([&](bool on) { p.kernel.ge.cachedTexture.address = on; });
   CHECK(variables + 4 <= opening && opening < fields && fields + 32 <= now.size() && vaudio + 15 <= now.size(), true);
   if(!(variables + 4 <= opening && opening < fields && fields + 32 <= now.size() && vaudio + 15 <= now.size())) return;
-  older = without(now, {{fields, 32}, {opening, 8}, {vaudio, 15}, {variables, 4}, {cached, 22}});
+  older = without(now, {{fields, 32}, {opening, 8}, {vaudio, 15}, {variables, 4}, {cached, 50}});
   KernelMachine q;
   prepare(q);
   q.kernel.stateLayout = 26;

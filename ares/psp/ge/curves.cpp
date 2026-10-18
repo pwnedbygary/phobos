@@ -237,11 +237,22 @@ auto GE::patch(bool spline, u32 argument) -> void {
       vertices.push_back(grid[(r + 1) * columns + c]);
     }
   }
-  auto before = owed;
-  drawVertices(kind == 0 ? TriangleStrip : kind == 1 ? LineStrip : Points, format, vertices, columns * 2);
-  if((commands[PatchCullEnable] & 1) && owed.pixels == before.pixels) owed = before;
-  else owed.front += f64(columns * rows) * Cost::PatchVertex;
-  owed.front += Cost::Patch;
+  u32 drawn = kind == 0 ? TriangleStrip : kind == 1 ? LineStrip : Points;
+  if(!pspTiming) {
+    drawVertices(drawn, format, vertices, columns * 2);
+  } else {
+    //(BEZIER's or SPLINE's own work and the patch's go first, then its vertices' are shared out among the primitives
+    //it may draw; one that PATCH_CULL_ENABLE leaves undrawn takes its own work alone: Cost, Pipe)
+    pipe.pending += pipe.vertices + Cost::Prim + Cost::Patch, pipe.vertices = 0;
+    bool culls = commands[PatchCullEnable] & 1;
+    u64 pixels = owedPixels;
+    Pipe kept;
+    if(culls) kept = pipe;
+    pipe.vertices = f64(columns * rows) * Cost::PatchVertex, pipe.left = vertices.size();
+    drawVertices(drawn, format, vertices, columns * 2);
+    if(culls && owedPixels == pixels) pipe = kept;
+    pipe.pending += pipe.vertices, pipe.vertices = 0, pipe.left = 0;
+  }
   //A huge surface's vertices (up to tens of MB at the budget) aren't kept once drawn: drawVertices() is done with
   //them (what it defers, it copies), and only room for an ordinary surface's stays for the next.
   if(vertices.capacity() > PatchKept) std::vector<Vertex>().swap(vertices);

@@ -206,65 +206,164 @@ static auto pixelsAcross(const s64 (&at)[3], s32 first, s32 last) -> s64 {
   return std::max<s64>(0, to - from + 1);
 }
 
-//A primitive's time in the GE's back end (Cost): setting it up; its rows, each the longer of the least a row takes
-//and its pixels' (columns: its box's width there, which decides how fast they go); the depth test's; and the texels
-//its texture brings from memory. A texture of 8 KiB at most is held whole by the cache, loaded once until another
-//is drawn with or TEX_FLUSH empties it; a bigger one brings in its bytes as the pixels take them, the texels a pixel
-//covers (texels: the texture's area over the pixels', at most 2 counted) but for a texture repeating across the
-//primitive, whose repeats on a row come from the cache (across: its texels across the primitive). The measured
-//rates: swizzled or not, from RAM or VRAM, and DXT's by the texel. A texture of more than 64 KiB comes slower from
-//RAM, as every such measurement drew it 256 texels across; drawn in strips 128 texels across or narrower, as games
-//draw a big picture, it's taken at the cache's rate (unmeasured: at the slower rate, Armored Core's movie frames, in
-//68-texel strips of a 512x512 texture, took the GE longer than they last, and the movie stalled; part 76).
-auto GE::owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 texels, f64 across) -> void {
-  owedPixels += pixels, owedPrimitives++;  //(what Sony's peaks count: the GE timing "Fast", Kernel::geTime())
-  struct Queued {  //its back end's clocks, into the front end's queue (Cost::Queue) however this returns
-    GE& ge;
-    f64 before;
-    ~Queued() { ge.queue(ge.owed.back - before); }
-  } queued{*this, owed.back};
+//With the PSP's timing, a primitive's pixels, rows, widest row and texels worked out for owePrimitive() out of the
+//hot functions that meet it, which with "Fast" count its pixels alone (GE::owe()), as they did before. A triangle
+//meshTriangles() hands on whole: its texels as transformRest() would place them (texture mapping 0; the others counted
+//as a texel a pixel), none worked out for an untextured one.
+[[gnu::noinline]] static auto oweMeshTriangle(GE& ge, const GE::Look& look, const GE::Transform& t, const GE::Vertex& a,
+                                              const GE::Vertex& b, const GE::Vertex& c, s64 area, const s64 (&x)[3],
+                                              const s64 (&y)[3], const Sixteenths& inside) -> void {
+  f64 texels = 1, across = 0;
+  if(look.textured && t.mapMode == 0) {
+    const GE::Vertex* corners[3] = {&a, &b, &c};
+    f64 u[3], v[3];
+    for(u32 k : range(3)) {
+      u[k] = (f64(corners[k]->u) * t.textureScale[0] + t.textureOffset[0]) * t.textureWidth;
+      v[k] = (f64(corners[k]->v) * t.textureScale[1] + t.textureOffset[1]) * t.textureHeight;
+    }
+    texels = std::abs((u[1] - u[0]) * (v[2] - v[0]) - (v[1] - v[0]) * (u[2] - u[0])) / (std::abs(area) / 256.0);
+    across = std::max({u[0], u[1], u[2]}) - std::min({u[0], u[1], u[2]});
+  }
+  auto& r = look.pixel;
+  ge.owePrimitive(look, pixelsInside(x, y, inside), pixelsAcross(y, r.top, r.bottom), pixelsAcross(x, r.left, r.right),
+                  texels, across, 4);
+}
+//A triangle placed already (placedTriangle()), its texels where 3D's texture mapping doesn't take them from elsewhere
+//(mapped), as meshTriangles() counts them.
+[[gnu::noinline]] static auto owePlacedTriangle(GE& ge, const GE::Look& look, const GE::Vertex& a, const GE::Vertex& b,
+                                                const GE::Vertex& c, bool mapped, s64 area, const s64 (&x)[3],
+                                                const s64 (&y)[3]) -> void {
+  f64 texels = 1, across = 0;
+  if(look.textured && mapped) {
+    f64 texelArea = (f64(b.u) - a.u) * (f64(c.v) - a.v) - (f64(b.v) - a.v) * (f64(c.u) - a.u);
+    texels = std::abs(texelArea) / (std::abs(area) / 256.0);
+    across = std::max({a.u, b.u, c.u}) - std::min({a.u, b.u, c.u});
+  }
+  auto& r = look.pixel;
+  ge.owePrimitive(look, pixelsInside(x, y, r), pixelsAcross(y, r.top, r.bottom), pixelsAcross(x, r.left, r.right),
+                  texels, across, 4);
+}
+//A sprite (rectangle()): its texels a pixel its texture's area over its own.
+[[gnu::noinline]] static auto oweSprite(GE& ge, const GE::Look& look, const GE::Vertex& from, const GE::Vertex& to,
+                                        const GE::Job& job, bool covers) -> void {
+  s64 columns = covers ? job.lastX - job.firstX + 1 : 0, rows = covers ? job.lastY - job.firstY + 1 : 0;
+  f64 texels = 1, across = 0;
+  if(look.textured) {
+    across = std::abs(f64(to.u) - f64(from.u));
+    f64 down = std::abs(f64(to.v) - f64(from.v));
+    f64 area = f64(job.sprite.right - job.sprite.left) * f64(job.sprite.bottom - job.sprite.top) / 256;
+    texels = across * down / area;
+  }
+  ge.owePrimitive(look, u64(columns * rows), rows, columns, texels, across, 3, true);
+}
+
+//A primitive met with the PSP's timing: what Sony's peaks count of it, and its time in the GE's back end (Cost), handed
+//on through the queue between the two ends (pipeItem()) with the front end's work since the last item and its share of
+//its PRIM's vertices' work: setting it up; its rows, each the longer of the least a row takes and its pixels' (columns:
+//its box's width there, which decides how fast they go); the depth test's; and its texels' (texelClocks()).
+auto GE::owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 texels, f64 across, f64 entries,
+                      bool sprite) -> void {
+  owedPixels += pixels, owedPrimitives++;  //(what Sony's peaks count, for the GE profile)
   auto& p = look.pixel;
-  owed.back += Cost::Primitive;
-  owed.pixels += pixels;
-  if(!pixels || rows <= 0) return;
-  f64 rate = columns <= 32 ? Cost::NarrowPixel : p.format == 3 ? Cost::Pixel32 : Cost::Pixel16;
-  owed.back += f64(rows) * std::max(Cost::Row, f64(pixels) / f64(rows) * rate);
-  if(p.clear ? p.clearDepth : p.depthTest) owed.back += f64(pixels) * Cost::DepthPixel;
-  if(!look.textured) return;
+  f64 back = Cost::Primitive;
+  if(pixels && rows > 0) {
+    f64 rate = columns <= Cost::NarrowColumns ? Cost::NarrowPixel : p.format == 3 ? Cost::Pixel32 : Cost::Pixel16;
+    back += f64(rows) * std::max(Cost::Row, f64(pixels) / f64(rows) * rate);
+    if(p.format == 3 && (p.clear ? p.clearDepth : p.depthTest)) back += f64(pixels) * Cost::DepthPixel;
+    if(look.textured) back += texelClocks(look, pixels, texels, across, sprite);
+  }
+  if(pipe.left) {
+    f64 share = pipe.vertices / pipe.left;
+    pipe.pending += share, pipe.vertices -= share, pipe.left--;
+  }
+  pipeItem(back, entries);
+}
+
+//A primitive's texels' time (Cost::TexelByte). A texture of 8 KiB at most is held whole by the cache, loaded once until
+//another is drawn with or TEX_FLUSH empties it. A bigger one brings in its bytes as the pixels take them: the texels a
+//pixel covers (texels: the texture's area over the pixels', at most 2 counted; with mipmaps at the level TEX_LEVEL
+//chooses), but for a texture repeating across the primitive, whose repeats on a row come from the cache (across: its
+//texels across the primitive); at a rate by where they come from, the texel's size and whether the primitive takes
+//them wide.
+auto GE::texelClocks(const Look& look, u64 pixels, f64 texels, f64 across, bool sprite) -> f64 {
   auto& t = look.texture;
   u32 bits = t.format < 8 ? TexelBits[t.format] : t.format == 8 ? 4 : 8;
   f64 bytes = f64(std::min<u32>(t.width, 512)) * std::min<u32>(t.height, 512) * bits / 8;
   u32 physical = t.address & 0x1fff'ffff;
   bool vram = physical >= Memory::VRAMBase && physical < Memory::VRAMBase + Memory::VRAMWindow;
-  if(bytes <= 8192) {
+  if(bytes <= Cost::WholeBytes) {
     CachedTexture now{t.address, t.format, commands[TextureSize0] & 0xf0f, true};
     if(cachedTexture.held && cachedTexture.address == now.address && cachedTexture.format == now.format &&
-       cachedTexture.size == now.size) return;
+       cachedTexture.size == now.size) return 0;
     cachedTexture = now;
-    owed.back += bytes * (vram ? Cost::LoadVRAMByte : t.swizzled ? Cost::LoadByteSwizzled : Cost::LoadByte);
-    return;
+    return bytes * Cost::LoadByte[vram ? 2 : t.swizzled ? 0 : 1];
   }
   cachedTexture.held = false;
-  f64 taken = std::isfinite(texels) ? std::clamp(texels, 0.0, 2.0) : 1.0;
+  f64 taken = std::isfinite(texels) ? std::sqrt(std::clamp(texels, 0.0, Cost::TexelsMost)) : 1.0;
+  u32 levels = commands[TextureMode] >> 16 & 7;
+  if(levels && std::isfinite(texels) && texels > 0) {
+    f64 bias = f64(s8(commands[TextureLevel] >> 16)) / 16;
+    f64 chosen = (commands[TextureLevel] & 3) == 1 ? bias : 0.5 * std::log2(texels) + bias;
+    u32 level = u32(std::clamp(std::floor(chosen + 0.5), 0.0, f64(levels)));
+    taken = std::sqrt(std::clamp(texels / f64(1u << 2 * level), 0.0, Cost::TexelsMost));
+  }
   if(std::isfinite(across) && across > t.width) taken *= f64(t.width) / across;
-  f64 fetched = f64(pixels) * taken;  //texels
-  if(t.format >= 8) return void(owed.back += fetched * Cost::CompressedTexel);
-  f64 perByte = vram ? Cost::VRAMTexelByte
-              : bytes > 65536 && across > 128 ? (t.swizzled ? Cost::BigTexelByteSwizzled : Cost::BigTexelByte)
-              : (t.swizzled ? Cost::TexelByteSwizzled : Cost::TexelByte);
-  owed.back += fetched * bits / 8 * perByte;
+  f64 fetched = f64(pixels) * taken * bits / 8;  //bytes
+  if(t.format >= 8) return fetched * Cost::CompressedByte;
+  f64 distinct = std::isfinite(across) ? std::min(across, f64(t.width)) : 0;
+  bool indices = bits <= 8, wide = distinct >= (indices ? Cost::WideIndices : Cost::WideTexels);
+  u32 from = vram ? 3 : t.swizzled ? 0 : bytes > Cost::SmallBytes ? 2 : 1;
+  if(!sprite && !indices) return fetched * Cost::TriangleTexelByte[from][wide];
+  return fetched * Cost::TexelByte[indices][from][wide];
+}
+
+//With the PSP's timing, a PRIM met: what the last left of its vertices' work (primitives culled or cut away) goes to
+//the front end, then the PRIM's own; its vertices' work (readVertices(), drawVertices()) is shared out among the
+//primitives it may draw, as they come (owePrimitive()).
+auto GE::pipePrimitive(u32 kind, u32 count) -> void {
+  pipe.pending += pipe.vertices + Cost::Prim;
+  pipe.vertices = 0;
+  pipe.left = kind == Points ? count : kind == Lines || kind == Sprites ? count / 2 : kind == LineStrip
+            ? (count ? count - 1 : 0) : kind == Triangles ? count / 3 : count > 2 ? count - 2 : 0;
+}
+
+//The front end waiting for the back end to be done with all it has been handed (before a palette's load, which what
+//it has is drawn with).
+auto GE::pipeDrain() -> void {
+  pipe.front = std::max(pipe.front + pipe.pending, pipe.back);
+  pipe.pending = 0, pipe.first = pipe.count = 0, pipe.entries = 0;
+}
+
+//An item handed on by the front end, with its work since the last (pipe.pending), to the back end, which takes back
+//clocks over it: the front end waits for room in the queue (Cost::Queue), the oldest items done; the back end takes
+//it once it has it and is done with the one before.
+auto GE::pipeItem(f64 back, f64 entries) -> void {
+  auto& q = pipe;
+  constexpr u32 Room = Pipe::Room;
+  if(running) q.pending += f64(*running - q.words) * Cost::Command, q.words = *running;
+  f64 front = q.front + q.pending;
+  q.pending = 0;
+  while(q.count && (q.entries + entries > Cost::Queue || q.count == Room)) {
+    auto& oldest = q.items[q.first];
+    front = std::max(front, oldest.done);
+    q.entries -= oldest.entries;
+    q.first = (q.first + 1) % Room, q.count--;
+  }
+  q.front = front;
+  q.back = std::max(q.back, front) + back;
+  q.items[(q.first + q.count) % Room] = {entries, q.back};
+  q.count++, q.entries += entries;
 }
 
 //A block transfer's time (Cost, part 76): its rows, and its bytes by where they come from and go (RAM or VRAM).
 auto GE::oweTransfer(u32 width, u32 height, u32 bytes, u32 source, u32 destination) -> void {
+  if(!pspTiming) return;
   auto inVRAM = [](u32 address) {
     u32 physical = address & 0x1fff'ffff;
     return physical >= Memory::VRAMBase && physical < Memory::VRAMBase + Memory::VRAMWindow;
   };
   f64 perByte = Cost::TransferByte[inVRAM(source)][inVRAM(destination)];
-  f64 clocks = height * Cost::TransferRow + f64(width) * height * bytes * perByte;
-  owed.back += clocks;
-  queue(clocks);
+  pipeItem(height * Cost::TransferRow + f64(width) * height * bytes * perByte, 1);
 }
 
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
@@ -360,13 +459,17 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
   }
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
-  //(the GE's time: vertices in a row come in at a byte a VertexByte, each one through an index far slower: Cost)
-  owed.front += format.indexFormat ? count * Cost::IndexedVertex : f64(count) * format.size * Cost::VertexByte;
+  //(the GE's time: vertices in a row come in at a byte a VertexByte, each one through an index far slower, the work
+  //shared out among the PRIM's primitives: Cost, Pipe)
+  if(pspTiming) {
+    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : f64(count) * format.size * Cost::VertexByte;
+  }
 }
 
 auto GE::primitive(u32 kind, u32 count) -> void {
   if(!drawing.deferring) settle();  //(called by itself, outside run(): what the last list left being drawn first)
   auto format = vertexFormat();
+  if(pspTiming) pipePrimitive(kind, count);  //(the GE's time: Pipe)
   readVertices(count, format);
   if(kind == 7) return note("PRIM's kind 7 (going on with the last primitive's vertices) isn't emulated yet");
   if(!format.positionFormat) return;  //vertices without positions draw nothing (as PPSSPP has it)
@@ -582,11 +685,15 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     t.weights = format.weightFormat ? format.weights : 0;
     t.textureWidth = texture.width, t.textureHeight = texture.height;
     t.vertexColor = format.colorFormat != 0;
-    f64 each = t.weights * Cost::Weight;  //(the GE's time a vertex: its skinning and its lights, Cost)
-    for(auto& light : t.lights) {
-      if(t.lighting && light.enabled) each += light.directional ? Cost::DirectionalLight : Cost::PointLight;
+    if(pspTiming) {  //(the GE's time a vertex: its skinning and its lights, Cost)
+      f64 each = t.weights * Cost::Weight;
+      for(auto& light : t.lights) {
+        if(!t.lighting || !light.enabled) continue;
+        if(!light.directional) each += Cost::PointLight;
+        if(light.specular) each += Cost::SpecularLight;
+      }
+      pipe.vertices += count * each;
     }
-    owed.front += count * each;
   }
   //(3D triangles' texels where they're the vertices' own coordinates, scaled and offset as transform() maps them:
   //every pixel's lie between its corners', as their perspective weighs them, and clipping cuts along its edges; a
@@ -843,21 +950,9 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
     s64 x0 = pa.x, y0 = pa.y;
     s64 area = (pb.x - x0) * (pc.y - y0) - (pb.y - y0) * (pc.x - x0);
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
-    //its texels, as transformRest() would place them (texture mapping 0; the others counted as a texel a pixel)
-    f64 u[3], v[3], texels = 1, across = 0;
-    for(u32 k : range(3)) {
-      auto& vertex = vertices[k ? (k == 1 ? b : c) : a];
-      u[k] = (f64(vertex.u) * t.textureScale[0] + t.textureOffset[0]) * t.textureWidth;
-      v[k] = (f64(vertex.v) * t.textureScale[1] + t.textureOffset[1]) * t.textureHeight;
-    }
-    if(t.mapMode == 0) {
-      texels = std::abs((u[1] - u[0]) * (v[2] - v[0]) - (v[1] - v[0]) * (u[2] - u[0])) / (std::abs(area) / 256.0);
-      across = std::max({u[0], u[1], u[2]}) - std::min({u[0], u[1], u[2]});
-    }
-    s64 xs[3] = {x0, pb.x, pc.x}, ys[3] = {y0, pb.y, pc.y};
-    auto& r = look.pixel;
-    owePrimitive(look, pixelsInside(xs, ys, inside), pixelsAcross(ys, r.top, r.bottom),
-                 pixelsAcross(xs, r.left, r.right), texels, across);
+    if(!pspTiming) owe(pixelsInside({x0, pb.x, pc.x}, {y0, pb.y, pc.y}, inside));
+    else oweMeshTriangle(*this, look, t, vertices[a], vertices[b], vertices[c], area, {x0, pb.x, pc.x},
+                         {y0, pb.y, pc.y}, inside);
     into[filled] = c, into[filled + 1] = a, into[filled + 2] = b, filled += 3;
   };
   if(kind == Triangles) {
@@ -1122,10 +1217,8 @@ auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool 
   Job job;
   if(!spriteJob(look, from, to, perspective, job)) return;
   bool covers = job.firstX <= job.lastX && job.firstY <= job.lastY;
-  s64 columns = covers ? job.lastX - job.firstX + 1 : 0, rows = covers ? job.lastY - job.firstY + 1 : 0;
-  f64 across = std::abs(f64(to.u) - f64(from.u)), down = std::abs(f64(to.v) - f64(from.v));
-  f64 area = f64(job.sprite.right - job.sprite.left) * f64(job.sprite.bottom - job.sprite.top) / 256;
-  owePrimitive(look, u64(columns * rows), rows, columns, across * down / area, across);
+  if(!pspTiming) owe(covers ? u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1) : 0);
+  else oweSprite(*this, look, from, to, job, covers);
   if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
   submit(job);
 }
@@ -1370,16 +1463,8 @@ auto GE::placedTriangle(const Look& look, const Vertex& a, const Vertex& b, cons
   s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //above 0: clockwise
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
-  //its texels, a texel a pixel where 3D's texture mapping takes them from elsewhere, as meshTriangles() counts them
-  f64 texels = 1, across = 0;
-  if(!perspective || (commands[TextureMapMode] & 3) == 0) {
-    f64 texelArea = (f64(b.u) - a.u) * (f64(c.v) - a.v) - (f64(b.v) - a.v) * (f64(c.u) - a.u);
-    texels = std::abs(texelArea) / (std::abs(area) / 256.0);
-    across = std::max({a.u, b.u, c.u}) - std::min({a.u, b.u, c.u});
-  }
-  auto& r = look.pixel;
-  owePrimitive(look, pixelsInside(x, y, r), pixelsAcross(y, r.top, r.bottom), pixelsAcross(x, r.left, r.right), texels,
-               across);
+  if(!pspTiming) owe(pixelsInside(x, y, look.pixel));
+  else owePlacedTriangle(*this, look, a, b, c, !perspective || (commands[TextureMapMode] & 3) == 0, area, x, y);
   if(hardware) return renderer->triangleAt(a, b, c, x, y);
   if(drawing.recording && !skipping) {  //(set up where the batch keeps it, not copied there: a triangle's is 470 bytes)
     auto& jobs = drawing.batch->jobs;
@@ -1485,7 +1570,8 @@ auto GE::point(const Look& look, const Vertex& at) -> void {
   auto& pixel = look.pixel;
   s32 x = fixed(at.x) >> 4, y = fixed(at.y) >> 4;
   if(x < pixel.left || x > pixel.right || y < pixel.top || y > pixel.bottom) return;
-  owePrimitive(look, 1, 1, 1, 1, 0);
+  if(!pspTiming) owe(1);
+  else owePrimitive(look, 1, 1, 1, 1, 0, 2);
   if(hardware) return renderer->point(at);
   Job job{};
   job.kind = Job::Kind::Point;
@@ -1595,7 +1681,8 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
     return rising ? row > highAcross : row < lowAcross;
   });
   s64 lit = std::max<s64>(0, end - start);  //(its pixels inside: a column, or a row when steep, apiece)
-  owePrimitive(look, u64(lit), steep ? lit : 1, steep ? 1 : lit, 1, 0);
+  if(!pspTiming) owe(u64(lit));
+  else owePrimitive(look, u64(lit), steep ? lit : 1, steep ? 1 : lit, 1, 0, 3);
   Job job{};
   job.kind = Job::Kind::Line;
   job.look = &look;

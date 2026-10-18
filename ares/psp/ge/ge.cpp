@@ -59,7 +59,7 @@ auto GE::power() -> void {
   boneIndex = worldIndex = viewIndex = projectionIndex = textureIndex = 0;
   pending = Stop::Ended;
   owedPixels = owedPrimitives = 0;
-  owed = {}, cachedTexture = {};
+  pipeStart(), cachedTexture = {};
   noted.clear();
   flush();
   dropTextures();

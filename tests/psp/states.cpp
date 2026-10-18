@@ -1718,13 +1718,14 @@ static auto olderLayouts() -> void {
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd == truncation && truncation < truncationEnd && truncationEnd <= workingDirectory
               && workingDirectory < geDone && geFinish == geDone + 8 && cached == geFinish + 1
-              && cached + 22 <= state.size();
+              && cached + 50 <= state.size();
   CHECK(ordered, true);
   if(!ordered) return;
-  //Layouts before 33 have no texture in the GE's cache, front end's time nor SIGNAL met (22 bytes right after the
-  //GE's time, after everything else changed here, so taken out of each older state first of all)
+  //Layouts before 33 have no texture in the GE's cache, front end's time, SIGNAL met nor pipeline (50 bytes with
+  //its queue empty, right after the GE's time, after everything else changed here, so taken out of each older state
+  //first of all)
   auto layout32 = state;
-  layout32.erase(layout32.begin() + cached, layout32.begin() + cached + 22);
+  layout32.erase(layout32.begin() + cached, layout32.begin() + cached + 50);
   //Layouts before 32 have no emptied file's lengths (the file's last fields, after everything but the working folder
   //and the GE's time, so taken out of each older state next, those after it moving back as much)
   u32 cut = truncationEnd - truncation;
@@ -1821,8 +1822,8 @@ static auto olderLayouts() -> void {
   m.kernel.audio.vaudio.reserved = false;
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
-  //(the GE's time; its cached texture, its front end's time and a SIGNAL met)
-  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 22);
+  //(the GE's time; its cached texture, its front end's time, a SIGNAL met and its pipeline, the queue empty)
+  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 50);
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption and lengths after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (truncationEnd - opened));
   }

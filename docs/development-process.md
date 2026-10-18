@@ -76,6 +76,9 @@ are excluded; copying the portable template elsewhere requires explicit adoption
   their PSP's round-3 GE measurements (`tests/psp/measurements/ge-round3`), kept so any machine runs every test.
   Authorized by the owner's task on 2026-10-11: round 6's GE measurements from the same PSP
   (`tests/psp/measurements/ge-round6`, packed with xz), for the same reason.
+  By the owner's task on 2026-10-18 (#269's 15% gate run from the repository): the owner's 12 GE profile captures of
+  six games from the same PSP (`tests/psp/measurements/ge-captures`, packed with xz: tools/psp-ge-profile's records
+  of the games' GE and display calls and their times, the disc IDs, titles and thread names; no game code or data).
   Do not uninstall or clear app data to run a comparison.
 
 See [coordinator prompt](coordinator-prompt.md),

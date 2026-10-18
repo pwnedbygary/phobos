@@ -1121,6 +1121,28 @@ auto Kernel::serialize(serializer& s) -> bool {
   //GE met them)
   if(s.reading() && stateLayout < 33) geReachAt = 0, geSignalDue = false;
   else s(geReachAt), s(geSignalDue);
+  //with the PSP's timing, the list's pipeline as its last run left it (GE::Pipe, Kernel::geResume()): when its times
+  //count from, when its front end and its back end will be done, and the items its queue holds, each's entries and
+  //when it's drawn (layout 33 on: an older state's list runs on from an empty pipeline)
+  if(s.reading() && stateLayout < 33) {
+    gePipeAt = 0, ge.pipeStart();
+  } else {
+    auto& pipe = ge.pipe;
+    u32 count = pipe.count;
+    s(gePipeAt), s(pipe.front), s(pipe.back), s(count);
+    if(s.reading()) {
+      check(count <= GE::Pipe::Room);
+      count = std::min(count, GE::Pipe::Room);
+      pipe.first = 0, pipe.count = count, pipe.entries = 0;
+      pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
+    }
+    for(u32 n = 0; n < count; n++) {
+      auto& item = pipe.items[(pipe.first + n) % GE::Pipe::Room];
+      s(item.entries), s(item.done);
+      if(s.reading()) pipe.entries += item.entries;
+    }
+    if(s.reading()) check(pipe.front >= 0 && pipe.back >= 0 && pipe.entries >= 0 && pipe.entries <= GE::Cost::Queue);
+  }
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue
     //and geEnded() take it out of there); one never queued is free; a completed one is either (it leaves the queue

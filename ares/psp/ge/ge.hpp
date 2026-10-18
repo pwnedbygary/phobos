@@ -74,7 +74,7 @@ struct GE {
     TransferSource = 0xb2, TransferSourceWidth = 0xb3, TransferDestination = 0xb4, TransferDestinationWidth = 0xb5,
     TextureSize0 = 0xb8, TextureMapMode = 0xc0, TextureShadeMapping = 0xc1, TextureMode = 0xc2, TextureFormat = 0xc3,
     ClutLoad = 0xc4,
-    ClutFormat = 0xc5, TextureFilter = 0xc6, TextureWrap = 0xc7, TextureFunction = 0xc9,
+    ClutFormat = 0xc5, TextureFilter = 0xc6, TextureWrap = 0xc7, TextureLevel = 0xc8, TextureFunction = 0xc9,
     TextureEnvironmentColor = 0xca, TextureFlush = 0xcb, FogEnd = 0xcd, FogSlope = 0xce, FogColor = 0xcf,
     FrameBufferPixelFormat = 0xd2, ClearMode = 0xd3, Scissor1 = 0xd4, Scissor2 = 0xd5, MinZ = 0xd6, MaxZ = 0xd7,
     ColorTest = 0xd8, ColorReference = 0xd9, ColorTestMask = 0xda, AlphaTest = 0xdb, StencilTest = 0xdc,
@@ -719,75 +719,137 @@ struct GE {
   std::vector<MeshCorner> placed;
   std::vector<u32> handed, handing;  //(handing: room for a PRIM's corners as they're found, handed over in runs)
 
-  //What a PSP's GE takes over its work, in its clocks (the bus's, half the PLL's), as round 6 of tools/psp-measure
-  //timed lists of known work on the owner's PSP (docs/psp-core.md, part 76: 906 lists at 222/111 and 333/166 MHz). The
-  //GE reads its list and fetches, transforms and lights vertices (its front end) while it draws what it has set up
-  //(its back end), each going on as the other does: a SIGNAL's callback comes long before the drawing ahead of it is
-  //done. So a run of a list takes the longer of the two (Kernel::geTime()), and a list some time of its own as it
-  //starts, an empty one's (whose finish callback came 18 microseconds after sceGeListEnQueue was called at 222/111
-  //MHz, inside the call; here it comes as the call returns, 23 microseconds in: Kernel::geDriven() takes the
-  //driver's own time). Half of the lists come within 4.2% of the PSP's time, 72% within 10% and 92% within 25%; the
-  //furthest out, perspective-textured fills, take nearly twice the PSP's. Used with the option "GE Timing" "PSP";
-  //"Fast", the default, charges Sony's peak rates instead (owedPixels, owedPrimitives).
+  //What a PSP's GE takes over its work, in its clocks (the bus's, half the PLL's), as tools/psp-measure timed lists of
+  //known work on the owner's PSP: round 6's 906 and round 8's 1,148 (docs/psp-core.md, parts 76 and 106), at 222/111
+  //and 333/166 MHz (and some of round 8's at 333/222/166 and 266/133 too: the GE's time follows the bus's clock
+  //alone). The GE reads its list and fetches, transforms and lights vertices (its front end), and hands each primitive
+  //on to be set up and drawn (its back end): the two go on at once as far as the queue between them lets them (Pipe).
+  //A list also takes some time of its own as it starts. Used with the option "GE Timing" "PSP"; "Fast", the default,
+  //charges Sony's peak rates instead (owedPixels, owedPrimitives). The clocks are tools/psp-measure/ge-fit.py's fit of
+  //rounds 6 and 8 (to three figures; part 106 has the command), but where a comment says otherwise.
   struct Cost {
-    static constexpr f64 List = 2170;                           //a list, as it starts
-    static constexpr f64 Command = 2.28;                        //a word of the list
-    static constexpr f64 Jump = 42.7, Call = 23.5;              //JUMP (or BJUMP taken): the list fetched afresh;
-                                                                //CALL, or RET
-    static constexpr f64 VertexByte = 0.515;                    //a vertex's byte, fetched in order
-    static constexpr f64 IndexedVertex = 37.6;                  //a vertex fetched through its index
-    static constexpr f64 DirectionalLight = 1.26;               //a vertex lit by a directional light
-    static constexpr f64 PointLight = 18.3;                     //or by a point light or a spotlight
-    static constexpr f64 Weight = 3.69;                         //a vertex's skinning weight
-    static constexpr f64 Cut = 26.3;                            //a triangle cut at the near plane
-    static constexpr f64 Patch = 120, PatchVertex = 14.5;       //a curved surface's patch, and each vertex made
-    static constexpr f64 Primitive = 7.03;                      //a primitive set up to be drawn
-    static constexpr f64 Row = 1.65;                            //the least a row of a primitive's pixels takes
-    static constexpr f64 NarrowPixel = 0.319;                   //a pixel of a primitive at most 32 pixels wide
-    static constexpr f64 Pixel32 = 0.535, Pixel16 = 0.34;       //of a wider one, into a 32- or 16-bit frame buffer
-    static constexpr f64 DepthPixel = 0.266;                    //more for the depth test (or clear mode's depth)
-    static constexpr f64 TexelByteSwizzled = 0.368;             //a texture's byte from RAM, swizzled
-    static constexpr f64 TexelByte = 1.38;                      //not swizzled
-    static constexpr f64 BigTexelByteSwizzled = 2.4;            //of one over 64 KiB, over 128 texels across, swizzled
-    static constexpr f64 BigTexelByte = 13.2;                   //not swizzled
-    static constexpr f64 VRAMTexelByte = 1.93;                  //from VRAM
-    static constexpr f64 CompressedTexel = 17.3;                //a DXT texture's texel
-    static constexpr f64 LoadByteSwizzled = 0.6, LoadByte = 1.41, LoadVRAMByte = 0.51;  //a texture loaded whole
-    static constexpr f64 PaletteByte = 0.28;                    //CLUT_LOAD's
-    static constexpr f64 TransferRow = 24.5;                    //a block transfer's row
-    static constexpr f64 TransferByte[2][2] = {{0.917, 0.662}, {0.353, 0.382}};  //from RAM or VRAM, to RAM or VRAM
-    //How far the front end gets ahead of the back end: the primitives (or transfers) it has handed on that the back
-    //end hasn't started, at most. Round 6's time-signals had the SIGNAL's callback after 16 primitives over the
-    //whole 256x256 target within 77 microseconds of queueing, their drawing 5 ms; Army of Two's last SIGNAL came 0.27
-    //ms before its list's FINISH, 30 ms in. Unmeasured beyond (round 8's time-signals2 measures it).
-    static constexpr u32 Queue = 16;
+    static constexpr f64 List = 2281;           //a list, as it starts
+    //the front end
+    static constexpr f64 Command = 2.32;        //a word of the list
+    static constexpr f64 Jump = 41.3;           //JUMP (or BJUMP taken): the list fetched afresh
+    static constexpr f64 Call = 23.3;           //CALL, or RET
+    static constexpr f64 Prim = 59.9;           //PRIM, BEZIER or SPLINE: its own, however many primitives it draws
+    static constexpr f64 VertexByte = 0.523;    //a vertex's byte, fetched in order
+    static constexpr f64 IndexedVertex = 35.7;  //a vertex fetched through its index (one used again costs as much)
+    static constexpr f64 Weight = 4.22;         //a vertex's skinning weight
+    static constexpr f64 PointLight = 11.2;     //a vertex lit by a point light or a spotlight (a directional one's
+                                                //light costs nothing to speak of)
+    static constexpr f64 SpecularLight = 1.43;  //and by a light's shine
+    static constexpr f64 Cut = 29.0;            //a triangle cut at the near plane
+    static constexpr f64 Patch = 91.6, PatchVertex = 13.8;  //a curved surface's patch, and each vertex made
+    //the back end
+    static constexpr f64 Primitive = 0;         //a primitive set up (the fit leaves it out: it hides behind its rows)
+    static constexpr f64 Row = 1.62;            //the least a row of a primitive's pixels takes
+    static constexpr s64 NarrowColumns = 32;    //a primitive at most this many pixels wide takes NarrowPixel (round
+                                                //6's time-sizes: 32 wide and narrower alike a pixel)
+    static constexpr f64 NarrowPixel = 0.356;   //a pixel of a narrow primitive
+    static constexpr f64 Pixel32 = 0.541, Pixel16 = 0.333;  //of a wider one, into a 32- or 16-bit frame buffer
+    static constexpr f64 DepthPixel = 0.190;    //more for the depth test (or clear mode's depth), into 32-bit only
+    //A texture's bytes, where it's over 8 KiB and so held a part at a time: [8- and 4-bit indices][from RAM swizzled,
+    //RAM not (up to 64 KiB), RAM not (more), VRAM][wide]. A sprite taking 256 distinct texels across, or 384 indices,
+    //takes them wide: it fetches its rows over and over (round 8's time-strips, a texel a pixel: 5 to 7.6 times the
+    //narrow rate; a texture repeating across takes as many as it has; 8-bit indices 256 across narrow, 480 wide).
+    //Wide from RAM unswizzled up to 64 KiB, which no list measured, is taken as more than 64 KiB is.
+    static constexpr f64 TexelByte[2][4][2] = {{{0.335, 3.11}, {1.41, 13.7}, {1.73, 13.7}, {0.275, 1.91}},
+                                               {{0.395, 2.82}, {1.32, 11.9}, {1.55, 11.9}, {0.583, 3.70}}};
+    //A triangle takes 16- and 32-bit texels at rates of its own, [from][wide] as above (sprites read along rows,
+    //triangles seem to go in blocks): wide, round 8's time-textures in 3D; narrow from RAM unswizzled up to 64 KiB,
+    //its time-overlap (32x32 squares, where its time-setup's 16x16 ones over a 64x64 texture took ten times as much: the
+    //cache's reuse, which the model doesn't follow). No list measured the rest (narrow from RAM swizzled, from RAM
+    //over 64 KiB and from VRAM; wide from RAM up to 64 KiB), taken as a sprite's (or wide, as over 64 KiB). Indices as a
+    //sprite's (Activision Hits Remixed's copyright screen, part 103's capture).
+    static constexpr f64 TriangleTexelByte[4][2] = {{0.335, 1.37}, {0.0342, 6.68}, {1.73, 6.68}, {0.275, 0.770}};
+    static constexpr f64 WholeBytes = 8192;     //a texture of at most this many bytes is held whole (LoadByte: the
+                                                //cache's 8 KiB, round 6's time-texcache)
+    static constexpr f64 SmallBytes = 65536;    //an unswizzled one from RAM up to this many takes the smaller rate
+                                                //(round 8: 64x64, 16 KiB, against 512 wide, 1 MiB)
+    static constexpr f64 WideTexels = 256, WideIndices = 384;  //distinct texels across a sprite takes wide (time-strips:
+                                                //128 narrow, 256 wide; indices 256 narrow, 480 wide)
+    static constexpr f64 TexelsMost = 64;       //texels a pixel counted at most: a pixel's take is their square root
+                                                //(round 8's time-textures and time-scenes: shrunk 2:1, 1.9 times
+                                                //the 1:1 time, 4:1 3.6 times, stretched 1:2 half)
+    static constexpr f64 CompressedByte = 20.3; //a DXT texture's byte
+    static constexpr f64 LoadByte[3] = {0.132, 0.509, 0.497};  //of one of 8 KiB at most, loaded whole into the cache:
+                                                               //from RAM swizzled, RAM not, VRAM
+    static constexpr f64 PaletteByte = 0.362;   //CLUT_LOAD's
+    static constexpr f64 TransferRow = 35.5;    //a block transfer's row
+    static constexpr f64 TransferByte[2][2] = {{0.881, 0.620}, {0.338, 0.382}};  //from RAM or VRAM, to RAM or VRAM
+    //The queue between the two ends, in entries, measured rather than fitted: a primitive takes one and one for each
+    //of its vertices (a sprite three, a triangle four), a transfer or a palette's load one. Round 8's time-signals2: a
+    //SIGNAL's callback after 128 sprites of 64x64 came with 28 of them left to draw, after 128 triangles 20.5 (84.6 and
+    //82 entries); its time-overlap: front-end and back-end work in turn, 16 of each at a time, went on together, 256
+    //at a time one after the other.
+    static constexpr f64 Queue = 83;
+    //The driver's own time on the CPU, in its cycles (Kernel::geDriven()), measured: sceGeListEnQueue's about 5200
+    //(round 6's timed lists: it returned 23.5 microseconds after it was called at 222 MHz, 15.5 at 333),
+    //sceGeListUpdateStallAddr's about 510 (ge-statuses: nine of them took the PSP 21 microseconds more than the core
+    //at 222 MHz).
+    static constexpr u64 EnqueueCycles = 5200, StallCycles = 510;
   };
-  //The work since the driver last looked (Kernel::geTime()), counted as each part is met, whichever renderer then
-  //draws it, so the time is the same for all of them (but for a renderer transforming 3D triangles itself, whose
-  //corners, meshTriangles()'s, are the GE's but for a float's rounding); the list's words are counted by the driver.
-  struct Owed {
-    f64 front = 0, back = 0;  //clocks
-    u64 pixels = 0;           //(those drawn, inside the scissor rectangle: whether a patch drew any, patch())
-    f64 last[Cost::Queue] = {};  //the back end's clocks for each of the last primitives (or transfers) met, a ring,
-    u32 next = 0;                //where the next goes,
-    f64 queued = 0;              //and their sum: what the back end may have left as the front end meets what follows
-  } owed;
-  auto queue(f64 clocks) -> void {
-    owed.queued += clocks - owed.last[owed.next];
-    owed.last[owed.next] = clocks;
-    owed.next = (owed.next + 1) % Cost::Queue;
+  //The work since the driver last looked (Kernel::geTime()), as the two ends take it, with the PSP's timing: the front
+  //end works till it hands an item on (a primitive, a transfer, a palette's load), as soon as the queue has room for
+  //it; the back end takes each in turn, once it's handed on and the last is done. Counted as each part is met,
+  //whichever renderer then draws it, so the time is the same for all of them (but for a renderer transforming 3D
+  //triangles itself, whose corners, meshTriangles()'s, are the GE's but for a float's rounding).
+  struct Pipe {
+    f64 front = 0, back = 0;  //clocks from Kernel::gePipeAt: the front end done with its last item, the back end with
+                              //all of them
+    f64 pending = 0;          //the front end's work since its last item (words, state, a PRIM's own): with the next
+    u64 words = 0;            //the run's words charged so far (run()'s count: the rest are the next item's)
+    f64 vertices = 0;         //a PRIM's vertices' work, shared out among its primitives as they come,
+    u32 left = 0;             //as many as it may still draw
+    static constexpr u32 Room = 128;  //(more items than Cost::Queue's entries can hold, each taking one at least)
+    struct Item { f64 entries, done; } items[Room];  //those in the queue: their entries, and when the back end is done
+    u32 first = 0, count = 0;                        //with each
+    f64 entries = 0;
+  } pipe;
+  bool pspTiming = false;  //the option "GE Timing" "PSP", as the kernel runs the GE (Kernel::geRun())
+  const u64* running = nullptr;  //the words run() has run (its ran), while it runs
+  auto pipeStart() -> void {
+    pipe.front = pipe.back = pipe.pending = pipe.vertices = pipe.entries = 0;
+    pipe.left = pipe.first = pipe.count = 0, pipe.words = 0;
+  }
+  auto pipeFront(f64 clocks) -> void { if(pspTiming) pipe.pending += clocks; }
+  auto pipeItem(f64 back, f64 entries) -> void;  //draw.cpp
+  auto pipePrimitive(u32 kind, u32 count) -> void;
+  auto pipeReach() const -> f64 { return pipe.front + pipe.pending + pipe.vertices; }  //the front end's, all of it
+  auto pipeTime() const -> f64 { return std::max(pipeReach(), pipe.back); }
+  //A run's end (words: run()'s count): the front end's work in hand, done; what it has handed on goes on being drawn,
+  //into the list's next run (Kernel::geResume()).
+  auto pipeStop(u64 words) -> void {
+    pipe.front += pipe.pending + f64(words - pipe.words) * Cost::Command + pipe.vertices;
+    pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
+  }
+  //Its times moved on by clocks: what was done by then gone from the queue.
+  auto pipeShift(f64 clocks) -> void {
+    pipe.front = std::max(pipe.front - clocks, 0.0), pipe.back = std::max(pipe.back - clocks, 0.0);
+    while(pipe.count && pipe.items[pipe.first].done <= clocks) {
+      pipe.entries -= pipe.items[pipe.first].entries;
+      pipe.first = (pipe.first + 1) % Pipe::Room, pipe.count--;
+    }
+    for(u32 n = 0; n < pipe.count; n++) pipe.items[(pipe.first + n) % Pipe::Room].done -= clocks;
   }
   //And what Sony's peak rates count of the same (the GE timing "Fast", the default): the primitives set up (a
   //triangle cut at the near plane, its pieces) and their pixels inside the scissor rectangle.
   u64 owedPixels = 0, owedPrimitives = 0;
   auto owe(u64 pixels) -> void { owedPixels += pixels, owedPrimitives++; }  //(those alone: owePrimitive() does both)
-  //The texture the GE's cache holds whole (8 KiB at most: owePrimitive()), kept until another is drawn with or
+  //The texture the GE's cache holds whole (8 KiB at most: texelClocks()), kept until another is drawn with or
   //TEX_FLUSH empties the cache; saved in states (layout 33 on).
   struct CachedTexture {
     u32 address = 0, format = 0, size = 0;  //size: TEXTURE_SIZE0's word
     bool held = false;
   } cachedTexture;
-  auto owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 texels, f64 across) -> void;
+  //A primitive met: its pixels, rows and widest row in pixels, its texels a pixel and across, its entries in the queue
+  //between the GE's two ends (Cost::Queue), and whether it's a sprite.
+  auto owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 texels, f64 across, f64 entries,
+                    bool sprite = false) -> void;
+  auto texelClocks(const Look& look, u64 pixels, f64 texels, f64 across, bool sprite) -> f64;
+  auto pipeDrain() -> void;  //draw.cpp
   //The GE's reciprocal (draw.cpp's geReciprocal()), and one of its chords' start and slope, for the tests.
   static auto reciprocal(float x) -> float;
   static auto reciprocalChord(u32 chord) -> std::pair<s32, s32>;

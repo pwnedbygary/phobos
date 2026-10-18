@@ -1000,7 +1000,7 @@ auto Kernel::power() -> void {
   geFinishing = -1;
   geLeft = GeBudget;
   geCommands = 0;
-  geDoneAt = geReachAt = 0;
+  geDoneAt = geReachAt = gePipeAt = 0;
   geFinishDue = false;
   geSignalDue = false;
   startTime = u64(std::time(nullptr)) * 1'000'000;

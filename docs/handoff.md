@@ -35,26 +35,34 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-## PSP GE: the GE's time as the owner's PSP took it — part 76's model behind the option "GE Timing" (off by default), the first comparison with the captures, a SIGNAL's interrupt at its time — 2026-10-16
+## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6 and 8, behind the option "GE Timing" (off by default), the gate against the captures, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
-`dd63f4ffb` (#266, #267) and `230c0a731` (#268) merged in; docs/psp-core.md, part 106.
-- **The model**: part 76's fit of round 6 (`GE::Cost`): the longer of the GE's front and back ends a run, a list's
-  start, the driver's CPU time in its calls; texture bytes with an 8 KiB cache (layout 33 keeps it).
-- **The option** "GE Timing": "Fast" (default) is Sony's peaks bit for bit as before; "PSP" the model. App: Settings →
-  Emulation and the in-game PSP menu; runner `--ge-timing psp|fast`; a profile's flag 16.
-- **A SIGNAL at its time** (PSP timing only): the GE waits at a SIGNAL till its front end would have got there, no
-  more than 16 primitives ahead of the back end (`GE::Cost::Queue`, provisional: round 6's time-signals had the
-  callback within 84 microseconds after 16 big sprites; Army of Two's came 0.27 ms before its list's FINISH, 30 ms
-  in, where Phobos took it 31 ms early). Round 8's time-signals2 measures the queue. Army of Two's pacing needs the
-  display's next-vblank switching too (part 108, its own pull request).
-- **First comparison**: within 15% Chains of Olympus (+11%), Ghost of Sparta (+3%), Activision Hits' copyright screen
-  (−9%); Super Monkey Ball −59%; Killzone +77 to +98% (its PSP lists as #266's reviewed decoder ends them);
-  Activision Hits' menu +138% (part 107: VRAM textures).
-- **Checks**: suite 577 groups, 0 failures (582 with master `dd63f4ffb` merged in, 585 with `230c0a731`; part 105's
-  spin groups pass with "PSP" too); "Fast" against master at #269's base (`a8d5640f5`) the same on 27 scenes,
-  Software and Vulkan-fast, every frame; older layouts load, master refuses layout 33.
-- **Not yet**: fixed-point charges before any default change; round 8's fit; the 15% gate.
+`dd63f4ffb` (#266, #267) and `230c0a731` (#268) merged in; draft PR #269, its merge held by the owner till the gate
+passes. docs/psp-core.md, part 106, has the evidence (part 76, the first model's fit, is here too). Clean room: our
+code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 33 (22 bytes, and the GE's
+pipeline: 28 and 16 a queued item; "Fast" 50 in all).
+- **The model** (`GE::Cost`, `GE::Pipe`): the front end (words, PRIMs, vertices, lights, cuts) hands each primitive,
+  transfer and palette load to the back end (rows, pixels, texels) through an 83-entry queue (round 8's
+  time-signals2); a sprite's rows spanning 256 distinct texels read wide; triangles read 16- and 32-bit texels at
+  rates of their own; the pipeline is carried through stall updates and SIGNALs.
+- **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6 and 8, 2,054 timed lists, 5.5% at the median
+  (70% within 10%, 90% within 25%); the command and the terms it couldn't measure in part 106.
+- **"Fast"** is master's bit for bit and no longer pays for "PSP" (the review measured 4.5-7.7% more instructions a
+  frame): now 0.19 to 0.56% on Vulkan-fast and within master's own spread on Software; exact against master
+  `230c0a731` on the review's 33 scenes, Software and Vulkan-fast (66 of 66, states master's with 50 bytes put in).
+- **A SIGNAL** waits for the front end to reach it, its lead kept through stall updates (a test gives the same list
+  whole, in one part and a part a sprite).
+- **The gate** (`tools/psp-ge-profile/decoder/gate.py`, the 12 captures in `tests/psp/measurements/ge-captures`):
+  5 of the 9 judged rows within 15% (Chains of Olympus −13%, Killzone's scene list −9% against its first capture
+  and its full-screen list −1%, the copyright screen −2%); too fast Ghost of Sparta −21%, Super Monkey Ball −31%,
+  Killzone −19% against its second capture; too slow Activision Hits' menu +29%. The merge stays held.
+- **Checks**: tests/psp sanitized, 586 groups, 0 failures; `test_geprof.py`, 24 tests. GitHub's checks wait for the
+  merge turn: the branch conflicts with master `92eddbfea` (part 109's GE thread, in the GE driver and the kernel).
+- **Not yet**: the CPU's contention with the GE (the CPU's timing, its own project); round 9 (triangles reading narrow
+  textures from swizzled RAM and VRAM, the texture cache's reuse, vertex formats, the scenes at the captures'
+  moments); fixed-point charges before any default change. Part 107 (round 8) is PR #270; part 108 (the display's
+  next-vblank switching) PR #271.
 
 ## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
 
