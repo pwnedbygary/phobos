@@ -9,7 +9,7 @@
 
 //make SMOKE=1 builds a quick version for trying the program in an emulator before a PSP runs it (PPSSPP's
 //PPSSPPHeadless, which has no buttons to press): it runs round 3's VFPU and FPU tests (the big ones cut short by
-//Shrink, a shift), the FPU probes and the GE's rounds 2 to 8 straight away, and leaves when done. Its results say
+//Shrink, a shift), the FPU probes and the GE's rounds 2 to 9 straight away, and leaves when done. Its results say
 //nothing about a PSP.
 #ifdef SMOKE
 enum { Smoke = 1, Shrink = 8 };
@@ -49,7 +49,8 @@ void vfpuStart(void);      //first thing when the program starts: what round 1 a
 int vfpuRound(int round);  //1-3, or 4 for the FPU probes
 int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4:
                            //parts 29's and 33's; 5: what part 48 left open; 6: what parts 60 and 64 left open;
-                           //7: anti-aliased lines (part 78); 8: the GE's time again, and the CPU's (part 107)
+                           //7: anti-aliased lines (part 78); 8: the GE's time again, and the CPU's (part 107); 9:
+                           //triangles, texture loads, vertex formats, time-lists again (part 110)
 void geEnd(void);          //lets the GE go before the program leaves
 
 //---- cpu.c: round 8's tests of the CPU alone, into results/ge as the round's other files, and what ge.c's test of the

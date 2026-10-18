@@ -16710,3 +16710,135 @@ program and that model, and comes once both are in.
 round 8 files, `r8dump.py` to read them, `EBOOT.PBP` as built); `results-1018/` (the owner's run as he sent it),
 `refit/` (`r8.py`, `repeat6.py` and `FINDINGS-1.md`: the results above), `r8fix/` (the program rebuilt with
 `time-lists`' fix, and its `EBOOT.PBP` for the PSP). Nothing was run on the RP6.
+
+## Part 110: psp-measure round 9 — triangles reading narrow textures, a texture's loads and the cache's reuse, vertex formats, time-lists again
+
+On branch `cursor/psp-measure-round9-2b67` (PR #NNN), stacked on #270's `cursor/psp-measure-round8-2b67`
+(`0d2060a2a`: part 107, round 8's results and `time-lists`' fix). Round 9 of `tools/psp-measure`, for the owner's
+PSP: what the fit of rounds 6 and 8 (#269, part 106) still guesses where its gate misses. Nothing in the core changes:
+the program, its test, the test programs' copy of it. Clean room as part 107: our own code; pspsdk's headers and
+uOFW's reading of the driver; no PPSSPP or JPCSP.
+
+### Where the gate misses, and what the model guesses there
+
+#269 is held until every captured scene is within 15% of the owner's PSP-1000, none more than 15% too slow; 5 of its
+9 judged rows pass (part 106). The four that don't, and the model's guesses round 9 measures:
+
+- **Super Monkey Ball Adventure's story, −31%** (its copy in round 8, `time-scenes` 5, −24%): its 200 CALLed lists
+  each set a 16 KiB CLUT8 texture and load its palette. Round 8's `time-textures` 19 to 24 had a texture of its own
+  for each 32x32 sprite cost the PSP about the same a sprite whether it was 1, 4 or 16 KiB (7.4 microseconds at
+  222/111, about 820 bus clocks), where the model loads a texture of 8 KiB or less whole, by its size. Its figures
+  follow the texels a sprite touches instead: 512 bytes (CLUT4) 590 clocks, 1 KiB (CLUT8, any size of texture) 820,
+  2 KiB (5650) 1,330, so about half a clock a byte touched over some 350 for the sprite itself; and `time-state` had
+  the same texture set again cost as much as another (TEX_FLUSH reloads it): 1 KiB unswizzled, about 400 clocks.
+- **Ghost of Sparta's main menu, −21%, and Killzone's second capture, −19%**: longer in the game than round 8's copies
+  of them alone, the more they read from RAM (round 8's `cpu-contention`: a thread reading RAM makes the GE's
+  RAM-textured drawing 2.12 times as long): the CPU's timing, a project of its own. But both draw mostly triangles,
+  and the model takes triangles reading narrow textures at a sprite's rates, never measured: round 8 had triangles
+  only reading a 256x256 texture whole (3.9 clocks a pixel where a 256-wide sprite took 13.3).
+- **Activision Hits Remixed's 3D menu, +29%** (too slow): its second list a frame, 434,000 pixels in 786 primitives,
+  a steady 3.5 ms on the PSP and 7.0 here; its copy in round 8 fits, so it's something of the game's list the model
+  takes as dearer than it is: its triangles' texels are the model's guess too.
+- **Vertices**: round 8's culled strips had 8-bit positions take 4.5 times the model's time and 16-bit 1.5 times
+  (floats as fitted), the strips' corners falling a little differently in each format.
+- **Lists**: round 8's `time-lists` lost 71 of its 80 records (part 107: the driver says the GE has reached a stall
+  address only when the address as given is the GE's own, which it keeps with its top three bits cut, and the program
+  gave the uncached mirror's); #270's program gives cached ones, never yet run on a PSP.
+
+### What round 9 measures
+
+A new first line of the menu, "Round 9: the GE's triangles, textures, vertices (about 0.1 MB)"; every other line is
+one further down. Its timed lists are round 8's kind (`timeCases8`): built once a case and size, each queued alone
+and timed from just before `sceGeListEnQueue` to the finish callback, every run kept, at 222/111 and 333/166 MHz;
+`time-lists2` at all four of round 8's settings. `manifest9.txt` lists every case.
+
+- **`time-anchors`**, first: 15 of round 8's cases built by round 8's own functions at its sizes: `time-strips` 2, 6,
+  30, 37, 41 and 44 (VRAM 8888 strips 32 wide and one sprite 512 wide, RAM 8888 unswizzled 32 wide, swizzled 32 and
+  512 wide, RAM CLUT8 32 wide), `time-textures` 13 and 19 (3D in perspective; a texture of its own for each sprite),
+  `time-state` 0 and 1 (nothing, TEX_FLUSH between sprites), `time-vertices` 0 and 2 (culled strips, float and 8-bit
+  positions), `time-pixels` 0 (the textured fill), `time-setup` 1 (16x16 squares) and `time-scenes` 0 (Killzone's
+  scene list): this session's PSP beside round 8's (whose round 6 repeated within 0.15% at the median).
+- **`time-tristrips`**: round 8's strips over the target's 512x256, texel for pixel from textures 512 texels wide, in
+  strips 8, 16, 32, 64, 128 and 256 wide and all 512 at once, as triangles (two a strip, corner to corner) in through
+  mode, from seven textures: RAM 8888 swizzled and not, VRAM 8888 swizzled and not, RAM CLUT8 512x256 swizzled, VRAM
+  CLUT8 swizzled, RAM 5650 swizzled; sprites over the two swizzled VRAM textures (round 8's VRAM ones were all
+  unswizzled); squares 8x8 to 64x64 of two triangles tiling the target, as a mesh draws a big texture (RAM 8888, VRAM
+  8888, RAM CLUT8); strips 32 and 256 wide in 3D (identity matrices, w 1) beside through mode's; strips 32 wide
+  bilinear, triangles and sprites; and strips 32 pixels wide shrinking the texture 2:1 onto 256x256, triangles and
+  sprites (the model takes the square root of the texels a pixel). Its sprites' cases and round 8's give the same
+  strips both ways, in one session or two (the anchors).
+- **`time-loads`**: sprites, each its own PRIM, with something done before each: nothing (one texture), a new texture
+  (sceGuTexImage: its address, buffer width, size and TEX_FLUSH), the same one set again, TEX_FLUSH alone, the address
+  and buffer width alone without TEX_FLUSH (the same or a new one), two textures in turn either way. CLUT8 textures
+  8x8 to 256x256 (64 bytes to 64 KiB) drawn whole or 32x32 texels of each, in sprites 8x8 to 128x128; 8888 swizzled
+  and not, from RAM and VRAM, 5650, CLUT4 and CLUT8 unswizzled and in VRAM, new or set once; textures set, TEX_FLUSHes
+  and palette loads with no sprite between (N of them, then one sprite); palettes of 16 to 256 colors loaded before
+  each sprite, 8888, 5650 and from VRAM, and a new texture with its palette each time (Super Monkey Ball's lists);
+  mipmaps in 3D: each square's own 32x32 texture at 1:1, against 64x64 ones with a 32x32 level, the level set to 1
+  (does the GE load level 0 too?), shrunk 2:1 without the level and with it chosen, and one such texture set once.
+- **`time-formats`**: the same triangles in every format, three vertices each, every vertex once (tiny triangles in
+  32x32 cells of 4 pixels, their positions in whole units every format holds exactly: in 3D an 8-bit k, a 16-bit 256k,
+  a float k/128, a pixel each; in through mode pixels). Culled in 3D: 8-bit, 16-bit and float positions alone and with
+  an 8888 or 5650 color, texture coordinates or a normal of each width, and whole vertices (texture coordinates, color,
+  normal, position) of 16-bit, float and 8-bit parts; through 16-bit indices, and 8-bit ones; drawn (culling off) in
+  3D and in through mode; strips of 128 triangles with each width of position. A PSP takes 8-bit positions in through
+  mode as 0 (pspautotests' `gpu/primitives` recorded it drawing their points at (0, 0); the core does the same, part
+  33), so that case draws nothing: the front end alone.
+- **`time-lists2`**: round 8's `time-lists` as #270 fixed it (stall addresses cached), every case at 222/111,
+  333/166, 333/222/166 and 266/133: a list's own time (0 to 64 small sprites), 1 to 8 lists queued at once, a list
+  drawn while its stall address is moved on 1 to 64 times, as fast as the CPU goes and each time once the GE has
+  reached it, 16 to 1024 CALLs. Named anew, as a round skips a test whose file is there and the owner's `results/ge`
+  keeps round 8's `time-lists.bin`.
+
+### How it runs
+
+- About a minute on the PSP, two at most: its lists are about 35 seconds of the GE's time by round 8's rates (sprites'
+  rates for the triangle cases, an upper bound), with some 9,600 runs' own overhead and the lists' building (the
+  vertex formats' 49,152 vertices the most); about 0.1 MB. It changes the clocks as round 8 does and puts them back
+  after each test.
+- The owner: copy `EBOOT.PBP` over the old one in `PSP/GAME/PSPMEASURE`, keeping `results/` (round 9's files are new
+  names beside rounds 2 to 8's, none overwritten); ARK's clock settings at Auto; the charger in; the GE profiler
+  plugin off (it times the same lists); run "Round 9" (the menu's first line); send `results/ge` back.
+- A list the GE hasn't finished in 5 seconds is a stall (reset, recorded, the test goes on), as since round 4;
+  `time-lists2`'s waits for the stall address are bounded the same way.
+
+### The test
+
+"psp measure" (tests/psp/measure.cpp) runs round 9 after round 8, through the menu (every line one further down), and
+checks its five files as round 8's: whole records, as many as the tables give (time-anchors 66, time-tristrips 352,
+time-loads 216, time-lists2 80, time-formats 204), each test's settings in turn with the clocks the core grants, every
+run finished, time-lists2's third time no later than its finish; and `manifest9.txt`. The core's times are this
+branch's GE timing (part 64's peaks), so they say nothing of the PSP's; they show the lists do what they say: every
+strip, square and 3D strip case draws the target's 131,072 pixels (295 microseconds at 111 MHz), the mipmapped squares
+their 1,024 pixels each, the culled vertex cases nothing, the drawn ones their primitives, the textures set and
+palettes loaded with no sprite between nothing but their list, and `time-lists2` all four settings.
+
+### For the owner's GE profiler plugin (not this program)
+
+The gate judges a scene only where Phobos has a state of the moment captured. Two captures at moments Phobos has states
+of (`~/phobos-work/scratch/cpu-round3/scenes`), each 10 seconds or more, the plugin in capture mode:
+
+- **Activision Hits Remixed's 3D main menu** as `ahr-menu` has it: the menu idle, Atlantis's box on the left and its
+  game on the television, the cursor on Play, nothing pressed, once the camera has settled. The first capture
+  (ULUS10186-menu) had the menu moving (its first list grew from 12 ms as it did); its second list, the gate's, was
+  3.5 ms throughout.
+- **Killzone's gameplay** as `kz-gp` has it (the owner's own state): the place in the level the state shows, a
+  courtyard seen from above, a stairway and catwalk to the upper right, another soldier to the player's left, the
+  ammunition 24/168; the player standing still. Capture 1 (UCUS98646-1) matches Phobos's state within 9%, capture 2
+  (another moment of the level) is 19% longer.
+
+### Checks
+
+- The program builds without a warning (`-Wall`), with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0)
+  and the flags of round 8's build; round 8's source as it was rebuilds to its committed `pspmeasure.elf` byte for
+  byte with the same setup.
+- "psp measure" alone (the sanitized test program built with just its group, as part 107 ran it), rounds 2 to 9
+  through the menu: 1 group, 0 failures. A check of the case tables beside what each case builds found one row lost in
+  an edit (the test's record count caught it too), put back.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/round9/` (`build/` the program as built, `EBOOT.PBP` and `EBOOT.PBP.sha256`
+the copy for the PSP, `measure-r9*.log` the test's runs, `ours*/` the core's round 9 files, `estimate.py` the time
+on the PSP from round 8's medians, `scenes/` the two states' frames for the plugin's captures). Nothing was run on
+the RP6.

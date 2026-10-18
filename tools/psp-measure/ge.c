@@ -23,12 +23,14 @@
 //part 76's model of round 6 missing (part 107): big textures in strips, the other texture cases, a pixel's tests and
 //blending, medium primitives, each part of a vertex, state between draws and CALLs, lists back to back and stall
 //updates, narrow transfers, clears, the two ends' overlap, lists like the captured scenes', and the CPU beside the
-//GE (with cpu.c's tests of the CPU alone). Each round is picked from the menu (main.c).
+//GE (with cpu.c's tests of the CPU alone). Round 9 takes what the fit of rounds 6 and 8 still guesses (part 110):
+//triangles reading narrow textures, a texture's loads and the cache's reuse, vertex formats, time-lists again with its
+//fix, and anchors from round 8. Each round is picked from the menu (main.c).
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
-//low half); round 6's and round 8's timing tests write times instead. manifest.txt (round 2), manifest3.txt to
-//manifest8.txt (rounds 3-8) say what each test drew. A test whose file is there is skipped, and one that stops the PSP
+//low half); the timing tests of rounds 6, 8 and 9 write times instead. manifest.txt (round 2), manifest3.txt to
+//manifest9.txt (rounds 3-9) say what each test drew. A test whose file is there is skipped, and one that stops the PSP
 //is given up on, as results.c has it. A list the GE hasn't finished after 5 seconds is a stall: the GE is reset,
 //<test>.stalled says so, and the round goes on (waitForGe). The program computes nothing: the host runs the same
 //program in Phobos's core (tests/psp/measure.cpp) and compares the files.
@@ -4972,6 +4974,501 @@ static void round8(void) {
   if(!cpuTests()) failed = 1;
 }
 
+//---- round 9: what the fit of rounds 6 and 8 (#269, part 106) still guesses where its gate misses (docs/psp-core.md,
+//part 110): triangles reading narrow textures, a texture's loads and the cache's reuse, vertex formats, time-lists
+//again with its fix, and anchors repeating round 8's cases, to show the PSP drawing as it did then. Each test is
+//round 8's kind (timeCases8), at 222/111 and 333/166 MHz, time-lists2 at all four settings.
+
+//-- anchors (time-anchors): round 8's cases, each built by round 8's own function at its sizes, so this session's
+//times can be set beside that run's (round 6 repeated within 0.15% at the median in round 8's session). First, so
+//they find the PSP as round 8's tests did.
+static const TimedCase anchorCases[] = {
+  {"round 8's time-strips 2: VRAM, 8888 512x512, strips 32 wide", "layers", 2, {1, 2}},
+  {"round 8's time-strips 6: VRAM, 8888 512x512, one sprite 512 wide", "layers", 2, {1, 2}},
+  {"round 8's time-strips 30: RAM, 8888 512x512 not swizzled, strips 32 wide", "layers", 2, {1, 2}},
+  {"round 8's time-strips 37: RAM, 8888 512x512 swizzled, strips 32 wide", "layers", 2, {1, 2}},
+  {"round 8's time-strips 41: RAM, 8888 512x512 swizzled, one sprite 512 wide", "layers", 2, {1, 2}},
+  {"round 8's time-strips 44: RAM, CLUT8 512x256 swizzled, strips 32 wide", "layers", 2, {1, 2}},
+  {"round 8's time-textures 13: 3D: RAM 8888 256x256 swizzled over 256x256 pixels, w 1 at the left to 2 at the right",
+   "layers", 2, {1, 2}},
+  {"round 8's time-textures 19: sprites 32x32, each its own CLUT8 32x32 texture (RAM, swizzled, 1 KiB), one palette",
+   "sprites", 2, {64, 256}},
+  {"round 8's time-state 0: nothing between the sprites", "sprites", 2, {256, 1024}},
+  {"round 8's time-state 1: TEX_FLUSH before each", "sprites", 2, {256, 1024}},
+  {"round 8's time-vertices 0: a strip, float positions", "triangles", 3, {1024, 4096, 16384}},
+  {"round 8's time-vertices 2: a strip, 8-bit positions", "triangles", 3, {1024, 4096, 16384}},
+  {"round 8's time-pixels 0: the textured fill alone", "layers", 3, {1, 2, 4}},
+  {"round 8's time-setup 1: squares 16x16", "layers", 2, {1, 2}},
+  {"round 8's time-scenes 0: Killzone's scene list", "lists", 2, {1, 2}},
+};
+static const struct { void (*build)(int c, int size); int c; } anchors[] = {
+  {buildStrips, 2}, {buildStrips, 6}, {buildStrips, 30}, {buildStrips, 37}, {buildStrips, 41}, {buildStrips, 44},
+  {buildTextures, 13}, {buildTextures, 19}, {buildState, 0}, {buildState, 1}, {buildVertices, 0}, {buildVertices, 2},
+  {buildPixels, 0}, {buildSetup, 1}, {buildScenes, 0},
+};
+static void buildAnchors(int c, int size) { anchors[c].build(anchors[c].c, size); }
+
+//-- triangles reading narrow textures (time-tristrips): round 8's time-strips drew textures 512 texels wide texel for
+//pixel over the target's 512x256 in sprites 8 to 512 wide, and a sprite took 5 to 7.6 times as long a pixel once its
+//rows spanned 256 distinct texels (512 indices). Triangles took a 256x256 swizzled texture over 256x256 pixels at 3.9
+//clocks a pixel where a 256-wide sprite of it took 13.3 (time-textures 13, time-pixels 0), and #269's model takes
+//triangles reading narrow textures at a sprite's rates, unmeasured: what games mostly draw. Cases 0-48: the strips as
+//triangles, two to a strip (rectangle9), in through mode, from seven textures (stripTextures9); 49-62: sprites over
+//the two swizzled VRAM textures, which round 8 didn't have; 63-74: squares 8 to 64 pixels across, two triangles each,
+//tiling the target as a mesh draws a big texture; 75-78: strips in 3D (identity matrices, w 1) beside through mode's;
+//79-83: strips 32 wide, bilinear (each pixel's middle on a texel's, as the nearest cases), triangles and sprites;
+//84-87: strips 32 pixels (64 texels) wide over the target's left 256x256, the texture shrunk 2:1 (#269's model takes
+//the square root of the texels a pixel), triangles and sprites. A VRAM texture is VRAM's first megabyte (the text on
+//the screen), a RAM one big, as in time-strips.
+static const BigTexture stripTextures9[7] = {
+  {GU_PSM_8888, 1, 0, 512}, {GU_PSM_8888, 0, 0, 512}, {GU_PSM_8888, 1, 1, 512}, {GU_PSM_8888, 0, 1, 512},
+  {GU_PSM_T8, 1, 0, 256}, {GU_PSM_T8, 1, 1, 512}, {GU_PSM_5650, 1, 0, 512},
+};
+#define TRIANGLE_WIDTHS(texture)                                                                                    \
+  {texture ", strips 8 wide as triangles", "layers", 2, {1, 2}},                                                    \
+  {texture ", strips 16 wide as triangles", "layers", 2, {1, 2}},                                                   \
+  {texture ", strips 32 wide as triangles", "layers", 2, {1, 2}},                                                   \
+  {texture ", strips 64 wide as triangles", "layers", 2, {1, 2}},                                                   \
+  {texture ", strips 128 wide as triangles", "layers", 2, {1, 2}},                                                  \
+  {texture ", strips 256 wide as triangles", "layers", 2, {1, 2}},                                                  \
+  {texture ", all 512 wide as two triangles", "layers", 2, {1, 2}}
+#define SQUARE_SIDES(texture)                                                                                       \
+  {texture ", squares 8x8 of two triangles", "layers", 2, {1, 2}},                                                  \
+  {texture ", squares 16x16 of two triangles", "layers", 2, {1, 2}},                                                \
+  {texture ", squares 32x32 of two triangles", "layers", 2, {1, 2}},                                                \
+  {texture ", squares 64x64 of two triangles", "layers", 2, {1, 2}}
+static const TimedCase triStripCases[] = {
+  TRIANGLE_WIDTHS("RAM, 8888 512x512 swizzled"), TRIANGLE_WIDTHS("RAM, 8888 512x512 not swizzled"),
+  TRIANGLE_WIDTHS("VRAM, 8888 512x512 swizzled"), TRIANGLE_WIDTHS("VRAM, 8888 512x512 not swizzled"),
+  TRIANGLE_WIDTHS("RAM, CLUT8 512x256 swizzled"), TRIANGLE_WIDTHS("VRAM, CLUT8 512x512 swizzled"),
+  TRIANGLE_WIDTHS("RAM, 5650 512x512 swizzled"),
+  STRIP_WIDTHS("sprites: VRAM, 8888 512x512 swizzled"), STRIP_WIDTHS("sprites: VRAM, CLUT8 512x512 swizzled"),
+  SQUARE_SIDES("RAM, 8888 512x512 swizzled"), SQUARE_SIDES("VRAM, 8888 512x512 swizzled"),
+  SQUARE_SIDES("RAM, CLUT8 512x256 swizzled"),
+  {"3D: RAM, 8888 512x512 swizzled, strips 32 wide as triangles", "layers", 2, {1, 2}},
+  {"3D: RAM, 8888 512x512 swizzled, strips 256 wide as triangles", "layers", 2, {1, 2}},
+  {"3D: VRAM, 8888 512x512 swizzled, strips 32 wide as triangles", "layers", 2, {1, 2}},
+  {"3D: VRAM, 8888 512x512 swizzled, strips 256 wide as triangles", "layers", 2, {1, 2}},
+  {"bilinear: RAM, 8888 512x512 swizzled, strips 32 wide as triangles", "layers", 2, {1, 2}},
+  {"bilinear: VRAM, 8888 512x512 swizzled, strips 32 wide as triangles", "layers", 2, {1, 2}},
+  {"bilinear: RAM, CLUT8 512x256 swizzled, strips 32 wide as triangles", "layers", 2, {1, 2}},
+  {"bilinear: sprites: RAM, 8888 512x512 swizzled, strips 32 wide", "layers", 2, {1, 2}},
+  {"bilinear: sprites: VRAM, 8888 512x512 swizzled, strips 32 wide", "layers", 2, {1, 2}},
+  {"shrunk 2:1 onto 256x256: RAM, 8888 512x512 swizzled, strips 32 pixels wide as triangles", "layers", 2, {1, 2}},
+  {"shrunk 2:1 onto 256x256: VRAM, 8888 512x512 swizzled, strips 32 pixels wide as triangles", "layers", 2, {1, 2}},
+  {"shrunk 2:1 onto 256x256: sprites: RAM, 8888 512x512 swizzled, strips 32 pixels wide", "layers", 2, {1, 2}},
+  {"shrunk 2:1 onto 256x256: sprites: VRAM, 8888 512x512 swizzled, strips 32 pixels wide", "layers", 2, {1, 2}},
+};
+//The two triangles of the target's rectangle (x0, y0) to (x1, y1), `scale` texels a pixel from a texture `height`
+//texels tall (texel x * scale at pixel x): its top-left, top-right and bottom-left corners, then its top-right,
+//bottom-right and bottom-left; in through mode, or in 3D over the target's 512x256 (wide3D), the texture coordinates
+//then fractions of the texture.
+static void rectangle9(FloatVertex* t, float x0, float y0, float x1, float y1, float scale, int in3D, int height) {
+  FloatVertex corners[4];
+  for(int k = 0; k < 4; k++) {
+    float x = k & 1 ? x1 : x0, y = k & 2 ? y1 : y0, u = x * scale, v = y * scale;
+    corners[k] = in3D ? (FloatVertex){u / 512, v / height, 0xffffffff, (x - 256) / 256, (128 - y) / 128, 0}
+                      : (FloatVertex){u, v, 0xffffffff, x, y, 0};
+  }
+  t[0] = corners[0], t[1] = corners[1], t[2] = corners[2], t[3] = corners[1], t[4] = corners[3], t[5] = corners[2];
+}
+//3D over the target's 512x256 (identity matrices, w 1): x from -1 to 1 across its 512 pixels, y from 1 to -1 down its
+//256 rows; the depth test off.
+static void wide3D(void) {
+  setUp3D(&identity, 1);
+  sceGuOffset(2048 - 256, 2048 - 128);
+  sceGuViewport(2048, 2048, 512, 256);
+  sceGuDisable(GU_DEPTH_TEST);
+}
+//The target's top-left `across` x 256 pixels tiled by rectangles `width` x `height` (the last column cut to fit), each
+//two triangles (rectangle9), in one block of vertices drawn `layers` times.
+static void rectangles9(int across, int width, int height, float scale, int in3D, int texels, int layers) {
+  int columns = (across + width - 1) / width, rows = 256 / height, count = columns * rows * 6;
+  FloatVertex* v = sceGuGetMemory(count * sizeof(FloatVertex));
+  for(int j = 0; j < rows; j++) {
+    for(int i = 0; i < columns; i++) {
+      float x0 = i * width, x1 = x0 + width < across ? x0 + width : across, y0 = j * height;
+      rectangle9(v + (j * columns + i) * 6, x0, y0, x1, y0 + height, scale, in3D, texels);
+    }
+  }
+  for(int layer = 0; layer < layers; layer++) {
+    sceGuDrawArray(GU_TRIANGLES, in3D ? FloatVertexType3D : FloatVertexType, count, 0, v);
+  }
+}
+static void buildTriStrips(int c, int layers) {
+  static const int squareTextures[3] = {0, 2, 4}, textures3D[2] = {0, 2}, bilinearTextures[5] = {0, 2, 4, 0, 2};
+  int texture, width = 32, height = 256, across = 512, sprites = 0, in3D = 0, linear = 0;
+  float scale = 1;
+  if(c < 49) texture = c / 7, width = 8 << c % 7;
+  else if(c < 63) texture = c < 56 ? 2 : 5, width = 8 << (c - 49) % 7, sprites = 1;
+  else if(c < 75) texture = squareTextures[(c - 63) / 4], width = height = 8 << (c - 63) % 4;
+  else if(c < 79) texture = textures3D[(c - 75) / 2], width = (c - 75) % 2 ? 256 : 32, in3D = 1;
+  else if(c < 84) texture = bilinearTextures[c - 79], sprites = c >= 82, linear = 1;
+  else texture = c % 2 ? 2 : 0, sprites = c >= 86, across = 256, scale = 2;
+  const BigTexture* t = &stripTextures9[texture];
+  timedList(GU_PSM_8888);
+  if(in3D) wide3D();
+  texture8(t->psm, t->swizzled, 512, t->height, t->vram ? VRAM_TEXTURE : (void*)big, linear);
+  if(sprites) {
+    for(int layer = 0; layer < layers; layer++) spriteStrips(0, 0, across, 256, width, 0, 0, scale);
+  } else {
+    rectangles9(across, width, height, scale, in3D, t->height, layers);
+  }
+  sceGuFinish();
+}
+
+//-- a texture's loads and the cache's reuse (time-loads): round 8's time-textures 19-24 had a texture of its own for
+//each 32x32 sprite cost the PSP about 7.4 microseconds a sprite whether it was 1, 4 or 16 KiB (32x32 texels of each
+//drawn), where #269's model loads a texture of 8 KiB or less whole, by its size; and time-state had the same texture
+//set again cost as much as another (sceGuTexImage's TEX_FLUSH reloads it). Each case draws N sprites, each its own
+//PRIM, in turn over the target, `pixels` square (32 unless said), texel for pixel from the texture's top left
+//(repeating where the texture is smaller), with this done before each (`what`): nothing (Once: the texture set with the
+//list); a new texture (New: the next in big or VRAM's first megabyte, by sceGuTexImage: its address, buffer width, size
+//and TEX_FLUSH); the same set again (Again); TEX_FLUSH alone (Flush); the address and buffer width alone, TEX_ADDR0 and
+//TEX_BUFWIDTH0 without TEX_FLUSH, the same or a new one (SameAddress, NewAddress); two textures in turn, either way
+//(InTurn, InTurnAddress). SetsAlone, FlushesAlone and LoadsAlone do N of New, Flush or a palette's load with no sprite
+//between, then one sprite. `colors`: a palette loaded before each sprite too (8888 from RAM, 5650 from RAM, or 8888
+//from VRAM by `palette`). The Mip cases draw squares 32x32 pixels of two triangles in 3D (identity matrices), each its
+//own CLUT8 texture: 32x32 at 1:1 (MipLevel0); 64x64 with a 32x32 level 1, the level set to 1 (MipLevel1, 1:1 on it);
+//64x64 without, shrunk 2:1 (MipShrunk); 64x64 with its level 1, the level chosen (MipAuto, 2:1); the last set once
+//(MipAutoOnce). A row of texels is 16 bytes at least (an 8x8 CLUT8 texture's 16 texels apart). CLUT textures take the
+//palette (256 colors, 8888) set with the texture.
+enum { Once, New, Again, Flush, SameAddress, NewAddress, InTurn, InTurnAddress, SetsAlone, FlushesAlone, LoadsAlone,
+       MipLevel0, MipLevel1, MipShrunk, MipAuto, MipAutoOnce };
+typedef struct { short psm, swizzled, vram, side, pixels, what, colors, palette; } LoadCase;
+static const LoadCase loads[] = {
+  {GU_PSM_T8, 1, 0, 32, 32, Once}, {GU_PSM_T8, 1, 0, 8, 32, New}, {GU_PSM_T8, 1, 0, 16, 32, New},
+  {GU_PSM_T8, 1, 0, 32, 32, New}, {GU_PSM_T8, 1, 0, 64, 32, New}, {GU_PSM_T8, 1, 0, 128, 32, New},
+  {GU_PSM_T8, 1, 0, 256, 32, New}, {GU_PSM_T8, 1, 0, 64, 64, Once}, {GU_PSM_T8, 1, 0, 64, 64, New},
+  {GU_PSM_T8, 1, 0, 128, 128, Once}, {GU_PSM_T8, 1, 0, 128, 128, New}, {GU_PSM_T8, 1, 0, 8, 8, Once},
+  {GU_PSM_T8, 1, 0, 8, 8, New},
+  {GU_PSM_T8, 1, 0, 32, 32, Again}, {GU_PSM_T8, 1, 0, 32, 32, Flush}, {GU_PSM_T8, 1, 0, 32, 32, SameAddress},
+  {GU_PSM_T8, 1, 0, 32, 32, NewAddress}, {GU_PSM_T8, 1, 0, 32, 32, InTurn}, {GU_PSM_T8, 1, 0, 32, 32, InTurnAddress},
+  {GU_PSM_8888, 1, 0, 32, 32, Once}, {GU_PSM_8888, 1, 0, 16, 32, New}, {GU_PSM_8888, 1, 0, 32, 32, New},
+  {GU_PSM_8888, 1, 0, 64, 32, New},
+  {GU_PSM_8888, 0, 0, 32, 32, Once}, {GU_PSM_8888, 0, 0, 16, 32, New}, {GU_PSM_8888, 0, 0, 32, 32, New},
+  {GU_PSM_8888, 0, 0, 64, 32, New},
+  {GU_PSM_8888, 0, 1, 32, 32, Once}, {GU_PSM_8888, 0, 1, 32, 32, New}, {GU_PSM_8888, 0, 1, 64, 32, New},
+  {GU_PSM_8888, 1, 1, 32, 32, New},
+  {GU_PSM_5650, 1, 0, 32, 32, Once}, {GU_PSM_5650, 1, 0, 32, 32, New},
+  {GU_PSM_T4, 1, 0, 32, 32, Once}, {GU_PSM_T4, 1, 0, 32, 32, New}, {GU_PSM_T4, 1, 0, 64, 32, New},
+  {GU_PSM_T8, 0, 0, 32, 32, New}, {GU_PSM_T8, 1, 1, 32, 32, New},
+  {GU_PSM_T8, 1, 0, 32, 32, SetsAlone}, {GU_PSM_T8, 1, 0, 32, 32, FlushesAlone},
+  {GU_PSM_T8, 1, 0, 32, 32, LoadsAlone, 256},
+  {GU_PSM_T8, 1, 0, 32, 32, Once, 16}, {GU_PSM_T8, 1, 0, 32, 32, Once, 32}, {GU_PSM_T8, 1, 0, 32, 32, Once, 64},
+  {GU_PSM_T8, 1, 0, 32, 32, Once, 128}, {GU_PSM_T8, 1, 0, 32, 32, Once, 256}, {GU_PSM_T8, 1, 0, 32, 32, Once, 256, 1},
+  {GU_PSM_T8, 1, 0, 32, 32, Once, 256, 2}, {GU_PSM_T8, 1, 0, 32, 32, New, 256},
+  {GU_PSM_T8, 1, 0, 32, 32, MipLevel0}, {GU_PSM_T8, 1, 0, 64, 32, MipLevel1}, {GU_PSM_T8, 1, 0, 64, 32, MipShrunk},
+  {GU_PSM_T8, 1, 0, 64, 32, MipAuto}, {GU_PSM_T8, 1, 0, 64, 32, MipAutoOnce},
+};
+static const TimedCase loadCases[] = {
+  {"CLUT8 swizzled in RAM, one 32x32 texture set once", "sprites", 2, {64, 256}},
+  {"CLUT8 swizzled in RAM, a new 8x8 texture before each sprite (128 bytes; repeating 4 times each way)", "sprites", 2,
+   {64, 256}},
+  {"the same, a new 16x16 texture (256 bytes; repeating twice each way)", "sprites", 2, {64, 256}},
+  {"the same, a new 32x32 texture (1 KiB)", "sprites", 2, {64, 256}},
+  {"the same, a new 64x64 texture (4 KiB), its top-left 32x32 texels", "sprites", 2, {64, 256}},
+  {"the same, a new 128x128 texture (16 KiB), its top-left 32x32 texels", "sprites", 2, {64, 256}},
+  {"the same, a new 256x256 texture (64 KiB), its top-left 32x32 texels", "sprites", 2, {64, 256}},
+  {"CLUT8 swizzled in RAM, one 64x64 texture set once, sprites 64x64", "sprites", 2, {64, 256}},
+  {"the same, a new 64x64 texture before each sprite 64x64 (all of it)", "sprites", 2, {64, 256}},
+  {"CLUT8 swizzled in RAM, one 128x128 texture set once, sprites 128x128", "sprites", 2, {64, 256}},
+  {"the same, a new 128x128 texture before each sprite 128x128 (all of it)", "sprites", 2, {64, 256}},
+  {"CLUT8 swizzled in RAM, one 8x8 texture set once, sprites 8x8", "sprites", 2, {64, 256}},
+  {"the same, a new 8x8 texture before each sprite 8x8", "sprites", 2, {64, 256}},
+  {"CLUT8 32x32: the same texture set again before each sprite (sceGuTexImage, with TEX_FLUSH)", "sprites", 2,
+   {64, 256}},
+  {"CLUT8 32x32: TEX_FLUSH alone before each sprite", "sprites", 2, {64, 256}},
+  {"CLUT8 32x32: the same texture's address and buffer width before each sprite, no TEX_FLUSH", "sprites", 2,
+   {64, 256}},
+  {"CLUT8 32x32: a new texture's address and buffer width before each sprite, no TEX_FLUSH", "sprites", 2, {64, 256}},
+  {"CLUT8 32x32: two textures in turn (sceGuTexImage, with TEX_FLUSH)", "sprites", 2, {64, 256}},
+  {"CLUT8 32x32: two textures in turn, their addresses and buffer widths alone (no TEX_FLUSH)", "sprites", 2,
+   {64, 256}},
+  {"8888 swizzled in RAM, one 32x32 texture set once", "sprites", 2, {64, 256}},
+  {"the same, a new 16x16 texture before each sprite (1 KiB; repeating)", "sprites", 2, {64, 256}},
+  {"the same, a new 32x32 texture (4 KiB)", "sprites", 2, {64, 256}},
+  {"the same, a new 64x64 texture (16 KiB), its top-left 32x32 texels", "sprites", 2, {64, 256}},
+  {"8888 not swizzled in RAM, one 32x32 texture set once", "sprites", 2, {64, 256}},
+  {"the same, a new 16x16 texture before each sprite (1 KiB; repeating)", "sprites", 2, {64, 256}},
+  {"the same, a new 32x32 texture (4 KiB)", "sprites", 2, {64, 256}},
+  {"the same, a new 64x64 texture (16 KiB), its top-left 32x32 texels", "sprites", 2, {64, 256}},
+  {"8888 not swizzled in VRAM, one 32x32 texture set once", "sprites", 2, {64, 256}},
+  {"the same, a new 32x32 texture before each sprite (4 KiB)", "sprites", 2, {64, 256}},
+  {"the same, a new 64x64 texture (16 KiB), its top-left 32x32 texels", "sprites", 2, {64, 256}},
+  {"8888 swizzled in VRAM, a new 32x32 texture before each sprite", "sprites", 2, {64, 256}},
+  {"5650 swizzled in RAM, one 32x32 texture set once", "sprites", 2, {64, 256}},
+  {"the same, a new 32x32 texture before each sprite (2 KiB)", "sprites", 2, {64, 256}},
+  {"CLUT4 swizzled in RAM, one 32x32 texture set once", "sprites", 2, {64, 256}},
+  {"the same, a new 32x32 texture before each sprite (512 bytes)", "sprites", 2, {64, 256}},
+  {"the same, a new 64x64 texture (2 KiB), its top-left 32x32 texels", "sprites", 2, {64, 256}},
+  {"CLUT8 not swizzled in RAM, a new 32x32 texture before each sprite", "sprites", 2, {64, 256}},
+  {"CLUT8 swizzled in VRAM, a new 32x32 texture before each sprite", "sprites", 2, {64, 256}},
+  {"N new CLUT8 32x32 textures set (sceGuTexImage) with no sprite between, then one sprite", "textures", 2,
+   {64, 256}},
+  {"N TEX_FLUSHes with no sprite between, then one sprite", "flushes", 2, {64, 256}},
+  {"N palette loads (256 colors, 8888) with no sprite between, then one sprite", "loads", 2, {64, 256}},
+  {"CLUT8 32x32 set once, a palette of 16 colors (8888, 64 bytes) loaded before each sprite", "sprites", 2, {64, 256}},
+  {"the same, 32 colors (128 bytes)", "sprites", 2, {64, 256}},
+  {"the same, 64 colors (256 bytes)", "sprites", 2, {64, 256}},
+  {"the same, 128 colors (512 bytes)", "sprites", 2, {64, 256}},
+  {"the same, 256 colors (1 KiB)", "sprites", 2, {64, 256}},
+  {"the same, 256 colors in 5650 (512 bytes)", "sprites", 2, {64, 256}},
+  {"the same, 256 colors (8888) from VRAM", "sprites", 2, {64, 256}},
+  {"a new CLUT8 32x32 texture and its palette (256 colors) before each sprite", "sprites", 2, {64, 256}},
+  {"3D: squares 32x32 of two triangles, each its own CLUT8 32x32 texture, 1:1", "squares", 2, {64, 256}},
+  {"3D: the same, each its own CLUT8 64x64 texture with a 32x32 mipmap, level 1 set (1:1 on it)", "squares", 2,
+   {64, 256}},
+  {"3D: the same 64x64 textures without the mipmap, shrunk 2:1", "squares", 2, {64, 256}},
+  {"3D: the same 64x64 textures with the mipmap, the level chosen, shrunk 2:1", "squares", 2, {64, 256}},
+  {"3D: one such texture set once, the level chosen, shrunk 2:1", "squares", 2, {64, 256}},
+};
+//A texture's address and buffer width alone (TEX_ADDR0, TEX_BUFWIDTH0): sceGuTexImage's first two commands, without
+//its TEX_SIZE0 and TEX_FLUSH.
+static void textureAddress(const void* texels, int bufferWidth) {
+  unsigned int at = (unsigned int)texels;
+  sceGuSendCommandi(0xa0, at & 0xffffff);
+  sceGuSendCommandi(0xa8, (at >> 8 & 0xf0000) | bufferWidth);
+}
+static void buildLoads(int c, int count) {
+  const LoadCase* l = &loads[c];
+  int doubled = l->psm == GU_PSM_8888 ? 8 : l->psm == GU_PSM_5650 ? 4 : l->psm == GU_PSM_T8 ? 2 : 1;  //bytes a texel x2
+  int width = l->side > 32 / doubled ? l->side : 32 / doubled;  //(rows of 16 bytes at least)
+  int mipmaps = l->what == MipLevel1 || l->what == MipAuto || l->what == MipAutoOnce, in3D = l->what >= MipLevel0;
+  int alone = l->what == SetsAlone || l->what == FlushesAlone || l->what == LoadsAlone;
+  int level = width * l->side * doubled / 2, bytes = level + (mipmaps ? level / 4 : 0);
+  unsigned char* base = l->vram ? (unsigned char*)VRAM_TEXTURE : (unsigned char*)big;
+  int held = (l->vram ? 1 << 20 : (int)sizeof(big)) / bytes, perRow = 512 / l->pixels, rows = 256 / l->pixels;
+  const void* colors = l->palette == 2 ? (const void*)(0x04000000 + Spare) : palette;
+  timedList(GU_PSM_8888);
+  if(in3D) setUp3D(&identity, 1), sceGuDisable(GU_DEPTH_TEST);
+  texture8(l->psm, l->swizzled, l->side, l->side, base, 0);
+  sceGuTexImage(0, l->side, l->side, width, base);
+  if(mipmaps) {
+    sceGuTexMode(l->psm, 1, 0, l->swizzled);
+    sceGuTexImage(1, l->side / 2, l->side / 2, width / 2, base + level);
+    sceGuTexLevelMode(l->what == MipLevel1 ? GU_TEXTURE_CONST : GU_TEXTURE_AUTO, l->what == MipLevel1 ? 1 : 0);
+    sceGuTexFilter(GU_NEAREST_MIPMAP_NEAREST, GU_NEAREST);
+  }
+  if(l->palette == 1) sceGuClutMode(GU_PSM_5650, 0, 0xff, 0);
+  for(int k = 0; k < count; k++) {
+    unsigned char* next = base + (k % held) * bytes, *turn = base + (k & 1) * bytes;
+    switch(l->what) {
+    case New: case SetsAlone: case MipLevel0: case MipShrunk: sceGuTexImage(0, l->side, l->side, width, next); break;
+    case MipLevel1: case MipAuto:
+      sceGuTexImage(0, l->side, l->side, width, next);
+      sceGuTexImage(1, l->side / 2, l->side / 2, width / 2, next + level);
+      break;
+    case Again: sceGuTexImage(0, l->side, l->side, width, base); break;
+    case Flush: case FlushesAlone: sceGuTexFlush(); break;
+    case SameAddress: textureAddress(base, width); break;
+    case NewAddress: textureAddress(next, width); break;
+    case InTurn: sceGuTexImage(0, l->side, l->side, width, turn); break;
+    case InTurnAddress: textureAddress(turn, width); break;
+    }
+    if(l->colors) sceGuClutLoad(l->colors / (l->palette == 1 ? 16 : 8), colors);
+    if(alone && k < count - 1) continue;
+    if(in3D) {
+      float x = (k & 7) * 32, y = (k >> 3 & 7) * 32;
+      FloatVertex* v = sceGuGetMemory(6 * sizeof(FloatVertex));
+      for(int n = 0; n < 6; n++) {
+        int corner = (int[6]){0, 1, 2, 1, 3, 2}[n], right = corner & 1, bottom = corner >> 1;
+        v[n] = (FloatVertex){right, bottom, 0xffffffff, ndcX(x + right * 32), ndcY(y + bottom * 32), 0};
+      }
+      sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 6, 0, v);
+    } else {
+      float x = (k % perRow) * l->pixels, y = (k / perRow % rows) * l->pixels;
+      timedSprite(x, y, x + l->pixels, y + l->pixels, 0, 0, l->pixels, l->pixels, 0xffffffff);
+    }
+  }
+  sceGuFinish();
+}
+
+//-- vertex formats (time-formats): the front end's time a vertex by its format, the same triangles in each format
+//(round 8's time-vertices had 8-bit positions take 4.5 times #269's model's time and 16-bit ones 1.5 times, floats as
+//fitted, its strips' corners falling a little differently in each format). A list of N triangles, three vertices
+//each, every vertex once: in 32x32 cells of 4 pixels, corners (x, y), (x, y + 2), (x + 2, y), counterclockwise, in the
+//middle 128x128 pixels in 3D (identity matrices) or the top-left 128x128 in through mode; positions in whole units that
+//every format holds exactly (putVertex9). Cases 0-15: 3D, culled as back faces (the front face clockwise), positions
+//alone and with a color, texture coordinates or a normal of each width, and whole vertices (texture coordinates, color,
+//normal, position) of 16-bit, float and 8-bit parts; 16-20: through 16-bit indices (each vertex once), and 8-bit ones
+//85 triangles a draw; 21-25: 3D, drawn (culling off: each about 2 pixels); 26-30: through mode, drawn (but 28, whose
+//8-bit positions a PSP takes as 0: the front end alone); 31-33: strips of 128 triangles a row (a draw each), culled,
+//positions of each width. No texture: texture coordinates are read, not used; normals unlit.
+static unsigned short __attribute__((aligned(64))) indices9[3 * 16384];
+enum { FormatCulled, FormatIndexed16, FormatIndexed8, FormatDrawn, FormatThrough, FormatStrip };
+static const struct { Parts parts; int kind; } formats[] = {
+  {{0, 0, 0, 0, 0, 4}, FormatCulled}, {{0, 0, 0, 0, 0, 2}, FormatCulled}, {{0, 0, 0, 0, 0, 1}, FormatCulled},
+  {{0, 0, 0, 4, 0, 4}, FormatCulled}, {{0, 0, 0, 4, 0, 2}, FormatCulled}, {{0, 0, 0, 4, 0, 1}, FormatCulled},
+  {{0, 0, 0, 2, 0, 2}, FormatCulled},
+  {{0, 0, 4, 0, 0, 4}, FormatCulled}, {{0, 0, 2, 0, 0, 2}, FormatCulled}, {{0, 0, 1, 0, 0, 1}, FormatCulled},
+  {{0, 0, 0, 0, 4, 4}, FormatCulled}, {{0, 0, 0, 0, 2, 2}, FormatCulled}, {{0, 0, 0, 0, 1, 1}, FormatCulled},
+  {{0, 0, 2, 4, 2, 2}, FormatCulled}, {{0, 0, 4, 4, 4, 4}, FormatCulled}, {{0, 0, 1, 4, 1, 1}, FormatCulled},
+  {{0, 0, 0, 0, 0, 4}, FormatIndexed16}, {{0, 0, 0, 0, 0, 2}, FormatIndexed16}, {{0, 0, 0, 0, 0, 1}, FormatIndexed16},
+  {{0, 0, 2, 4, 2, 2}, FormatIndexed16}, {{0, 0, 0, 0, 0, 4}, FormatIndexed8},
+  {{0, 0, 0, 0, 0, 4}, FormatDrawn}, {{0, 0, 0, 0, 0, 2}, FormatDrawn}, {{0, 0, 0, 0, 0, 1}, FormatDrawn},
+  {{0, 0, 2, 4, 2, 2}, FormatDrawn}, {{0, 0, 0, 4, 0, 4}, FormatDrawn},
+  {{0, 0, 0, 0, 0, 4}, FormatThrough}, {{0, 0, 0, 0, 0, 2}, FormatThrough}, {{0, 0, 0, 0, 0, 1}, FormatThrough},
+  {{0, 0, 0, 4, 0, 2}, FormatThrough}, {{0, 0, 2, 4, 0, 2}, FormatThrough},
+  {{0, 0, 0, 0, 0, 4}, FormatStrip}, {{0, 0, 0, 0, 0, 2}, FormatStrip}, {{0, 0, 0, 0, 0, 1}, FormatStrip},
+};
+static const TimedCase formatCases[] = {
+  {"3D, culled: float positions (12 bytes a vertex)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: 16-bit positions (6)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: 8-bit positions (3)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: an 8888 color, float positions (16)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: an 8888 color, 16-bit positions (12)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: an 8888 color, 8-bit positions (8)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: a 5650 color, 16-bit positions (8)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: float texture coordinates and positions (20)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: 16-bit texture coordinates and positions (10)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: 8-bit texture coordinates and positions (5)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: float normals and positions (24)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: 16-bit normals and positions (12)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: 8-bit normals and positions (6)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: 16-bit texture coordinates, an 8888 color, 16-bit normals and positions (20)", "triangles", 3,
+   {1024, 4096, 16384}},
+  {"3D, culled: float texture coordinates, an 8888 color, float normals and positions (36)", "triangles", 3,
+   {1024, 4096, 16384}},
+  {"3D, culled: 8-bit texture coordinates, an 8888 color, 8-bit normals and positions (16)", "triangles", 3,
+   {1024, 4096, 16384}},
+  {"3D, culled, through 16-bit indices: float positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled, through 16-bit indices: 16-bit positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled, through 16-bit indices: 8-bit positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled, through 16-bit indices: case 13's vertices (20 bytes)", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled, through 8-bit indices, 85 triangles a draw: float positions", "triangles", 3, {1020, 4080, 16320}},
+  {"3D, drawn: float positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, drawn: 16-bit positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, drawn: 8-bit positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, drawn: case 13's vertices", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, drawn: an 8888 color, float positions", "triangles", 3, {1024, 4096, 16384}},
+  {"through mode, drawn: float positions", "triangles", 3, {1024, 4096, 16384}},
+  {"through mode, drawn: 16-bit positions", "triangles", 3, {1024, 4096, 16384}},
+  {"through mode: 8-bit positions (pspautotests saw a PSP take them as 0: nothing drawn)", "triangles", 3,
+   {1024, 4096, 16384}},
+  {"through mode, drawn: an 8888 color, 16-bit positions (12)", "triangles", 3, {1024, 4096, 16384}},
+  {"through mode, drawn: 16-bit texture coordinates, an 8888 color, 16-bit positions (16)", "triangles", 3,
+   {1024, 4096, 16384}},
+  {"3D, culled: strips of 128 triangles, float positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: strips of 128 triangles, 16-bit positions", "triangles", 3, {1024, 4096, 16384}},
+  {"3D, culled: strips of 128 triangles, 8-bit positions", "triangles", 3, {1024, 4096, 16384}},
+};
+//A vertex of these parts as putVertex lays it out (no weights), its position (x, y, 0) in whole units: in through
+//mode pixels, each format the number itself (8-bit ones too, though pspautotests' gpu/primitives recorded a PSP
+//drawing them at (0, 0)); in 3D 128ths of the viewport's half (a pixel each): an 8-bit k, a 16-bit 256k, a float
+//k / 128. Returns where the next goes.
+static unsigned char* putVertex9(unsigned char* at, const Parts* p, int x, int y, int through) {
+  unsigned char* start = at;
+  int largest = 1;
+#define ALIGN_PART(bytes) \
+  (at = start + (((at - start) + (bytes) - 1) & -(bytes)), largest = (bytes) > largest ? (bytes) : largest)
+  if(p->uv) ALIGN_PART(p->uv), at = putPart(putPart(at, p->uv, 0.25f), p->uv, 0.25f);
+  if(p->color == 2) ALIGN_PART(2), *(unsigned short*)at = 0xffff, at += 2;
+  if(p->color == 4) ALIGN_PART(4), *(unsigned int*)at = 0xffffffff, at += 4;
+  if(p->normal) ALIGN_PART(p->normal), at = putPart(putPart(putPart(at, p->normal, 0), p->normal, 0), p->normal, 1);
+  ALIGN_PART(p->position);
+#undef ALIGN_PART
+  int position[3] = {x, y, 0};
+  for(int k = 0; k < 3; k++, at += p->position) {
+    if(p->position == 1) *(signed char*)at = position[k];
+    else if(p->position == 2) *(short*)at = through ? position[k] : position[k] * 256;
+    else *(float*)at = through ? position[k] : position[k] / 128.0f;
+  }
+  return start + (((at - start) + largest - 1) & -largest);
+}
+static void buildFormats(int c, int count) {
+  const Parts* p = &formats[c].parts;
+  int kind = formats[c].kind, through = kind == FormatThrough;
+  int vertices = kind == FormatStrip ? count / 128 * 130 : 3 * count;
+  unsigned char* at = (unsigned char*)big;
+  for(int n = 0; n < vertices; n++) {
+    int x, y;  //in pixels, from the 128x128's top left
+    if(kind == FormatStrip) {
+      x = n % 130, y = n / 130 % 32 * 4 + (n & 1) * 2;
+    } else {
+      int cell = n / 3 & 1023, corner = n % 3;
+      x = (cell & 31) * 4 + (corner == 2 ? 2 : 0), y = (cell >> 5) * 4 + (corner == 1 ? 2 : 0);
+    }
+    at = through ? putVertex9(at, p, x, y, 1) : putVertex9(at, p, x - 64, 64 - y, 0);
+  }
+  int bytes = (at - (unsigned char*)big) / vertices;  //a vertex's
+  for(int n = 0; kind == FormatIndexed16 && n < 3 * count; n++) indices9[n] = n;
+  for(int n = 0; kind == FormatIndexed8 && n < 255; n++) ((unsigned char*)indices9)[n] = n;
+  sceKernelDcacheWritebackAll();
+  timedList(GU_PSM_8888);
+  int type = partsType(p) | (through ? GU_TRANSFORM_2D : GU_TRANSFORM_3D);
+  if(!through) {
+    setUp3D(&identity, 1);
+    sceGuDisable(GU_DEPTH_TEST);
+    if(kind != FormatDrawn) sceGuEnable(GU_CULL_FACE), sceGuFrontFace(GU_CW);
+  }
+  if(kind == FormatStrip) {
+    for(int row = 0; row < count / 128; row++) {
+      sceGuDrawArray(GU_TRIANGLE_STRIP, type, 130, 0, (unsigned char*)big + row * 130 * bytes);
+    }
+  } else if(kind == FormatIndexed8) {
+    for(int first = 0; first < count; first += 85) {
+      sceGuDrawArray(GU_TRIANGLES, type | GU_INDEX_8BIT, 255, indices9, (unsigned char*)big + first * 3 * bytes);
+    }
+  } else {
+    int indexed = kind == FormatIndexed16;
+    sceGuDrawArray(GU_TRIANGLES, type | (indexed ? GU_INDEX_16BIT : 0), 3 * count, indexed ? indices9 : 0, big);
+  }
+  sceGuFinish();
+}
+
+static void writeManifest9(void) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/manifest9.txt", folder);
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return;
+  static const char text[] =
+    "psp-measure's GE tests, round 9 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,\n"
+    "part 110, what each is for). Records of words as round 8's (manifest8.txt): case, size, CPU MHz << 16 | bus MHz\n"
+    "(as scePower gave them back), repeats | values << 16, then per run `values` times in microseconds from just\n"
+    "before sceGeListEnQueue: to the finish callback, to sceGeListEnQueue's return, and (time-lists2) to the last\n"
+    "sceGeListEnQueue's or sceGeListUpdateStallAddr's return; 0xffffffff for a run not finished (see\n"
+    "<name>.stalled). time-lists2 is round 8's time-lists with its stall addresses cached, at 222/111, 333/166,\n"
+    "333/222/166 and 266/133 MHz; the rest run at the first two; the clocks as found are put back after each.\n"
+    "time-anchors' cases are round 8's, built the same way at the same sizes. The cases (test case: what; size):\n";
+  sceIoWrite(file, text, sizeof(text) - 1);
+  static const struct { const char* test; const TimedCase* cases; int count; } tests[] = {
+    {"time-anchors", anchorCases, sizeof(anchorCases) / sizeof(anchorCases[0])},
+    {"time-tristrips", triStripCases, sizeof(triStripCases) / sizeof(triStripCases[0])},
+    {"time-loads", loadCases, sizeof(loadCases) / sizeof(loadCases[0])},
+    {"time-lists2", listCases, sizeof(listCases) / sizeof(listCases[0])},
+    {"time-formats", formatCases, sizeof(formatCases) / sizeof(formatCases[0])},
+  };
+  char line[320];
+  for(unsigned int t = 0; t < sizeof(tests) / sizeof(tests[0]); t++) {
+    for(int c = 0; c < tests[t].count; c++) {
+      int length = snprintf(line, sizeof(line), "%s %d: %s; %s\n", tests[t].test, c, tests[t].cases[c].name,
+                            tests[t].cases[c].unit);
+      sceIoWrite(file, line, length < (int)sizeof(line) ? length : (int)sizeof(line) - 1);
+    }
+  }
+  static const char end[] =
+    "<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).\n"
+    "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
+  sceIoWrite(file, end, sizeof(end) - 1);
+  sceIoClose(file);
+}
+
+static void round9(void) {
+  foundCpu = scePowerGetCpuClockFrequencyInt();
+  foundBus = scePowerGetBusClockFrequencyInt();
+  foundPll = foundCpu > 2 * foundBus ? foundCpu : 2 * foundBus;  //(as round 6 reads them)
+  writeManifest9();
+  prepareTexels();
+#define CASES(table) table, sizeof(table) / sizeof(table[0])
+  timeCases8("time-anchors", CASES(anchorCases), 8, 2, AtTwo, buildAnchors, 0);
+  timeCases8("time-tristrips", CASES(triStripCases), 8, 2, AtTwo, buildTriStrips, 0);
+  timeCases8("time-loads", CASES(loadCases), 8, 2, AtTwo, buildLoads, 0);
+  timeCases8("time-lists2", CASES(listCases), 16, 3, AtAll, buildLists, runLists);
+  timeCases8("time-formats", CASES(formatCases), 16, 2, AtTwo, buildFormats, 0);
+#undef CASES
+}
+
 //---- the rounds
 
 static int guReady;  //whether sceGuInit has set the GE up: once, on the first round, kept until geEnd
@@ -5045,9 +5542,9 @@ static void round2(void) {
   controllerTiming("controller-timing");
 }
 
-//A round of the GE's tests (2 to 8) into results/ge. Returns 0 if something couldn't be written.
+//A round of the GE's tests (2 to 9) into results/ge. Returns 0 if something couldn't be written.
 int geRound(int round) {
-  if(round < 2 || round > 8) return 1;
+  if(round < 2 || round > 9) return 1;
   if(!guReady) {
     sceGuInit();
     guReady = 1;
@@ -5060,7 +5557,8 @@ int geRound(int round) {
   else if(round == 5) round5();
   else if(round == 6) round6();
   else if(round == 7) round7();
-  else round8();
+  else if(round == 8) round8();
+  else round9();
   return !failed;
 }
 

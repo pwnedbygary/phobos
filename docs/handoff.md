@@ -35,6 +35,29 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
+
+Branch `cursor/psp-measure-round9-2b67` (PR #NNN, draft), stacked on #270's `cursor/psp-measure-round8-2b67`
+(`0d2060a2a`); docs/psp-core.md, part 110.
+- **Why**: #269's gate passes 5 of its 9 judged scenes at 15% (part 106). Too fast: Ghost of Sparta's menu −21%,
+  Super Monkey Ball's story −31% (a texture set costs the PSP about the same at 1, 4 or 16 KiB, where the model
+  charges by size), Killzone's second capture −19%; too slow: Activision Hits' 3D menu +29%. Round 9 measures what the
+  model guesses there: triangles reading narrow textures (taken as sprites'), texture loads and the cache's reuse,
+  vertex formats (8-bit positions 4.5 times the model in round 8), and round 8's `time-lists` again with #270's fix.
+- **What**: a new first menu line, round 9 (about 0.1 MB, `manifest9.txt`): `time-anchors` (15 of round 8's cases,
+  first), `time-tristrips` (88 cases: strips 8 to 512 wide as triangles from seven textures, RAM and VRAM, swizzled and
+  not; sprites over swizzled VRAM; squares of two triangles; 3D; bilinear; shrunk 2:1), `time-loads` (54: new, the
+  same, TEX_FLUSH, the address alone, textures in turn, by size, format and place; sets, flushes and palette loads
+  alone; palettes of 16 to 256 colors; mipmaps), `time-formats` (34: positions, colors, texture coordinates and
+  normals of each width, whole vertices, indices, culled, drawn, through mode, strips), `time-lists2` (round 8's
+  `time-lists` with cached stall addresses, all four clock settings). About a minute on the PSP, two at most.
+- **Test**: "psp measure" runs round 9 after round 8 and checks every record; `tests/psp/programs/pspmeasure.elf`
+  rebuilt.
+- **Next**: the owner runs round 9 (copy over `PSP/GAME/PSPMEASURE/EBOOT.PBP` keeping `results/`; ARK's clocks at
+  Auto; charger in; the GE profiler plugin off) and sends `results/ge`; and, with the plugin, captures Activision Hits'
+  3D menu and Killzone's gameplay at the moments of Phobos's `ahr-menu` and `kz-gp` states (part 110). Then #269's fit
+  takes round 9's files.
+
 ## PSP measure, round 8: the GE's time where part 76's model misses the owner's captures, and the CPU's — 2026-10-16
 
 Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`; masters `5442acb8b`, `03eca2a69`, `dd63f4ffb` and
