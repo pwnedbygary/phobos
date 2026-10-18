@@ -3576,6 +3576,21 @@ static auto geThreadListPages() -> void {
   }
 }
 
+//With the GE on its thread and its checks on (every threaded test machine's, PHOBOS_GE_CHECK's), the thread's copy of
+//the model drops the put points it has passed, as the emulation thread's model does: the check of every byte a finish
+//changes goes through every put point kept, and MX vs ATV, its frame's picture taken from memory each frame (a finish
+//each), crawled with the checks on: 600 frames in 12 minutes, 17 s with the thread off.
+static auto geThreadReplicaPuts() -> void {
+  System s;
+  s.threadGE(true);
+  auto& thread = *s.geThreading;
+  thread.drain();  //(the thread's copy is the thread's: changed only while it waits for a record)
+  for(u32 n = 0; n < 1000; n++) thread.replica.putPoints.push_back({0, {}, {}});
+  thread.frame({1, 0, 0, 0, 480, 272});  //(any record: the thread passes the put points' place)
+  thread.waitFrames(0);
+  CHECK(thread.replica.putPoints.size(), 0u);
+}
+
 //With the GE on its thread, held back with thousands of software PRIMs waiting for it, each reading its texture from
 //memory as it's drawn, the emulation thread's look at what the thread may still change costs no more than with a few:
 //loads of VRAM no PRIM reaches, each taking the thread's reports first (those textures' pages: ge/model.hpp). Kept by
@@ -4461,6 +4476,8 @@ auto geTests() -> Tests {
      geThreadListPages},
     {"ge on its own thread: thousands of software PRIMs behind, a load costs what it does with a few",
      geThreadManyBehind},
+    {"ge on its own thread: the check's copy of the model drops the put points the thread has passed",
+     geThreadReplicaPuts},
     {"ge on its own thread: vertices by indices copied from the least to the most", geThreadIndexedCopies},
     {"ge on its own thread: a store onto a texel a software PRIM reads but doesn't draw over waits for it",
      geThreadTextureConflict},

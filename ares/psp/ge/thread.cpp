@@ -587,7 +587,17 @@ auto GeThread::take() -> void {
     Header header;
     std::memcpy(&header, at, sizeof(header));
     render.place = header.serial;
-    if(checking) replica.passed = header.serial - 1;
+    if(checking) {
+      replica.passed = header.serial - 1;
+      //(the put points passed dropped, as takeReports() drops the emulation thread's: dirty() goes through every one
+      //kept, for every byte a finish changes)
+      auto& points = replica.putPoints;
+      if(!points.empty() && points.front().at <= replica.passed) {
+        points.erase(points.begin(), std::find_if(points.begin(), points.end(), [&](const GeModel::PutPoint& point) {
+          return point.at > replica.passed;
+        }));
+      }
+    }
     if(gate) gate(header.serial);
     if(fuzz != Fuzz::None) fuzzBefore(header.serial);
     if(abandoned.load(std::memory_order_acquire)) break;
