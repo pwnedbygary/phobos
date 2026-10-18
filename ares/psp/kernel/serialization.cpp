@@ -1144,10 +1144,11 @@ auto Kernel::serialize(serializer& s) -> bool {
       pipe.first = 0, pipe.count = count, pipe.entries = 0;
       pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
     }
-    for(u32 n = 0; n < count; n++) {
-      auto& item = pipe.items[(pipe.first + n) % GE::Pipe::Room];
+    for(u32 n = 0; n < count; n++) {  //(through locals: GCC's -O3 takes the ring's index for past its end)
+      GE::Pipe::Item item{};
+      if(!s.reading()) item = pipe.items[(pipe.first + n) % GE::Pipe::Room];
       s(item.entries), s(item.done);
-      if(s.reading()) pipe.entries += item.entries;
+      if(s.reading()) pipe.items[n % GE::Pipe::Room] = item, pipe.entries += item.entries;  //(n: count is at most Room)
     }
     if(s.reading()) check(pipe.front >= 0 && pipe.back >= 0 && pipe.entries >= 0 && pipe.entries <= GE::Cost::Queue);
   }
