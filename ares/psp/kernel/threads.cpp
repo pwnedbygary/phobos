@@ -331,7 +331,9 @@ auto Kernel::idle(u64 end) -> bool {
   }
   //(the GE's exact time, where it may be the next thing: ge/thread.hpp)
   if(geFinishDue && !geRuns.empty()) geFold(true);
+  u64 from = cycles;
   cycles = std::min(end, cycles + untilNextEvent());
+  if constexpr(GE::Cost::Contended) if(gePspTiming) geContend(from, cycles, false);
   events();
   return true;
 }

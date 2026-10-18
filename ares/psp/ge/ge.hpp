@@ -780,9 +780,13 @@ struct GE {
     static constexpr f64 Vertex3 = 9.08;        //and the 3-byte format (8-bit positions alone) this
     static constexpr f64 IndexedVertex = 35.0;  //a vertex fetched through its index (one used again costs as much)
     static constexpr f64 Weight = 4.28;         //a vertex's skinning weight
-    static constexpr f64 PointLight = 11.2;     //a vertex lit by a point light or a spotlight (a directional one's
-                                                //light costs nothing to speak of)
-    static constexpr f64 SpecularLight = 1.49;  //and by a light's shine
+    static constexpr f64 PointLight = 11.2;     //a vertex lit by a point light (a directional one's light costs
+                                                //nothing to speak of)
+    static constexpr f64 SpotLight = 11.2;      //by a spotlight (round 8: as a point light)
+    //and by a light's shine, a directional light's and a point light's or spotlight's; and more for a vertex with one
+    //light shining (round 8: one directional light's shine 20.7 clocks a vertex, four 1.2 each; round 10's
+    //time-lights says which). Till round 10 is fitted, the shine one rate and none more for one.
+    static constexpr f64 DirectionalShine = 1.49, PointShine = 1.49, OneShine = 0;
     static constexpr f64 Cut = 25.9;            //a triangle cut at the near plane
     static constexpr f64 Patch = 92.7, PatchVertex = 13.8;  //a curved surface's patch, and each vertex made
     //the back end
@@ -819,6 +823,13 @@ struct GE {
     static constexpr f64 ShrunkMost = 4;
     static constexpr f64 FetchFixed = 26.0;
     static constexpr f64 FetchByte[4] = {0.495, 1.59, 0.352, 0.404};
+    //A CLUT32 texture's fetches, at rates of their own (Activision Hits' menu reads its 8888 picture back as CLUT32,
+    //its texels next to nothing on the PSP: round 10's time-clut32 says); till round 10 is fitted, the others'.
+    static constexpr f64 Clut32FetchByte[4] = {0.495, 1.59, 0.352, 0.404};
+    //Triangles' rows into a 16-bit frame buffer: the share of round 9's narrow rows (those under the wide reads'
+    //texels) read wide instead, as a sprite's (Activision Hits' copyright screen's triangles take what a sprite of
+    //them takes: round 10's time-widetri says); till round 10 is fitted, none.
+    static constexpr f64 TriangleWide16 = 0;
     static constexpr f64 CompressedByte = 20.3; //a DXT texture's byte
     static constexpr f64 PaletteLoad = 6.64, PaletteByte = 0.226;  //CLUT_LOAD's, and a byte of it (time-loads)
     static constexpr f64 RamShare = 0.0602;     //of a RAM-textured primitive's vertices' work, the back end's too (the
@@ -836,7 +847,27 @@ struct GE {
     //sceGeListUpdateStallAddr's about 510 (ge-statuses: nine of them took the PSP 21 microseconds more than the core
     //at 222 MHz).
     static constexpr u64 EnqueueCycles = 5200, StallCycles = 510;
+    //The CPU beside the GE (Kernel::geContend()): a list's reads of RAM, of each kind [the front end's vertices, its
+    //words, the back end's texels, transfers], make its work take 1 + Contention[kind] x that kind's share of its
+    //clocks x f as long, f the share of the time the CPU works beside it as a PSP's would: CpuScale times the emulated
+    //CPU's (the PSP's CPU takes 3.9 to 9.1 times as long a frame in the captures), at most all of it; a stretch of
+    //fewer than PollInstructions between syscalls is polling, not work (a loop waiting reads the cache). Round 8's
+    //cpu-contention: a thread streaming RAM beside the GE made its RAM-textured drawing 2.12 times as long; round 10's
+    //time-contention measures each kind. Till round 10 is fitted, none: Contended false, the kernel's part not built.
+    static constexpr f64 Contention[4] = {0, 0, 0, 0};
+    static constexpr f64 CpuScale = 5;
+    static constexpr u64 PollInstructions = 300;
+    static constexpr bool Contended = Contention[0] > 0 || Contention[1] > 0 || Contention[2] > 0 || Contention[3] > 0;
   };
+  //The list's clocks so far that read RAM, by Cost::Contention's kinds, and all of them (pipeStart() clears them; with
+  //Cost::Contended alone).
+  f64 ramClocks[4] = {}, allClocks = 0;
+  auto ramRead(u32 kind, f64 clocks) -> void {
+    if constexpr(Cost::Contended) ramClocks[kind] += clocks, allClocks += clocks;
+  }
+  auto otherWork(f64 clocks) -> void {
+    if constexpr(Cost::Contended) allClocks += clocks;
+  }
   //The work since the driver last looked (Kernel::geTime()), as the two ends take it, with the PSP's timing: the front
   //end works till it hands an item on (a primitive, a transfer, a palette's load), as soon as the queue has room for
   //it; the back end takes each in turn, once it's handed on and the last is done. Counted as each part is met,
@@ -859,6 +890,7 @@ struct GE {
   auto pipeStart() -> void {
     pipe.front = pipe.back = pipe.pending = pipe.vertices = pipe.entries = 0;
     pipe.left = pipe.first = pipe.count = 0, pipe.words = 0;
+    if constexpr(Cost::Contended) ramClocks[0] = ramClocks[1] = ramClocks[2] = ramClocks[3] = allClocks = 0;
   }
   auto pipeFront(f64 clocks) -> void { if(pspTiming) pipe.pending += clocks; }
   auto pipeItem(f64 back, f64 entries) -> void;  //draw.cpp

@@ -64,9 +64,14 @@ bytes, and the GE's pipeline: 28 and 16 a queued item; "Fast" 46 in all).
   fill, its bound since set to 3% and passed); the ares tests 361 checks, 0 failed; `test_geprof.py` 24 tests; the fit
   reproduced from a runner built from the tree; "Fast" against master on eight scenes, Software and Vulkan-fast: 16 of
   16 the same, every frame and the states (46 zero bytes put in).
-- **Not yet**: round 10's cases (perspective, turned and mipmapped triangles, CLUT32, wide triangles into 16-bit, a
-  light's shine by kind, 8-texel CLUT8 strips); "Fast"'s templates per timing; the CPU's contention with the GE (the
-  CPU's timing, its own project); fixed-point charges before any default change.
+- **Ready for round 10** (PR #278, part 112): `ge-fit.py` reads its records (checked against the core's own run),
+  `contention10.py` fits the CPU beside the GE to its time-contention, and the model holds round 10's terms where they
+  change nothing (shine by light kind, CLUT32's fetches, triangles' rows into 16-bit, the contention term, its kernel
+  part not built till fitted): rounds 6 to 10 in this runner byte for byte as before, the gate's profiles too, "Fast"
+  the same.
+- **Not yet**: fitting round 10 (perspective, turned and mipmapped triangles, CLUT32, wide triangles into 16-bit, a
+  light's shine by kind, 8-texel CLUT8 strips, the CPU beside the GE); "Fast"'s templates per timing; the CPU's own
+  timing (its own project); fixed-point charges before any default change.
 
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 

@@ -1160,7 +1160,9 @@ auto Kernel::run(u64 budget) -> u64 {
     if(!ge.thread) {
       u64 ran = cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
       going = false;
-      cycles += ran - counted;
+      u64 tail = ran - counted;
+      cycles += tail;
+      if constexpr(GE::Cost::Contended) if(gePspTiming) geStretchEnded(tail, tail >= GE::Cost::PollInstructions);
       counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
     } else {
       goThreaded(end);
@@ -1202,6 +1204,7 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 auto Kernel::syscall(u32 code) -> bool {
   u64 before = cpu.instructionsBefore();
   if(before > counted) cycles += before - counted;
+  if constexpr(GE::Cost::Contended) if(gePspTiming) geStretchEnded(before > counted ? before - counted : 0, true);
   counted = before;
   bool quiet = false;
   bool handled = dispatch(code, quiet);

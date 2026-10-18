@@ -73,25 +73,30 @@ edit("ares/psp/ge/draw.cpp", '''  f64 back = Cost::Primitive;
     }
     if(p.format == 3 && (p.clear ? p.clearDepth : p.depthTest)) back += f64(pixels) * Cost::DepthPixel,
       geterms::add("B", "DepthPixel", f64(pixels));''')
-edit("ares/psp/ge/draw.cpp", '''      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * Cost::FetchByte[(vram ? 2 : 0) + !t.swizzled];''',
-     '''      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * Cost::FetchByte[(vram ? 2 : 0) + !t.swizzled];
+edit("ares/psp/ge/draw.cpp", '''      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * rate[(vram ? 2 : 0) + !t.swizzled];''',
+     '''      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * rate[(vram ? 2 : 0) + !t.swizzled];
       if(!c.fetched) geterms::add("B", "FetchFixed", 1);
-      geterms::add("B", geterms::indexed("FetchByte", {(vram ? 2u : 0u) + !t.swizzled}), fresh);''')
+      geterms::add("B", geterms::indexed(t.format == 7 ? "Clut32FetchByte" : "FetchByte", {(vram ? 2u : 0u) + !t.swizzled}),
+                   fresh);''')
 edit("ares/psp/ge/draw.cpp", '''  if(t.format >= 8) return wide * Cost::CompressedByte;''',
      '''  if(t.format >= 8) return geterms::add("B", "CompressedByte", wide), wide * Cost::CompressedByte;''')
 edit("ares/psp/ge/draw.cpp", '''  return (1 - rowsWide) * narrow * narrowRate + rowsWide * wide * Cost::TexelByte[indices][from][1];''',
-     '''  if(sprite) geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 0u}), (1 - rowsWide) * narrow);
+     '''  if(!sprite && distinct > threshold && look.pixel.format != 3) {  //(the clocks a whole TriangleWide16 moves)
+    f64 split = (threshold / distinct) * (threshold / distinct);
+    geterms::add("B", "TriangleWide16", split * (wide * Cost::TexelByte[indices][from][1] - narrow * narrowRate));
+  }
+  if(sprite) geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 0u}), (1 - rowsWide) * narrow);
   else geterms::add("B", geterms::indexed("TriangleTexelByte", {indices ? 1u : 0u, from}), (1 - rowsWide) * narrow);
   geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 1u}), rowsWide * wide);
   return (1 - rowsWide) * narrow * narrowRate + rowsWide * wide * Cost::TexelByte[indices][from][1];''')
 edit("ares/psp/ge/draw.cpp", '''    if(physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow) back += share * Cost::RamShare;''',
      '''    if(physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow) back += share * Cost::RamShare,
       geterms::add("B", "RamShare", share);''')
-edit("ares/psp/ge/draw.cpp", '''  pipeItem(height * Cost::TransferRow + f64(width) * height * bytes * perByte, 1);''',
+edit("ares/psp/ge/draw.cpp", '''  pipeItem(clocks, 1);''',
      '''  geterms::add("B", "TransferRow", height);
   geterms::add("B", geterms::indexed("TransferByte", {inVRAM(source) ? 1u : 0u, inVRAM(destination) ? 1u : 0u}),
                f64(width) * height * bytes);
-  pipeItem(height * Cost::TransferRow + f64(width) * height * bytes * perByte, 1);''')
+  pipeItem(clocks, 1);''')
 edit("ares/psp/ge/texture.cpp", '''  if(pspTiming) pipeDrain(), pipeItem(Cost::PaletteLoad + bytes * Cost::PaletteByte, 1);''',
      '''  if(pspTiming) pipeDrain(), pipeItem(Cost::PaletteLoad + bytes * Cost::PaletteByte, 1),
     geterms::add("B", "PaletteLoad", 1), geterms::add("B", "PaletteByte", bytes);''')
@@ -108,17 +113,23 @@ edit("ares/psp/ge/draw.cpp", '''    pipe.vertices += format.indexFormat ? count 
     else if(format.size * Cost::VertexByte < Cost::VertexFloor) geterms::add("F", "VertexFloor", count);
     else geterms::add("F", "VertexByte", f64(count) * format.size);''')
 edit("ares/psp/ge/draw.cpp", '''      f64 each = t.weights * Cost::Weight;
+      u32 shining = 0;
       for(auto& light : t.lights) {
         if(!t.lighting || !light.enabled) continue;
-        if(!light.directional) each += Cost::PointLight;
-        if(light.specular) each += Cost::SpecularLight;
-      }''', '''      f64 each = t.weights * Cost::Weight;
+        if(!light.directional) each += light.spot ? Cost::SpotLight : Cost::PointLight;
+        if(light.specular) each += light.directional ? Cost::DirectionalShine : Cost::PointShine, shining++;
+      }
+      if(shining == 1) each += Cost::OneShine;''', '''      f64 each = t.weights * Cost::Weight;
       geterms::add("F", "Weight", f64(count) * t.weights);
+      u32 shining = 0;
       for(auto& light : t.lights) {
         if(!t.lighting || !light.enabled) continue;
-        if(!light.directional) each += Cost::PointLight, geterms::add("F", "PointLight", count);
-        if(light.specular) each += Cost::SpecularLight, geterms::add("F", "SpecularLight", count);
-      }''')
+        if(!light.directional) each += light.spot ? Cost::SpotLight : Cost::PointLight,
+          geterms::add("F", light.spot ? "SpotLight" : "PointLight", count);
+        if(light.specular) each += light.directional ? Cost::DirectionalShine : Cost::PointShine, shining++,
+          geterms::add("F", light.directional ? "DirectionalShine" : "PointShine", count);
+      }
+      if(shining == 1) each += Cost::OneShine, geterms::add("F", "OneShine", count);''')
 edit("ares/psp/ge/list.cpp", "pipeFront(Cost::Jump);", "pipeFront(Cost::Jump), geterms::add(\"F\", \"Jump\", 1);", count=2)
 edit("ares/psp/ge/list.cpp", "pipeFront(Cost::Call);", "pipeFront(Cost::Call), geterms::add(\"F\", \"Call\", 1);", count=2)
 edit("ares/psp/ge/transform.cpp", "  pipeFront(Cost::Cut);\n", "  pipeFront(Cost::Cut);\n  geterms::add(\"F\", \"Cut\", 1);\n")

@@ -274,7 +274,14 @@ auto GE::owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 t
     f64 rate = columns <= Cost::NarrowColumns ? Cost::NarrowPixel : p.format == 3 ? Cost::Pixel32 : Cost::Pixel16;
     back += f64(rows) * std::max(Cost::Row, f64(pixels) / f64(rows) * rate);
     if(p.format == 3 && (p.clear ? p.clearDepth : p.depthTest)) back += f64(pixels) * Cost::DepthPixel;
-    if(look.textured) back += texelClocks(look, pixels, texels, box, sprite);
+    if(look.textured) {
+      f64 texelTime = texelClocks(look, pixels, texels, box, sprite);
+      back += texelTime;
+      if constexpr(Cost::Contended) {  //(all of the back end's clocks counted below)
+        u32 at = look.texture.address & 0x1fff'ffff;
+        if(at < Memory::VRAMBase || at >= Memory::VRAMBase + Memory::VRAMWindow) ramClocks[2] += texelTime;
+      }
+    }
   }
   f64 share = 0;
   if(pipe.left) {
@@ -285,6 +292,7 @@ auto GE::owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 t
     u32 physical = look.texture.address & 0x1fff'ffff;
     if(physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow) back += share * Cost::RamShare;
   }
+  otherWork(back);
   pipeItem(back, entries);
 }
 
@@ -334,7 +342,8 @@ auto GE::texelClocks(const Look& look, u64 pixels, f64 texels, const TexelsRead&
     }
     f64 fresh = region - inside, clocks = 0;
     if(fresh > 0) {
-      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * Cost::FetchByte[(vram ? 2 : 0) + !t.swizzled];
+      const f64* rate = t.format == 7 ? Cost::Clut32FetchByte : Cost::FetchByte;
+      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * rate[(vram ? 2 : 0) + !t.swizzled];
       c.fetched = true;
     }
     if(held) {
@@ -352,7 +361,12 @@ auto GE::texelClocks(const Look& look, u64 pixels, f64 texels, const TexelsRead&
   f64 distinct = std::min(span, width);
   bool indices = bits <= 8;
   f64 threshold = indices ? Cost::WideIndices : Cost::WideTexels;
-  f64 rowsWide = distinct <= threshold ? 0 : sprite ? 1 : 1 - (threshold / distinct) * (threshold / distinct);
+  f64 rowsWide = 0;
+  if(distinct > threshold) {
+    f64 narrowRows = (threshold / distinct) * (threshold / distinct);
+    if(look.pixel.format != 3) narrowRows *= 1 - Cost::TriangleWide16;
+    rowsWide = sprite ? 1 : 1 - narrowRows;
+  }
   u32 from = vram ? 3 : t.swizzled ? 0 : width * height * bits / 8 > Cost::SmallBytes ? 2 : 1;
   f64 narrowRate = sprite ? Cost::TexelByte[indices][from][0] : Cost::TriangleTexelByte[indices][from];
   return (1 - rowsWide) * narrow * narrowRate + rowsWide * wide * Cost::TexelByte[indices][from][1];
@@ -381,6 +395,7 @@ auto GE::pipeDrain() -> void {
 auto GE::pipeItem(f64 back, f64 entries) -> void {
   auto& q = pipe;
   constexpr u32 Room = Pipe::Room;
+  if(wordsRun) ramRead(1, f64(*wordsRun - q.words) * Cost::Command);
   if(wordsRun) q.pending += f64(*wordsRun - q.words) * Cost::Command, q.words = *wordsRun;
   f64 front = q.front + q.pending;
   q.pending = 0;
@@ -404,7 +419,10 @@ auto GE::oweTransfer(u32 width, u32 height, u32 bytes, u32 source, u32 destinati
     return physical >= Memory::VRAMBase && physical < Memory::VRAMBase + Memory::VRAMWindow;
   };
   f64 perByte = Cost::TransferByte[inVRAM(source)][inVRAM(destination)];
-  pipeItem(height * Cost::TransferRow + f64(width) * height * bytes * perByte, 1);
+  f64 clocks = height * Cost::TransferRow + f64(width) * height * bytes * perByte;
+  if(inVRAM(source) && inVRAM(destination)) otherWork(clocks);
+  else ramRead(3, clocks);
+  pipeItem(clocks, 1);
 }
 
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
@@ -507,6 +525,7 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
   if(pspTiming) {
     f64 each = format.size == 3 ? Cost::Vertex3 : std::max(Cost::VertexFloor, format.size * Cost::VertexByte);
     pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : count * each;
+    ramRead(0, format.indexFormat ? count * Cost::IndexedVertex : count * each);
   }
 }
 
@@ -735,12 +754,15 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     t.vertexColor = format.colorFormat != 0;
     if(pspTiming) {  //(the GE's time a vertex: its skinning and its lights, Cost)
       f64 each = t.weights * Cost::Weight;
+      u32 shining = 0;
       for(auto& light : t.lights) {
         if(!t.lighting || !light.enabled) continue;
-        if(!light.directional) each += Cost::PointLight;
-        if(light.specular) each += Cost::SpecularLight;
+        if(!light.directional) each += light.spot ? Cost::SpotLight : Cost::PointLight;
+        if(light.specular) each += light.directional ? Cost::DirectionalShine : Cost::PointShine, shining++;
       }
+      if(shining == 1) each += Cost::OneShine;
       pipe.vertices += count * each;
+      otherWork(count * each);
     }
   }
   //(3D triangles' texels where they're the vertices' own coordinates, scaled and offset as transform() maps them:

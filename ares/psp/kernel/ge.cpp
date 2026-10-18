@@ -155,6 +155,41 @@ auto Kernel::geResume() -> void {
   gePipeAt = cycles;
 }
 
+//With the PSP's timing, the CPU beside the GE (GE::Cost::Contention): cycles from to to passed, the CPU working or not.
+//While the GE is busy (geDoneAt ahead), the CPU's share of its busy window as a PSP's would be (f: CpuScale times the
+//emulated CPU's, at most all of it) makes the list's work take 1 + sum(Contention[kind] x its share of the list's
+//clocks x f) as long: each cycle passed pushes geDoneAt (and a due SIGNAL's geReachAt) back by slow / (1 + slow) of a
+//cycle. The window starts afresh when the GE is idle.
+auto Kernel::geContend(u64 from, u64 to, bool worked) -> void {
+  if(geDoneAt <= from) {
+    geWindowPassed = geWindowWorked = 0;
+    return;
+  }
+  f64 overlap = f64(std::min(geDoneAt, to) - from);
+  geWindowPassed += overlap;
+  if(worked) geWindowWorked += overlap;
+  if(!(geWindowPassed > 0) || !(ge.allClocks > 0)) return;
+  f64 f = std::min(1.0, GE::Cost::CpuScale * geWindowWorked / geWindowPassed), slow = 0;
+  for(u32 kind : range(4)) slow += GE::Cost::Contention[kind] * ge.ramClocks[kind] / ge.allClocks * f;
+  geContendCarry += overlap * slow / (1 + slow);
+  u64 pushed = u64(geContendCarry);
+  geContendCarry -= f64(pushed);
+  if(!pushed) return;
+  if(geSignalDue && geReachAt > from) geReachAt += pushed;
+  geDoneAt += pushed;
+}
+
+//A stretch of the CPU's instructions ended, at a syscall (ended), or with a go (a short one goes on into the next):
+//work beside the GE from its start, or polling, fewer than GE::Cost::PollInstructions between syscalls.
+auto Kernel::geStretchEnded(u64 instructions, bool ended) -> void {
+  instructions += geStretch, geStretch = 0;
+  if(instructions < GE::Cost::PollInstructions && !ended) {
+    geStretch = instructions;
+    return;
+  }
+  geContend(cycles - std::min(cycles, instructions), cycles, instructions >= GE::Cost::PollInstructions);
+}
+
 //The driver's own work in a call, the CPU's (GE::Cost::EnqueueCycles, StallCycles), which the call takes before it
 //returns, the GE drawing meanwhile, so a list done by then has its finish callback before the program goes on.
 //(docs/psp-core.md, part 76; the driver's other calls take nothing, unmeasured.)

@@ -1121,6 +1121,13 @@ struct Kernel {
                             //GE waiting there (geRun())
   u64 gePipeAt = 0;         //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
                             //a list's, from one of its runs to the next)
+  //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended
+  //alone, and not saved till then): the GE's busy window so far, its cycles passed and those the CPU worked beside
+  //it, the push still owed (a part of a cycle), and the instructions of the CPU's stretch under way.
+  f64 geWindowPassed = 0, geWindowWorked = 0, geContendCarry = 0;
+  u64 geStretch = 0;
+  auto geContend(u64 from, u64 to, bool worked) -> void;
+  auto geStretchEnded(u64 instructions, bool ended) -> void;
   //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
   //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
   //takes for it as it's handed over, and geDoneAt is a lower bound of the synchronous GE's till none is left

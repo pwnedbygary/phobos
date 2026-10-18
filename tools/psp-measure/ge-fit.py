@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The GE timing model's fit (GE::Cost, docs/psp-core.md parts 76 and 106) to the owner's timed lists, in Python alone
-(no numpy). Inputs, for each round (6, 8 and 9): the terms of each run of the GE as a runner counted them (ge-terms.py's
+(no numpy). Inputs, for each round (6, 8, 9 and 10): the terms of each run of the GE as a runner counted them (ge-terms.py's
 PHOBOS_GE_TERMS file, the program's round run with the GE timing "PSP"), that run's own results folder (its records
 say how many runs each case had) and the PSP's results folder (the median of each case's runs is the time to fit).
 
@@ -11,10 +11,13 @@ list started plus, for each run, the longer of its front end's terms and its bac
 same for a list of one kind of work; it lets the two ends overlap only as far as its queue). The fit is a least squares
 on the relative error; each run's longer end is taken from the last fit's coefficients until no run changes ends, as
 part 76 did; a term that would go below 0 is left out (0) and the rest fitted again. Lists whose CPU moves their stall
-address (time-lists' and time-lists2's cases 2 and 3) are left out; time-anchors (round 8's cases again, on round 9's
-day) and the cases OUTSIDE names are checks, not fitted: their misses are shown apart.
+address (time-lists' and time-lists2's cases 2 and 3) are left out; time-anchors and time-anchors2 (round 8's cases
+again, on rounds 9's and 10's days) and the cases OUTSIDE names are checks, not fitted: their misses are shown apart.
+Round 10's time-contention and time-contention2 time each list alone and beside a CPU thread: the cases with no list
+(a pattern alone) have none to match, those with a thread are the CPU's beside the GE (CONTENDED: contention10.py's,
+not this fit's), and those with the CPU idle are fitted as any other.
 
-usage: ge-fit.py PSP_RESULTS TERMS OURS [TERMS OURS ...] [--fix TERM=VALUE,...] [--show N]
+usage: ge-fit.py PSP_RESULTS TERMS OURS [TERMS OURS ...] [--fix TERM=VALUE,...] [--show N] [--untie]
 prints each term's fitted value (GE::Cost's names), the median miss by test, and the furthest lists"""
 import os
 import statistics
@@ -23,13 +26,55 @@ import sys
 
 UNFINISHED = 0xffffffff
 SPACING = 16384 * 4  #ge.c's ListSpacing: case 1's lists, queued at once
-CHECKS = {"time-anchors"}
+CHECKS = {"time-anchors", "time-anchors2"}
 #Cases whose texels the model can't follow, shown as checks: 3D squares in perspective (round 8's time-textures 13-15
 #and round 6's time-fill 39: v changes along each pixel row; time-fill 38, the same at w 1, takes 1.8 times as long)
 #and turned a quarter (time-textures 16-18: the rows run down the texture's columns), which the PSP reads at a fraction
 #of the wide rows' rate, and mipmapped squares (time-textures 10-12: level 1 of a 256x256 texture, 4.5 times a 1:1
 #strip as wide) (docs/psp-core.md, part 106).
 OUTSIDE = {("time-textures", c) for c in range(10, 19)} | {("time-fill", 39)}
+#and round 10's (part 112) of the same kinds, till the model has terms for them: time-perspective's squares with w
+#changing across or down, the far side at the left (1-5, 7-11, 13-17, 19, 21, 23) and turned a quarter (the odd cases
+#from 25); time-mipmaps' textures with levels (1-5, 8-10, 12-15, 18, 19).
+OUTSIDE |= {("time-perspective", c) for c in (1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 19, 21, 23)}
+OUTSIDE |= {("time-perspective", c) for c in range(25, 48, 2)}
+OUTSIDE |= {("time-mipmaps", c) for c in (1, 2, 3, 4, 5, 8, 9, 10, 12, 13, 14, 15, 18, 19)}
+#round 10's time-contention (17 patterns alone, then 10 lists, each alone and beside each pattern) and time-contention2
+#(4 streaming patterns alone, then the lists alone and beside each): whether a case has a list, and a thread beside it
+CONTENTION = {"time-contention": (17, 18), "time-contention2": (4, 5)}
+
+
+#The terms round 10 is to fit (part 106's refit plan), held to the ones they split till it is (--untie frees them): a
+#spotlight a point light's, a point light's shine a directional light's, CLUT32's fetches the other formats', and none
+#more for one light shining or for triangles' rows into 16-bit; so the fit of rounds 6, 8 and 9 is GE::Cost as it is.
+TIES = {"SpotLight": "PointLight", "PointShine": "DirectionalShine"}
+TIES.update({"Clut32FetchByte[%d]" % k: "FetchByte[%d]" % k for k in range(4)})
+HELD = {"OneShine", "TriangleWide16"}
+
+
+def tied(side, untie):
+    """a run's counts with the terms held as TIES and HELD say, unless untie"""
+    if untie:
+        return side
+    out = {}
+    for k, v in side.items():
+        if k in HELD:
+            continue
+        k = TIES.get(k, k)
+        out[k] = out.get(k, 0) + v
+    return out
+
+
+def listed(test, case):
+    """whether a case of the test queues a list (round 10's contention tests: not the patterns alone)"""
+    return test not in CONTENTION or case >= CONTENTION[test][0]
+
+
+def contended(test, case):
+    """whether a CPU thread runs beside the case's list (round 10's contention tests)"""
+    if test not in CONTENTION or case < CONTENTION[test][0]:
+        return False
+    return (case - CONTENTION[test][0]) % CONTENTION[test][1] != 0
 
 
 def records(path):
@@ -84,14 +129,14 @@ def lists(path):
     return tests
 
 
-def load(psp, pairs):
+def load(psp, pairs, untie=False):
     recs = []
     for terms, ours in pairs:
         for test, groups in lists(terms).items():
             path = os.path.join(ours, test + ".bin")
             if not test.startswith("time-") or not os.path.exists(path):  #(cpu-contention's first value is the CPU's)
                 continue
-            mine = records(path)
+            mine = [r for r in records(path) if listed(test, r[0])]
             if sum(len(r[4]) for r in mine) != len(groups):
                 print("%s: %d lists counted, %d runs recorded: left out" % (test, len(groups),
                                                                              sum(len(r[4]) for r in mine)))
@@ -102,15 +147,15 @@ def load(psp, pairs):
             for c, s, cpu, bus, runs in mine:
                 group = groups[at + len(runs) - 1]  #(the last run: the cache as a run finds it)
                 at += len(runs)
-                if test in ("time-lists", "time-lists2") and c in (2, 3):
+                if (test in ("time-lists", "time-lists2") and c in (2, 3)) or contended(test, c):
                     continue
                 read = {(222, 166): 221, (266, 133): 265}.get((cpu, bus), cpu)
                 psp_runs = theirs.get((c, s, read, bus)) or theirs.get((c, s, cpu, bus))
                 t = median_time(psp_runs) if psp_runs else None
                 if t is None or t <= 0 or not group[0]:
                     continue
-                sides = [({k[2:]: v for k, v in run.items() if k.startswith("F.")},
-                          {k[2:]: v for k, v in run.items() if k.startswith("B.")}) for run in group[0]]
+                sides = [(tied({k[2:]: v for k, v in run.items() if k.startswith("F.")}, untie),
+                          tied({k[2:]: v for k, v in run.items() if k.startswith("B.")}, untie)) for run in group[0]]
                 recs.append({"key": (test, c, s, cpu, bus), "y": t * bus, "lists": group[1], "runs": sides,
                              "check": test in CHECKS or (test, c) in OUTSIDE})
     return recs
@@ -185,7 +230,7 @@ def fit(recs, fixed):
 
 
 def main(argv):
-    fixed, show, args = {}, 0, []
+    fixed, show, args, untie = {}, 0, [], False
     i = 0
     while i < len(argv):
         if argv[i] == "--fix":
@@ -195,13 +240,15 @@ def main(argv):
             i += 2
         elif argv[i] == "--show":
             show, i = int(argv[i + 1]), i + 2
+        elif argv[i] == "--untie":
+            untie, i = True, i + 1
         else:
             args.append(argv[i])
             i += 1
     if len(args) < 3 or len(args) % 2 == 0:
         print(__doc__)
         return 2
-    recs = load(args[0], list(zip(args[1::2], args[2::2])))
+    recs = load(args[0], list(zip(args[1::2], args[2::2])), untie)
     checks = [r for r in recs if r["check"]]
     recs = [r for r in recs if not r["check"]]
     coef = fit(recs, fixed)
