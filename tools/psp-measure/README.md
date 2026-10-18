@@ -272,10 +272,11 @@ Round 7 (about 1.5 MB, `manifest7.txt`) takes anti-aliased lines (`GU_LINE_SMOOT
 - **In 3D** (`aa-3d`): colored and textured lines under identity matrices, against through mode's, some with the
   texture scaled and offset.
 
-Round 8 (about 1 MB, `manifest8.txt`, which lists every case) takes the GE's time again (docs/psp-core.md, part
+Round 8 (about 170 KB, `manifest8.txt`, which lists every case) takes the GE's time again (docs/psp-core.md, part
 107). Part 76 fitted a model of the GE's time to round 6's lists, and the owner's captures of games (part 103) show
-where it misses: Killzone's scene lists come out 2 to 3 times as long as on his PSP, most of their time a 512x512
-VRAM buffer read as a CLUT32 texture in strips 32 texels wide, which round 6 never drew; Super Monkey Ball
+where it misses: Killzone's scene lists come out 1.8 to 2 times as long as on his PSP (+77 to +98%, as #266's
+reviewed decoder reads his captures), most of their time a 512x512 VRAM buffer read as a CLUT32 texture in strips 32
+texels wide, which round 6 never drew; Super Monkey Ball
 Adventure's lists 2.5 times as short. Its timed lists are round 6's kind, each queued alone and timed to its finish
 callback, at 222/111 and 333/166 MHz, and `time-lists` and `time-scenes` at 333/222/166 (the CPU's clock apart
 from the bus's, if the PSP grants it) and 266/133 too:

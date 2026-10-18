@@ -65,6 +65,18 @@ namespace ares {
   auto getSaveFiles() -> std::vector<string>;
   auto getButtonNames() -> std::vector<string>;
   auto flushSaves() -> void;
+  // A screenshot's picture, upright (a WonderSwan held upright turned as the window shows it), red in the high byte as
+  // the PNG encoder and Android's bitmaps take it (0xAARRGGBB).
+  struct ScreenshotPicture {
+    std::vector<u32> pixels;
+    u32 width = 0;
+    u32 height = 0;
+  };
+  // The picture a screenshot takes now: false when there's none (no frame yet; the PSP's or the N64's unreadable).
+  auto captureScreenshot(ScreenshotPicture& picture) -> bool;
+  // [picture] as a PNG at [path]: false unless all of it got there (the file couldn't be opened, or a disk filled).
+  auto writeScreenshot(const ScreenshotPicture& picture, const char* path) -> bool;
+  // Both at once.
   auto takeScreenshot(const char* path) -> bool;
   auto setFastBoot(bool enabled) -> void;
   auto setAutoSaveMemory(bool enabled) -> void;

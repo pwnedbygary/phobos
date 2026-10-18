@@ -6,8 +6,9 @@
 //thread switch, and the GE's and the display's calls (cpu-syscalls); and what clocks the power service grants
 //(cpu-clocks). Each file holds records as round 6's timing tests do: the case, its size, the clocks (CPU MHz << 16 |
 //bus MHz, as scePower gives them back), repeats | values << 16, then each run's `values` words: the run's time in
-//microseconds (sceKernelGetSystemTimeLow), but in cpu-clocks (below). The loops are written in assembly, so what
-//each runs is what its line says, whatever the compiler.
+//microseconds (sceKernelGetSystemTimeLow), but in cpu-clocks (below). cpu-alu's and cpu-latency's loops are written
+//in assembly, so what each runs is what its line says, whatever the compiler; cpu-memory's are C (-O2): a chain's step
+//is a load, a branch and the count's add.
 
 #include "measure.h"
 #include <pspctrl.h>
@@ -546,7 +547,8 @@ static void cpuCases(const char* name, const CpuCase* cases, int count, int repe
 //What the power service grants (part 104: a stock PSP refuses a CPU faster than the PLL and a bus faster than half
 //of it; the owner's PSP ran Activision Hits Remixed at 333/166 under ARK's overclock): each attempt from a known
 //setting, then what the call gave back, the clocks after (CPU and bus MHz), and the time of 65536 passes of
-//cpu-alu's dependent additions (4.19 million instructions) at them, in microseconds: 1 record each, 4 values.
+//cpu-alu's dependent additions (4.19 million additions, 4.39 million instructions with the loop's three a pass) at
+//them, in microseconds: 1 record each, 4 values.
 typedef struct { const char* name; short from, pll, cpu, bus, call; } ClockAttempt;  //call 0: all three, 1: CPU, 2: bus
 static const ClockAttempt clockAttempts[] = {
   {"scePowerSetClockFrequency(333, 333, 166) from 222/222/111", 0, 333, 333, 166, 0},

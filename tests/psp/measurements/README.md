@@ -33,10 +33,11 @@ Round 8 of the same program (its menu's first line since, "Round 8: the GE's tim
 same PSP on 2026-10-18 (the night's `results/ge`, beside rounds 6 and 7 again): 19 files, the GE's timed lists
 (`time-*`, at 222/111 and 333/166 MHz, `time-lists` and `time-scenes` at 333/222/166 and 266/133 too), the CPU
 beside the GE (`cpu-contention`), the CPU alone (`cpu-*`) and the display as the program starts (`display-start`), laid
-out as `manifest8.txt` describes; `time-lists.stalled` is the program's note of the stalls its case 3 met (a fault of
-the program's then: docs/psp-core.md, part 107). Part 107 says what each test is for and what the PSP showed. Each
-`.bin` is packed with xz (`xz -9e`, 212 KB as 120 KB with the rest); `SHA256SUMS` holds the unpacked files' sums. No
-test reads them yet: `tools/psp-measure/ge-fit.py` fits the GE timing's model to them (with #269's model) and a
+out as `manifest8.txt` describes; `time-lists.stalled` is the program's note of what it took for stalls in its case 3
+(its own timeout, not the GE's: docs/psp-core.md, part 107). Part 107 says what each test is for and what the PSP
+showed. Each `.bin` is packed with xz (`xz -9e`: 140 KB of records as 28 KB, 169 KB as 56 KB with the manifest, the
+note and the sums); `SHA256SUMS` holds the unpacked files' sums. No test reads them yet: #269's
+`tools/psp-measure/ge-fit.py` fits the GE timing's model to them (with #269's model) and a
 `measured8` test will compare the core's run of round 8 with them once that model and this program are both in.
 
 ## `ge-round9/`

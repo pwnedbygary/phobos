@@ -45,7 +45,8 @@ void drop(Output* out);  //closes the file unkept, as if the test hadn't started
 //---- the parts' rounds, each returning 0 if a file couldn't be written (the VFPU's rounds stop there, the GE's go
 //on with the rest)
 
-void vfpuStart(void);      //first thing when the program starts: what round 1 and round 3 record as found then
+void vfpuStart(void);      //as the program starts (after displayAtStart's two display calls): what round 1 and round 3
+                           //record as found then
 int vfpuRound(int round);  //1-3, or 4 for the FPU probes
 int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4:
                            //parts 29's and 33's; 5: what part 48 left open; 6: what parts 60 and 64 left open;
@@ -59,7 +60,8 @@ void geEnd(void);          //lets the GE go before the program leaves
 int cpuTests(void);                                      //0 if a file couldn't be written
 void cpuManifest(SceUID file);                           //their lines of manifest8.txt
 void displayAtStart(void);  //what the display holds as the program starts (round 8's display-start): first of all
-unsigned int cpuRead(const void* from, unsigned int bytes);  //reads every word (cached), returns their sum
+unsigned int cpuRead(const void* from, unsigned int bytes);  //reads every word (through from's own addresses, cached
+                                                             //or not), returns their sum
 void cpuChain(void* at, unsigned int nodes, unsigned int apart);  //a chain of pointers `apart` bytes apart, in a
                                                                   //scrambled order, through all of them
 unsigned int cpuChase(const void* at, unsigned int steps);   //follows it that many steps

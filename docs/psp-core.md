@@ -16496,14 +16496,14 @@ the RP6.
 
 On branch `cursor/psp-measure-round8-2b67` (PR #270), from master `a8d5640f5` (part 101, #263), masters `5442acb8b`
 (part 102, #265; #264, no part), `03eca2a69` (#274, no part), `dd63f4ffb` (parts 103 and 104, #266 and #267) and
-`230c0a731` (part 105, #268) merged in. Round 8 of `tools/psp-measure`, for the owner's PSP: what round 6 left of the
-GE's time, chosen by where part 76's model (fitted to round 6, ported behind the option "GE Timing" on #269) misses the
-owner's captures of games (part 103), and the CPU's own time, which in every captured scene that syncs is 7 to 9 times
-Phobos's. Nothing in the core changes: the program, its test, the test programs' copy of it, and the PSP's results
-(below). The owner approved the plan (the design's section 4, the CPU block with it). The fit that follows the results
-went with the model it fits (#269, part 106: `tools/psp-measure/ge-fit.py`, and `ge-terms.py` for the runner's counts
-in place of a `--ge-terms` option, so the core carries no counting code); the `measured8` test needs this program and
-that model both, so it comes after them.
+`230c0a731` (part 105, #268) and `fe3deab82` (parts 108 and 109, #271 and #272; #273, no part) merged in. Round 8 of
+`tools/psp-measure`, for the owner's PSP: what round 6 left of the GE's time, chosen by where part 76's model (fitted to
+round 6, ported behind the option "GE Timing" on #269) misses the owner's captures of games (part 103), and the CPU's
+own time, which in every captured scene that syncs is 7 to 9 times Phobos's. Nothing in the core changes: the program,
+its test, the test programs' copy of it, and the PSP's results (below). The owner approved the plan (the design's
+section 4, the CPU block with it). The fit that follows the results went with the model it fits (#269, part 106:
+`tools/psp-measure/ge-fit.py`, and `ge-terms.py` for the runner's counts in place of a `--ge-terms` option, so the core
+carries no counting code); the `measured8` test needs this program and that model both, so it comes after them.
 
 ### Where the model misses, term by term
 
@@ -16559,9 +16559,9 @@ the bus's, if the PSP grants it) and 266/133 (a third bus clock). Each record sa
   vertices; directional, point and spot lights, one to four, with their shine; skinning, one to eight bones, 8- to
   32-bit weights; morphing; texture coordinates through the texture matrix, from positions, environment mapping;
   fog; through mode.
-- **`time-state`**: 8x8 sprites with one thing set before each, as games set state between draws: TEX_FLUSH, a
-  texture changed or set again, a palette loaded, TEX_MODE, a blend or depth function, a matrix, TEX_SYNC, the alpha
-  test switched, each PRIM in a CALLed list, 3D triangles with their world matrix.
+- **`time-state`**: 8x8 sprites with one thing set before each, as games set state between draws: TEX_FLUSH, a texture
+  changed or set again, a palette loaded, TEX_MODE (GU's, with its TEX_FLUSH), a blend or depth function, a matrix,
+  TEX_SYNC, the alpha test switched, each PRIM in a CALLed list, 3D triangles with their world matrix.
 - **`time-lists`**: a list's own time (0 to 64 small sprites); 1 to 8 lists queued at once; one list drawn while its
   stall address is moved on 1 to 64 times, as fast as the CPU goes and each time once the GE has reached it; 16 to
   1024 CALLs.
@@ -16592,14 +16592,16 @@ the bus's, if the PSP grants it) and 266/133 (a third bus clock). Each record sa
   settings; `cpu-syscalls` (a system call, a semaphore, a thread switch there and back, interrupts held off, the
   cache written back, the GE's calls: queueing, stall updates, its looks, the display's) at 222/111 and 333/166; and
   `cpu-clocks`, what the power service gives for 13 clock requests (333/222/166 among them, and the CPU or the bus
-  asked for alone past what a stock PSP grants, part 104), with the CPU's speed timed at each. The loops are in
-  assembly, so each runs what its line says.
+  asked for alone past what a stock PSP grants, part 104), with the CPU's speed timed at each. `cpu-alu`'s and
+  `cpu-latency`'s loops are in assembly, so each runs what its line says; `cpu-memory`'s are C (`-O2`): a chain's step
+  is a load, a branch and the count's add.
 
 ### How it runs
 
 - About 3 minutes on the PSP (the GE's part summed from the model's rates, about 1 minute; the CPU's tests, the clock
-  changes and the runs' own overhead the rest), about 1 MB of results. The program changes the clocks part of the
-  time and puts them back after each test, as round 6 did.
+  changes and the runs' own overhead the rest). It wrote 167 KB (140 KB of records, the 25 KB manifest, the stall note),
+  where the menu line's "about 1 MB" was the estimate. The program changes the clocks part of the time and puts them
+  back after each test, as round 6 did.
 - A list the GE hasn't finished in 5 seconds is a stall (reset, recorded, the test goes on), as since round 4.
 - newlib's heap is held to 1 MiB (`PSP_HEAP_SIZE_KB`): left to itself it takes all the memory free as the program
   starts, and `cpu-memory` asks the kernel for 8 MiB (4 if that much isn't free; the records say which). Nothing in
@@ -16627,29 +16629,41 @@ are). Times below are in the GE's bus clocks (microseconds times the bus's MHz) 
   the finish 538.0 against 537.2 ms (part 1) and 269.9 against 268.7 ms (part 2). There's no earlier PSP run of round 7
   to set its files beside (part 78's open questions stand: aa-alpha the same as the core's, aa-blend 1 pixel a level
   off, aa-slopes 117 pixels, aa-axes 259, aa-3d 1008, aa-textured 1882).
-- **Wide texture reads** (`time-strips`): a texture's time per pixel jumps 5 to 7.6 times once a sprite's row spans
-  256 distinct texels (16- and 32-bit texels; 8-bit indices between 256 and 512): VRAM 8888 and CLUT32 1.4-1.6
-  clocks a pixel narrow, 8.4 wide; 5650 1.0, then 4.1; RAM swizzled 8888 1.9-2.0, then 12.4; RAM unswizzled 8888 7.5,
-  then 57. Wide, per byte: about 2.9 (RAM swizzled), 14 (RAM unswizzled), 1.8-2.0 (VRAM). Round 6 measured VRAM
-  (1.93 a byte) with a 256-wide sprite: the wide side. Killzone's and Activision Hits' CLUT32 strips 32 texels wide
-  take about 1.4 clocks a pixel, not about 8. The distinct texels are the fewer of the span and the texture's width:
-  a 64-texel texture repeated over 256 pixels is narrow (`time-texcache`'s 64x64 swizzled 8888, 0.92 a pixel).
-- **Other textures** (`time-textures`): triangles aren't sprites: a 256x256 swizzled texture over 256x256 pixels in
-  3D takes 3.9 clocks a pixel, a 256-wide sprite of it 13.3 (sprites read along rows; triangles seem to go in
-  blocks). Unswizzled textures from RAM go by their size or row pitch (64x64, 16 KiB: 0.36 a byte; 512 wide, 1 MiB,
-  narrow: 1.73). Shrunk 2:1 a texture costs about 1.9 times its 1:1 time a pixel, 4:1 about 3.6 times, stretched 1:2
-  about half: about the square root of the texels a pixel, not the texels.
+- **Wide texture reads** (`time-strips`): a texture's time per pixel jumps about 4 to 7.5 times once a sprite's row
+  spans 256 distinct texels (16- and 32-bit texels; 8-bit indices between 256 and 512), from the 128-wide strips at
+  222/111: VRAM 8888 and CLUT32 1.4-1.6 clocks a pixel narrow, 8.4 wide (5.4 times); VRAM 5650 1.0, then 4.1 (4.0); RAM
+  swizzled 8888 1.9-2.0, then 12.4 (6.2); RAM swizzled 5650 1.25, then 6.3 (5.0); RAM unswizzled 8888 7.5, then 57
+  (7.5); CLUT8 from 256 to 512 indices 3.9 to 4.1 times (VRAM 1.05, then 4.27; RAM swizzled 0.87, then 3.37). Wide, per
+  byte: about 2.9 (RAM swizzled), 14 (RAM unswizzled), 1.8-2.0 (VRAM). Round 6 measured VRAM (1.93 a byte) with a
+  256-wide sprite: the wide side. Killzone's and Activision Hits' CLUT32 strips 32 texels wide take about 1.4 clocks a
+  pixel, not about 8. The distinct texels are the fewer of the span and the texture's width: a 64-texel texture repeated
+  over 256 pixels is narrow (`time-texcache`'s 64x64 swizzled 8888, 0.92 a pixel).
+- **Other textures** (`time-textures`): triangles aren't sprites: a 256x256 swizzled texture over 256x256 pixels in 3D
+  takes 3.9 clocks a pixel, a 256-wide sprite of it 13.3 (sprites read along rows; triangles seem to go in blocks), the
+  3D case drawn in perspective (case 13: w 1 at the left to 2 at the right, 0.5 to 2 texels a pixel across the screen).
+  Unswizzled textures from RAM go by their size or row pitch (64x64, 16 KiB: 0.36 a byte; 512 wide, 1 MiB, narrow:
+  1.73). Drawn wide (one sprite 512 texels across), a texture shrunk 2:1 costs about 1.9 times its 1:1 time a pixel, 4:1
+  about 3.6 times, stretched 1:2 about half: about the square root of the texels a pixel. Read narrow it's more: in
+  strips 64 texels wide (case 2) shrunk 2:1 takes 4.40 a pixel against 1.58 for 1:1 strips that wide, about 2.8 times
+  (round 9 found about 3, part 110).
 - **The front end** (`time-vertices`, `time-state`): a PRIM command about 60 clocks (one PRIM for each 8x8 sprite:
-  95-98 clocks a sprite; many sprites to a PRIM, round 6's time-sizes, 25); 0.5 a vertex's byte; 35 an indexed vertex,
+  95-98 clocks a sprite in `time-signals2`, each behind `sceGuGetMemory`'s JUMP over its vertices, 78-80 in
+  `time-state`, their vertices in RAM; many sprites to a PRIM, round 6's time-sizes, 25); 0.5 a vertex's byte, but
+  8-bit positions (3 bytes) 8.7 a vertex, more than floats' 5.9 (round 9: a floor of about 5); 35 an indexed vertex,
   with no cache of vertices (the same three again cost as much); a skinning weight about 6.5 a vertex; a point or spot
   light about 11; a directional light about nothing.
 - **State** (`time-state`): TEX_FLUSH or a texture changed reloads a 1 KiB texture for about 374 clocks (unswizzled)
-  or 170 (swizzled), not round 6's 1444 and 614; a 256-color palette 252 (0.25 a byte); TEX_MODE flushes (its 280 is
-  the reload); a matrix about 50; CALL and RET together about 51; a blend or depth function, the alpha test, TEX_SYNC
-  about nothing.
+  or 170 (swizzled), not round 6's 1444 and 614; a 256-color palette 252 (0.25 a byte); a matrix about 50; CALL and
+  RET together about 58 (sprites drawn from CALLed lists against the same drawn directly); a blend or depth function,
+  the alpha test, TEX_SYNC about nothing. Case 6's TEX_MODE costs 280 because GU's `sceGuTexMode` ends with a
+  TEX_FLUSH (it jumps to `sceGuTexFlush`): that flush's reload, half swizzled and half not ((170 + 374) / 2); it says
+  nothing of a TEX_MODE command alone.
 - **Pixels** (`time-pixels`): the depth, alpha, stencil and color tests, blending and the texture functions add
-  nothing beside a texture's fetching; a failing depth test still fetches. A cached texture, depth tested and blended:
-  0.80 clocks a pixel into 8888, 0.34 into 5650; clear mode the same (the depth costs only in 32-bit).
+  nothing beside a texture's fetching; a failing depth test still fetches. A cached texture, depth tested and blended,
+  in full-width sprites (256 wide): 0.78-0.80 clocks a pixel into 8888, 0.34 into 5650; clear mode the same (the depth
+  costs only in 32-bit). The rate goes by the primitive's size and shape, as the texels' does: `time-setup`'s 3D
+  squares, textured and depth tested, drew their 8888 pixels at 0.38-0.39 a pixel at 16x16 (the same untextured),
+  0.72-0.74 at 32x32, 0.87-0.88 at 64x64 and about 1.0 at 8x8.
 - **The SIGNAL** (`time-signals2`): when the back end keeps up, the finish comes a fixed 12 microseconds after the
   signal callback at 222 MHz (8 at 333: the callback's own CPU time); otherwise the front end gets at most about 28
   sprites of 64x64 or 20.5 triangles ahead: about 83 entries counting each primitive and each of its vertices (84.6 for
@@ -16657,34 +16671,48 @@ are). Times below are in the GE's bus clocks (microseconds times the bus's MHz) 
 - **The scenes** (`time-scenes`): Killzone's scene list 12.4 ms at 222/111, its full-screen list 1.59 ms; the GE
   follows the bus's clock alone (333/222/166 as 333/166).
 - **The CPU beside the GE** (`cpu-contention`): a CPU thread reading RAM makes the GE's layers textured from RAM take
-  2.12 times as long (from VRAM about the same); the GE drawing from RAM slows the CPU's reads of RAM by 26%
+  2.12 times as long (from VRAM 151 ms with the reader, against about 159 ms from `time-strips`' wide VRAM rate:
+  there's no VRAM case without it); the GE drawing from RAM slows the CPU's reads of RAM by 26%
   (streaming) and 67% (a chain of pointers).
+- **The two ends' overlap** (`time-overlap`): its two kinds of piece came out 14 to 1, not about as long as each
+  other: at 222/111 the front-end pieces alone took 13.2 ms, the back-end ones 0.95; in turn 13.6 ms (1 or 16 at a
+  time) and 14.1 (256 at a time). Too lopsided to show the overlap; a balanced version is for a later round.
 - **`time-lists`' stalls**: a fault of the program's, over a driver rule Phobos doesn't keep. Case 3 waits for
   `sceGeListSync(id, 1)` to say 3 (the GE has reached the stall address) before each move; uOFW's driver says 3 only
   when the stall address as the program gave it equals the GE's list address, which it keeps with the top three bits
-  cut, and the program gave the uncached mirror's (0x4...), so it never did: each wait ran out (5 s) and the stall
-  check reset the GE; after three, `timeCases8` gave up on the test, so case 4 and every case at 333/166, 333/222/166
-  and 266/133 were never run (71 of its 80 records empty). The program now gives cached addresses (`ge.c`'s
-  `pieceEnds`; `pspmeasure.elf` rebuilt): a later run of `time-lists` alone (its files deleted, round 8 again) gives
-  the rest. Phobos masks both addresses and says 3 there, so the core ran case 3 through; keeping the address as given
-  is a small kernel change of its own, with a test, apart from this part.
+  cut, and the program gave the uncached mirror's (0x4...), so it never did. The run's 5 seconds count from its start:
+  the first wait used them all and the rest of the moves came at once, and `awaitFinishes`, on the same budget, then had
+  no time left while the GE was still drawing those pieces (`sceGeDrawSync(1)` gave 2), so the program reported a stall.
+  The GE never stalled: the note's 5000 ms is the run's whole budget, not 5 s a piece, and `sceGuBreak`'s 0x80000020
+  (already: no list active) says the list had ended by the reset. After three such runs `timeCases8` gave up on the
+  test: 67 of its 80 records are empty (case 3 at 4, 16 and 64 pieces, case 4, and every case at 333/166, 333/222/166
+  and 266/133); the 13 that finished are 222/111's cases 0 to 2 and case 3's single piece. The program now gives cached
+  addresses (`ge.c`'s `pieceEnds`; `pspmeasure.elf` rebuilt), and round 9's `time-lists2` (#276, part 110), the same
+  cases with the fix, finished all 80 records at all four settings on his PSP: no run of round 8's `time-lists` again is
+  needed. Phobos masks both addresses and says 3 there, so the core ran case 3 through; keeping the address as given is
+  a small kernel change of its own, with a test, apart from this part.
 - **The display as a program starts** (`display-start`, for part 108): the frame buffer reads address 0, width 0,
   format 3 (8888), for the next vblank and at once alike, and `sceDisplayIsForeground` 0. From there (put back before
   each try): 512 wide in 8888 or in 5650 at once, 0x80000107; the start's width and format with VRAM's address at
   once, 0x80000104; 0, 0, 0 at once, 0x80000107; 512 in 8888 for the next vblank, 0, after which the width reads 512 at
   once and the address 0 until the vblank.
-- **The CPU's clocks** (`cpu-clocks`; noted only: the CPU's timing is a project of its own): the CPU's speed follows
-  its own clock exactly (a loop 13.7 ms at 333 MHz, 20.6 at 222, 24.1 at 189, 45.8 at 99); granted 333/222/166 (read
-  back as 221/166), 266/133 (265/133), 190/95 and 299/166; two requests refused with 0x800001FE.
-- **The CPU's own time** (noted for that project; 333/166, each test's median): an addition a cycle, dependent or
-  not, as are loads that don't depend on each other; a load from the address the last one loaded, or a store, about
-  3; a taken branch with its delay slot, or a load used by the next instruction, about 4. A chain of pointers takes 5
-  cycles a step within 16 KiB (the data cache) and 73 (219 ns) over 32 KiB to 8 MiB alike (no second cache); through
-  RAM's uncached addresses 55 to 58, in the scratchpad 5, in VRAM 44 (37 uncached). Calls: `sceKernelGetSystemTimeLow`
-  0.56 microseconds, a semaphore's signal and poll 2.3, `sceKernelDelayThread(0)` 120, a thread switch there and back
-  19, `sceKernelDcacheWritebackAll` 10.6, `sceGeListEnQueue` about 14 (about 4,650 cycles: round 6's 5,200 from its
-  return), `sceGeListUpdateStallAddr` with the list left waiting 0.53, `sceGeDrawSync(1)` 0.67,
-  `sceDisplaySetFrameBuf` 0.95. `cpu-latency` and the other clocks are kept for that project.
+- **The CPU's clocks** (`cpu-clocks`; noted only: the CPU's timing is a project of its own): the CPU's speed follows its
+  own clock exactly (a loop 13.7 ms at 333 MHz, 20.6 at 222, 24.1 at 189, 45.8 at 99); granted 333/222/166 (read back as
+  221/166), 266/133 (265/133) and 190/95 (189/95). The bus is never granted as asked: it's half the PLL. 333/333/111
+  gave 333/166 and 300/300/150 gave 299/166, and `scePowerSetBusClockFrequency(111)` and `(133)` from 333/166 returned 0
+  with the bus left at 165: uOFW's `scePowerSetBusClockFrequency` refuses a bus above half the PLL (0x800001FE: `(166)`
+  from 222/111, as `scePowerSetCpuClockFrequency(333)` there) and for a user-level caller sets the bus to half the PLL
+  whatever was asked. Phobos's power service should do the same (part 104's rule covers only the refusals).
+- **The CPU's own time** (noted for that project; 333/166, each test's median): an addition a cycle, dependent or not,
+  as are loads that don't depend on each other; a load from the address the last one loaded, or a store, about 3; a
+  taken branch with its delay slot, or a load used by the next instruction, about 4. A chain of pointers takes 5 cycles
+  a step within 16 KiB (the data cache; with its loop's branch and add, the load alone being `cpu-alu`'s 3) and 73 (219
+  ns) over 32 KiB to 8 MiB alike (no second cache); through RAM's uncached addresses 55 to 58, in the scratchpad 5, in
+  VRAM 44 (37 uncached). Calls: `sceKernelGetSystemTimeLow` 0.56 microseconds, a semaphore's signal and poll 2.3,
+  `sceKernelDelayThread(0)` 120, a thread switch there and back 19, `sceKernelDcacheWritebackAll` 10.6,
+  `sceGeListEnQueue` about 14 (about 4,650 cycles: round 6's 5,200 from its return), `sceGeListUpdateStallAddr` with the
+  list left waiting 0.53, `sceGeDrawSync(1)` 0.67, `sceDisplaySetFrameBuf` 0.95. `cpu-latency` and the other clocks are
+  kept for that project.
 
 The fit of the GE timing's model to rounds 6 and 8 (`tools/psp-measure/ge-terms.py` and `ge-fit.py`) and the model it
 changes are part 106's, on #269; a `measured8` test, the core's run of round 8 beside these files, needs both this
@@ -16696,8 +16724,11 @@ program and that model, and comes once both are in.
   573 groups, 0 failures; "psp measure" alone, with the final program, again; with master `dd63f4ffb` (parts 103 and
   104) merged in, 579 groups, 0 failures; with master `230c0a731` (part 105), 582 groups, 0 failures; with round 8's
   results and `time-lists`' fix (`pspmeasure.elf` rebuilt), 582 groups, 0 failures. The program builds without a
-  warning (`-Wall`). GitHub's checks don't run while the branch conflicts with master (part 109's docs since
-  `92eddbfea`): master is merged in at this pull request's turn to land.
+  warning (`-Wall`). Master `fe3deab82` (parts 108 and 109) merged in at this pull request's turn to land: only the
+  docs met. The review (`~/phobos-work/scratch/review-270/REVIEW.md`: approve with should-fixes) found this part's
+  account wrong in places: the record count, the stall's story, the jump's range, the bus clock, the texture
+  statements' conditions, TEX_MODE, the pixel rate's, and the request that the owner run `time-lists` again: put
+  right above; `pspmeasure.elf` is unchanged (comments only in `ge.c`, `cpu.c` and `measure.h`).
 - The core's round 8 files read as its model has them: every CPU loop a cycle an instruction at 333 MHz whatever the
   clock (cpu-alu's 16384 passes of 67 instructions in 3,297 microseconds), a chain of pointers as fast over 8 MiB as
   over 1 KiB, a 512x256 layer 295 microseconds at 111 MHz whatever its texture: what the PSP's files will be set
@@ -16709,7 +16740,357 @@ program and that model, and comes once both are in.
 #269's runner only for its build; `out/terms-*.log`, the tables above); `round8/` (the test's logs, `ours/` the core's
 round 8 files, `r8dump.py` to read them, `EBOOT.PBP` as built); `results-1018/` (the owner's run as he sent it),
 `refit/` (`r8.py`, `repeat6.py` and `FINDINGS-1.md`: the results above), `r8fix/` (the program rebuilt with
-`time-lists`' fix, and its `EBOOT.PBP` for the PSP). Nothing was run on the RP6.
+`time-lists`' fix, and its `EBOOT.PBP` for the PSP); the review in `~/phobos-work/scratch/review-270/`. Nothing was
+run on the RP6.
+
+## Part 108: the display's frame buffer for the next vertical sync — sceDisplaySetFrameBuf's sync 1 shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second)
+
+On branch `cursor/psp-display-latch-2b67` (draft PR #271), from master `5442acb8b` (part 102, #265; #264, no part),
+masters `03eca2a69` (#274, no part), `dd63f4ffb` (parts 103 and 104, #266 and #267), `230c0a731` (part 105, #268)
+and `92eddbfea` (part 109, #272; #273, no part) merged in. Sources: pspautotests' display/setframebuf and
+display/isstate (their recordings), round 8's display-start (part 107, #270: `tools/psp-measure/cpu.c`), pspsdk's
+`pspdisplay.h`. No PPSSPP or JPCSP. Save states: layout 33 (its own: #269's GE timing takes 33 too, and whichever
+lands second renumbers its layout to 34).
+
+### Why
+
+- Army of Two (part 103's captures ULUS10472-1 and -2): each frame its list's SIGNAL callback sets the next frame
+  buffer for the next vertical sync; after its draw sync the game asks `sceDisplayGetFrameBuf` which is shown (0),
+  and while it isn't the new one yet, sets it again and waits for the blank: two flips and one wait a frame, 30
+  frames a second while the GE's frame fits two blanks, 20 above, on the owner's PSP. Phobos took every frame buffer
+  at once, so the game found its flip shown and never waited: master draws 251 frames a second (the GE timing
+  "Fast") for 60 shown, part 106's PSP timing 29 to 32 a second with no cap.
+
+### What a PSP does
+
+- display/setframebuf: a frame buffer set with sync 1 (pspsdk's NEXTVSYNC) reads at once as the one coming
+  (`sceDisplayGetFrameBuf`'s 1) and as the one shown (0) only from the next blank (read after
+  `sceDisplayWaitVblankStart`); its width and format read at once from both. display/isstate: a frame buffer of 0 so
+  set leaves the display in the foreground till then, and the vertical sync comes 631.5 microseconds into the blank.
+  Round 8's display-start, from a program's start: one set for the next vblank (512 wide, 8888) is taken and reads
+  back at once as address 0 (the start's), width 512 and format 3, the address the new one only from the blank.
+- Five of the scenes below set theirs with sync 1 just as a blank starts (from a vertical blank handler, or a thread
+  that waited for the blank): if the frame buffer were taken at the blank's start, each of their frames would show a
+  blank late. Set in a blank before its sync, here they're taken at that sync, for the frame after the blank; set
+  anywhere else, at the next blank's start, as setframebuf read it.
+- (Also recorded, left out here for scope: refusals of a sync other than 0 and 1, of a width or format set at once
+  that isn't the one shown (0x80000107), of widths not a multiple of 64 (0x80000104), formats past 3 (0x80000108) and
+  addresses misaligned or outside VRAM and RAM (0x80000103). Round 8's display-start has what a program meets as it
+  starts: address 0, width 0 and format 3 (8888) for the next vblank and at once alike, `sceDisplayIsForeground` 0,
+  and every frame buffer set at once refused from there, the display left as it was (512 wide in 8888 or in 5650,
+  and 0, 0, 0: 0x80000107; the start's width of 0 with VRAM's address: 0x80000104). Phobos starts at format 0 and
+  takes every one. The refusals, and the start's format, change what every game meets as it starts: a change of
+  their own, with a library check of its own (below, "Not yet").)
+
+### What changed
+
+- display.cpp: `sceDisplaySetFrameBuf`'s sync 1 sets the address shown from the next blank's start, or, set in a
+  blank before its sync, from that sync (`Display::nextFrameBuffer`, `nextAt`; `Kernel::VsyncCycles`), the width and
+  format at once; sync 0 (anything else) as before, replacing one waiting. `latchFrameBuffer()` makes it the one
+  shown once its sync has come, as `sceDisplayGetFrameBuf` and `sceDisplayIsForeground` read, as another is set for
+  the sync, and as each blank goes by (so a state saved as a frame starts is the same whether the game read it or
+  not); `sceDisplayGetFrameBuf`'s which 1 reads the one coming. The screen (`presentedFrameBuffer()`:
+  `Kernel::picture()`, system.cpp) shows in the frame after a blank the frame buffer its sync takes: the last one set,
+  as before. Its picture is taken as the blank starts (`System::run()`), so one set in the blank before its sync,
+  after that, shows a frame later than on a PSP, as on master.
+- Save states: layout 33 keeps one waiting and its sync (13 bytes); older layouts load with none; a state with one
+  due past the next blank's start is refused.
+
+### What it does
+
+- Every scene of both libraries (34, `cpu-round3/scenes` and `psp-hires/scenes`), the bench runners against master,
+  100 frames from each state, in Software, Vulkan and Vulkan-fast: 31 the same as master in every frame's picture
+  and VRAM and the RAM after, in all three. Three change, the same way in all three renderers:
+  - Army of Two's gameplay and menu: every frame, and the RAM: its pacing (below).
+  - Death Jr. II's character screen: every frame's picture the same; the VRAM in alternate frames (50 of 100) and
+    the RAM: its vertical blank handler flips for the sync as the blank starts and reads which is shown, once on
+    master; its reads before the sync find the old one now, so it reads twice more (the last at the next blank,
+    which finds it), and its main thread, which never reads it on master, reads it five times before the sync. Its
+    work around the flip changes with them, at 30 flips a second still, no blank waited for. (Its gameplay scene
+    comes out the same in its 100 frames: its main thread reads once a flip, mid-frame, after the sync.)
+- The first try (`latch/`: every frame buffer set for the sync taken at the next blank's start, the screen showing
+  the one taken) changed four more, their flips at a blank's start each shown a blank late, in alternate frames:
+  Death Jr. II's gameplay (50 pictures of 100) and Sonic Rivals (50), whose main threads read for a whole frame
+  (4,744 and 1,797 times in 600 frames), Disaster Report 3's intro (35) and Twisted Metal's logos (49); Death Jr.
+  II's character screen's pictures too (50). Taken at that blank's sync, the four are master's in every frame's
+  picture and VRAM and in the RAM, their calls master's but for the reads (Death Jr. II's main thread once a flip,
+  after the sync; Sonic Rivals' twice before it and once after: 299 and 897 times in 600 frames).
+
+- Each scene 600 frames (10 s) in Software, its display calls traced (`phase3/calltrace-patch.py`): frames a second
+  the same in 32 scenes. Army of Two, with the GE timing "Fast" (the default): drawn 251 times a second in its
+  gameplay and 194 in its menu, for 60 shown, never waiting; now 120 in both, two frames a blank: Fast's GE is done
+  with the frame after a blank within a line of it, so that flip comes before the blank's sync and is taken there,
+  found shown, no wait; the next, flipped mid-frame, isn't shown yet after its draw sync, so the game flips it again
+  and waits for the blank (three flips, two reads and a wait a blank, where master made 4.2 flips and reads). A PSP's
+  GE is never that quick (the owner's captures: 23 to 35 ms a frame). With the PSP's timing as well (part 106, #269;
+  both branches' code merged for a scratch run, `combo/`) its gameplay draws 244 frames in 600 blanks, flipping
+  twice and waiting once a frame (482 flips, 239 waits: two blanks apart 125 times, three 109 times, 30 and 20
+  frames a second; four frames whose flip came just before the sync found it shown and went on), its menu 201, 20 a
+  second, every wait three blanks apart: the owner's PSP's pattern (two flips and a wait a frame, 30 frames a second
+  while the GE's frame fits two blanks, 20 above).
+- Nothing missed or waited for without end, in these 34 scenes: in the seven that changed under any of the three
+  tries, in all three renderers, no picture repeats the frame before where master's doesn't (Army of Two 100
+  different pictures in 100 frames on both; the others, at 30 frames a second or less, repeat exactly where master's
+  do; elsewhere one can: Army of Two's intro, below, holds each of its video's pictures two frames, where master
+  holds them one to three); a frame buffer set for the sync is the one shown by the next blank's start at the
+  latest, read or not, and in the traces every scene flips as often as on master but Army of Two, which now waits
+  once a blank.
+- Which games read the display back: `sceDisplayGetFrameBuf`'s 0, after flipping for the next sync: Army of Two (after
+  its draw sync), Death Jr. II and Sonic Rivals (their main threads, after their vertical blank handlers' flips): the
+  ones whose behaviour can change. Activision Hits Remixed reads 0 and Twisted Metal Head On's game 1, but set theirs
+  at once: unchanged. Next-sync flips besides: Colin McRae Rally 2005, Disaster Report 3's intro, Chinatown Wars, Hot
+  Wheels Ultimate Racing (half its flips), Killzone Liberation, Twisted Metal's logos: their pictures as master's,
+  Twisted Metal's, Death Jr. II's and Sonic Rivals' set as the blank starts, for the frame after it. No game here
+  asks `sceDisplayIsForeground`.
+- The coordinator's library check (all 266 games, each from its start with the library's presses, four pictures in
+  3,600 frames, Software and Vulkan-fast, the clock started at a fixed time in every run, against master
+  `230c0a731`): 0 newly failing, 266 folders in each pass. In Software 8 games' pictures differed on the first pass,
+  6 of them master's on a rerun; in Vulkan-fast 6 and 4. The two left, in both renderers, are this part's doing and
+  not faults (the review's runs): Army of Two (frame 300) shows master's very pictures 4 frames later: its loading
+  frames now wait for the blank, so EALogo.bik opens 58,550 microseconds later (frame 91, not 87), and each of the
+  video's pictures is then held exactly two frames, where master holds them one to three. Sonic Rivals 2 (frame
+  3,600) presents the same frame buffer as master at every one of its 3,600 frames: its flip, made in a GE FINISH
+  callback, now reads back as not shown yet, as on a PSP, so its second list is queued by the vertical blank handler
+  at the next blank rather than at once, and the game's animation is sampled at other moments (1,739 of the 3,600
+  pictures byte for byte master's; the boot notice's fade, frames 190-201, a frame ahead of master's; the rest the
+  title screen's sub-pixel motion).
+
+### Tests
+
+- "display frame buffer set for the next vsync" (callbacks.cpp): setframebuf's and isstate's recordings (with sync 1
+  taken at once, as master takes it, the address reads as shown at once and the display leaves the foreground at
+  once: the test fails); set mid-frame, shown from the next blank's start; set as a blank starts, from that blank's
+  sync; set after the sync, from the next blank's start; the frame after the blank showing it either way; one set at
+  once replacing one waiting; two for one sync, the last; a state keeping one.
+- "display frame buffer set for the next vsync, taken by whatever looks first" (callbacks.cpp; the review's four
+  surviving mutants): read a cycle before its sync, the one before still; a frame buffer of 0 set as a blank starts
+  out of the foreground at that sync, asked with nothing else read; one set as a blank starts and one after its sync,
+  nothing read between: the first shown from that sync, the second from the next blank's start; one set mid-frame and
+  not read: as the next frame starts nothing is left for a read to take (the state the same).
+- "the frame shown" (ares/system.cpp, the whole system): a pretend GPU holds two frame buffers, each drawn whole; the
+  frame is read back (`System::run()`) and presented, as Android's GPU presents it (`present()`), from the one set
+  for the coming sync while the other is shown, from the one shown with none set.
+- "state fields" (states.cpp): the three new fields each reach the state and come back, and one due past the next
+  blank's start is refused. The layout tests (states.cpp, font.cpp, atrac.cpp, ares/system.cpp) for layout 33; the
+  tests that read the screen's frame buffer (draw.cpp's and ge.cpp's samples, kernel.cpp's hello program) read the
+  one presented.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+  577 groups, 0 failures. With sync 1 taken at once, as master takes it (the rest kept, so the test builds): the new
+  test's 5 checks of the frame buffer shown and the foreground fail, every other group passes.
+- With master `dd63f4ffb` merged in (part 103's GE profile, part 104): 580 groups, 0 failures, the GE profile's and the
+  display's groups among them. The profile still records each `sceDisplaySetFrameBuf` as it's called (its
+  `ProfiledCall` first, then the latch) and each blank after its latch: Army of Two's a2-gp, profiled as part 103
+  profiled it (frames 301 to 900), has the SIGNAL callback's call and the second one its thread makes while the flip
+  isn't shown (1,200 and 600, all for the next sync) and 600 vblank waits, where master has the callback's alone; the
+  decoder counts a flip a list, the second call setting the same buffer, as it counts the PSP's capture (289 flips of
+  565 calls in ULUS10472-1).
+- With master `230c0a731` merged in (part 105): 583 groups, 0 failures. A spin's turns call no display function but
+  `sceDisplayGetVcount`, and a blank ends any skip, so a frame buffer set for the next sync is latched at the same
+  moment with the skip on or off.
+- With master `92eddbfea` merged in (part 109, #272; #273) and the review's fixes (its review of `96383388d`: approve
+  with should-fixes): 610 groups, 0 failures (the merge alone: 609). The merge's two conflicts, both in
+  system.cpp, keep both sides: the frame from `presentedFrameBuffer()` under #272's renderer checks
+  (`drawing.renderer` in `System::run()`, `ge.drawer().renderer` in `present()`, the GE thread done with the GPU
+  first). Every picture of Army of Two's first 400 frames (Software and Vulkan-fast) and of Sonic Rivals 2's first
+  600 (both renderers; Vulkan-fast's differing from Software's in 505 of them) is byte for byte #271's, with the GE
+  thread off and on. Mutants, each made, run and taken out: the review's four survivors (the latch dropped from
+  `sceDisplaySetFrameBuf`, from `sceDisplayIsForeground` or from `events()`, or made 0.3 ms before the sync) each fail
+  the new group and nothing else; system.cpp's two uses of `presentedFrameBuffer()`, each put back to the frame
+  buffer shown, fail "the frame shown" (read back, presented); `nextAt` left out of the state, and the loader's
+  refusal taken out, each fail "state fields".
+
+### Not yet
+
+- The refusals above and the start's format (a PSP's 3, Phobos's 0), now that round 8's display-start has what a
+  program meets as it starts: a change of their own, with a library check of their own.
+- When a PSP's display takes a frame buffer set as a blank starts, before the sync: taken at that sync here (the sync
+  is 631.5 microseconds in, the handlers run as the blank starts), unrecorded (display-start reads once, just after
+  the set). Taken at the next blank's start instead, five of the library's games would show each frame a blank late
+  (the first try). A round could record it: a flip at a blank's start read back before the sync, after it and
+  mid-frame.
+- Perhaps the picture taken at the sync rather than as the blank starts, so that one set in the blank before its
+  sync shows in the frame after that blank, as on a PSP (master shows it a frame later too).
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/latch/`: `latchcheck.sh` (the blank's start taken as the moment) and
+`latchcheck2.sh` (the sync) and `latchcheck3.sh` (the sync for a frame buffer set in the blank, the blank's start
+for one set before it), their `summary.txt` (its "VRAM" and "picture" swapped: each hash line is the frame, the
+picture, the VRAM), `hashes/` and `pacing/` (each scene's display calls, traced with `phase3/calltrace-patch.py`) in
+`latch/`, `latch2/` and `latch3/`; `latch3/scenes.sh` and `scenes.txt`, the seven scenes' calls by thread, sync and
+line under each try; `combo/`, Army of Two with #269's PSP timing; `phase3/latch-patch.py`, the first try;
+`round8/`, display-start. Nothing was run on the RP6.
+
+## Part 109: the GE's front end on a thread of its own, exact — option "GE Thread" (Off, the default, and On), the emulation thread waiting only where the GE could still change what it reads (GE round 4, part B, first PR)
+
+On branch `cursor/psp-ge-thread-2b67`, on master `a8d5640f5` (part 101, #263) with masters `684ce8561` (#261, #262,
+#249), `a8d5640f5`, `5442acb8b` (#264, the PGD layer's comments, #265: part 102), `03eca2a69` (#274), `a014706e9`
+(#266: part 103), `dd63f4ffb` (#267: part 104) and `230c0a731` (#268: part 105) merged in. The design is GE round
+4's (part 100 was its part A), revision 4, approved by the independent review with two conditions, both met (below).
+Clean room: no PPSSPP for any GE or GPU code (its threaded GPU code included), JPCSP never. Save states: unchanged
+(StateVersion as before; a state is the same file with the thread on or off).
+
+**What it is.** With "GE Thread" On, the kernel's GE on the emulation thread (E) still runs every display list's
+commands as it always has (the control pass: every word, JUMP and CALL, SIGNAL, FINISH and END, bounding boxes, block
+transfers), and hands what draws to a second GE, the render GE, on a thread of its own (G), as records in a ring:
+the state words with their addresses, each PRIM, curved surface and palette with the bytes it reads copied as of its
+place, the CPU's writes the GE hears of, and the reads where G's memory may be busy. G draws them with the renderer and
+the drawing threads, in the same memory seen through a view of its own, and makes the checks the synchronous GE makes
+(its finishes, the drawing first over what it reads) where they come in the stream. Every emulated result is the
+synchronous GE's, by construction:
+- **The value rule** (`ge/model.hpp`): E keeps a model of what each PRIM handed over may change (where it may draw on
+  the GPU and in software, its depth's 16 KiBs, the put points where a depth goes back into memory, above 1x each
+  target's hull since its last finish) and of what G reports done (finishes, depth put back, software pixels drawn).
+  A CPU load, an HLE function's copy out of VRAM and the control pass's reads of lists, vertices and palettes wait
+  for G only where it may still change the bytes; elsewhere they read memory at once.
+- **Versions** (`ge/versions.hpp`): E's writes (the CPU's stores reaching VRAM or a watched page, HLE functions'
+  copies and fills, block transfers' rows) are made at once and handed over; their old bytes are kept as versions
+  where G may still read them or write them back as of an earlier place, and G reads and writes back through them
+  (it never waits while it holds a page: R13). A write over pixels the drawing threads may still draw, or onto a
+  texture they may still read, goes after its record, once G has passed it.
+- **The clock** (`kernel/ge.cpp`): no wait at a kick's end; the runs G counts are folded into the GE's time
+  (`geFold()`), and a go limited by the time's bound is worked out exactly before anything sees it.
+- **Debug checks**, on in every threaded test machine (and with `PHOBOS_GE_CHECK=1`): G runs E's model on the same
+  records and aborts where a finish or a depth put-back changes a byte E may have read clean (the whole rule), or
+  where G reads memory outside what the model declares the PRIM may read (G-interest: its target's rows, the rows of
+  every target with pages there (R19), its depth's 16 KiBs to the most rows any target drew with it (R24) and the
+  targets over them (R22), its texture's bytes, a put point's depth buffers).
+
+**The option.** "GE Thread", Off (the default) or On, the core's option (`system.cpp`) and the runner's `--ge-thread`;
+the app doesn't offer it yet. Part 103's GE profile (`--ge-profile`) records the same with the thread On: while it
+records, each run handed over is counted at once and its charge recorded where the synchronous GE records it
+(`Kernel::geProfiledRun()`), the threads taking turns at each run meanwhile. Part 105's skips through a game's polls of
+the GE's looks (`sceGeListSync(id, 1)`, `sceGeDrawSync(1)`) hold with the thread On as they are: a look reads the
+kernel's lists, which the control pass keeps on E as it always has, and what the GE thread decides is only when a FINISH
+falls due; a skip ends before the go's limit, which is no later than the GE time's bound where the FINISH may come next
+(`untilNextEvent()`), and makes sure by that bound that no FINISH falls due in it (`spinSkip()`), so it skips no further
+than without the thread, at times fewer turns (the GE thread not done counting), which is exact. A test holds the GE
+thread back at every step while a game polls each look, and every step's state is that of a machine without the thread
+running every turn. **The limit of this first part**: the frame is still shown from the emulation thread, which drains G
+at every frame's end (`System::run()`'s `ge.drawer()`), so the two threads overlap within a frame and not across frames;
+showing the frame from G (every GPU call there, at most two frames in flight), the bounded drains and unloading with G
+stuck (R10, R18), and Auto with its handover both ways (R17) are the second part's (design steps 3 and 4), which the
+app's option waits for.
+
+**Speed, in this first part**: On is exact, but on the M1 it's seldom faster than Off and in some games much slower
+(the library's slowest with the software renderer, all 3,600 frames from their start, Off then On: BlazBlue 4 s and
+20 s, SSX on Tour 8 s and 43 s, Aces of War 10 s and 41 s). Every CPU load and store reaching VRAM takes the slow path
+(VRAM is out of E's page table all the while) and each store is a record of its own, G woken for it, about a
+microsecond each: the design's access records only on pages where checks could act, with runs encoded as one record
+(costed there at 5 ns a record), aren't done yet. And a game that touches what G is still drawing, or reads
+the frame back, has the two threads take turns, the frame's end draining G. Auto keeps such a game synchronous;
+until then On is for the tests and the runner.
+
+**Off costs nothing.** Every Off path is master's (or the stage's own arithmetic, measured): the emulation thread's
+retired instructions a frame against master on the M1, Vulkan fast, late frames as the app shows them, 300 frames,
+5 rounds alternating: Super Monkey Ball's story -0.29% (ms -2.4%), Ghost of Sparta's menu -0.02% (ms +0.7%), Chains of
+Olympus +0.05% (ms +0.2%; over 14 rounds interleaved +0.04%, master's own rounds spanning 0.45%). Getting there took
+the Off paths back to master's text where the first 2c tree cost +0.40% on Ghost of Sparta: `Memory::changed()`'s
+helpers inline again, `pieces()` inside `copyIn()` and `fill()` again, `pointerElsewhere()`'s `bool load`, a Look as
+it was (the deferred decode's place kept by its batch), `transfer()`'s overwrite master's lambda, and stage 1's
+`geReached()` and `idle()` folding nothing with no runs handed over. The review's fixes, against `0d7e04246` the same
+way: -0.01%, -0.01%, -0.06%, once `geTime()`'s threaded branch was kept as it was, its fold of the oldest runs out of
+line (`geFoldKept()`): written inline there it cost 0.19% in all three, `geTime()` being what every run takes.
+
+**Exactness, measured** (the M1, MoltenVK; the thread On with both debug checks against Off on the same runner):
+- the 78 settled hashes: the 26 scenes (the 21 of the kit, Hot Wheels, Killzone's play and menu, MX vs ATV, Chains of
+  Olympus) in Vulkan fast, Software and Vulkan accurate, 100 frames, each frame's picture and VRAM with the drawing
+  settled, then RAM and the machine's state: 78 of 78 the same;
+- the 26 scenes 600 frames with only the end hashed and a state saved every 150 frames, each compared: all the same;
+- Ghost of Sparta from its start with the library check's presses, 2,400 frames, each frame's picture and VRAM, then
+  RAM and the state, in Software and Vulkan fast: the same (the clock started at a fixed time: a game booted takes
+  the host's, which runs on between two runs);
+- schedule fuzzing (`PHOBOS_GE_FUZZ=seed,mode,n`: G pausing before records; G held back till E has appended n more,
+  waits for it, fills a quarter of the ring or 2 ms pass; E waiting for every record): 10 scenes three ways, 300
+  frames, states every 100: all the same, none hung (every run under a hang timeout);
+- the stress mode (a build with `PHOBOS_GE_STRESS_HOOK`; `PHOBOS_GE_STRESS=97`: the GPU finished at every kick's end
+  and before every 97th PRIM, the same places with the thread or not; a scene's 101 finishes become 6,224): the 26
+  scenes at 1x and 2x and eight at 4x: all the same;
+- the suite: with the thread Off and On, and On fuzzed each of the three ways, 0 failures (604 groups now, with
+  #265's and #266's merged in, the library check's two tests and the review's six; the delay fuzzing on the 590 before
+  them); On under ThreadSanitizer with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it:
+  below).
+
+**The targeted tests** (tests/psp/gpu.cpp and ge.cpp; each on an explicitly threaded machine, G held back by a test gate
+where it would lag, against the same lists and accesses without the thread, both checks on; each fails with its rule
+taken out): reads waiting only where G may change the bytes; stores waiting only for pixels the drawing threads may
+still draw; deferred texture decodes read as of their own PRIMs; a transfer outside a list; the CPU's stores after a
+list into a texture it draws; Ghost of Sparta's list copied into VRAM over drawn pixels and called there; a write
+whose own checks finish the GPU (below); and the review's findings: R14 (a waited load leaves the GPU's pixels dirty),
+R15 (halfword and byte stores into drawn pixels, each replayed alone), R16 (a depth of the other order taken through
+memory), R19 (a move source's bytes beside its pixels before the drawer's rows), R22 (a depth fill reviving a source's
+dead bytes on a page no rectangle reaches, after a long transfer row onto it), R23 (a depth put back over pixels a
+finish put there since, at 1x and 2x, the moves on and off), R24 (a taller drawer's changed depth rows), and above 1x
+the hull rule; and after the independent review: a store onto a texel a software PRIM reads but doesn't draw over,
+software depth read through the depth views, a copy out of clean bytes on a block the GPU drew in, more runs than G
+keeps counts of before a FINISH, reads of nothing reported, and the go split.
+
+**Found on the way** (each with a test that fails without its fix):
+- A write whose own record's checks finish the GPU (a store through VRAM's depth views onto a drawn pixel, a
+  transfer's half pixels) with G caught up: the finish, before the write in the stream though G makes it after, put
+  the drawn pixels back over it. The write's old bytes are now kept as a version wherever its pages may still be the
+  GPU's, so the finish's write-back goes under it.
+- R25, with the depth moves off (the fallback): a depth fill takes memory's bytes as they are where another target
+  drew on the GPU since the last finish, and a later put writes that depth back over the pixels a finish has put there
+  since, at 1x too, where the model's put rule held only above 1x. It holds now wherever a depth put back may not be
+  memory's newest (above 1x, or the renderer's `depthMoves()` off).
+- Found by ThreadSanitizer over the GPU groups (below): G starved while E writes into pages G writes back. E publishes
+  a version, waits for G's pin to go, copies, makes it ready; G, finding an unready version on a page it pinned, let
+  go and waited for it. With E writing on and on into such a page (pspsdk's samples, the CPU writing VRAM as the GPU
+  finishes there), G saw each next version before its rescan ended, nothing freed while it was stuck on that record:
+  quadratic, and under the sanitizer's slow atomics never done. Now E says it's copying once it has found the page
+  unpinned, then looks at the pins again, and G waits only for a version being copied; one published under its pins,
+  which waits for them, it reads past, memory having the bytes the copy will take (one of the two threads always sees
+  the other's step: both store, then load, in one order). The R13 test's interleavings now include E stopped while
+  copying (G waits) and E stopped after publishing till G is done (G goes on; the old protocol deadlocks there).
+- Found by the coordinator's library check with the thread On (every game from its start, 3,600 frames; the pictures
+  were Off's): two costs of the control pass that grew without bound. The textures the software renderer reads from
+  memory as it draws were kept one entry per PRIM until drawn, and E went through them all at every report it took,
+  which is at each load of VRAM, each list word read from VRAM and each vertex read, and at every write's look for a
+  conflict: quadratic in the PRIMs G had yet to draw. Ghost of Sparta, its lists in VRAM, crawled past the check's 15
+  minutes from its start (Off: 7), and Gran Turismo took 226 s (Off: 14). They're kept by page now, the newest PRIM
+  over each, with nothing to go through (and the put points are dropped as a prefix: they come in their places'
+  order): Gran Turismo 15 s. And an indexed PRIM's vertices were copied from the vertex address up to its most index,
+  a byte at a time, so a big buffer's few vertices were copied whole for every PRIM (85% of E in Jeanne d'Arc); now
+  from the least index to the most, in one copy from RAM: Jeanne d'Arc 123 s → 36 s (Off: 30). The tests: what the
+  model keeps of the software textures in flight is as big with 8,000 software PRIMs behind as with 500 (kept by
+  PRIM, the list every report went through grew by one entry each), and 20,000 loads of VRAM take less than four
+  times as long with 8,000 behind as with 500, the best of three rounds each (15 times as long with the list kept by
+  PRIM); and a sprite by indices 4000 and 4001 hands G a record no bigger than one by 0 and 1, which G reads as a run
+  from the copy.
+- Found by the independent review. Past 4,096 runs handed over before a FINISH is due (a GU direct list, its stall
+  address moved at each draw, makes a run each), G's counts of later runs overwrote earlier ones' that E hadn't
+  folded (runs fold only while a FINISH is due), a data race too: the GE's time came out wrong, and differently run
+  to run. E now folds the oldest as each run past 4,096 is handed over (`Kernel::geTime()`; exact, the fold taking
+  the cycles and the bus's clock kept at the hand-over). G's memory reported no read of nothing, so a texture where
+  nothing is left the count a state keeps (`System::unmappedReports`) short of Off's by the software renderer's texel
+  reads: G's memory reports through E's now, the count atomic and saturating at 16 (the drawing threads report too,
+  with the thread off as well). Three rules no test caught (each taken out, the suites passed with the thread On)
+  have tests now: the software textures' conflicts, page by page; the software depth rectangles; and the busy check
+  made for a read whose page is busy but whose bytes are clean (an HLE copy out of VRAM's depth views, whose check
+  covers the whole 16 KiB block and finishes the GPU wherever it drew there). And a write straddling two pages looks
+  at both for a watched texture (an HLE write may).
+
+**ThreadSanitizer and the GPU.** MoltenVK runs under ThreadSanitizer, nothing suppressed: every GPU group with the
+thread On, pspsdk's samples included, the GE-thread groups and the versions' group: 0 failures, no report (78, 12 and
+1 groups after the review's fixes, B1's fold and S1's reports among what they ran). Its first run, with the
+samples left out, found one race, in the tests (a test gate set while G was still taking records and reading it:
+the tests now drain the thread before setting it), none in the emulator, the render GE driving the GPU backend
+included; its run with the samples found the starvation above.
+
+**The go split is needed.** A go stopped at the GE time's bound runs on from where it stopped, with none of the run
+loop's steps between, and the review found the case that needs it (the design's R5): a call into the program held
+back while interrupts are off (an alarm gone off), the program turning them on with mtic, no system call, so the go
+goes on, inside a go whose limit came from the bound. Ended at the bound, the loop's startCall() would start the call
+there, at count 9,791 where the synchronous GE starts it at 19,583, with either engine. A test has it now, and fails
+with the split taken out (the suite and the scenes didn't).
+
+**Next (the second PR, stacked):** design steps 3 and 4: the frame shown from G (`Present` records, at most two
+frames in flight, `Shot` and `Settings` records, the window handed over through G), the drains bounded and unloading
+with G stuck, then Auto and its handover both ways, with switches forced at seeded frames.
 
 ## Part 110: psp-measure round 9 — triangles reading narrow textures, a texture's loads and the cache's reuse, vertex formats, time-lists again
 
