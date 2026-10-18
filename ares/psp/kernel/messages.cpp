@@ -64,6 +64,7 @@ auto Kernel::pipeCopy(u32 to, u32 from, u32 bytes) -> void {
   u8* target = memory.pointer(to, bytes);
   u8* source = memory.pointer(from, bytes);
   if(target && source) {
+    memory.storing(to, bytes);
     std::memmove(target, source, bytes);
     return memory.changed(to, bytes);
   }

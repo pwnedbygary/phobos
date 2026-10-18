@@ -28,6 +28,7 @@
 //                                them gives: on by default, off with --ge-profile unless given (so a profile counts
 //                                every poll, as the PSP's plugin records them)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
+//    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on
 //    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
 //                                system's Vulkan loader; the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
@@ -461,6 +462,7 @@ auto main(int argc, char** argv) -> int {
   std::string renderer, spinSkip;
   u32 resolution = 0;  //(0: the core's own, 1)
   u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0, geProfileFrom = 1;
+  std::string geThread;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
   bool lateFrames = false;
@@ -506,6 +508,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--interpreter") interpreter = true;
     else if(option == "--spin-skip") spinSkip = next();
     else if(option == "--ge-threads") geThreads = parseUint(next(), option);
+    else if(option == "--ge-thread") geThread = next();
     else if(option == "--renderer") renderer = next();
     else if(option == "--resolution") resolution = parseUint(next(), option);
     else if(option == "--late-frames") lateFrames = true;
@@ -634,6 +637,7 @@ auto main(int argc, char** argv) -> int {
   if(!fonts.empty()) PlayStationPortable::option("Fonts", fonts.c_str());
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
+  if(!geThread.empty()) PlayStationPortable::option("GE Thread", geThread == "on" || geThread == "On" ? "On" : "Off");
   //(the core's names, "Vulkan (accurate)" and "Vulkan (fast)", as one word each for a shell)
   if(renderer == "Vulkan-accurate") renderer = "Vulkan";
   if(renderer == "Vulkan-fast") renderer = "Vulkan (fast)";

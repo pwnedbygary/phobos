@@ -35,7 +35,9 @@ auto Kernel::geLoad(GeList& list) -> void {
 //command (uOFW's _sceGeSetInternalReg). A word of 0, a list that never ran, is a NOP: BASE stays as the last list
 //left it.
 auto Kernel::geRestoreBase(u32 word) -> void {
-  if(word >> 24 == GE::Base) ge.commands[GE::Base] = word;
+  if(word >> 24 != GE::Base) return;
+  ge.commands[GE::Base] = word;
+  if(ge.thread) ge.thread->word(word, ~0u);  //(the render GE's too, from no list: ge/thread.hpp)
 }
 
 //Whether the GE waits at a list's stall address: the list's own, not the GE's. They differ for a paused list the GE
@@ -99,11 +101,99 @@ auto Kernel::geRun() -> void {
 auto Kernel::geTime() -> void {
   u64 pixels = ge.owedPixels, primitives = ge.owedPrimitives;
   ge.owedPixels = ge.owedPrimitives = 0;
+  if(ge.thread) {  //(counted there: geFold())
+    geRuns.push_back({ge.thread->runsHanded(), cycles, std::clamp<u32>(powerState.bus, 1, 166)});
+    if(geProfile) [[unlikely]] geProfiledRun();
+    else if(geRuns.size() >= GeThread::RunsKept) geFoldKept();
+    return;
+  }
   if(!pixels && !primitives) return;
   u64 bus = std::clamp<u32>(powerState.bus, 1, 166);
   u64 owed = std::max(pixels * 35, primitives * 664) * (CPUFrequency / 1'000'000) / (140 * bus);
   geDoneAt = std::max(geDoneAt, cycles) + owed;
   if(geProfile) [[unlikely]] geProfileWork(pixels, primitives, owed);
+}
+
+//(the GE on its thread) The oldest runs folded while the thread keeps no more runs' counts (GeThread::RunsKept) than
+//are waiting to be folded. Out of geTime(), which every run takes.
+NALL_NOINLINE auto Kernel::geFoldKept() const -> void {
+  while(geRuns.size() >= GeThread::RunsKept) geFold(true, geRuns.front().run);
+}
+
+//(the GE on its thread, a profile recording) The run just handed over counted at once, its charge recorded where the
+//synchronous GE records it (geProfileWork()), as it is and in the same place among the profile's records; the runs
+//handed over before the profile started folded first, unrecorded, as then.
+NALL_NOINLINE auto Kernel::geProfiledRun() -> void {
+  GeRun run = geRuns.back();
+  geFold(true);
+  GeThread::Owed owed;
+  ge.thread->owedOf(run.run, false, owed);
+  if(owed.pixels || owed.primitives) {
+    geProfileWork(owed.pixels, owed.primitives, geOwed(owed.pixels, owed.primitives, run.bus));
+  }
+}
+
+auto Kernel::geOwed(u64 pixels, u64 primitives, u32 bus) -> u64 {
+  return std::max(pixels * 35, primitives * 664) * (CPUFrequency / 1'000'000) / (140 * u64(bus));
+}
+
+//The runs the GE thread has ended (with wait, every one through the run numbered through, waiting for it) folded into
+//geDoneAt in turn, as geTime() folds each synchronously.
+auto Kernel::geFold(bool wait, u64 through) const -> void {
+  while(!geRuns.empty() && geRuns.front().run <= through) {
+    auto& run = geRuns.front();
+    GeThread::Owed owed;
+    if(!ge.thread || !ge.thread->owedOf(run.run, wait, owed)) return;
+    if(owed.pixels || owed.primitives) {
+      geDoneAt = std::max(geDoneAt, run.cycles) + geOwed(owed.pixels, owed.primitives, run.bus);
+    }
+    geFoldedRun = run.run;
+    if(!geLimits.empty()) geFolded.push_back({run.run, run.cycles, run.bus, owed.pixels, owed.primitives});
+    geRuns.pop_front();
+  }
+}
+
+//At most what geDoneAt will be once every run handed over is folded: the run under way's counts so far added as it
+//would add its own (they only grow, and so does what they owe), the runs after it left out (they only add more).
+auto Kernel::geBound() const -> u64 {
+  geFold(false);
+  if(geRuns.empty()) return geDoneAt;
+  auto& run = geRuns.front();
+  GeThread::Owed owed;
+  if(!ge.thread->owedSoFar(run.run, owed) || (!owed.pixels && !owed.primitives)) return geDoneAt;
+  return std::max(geDoneAt, run.cycles) + geOwed(owed.pixels, owed.primitives, run.bus);
+}
+
+//Whether the GE's time has come (cycles at or past geDoneAt): at once where the bound is past cycles, else once the GE
+//thread has counted every run handed over (a wait for it: the GE thread is then what the emulation thread waits on).
+auto Kernel::geReached() -> bool {
+  if(geRuns.empty()) return cycles >= geDoneAt;  //(none handed over: always so with the thread off)
+  if(geBound() > cycles) return false;
+  geFold(true);
+  return cycles >= geDoneAt;
+}
+
+//geDoneAt about to be set afresh: the runs before don't count, and the go's limits worked out from the bound are
+//worked out exactly first, as they stood.
+auto Kernel::geClearRuns() -> void {
+  for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
+  geLimits.clear(), geFolded.clear(), geRuns.clear();
+  geFoldedRun = ge.thread ? ge.thread->runsHanded() : 0;
+}
+
+//A limit untilNextEvent() worked out from the bound (GeLimit), worked out exactly: geDoneAt as it was then, with the
+//runs handed over by then folded on it (their counts waited for), in place of the bound.
+auto Kernel::geExactLimit(const GeLimit& limit) -> u64 {
+  geFold(true, limit.run);
+  u64 at = limit.foldedAt;
+  for(auto& run : geFolded) {
+    if(run.run <= limit.foldedRun || run.run > limit.run || (!run.pixels && !run.primitives)) continue;
+    at = std::max(at, run.cycles) + geOwed(run.pixels, run.primitives, run.bus);
+  }
+  u64 next = limit.others;
+  if(limit.due && at > limit.cycles) next = std::min(next, at);
+  u64 until = next > limit.cycles ? next - limit.cycles : 1;
+  return limit.before + std::min(limit.cap, std::max<u64>(1, until));
 }
 
 //The FINISH of the list the GE runs, met (geFinishDue): the GE has stopped at its END and raised its interrupt, which
@@ -116,7 +206,7 @@ auto Kernel::geTime() -> void {
 //next list runs. Returns whether one was taken.
 auto Kernel::geInterrupt() -> bool {
   bool taken = false;
-  while(geFinishDue && !interrupting && interruptsEnabled && cycles >= geDoneAt) {
+  while(geFinishDue && !interrupting && interruptsEnabled && geReached()) {
     if(std::any_of(calls.begin(), calls.end(), [](const Call& call) { return call.kind == Call::Ge; })) break;
     geFinishDue = false;
     geFinished();
@@ -329,6 +419,7 @@ auto Kernel::geRestoreContext(u32 address) -> void {
   ge.list.address = get(); ge.list.stall = get(); ge.list.offset = get(); ge.list.depth = std::min(get(), 2u);
   for(u32 n : {0, 1}) ge.list.returnAddress[n] = get(), ge.list.returnOffset[n] = get();
   ge.vertexAddress = get(); ge.indexAddress = get();
+  if(ge.thread) ge.handState();  //(the render GE's too: ge/thread.hpp)
 }
 
 //The GE's memory: VRAM, 2 MiB at 0x04000000.
@@ -595,6 +686,7 @@ auto Kernel::sceGeBreak() -> void {
     geSuspended = false;
     geFinishing = -1;
     geFinishDue = false;
+    geClearRuns();
     geDoneAt = 0;
     std::erase_if(calls, [](const Call& call) { return call.kind == Call::Ge; });
     callResumesGe = false;
@@ -641,7 +733,7 @@ auto Kernel::sceGeGetMtx() -> void {
 //at a FINISH whose interrupt is still to come, once the GE's time for it has come (geInterrupt()).
 auto Kernel::sceGeSaveContext() -> void {
   if(arg(0) & 3) return result(ErrorInvalidPointer);
-  bool stopped = geSuspended || (geFinishDue && cycles >= geDoneAt);
+  bool stopped = geSuspended || (geFinishDue && geReached());
   if(geRunning >= 0 && !stopped) return result(0xffff'ffff);
   geSaveContext(arg(0));
   result(0);

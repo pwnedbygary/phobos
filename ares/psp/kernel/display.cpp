@@ -12,18 +12,60 @@ auto Kernel::sceDisplaySetMode() -> void {
   result(0);
 }
 
-//(address, buffer width in pixels, pixel format (0: 16-bit 5650, 1: 5551, 2: 4444, 3: 32-bit 8888), when to switch)
+//(address, buffer width in pixels, pixel format (0: 16-bit 5650, 1: 5551, 2: 4444, 3: 32-bit 8888), when to switch:
+//0 at once, 1 at the next vertical sync, pspdisplay.h's PSP_DISPLAY_SETBUF_NEXTHSYNC and NEXTVSYNC). Set for the next
+//sync, the address is the one shown from the next blank's start, or, set in a blank before its sync (VsyncCycles in),
+//from that sync; the width and format at once. pspautotests' display/setframebuf recorded the one shown keeping its
+//address till the next blank (read just after sceDisplayWaitVblankStart) but taking the width and format (both its
+//readings, sceDisplayGetFrameBuf's 0 and 1, gave them at once), and display/isstate a frame buffer of 0 so set still
+//shown in the foreground and the sync 631.5 microseconds into the blank; round 8's display-start (part 107) the same
+//from a program's start: the address read back as it was till the blank, the width and format at once. Games set
+//theirs as a blank starts (Twisted Metal's display thread, the blank waited for; Death Jr. II's and Sonic Rivals'
+//vertical blank handlers) for the frame after it; Army of Two sets its mid-frame and, after its draw sync, while it
+//isn't shown yet, sets it again and waits for the blank. The screen shows in the frame after a blank the last one set
+//(presentedFrameBuffer()), its picture taken as the blank starts (System::run()): one set in the blank before its
+//sync, after that, shows a frame later than on a PSP, as it did when every one was taken at once. One set at once
+//after one for the next sync replaces it (unrecorded). (Left out, for scope: the refusals. A PSP starts at address
+//0, width 0 and format 3 (8888; 0 here), not in the foreground, and refuses every frame buffer set at once from
+//there, leaving the display as it was: 0x80000107, or 0x80000104 for the start's width of 0 (display-start;
+//setframebuf the same for a width or format set at once that isn't the one shown). Taking them, and the start's
+//format, would change what every game meets as it starts: a change of their own, with a library check.)
 auto Kernel::sceDisplaySetFrameBuf() -> void {
   ProfiledCall profile{*this, GeProfile::SetFrameBuf};
-  display.frameBuffer = arg(0);
+  if(arg(3) == 1) {
+    latchFrameBuffer();  //(one set for an earlier sync, shown by now)
+    //(this blank's. A go can run a few instructions past the next blank's start before events() takes it: one set
+    //then counts as set before that blank, shown from its start rather than from its sync.)
+    u64 vsync = nextVblank - VblankCycles + VsyncCycles;
+    display.nextFrameBuffer = arg(0), display.nextSet = true;
+    display.nextAt = cycles < vsync ? vsync : nextVblank;
+  } else {
+    display.frameBuffer = arg(0), display.nextSet = false;
+  }
   display.bufferWidth = arg(1);
   display.pixelFormat = arg(2);
   result(0);
 }
 
-//(where to put the address, the buffer width and the pixel format; which: 0 the one shown now, 1 the next)
+//A frame buffer set for the vertical sync, now the one shown once its time has come (sceDisplaySetFrameBuf).
+auto Kernel::latchFrameBuffer() -> void {
+  if(!display.nextSet || cycles < display.nextAt) return;
+  display.frameBuffer = display.nextFrameBuffer, display.nextSet = false;
+}
+
+//The frame buffer the screen shows in the frame after this vertical blank: one set for its sync, as it starts, or the
+//one shown.
+auto Kernel::presentedFrameBuffer() const -> u32 {
+  return display.nextSet ? display.nextFrameBuffer : display.frameBuffer;
+}
+
+//(where to put the address, the buffer width and the pixel format; which: 0 the one shown now, 1 the one coming, as
+//sceDisplaySetFrameBuf's sync): the address set for the next vertical sync only as the one coming, till that sync
+//(display/setframebuf).
 auto Kernel::sceDisplayGetFrameBuf() -> void {
-  if(arg(0)) memory.write(4, arg(0), display.frameBuffer);
+  latchFrameBuffer();
+  u32 address = arg(3) == 1 && display.nextSet ? display.nextFrameBuffer : display.frameBuffer;
+  if(arg(0)) memory.write(4, arg(0), address);
   if(arg(1)) memory.write(4, arg(1), display.bufferWidth);
   if(arg(2)) memory.write(4, arg(2), display.pixelFormat);
   result(0);
@@ -95,9 +137,10 @@ auto Kernel::sceDisplayIsVblank() -> void {
 }
 
 //Whether a frame buffer is shown (pspdisplay.h): 1 with one set, 0 with none (0, the display off), as pspautotests'
-//display/isstate recorded. (It recorded 1 still just after a frame buffer of 0 was set for the next frame; frame
-//buffers here change at once.) Power Stone Collection asks.
+//display/isstate recorded, 1 still just after a frame buffer of 0 was set for the next vertical sync (the one shown
+//till then). Power Stone Collection asks.
 auto Kernel::sceDisplayIsForeground() -> void {
+  latchFrameBuffer();
   result(display.frameBuffer != 0);
 }
 
@@ -140,18 +183,20 @@ auto Kernel::sceDisplayGetVcount() -> void {
   result(vblanks);
 }
 
-//What the screen shows: display.width x display.height pixels (480x272) of the frame buffer the program set, as 8888
+//What the screen shows: display.width x display.height pixels (480x272) of the frame buffer the program set (for the
+//coming vertical sync, if it set one: presentedFrameBuffer()), as 8888
 //with red in the low byte and alpha 255 (the LCD has no alpha). 16-bit pixels widen by repeating each channel's top
 //bits. Black if the program hasn't set a frame buffer, or has turned the display off (a frame buffer of 0).
 auto Kernel::picture(std::vector<u32>& pixels) -> void {
   u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
   pixels.assign(width * height, 0xff00'0000);
-  if(!display.frameBuffer) return;
+  u32 frameBuffer = presentedFrameBuffer();
+  if(!frameBuffer) return;
   u32 format = display.pixelFormat & 3, bytes = format == 3 ? 4 : 2;
   auto widen = [](u32 value, u32 bits) { return value << (8 - bits) | value >> (2 * bits - 8); };
   for(u32 y = 0; y < height; y++) {
     //(a row's bytes straight from where they are when they're all in one place, else a pixel at a time)
-    u32 row = display.frameBuffer + y * display.bufferWidth * bytes;
+    u32 row = frameBuffer + y * display.bufferWidth * bytes;
     const u8* bytesOf = memory.pointer(row, width * bytes);
     for(u32 x = 0; x < width; x++) {
       u32 c, r, g, b;

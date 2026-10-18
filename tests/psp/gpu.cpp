@@ -40,6 +40,12 @@ static auto renderer() -> GPU* {
 
 static auto bitsOf(float value) -> u32 { u32 bits; std::memcpy(&bits, &value, 4); return bits; }
 
+//A GPU's statistics, every threaded machine's GE thread done first (they're that thread's while it runs).
+static auto stats(GPU* gpu) -> GPU::Statistics& {
+  drainThreads();
+  return gpu->statistics;
+}
+
 //A machine's GE ready to draw 2D sprites (through mode: float u, v; 8888 color; float position) into a frame buffer
 //at VRAM's offset buffer, 64 pixels wide, in format; no depth test, so the depth buffer (VRAM's last 64 KiB) stays.
 static auto prepare(System& s, u32 buffer, u32 format) -> void {
@@ -162,7 +168,7 @@ static auto gpuRenderToTexture() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   std::mt19937 random{20261008};
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   System software, hardware;
   hardware.ge.setRenderer(gpu);
   for(System* s : {&software, &hardware}) prepare(*s, 0, 3);
@@ -173,10 +179,10 @@ static auto gpuRenderToTexture() -> void {
     texture(*s, Memory::VRAMBase, 64, 64, 64);
     for(auto& one : sampled) sprite(*s, one);
   }
-  CHECK(hardware.memory.vramBusy, true);  //(nothing read back yet)
+  CHECK(hardware.ge.drawer().memory.vramBusy, true);  //(nothing read back yet: the drawing GE's memory's pages)
   u32 bytes = apart(software, hardware);
   CHECK(bytes, 0u);
-  CHECK(gpu->statistics.copies > before.copies, true);
+  CHECK(stats(gpu).copies > before.copies, true);
   hardware.ge.setRenderer(nullptr);
 }
 
@@ -189,7 +195,7 @@ static auto gpuSmoothLines() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   std::mt19937 random{20261012};
-  auto before = gpu->statistics.primitives;
+  auto before = stats(gpu).primitives;
   System software, hardware;
   hardware.ge.setRenderer(gpu);
   auto background = randomSprites(random, 30, false);
@@ -226,7 +232,7 @@ static auto gpuSmoothLines() -> void {
   }
   u32 bytes = apart(software, hardware);
   CHECK(bytes, 0u);
-  CHECK(gpu->statistics.primitives > before + 80, true);  //(the GPU drew the lines, not the GE in its place)
+  CHECK(stats(gpu).primitives > before + 80, true);  //(the GPU drew the lines, not the GE in its place)
   hardware.ge.setRenderer(nullptr);
 }
 
@@ -294,16 +300,16 @@ static auto gpuFast() -> void {
   if(!gpu->backend->transforms) {
     return skip("vulkan-transforms", "the driver didn't take transform.vert: 3D on the CPU");
   }
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   std::string error;
   bool passed = gpu->check(error);
   if(!passed) std::printf("  %s\n", error.c_str());
   CHECK(passed, true);
-  CHECK(gpu->statistics.meshes - before.meshes >= 4, true);
+  CHECK(stats(gpu).meshes - before.meshes >= 4, true);
   if(!testPrograms()) return;
-  before = gpu->statistics;
+  before = stats(gpu);
   samples(gpu, 3);
-  CHECK(gpu->statistics.meshes > before.meshes, true);
+  CHECK(stats(gpu).meshes > before.meshes, true);
 }
 
 //The stencil as each 16-bit format keeps it (part 68), beside 8888's, at 1x and 2x. A 5650 frame buffer has none,
@@ -503,9 +509,9 @@ static auto gpuFastRules() -> void {
       GPU* gpu = mode ? fast : accurate;
       System software, hardware;
       hardware.ge.setRenderer(gpu);
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       scene(software, clip), scene(hardware, clip);
-      if(mode) CHECK(gpu->statistics.meshes > before.meshes, true);
+      if(mode) CHECK(stats(gpu).meshes > before.meshes, true);
       hardware.ge.setRenderer(nullptr);
       for(u32 n = 0; n < Width * Height; n++) {
         for(u32 channel = 0; channel < 3; channel++) {
@@ -582,7 +588,7 @@ static auto gpuScreenMeshes() -> void {
         c[GE::MaterialColor] = 2, c[GE::MaterialSpecular] = 0xff'ffff, c[GE::MaterialSpecularCoefficient] = f24(2);
         c[GE::AmbientLightColor] = 0x30'3030, c[GE::AmbientLightAlpha] = 0xff;
       }
-      u64 before = s.ge.renderer ? gpu->statistics.draws : 0;
+      u64 before = s.ge.drawer().renderer ? stats(gpu).draws : 0;  //(the drawing GE's: ge/thread.hpp)
       for(u32 prim = 0; prim < 8; prim++) {
         std::vector<Corner> corners;
         for(u32 n = 0; n < (prim & 1 ? 6u : 30u); n++) {
@@ -595,7 +601,7 @@ static auto gpuScreenMeshes() -> void {
         if(prim == 0) corners[2].at[2] = -0.5f;  //(nearer than the near plane: its triangle cut)
         draw(s, GE::Triangles, corners);
       }
-      if(s.ge.renderer) draws.push_back(gpu->statistics.draws - before);
+      if(s.ge.drawer().renderer) draws.push_back(stats(gpu).draws - before);
     }
     c[GE::LightingEnable] = 0, c[GE::LightMode] = 0, c[GE::LightType0] = 0;
   };
@@ -610,9 +616,9 @@ static auto gpuScreenMeshes() -> void {
         gpu->screenMeshes = together;
         System hardware;
         hardware.ge.setRenderer(gpu);
-        u64 before = gpu->statistics.screened;
+        u64 before = stats(gpu).screened;
         scene(hardware, width, height, draws[together]);
-        if(together) screened = gpu->statistics.screened - before;
+        if(together) screened = stats(gpu).screened - before;
         CHECK(gpu->picture(0, width, 3, width, height, pictures[together], scale), true);
         hardware.ge.setRenderer(nullptr);
       }
@@ -678,7 +684,7 @@ static auto gpuFastMeshChanges() -> void {
   };
   System software, hardware;
   hardware.ge.setRenderer(gpu);
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   for(System* s : {&software, &hardware}) {
     prepare(*s, 0, 3);
     for(auto& one : drawn) sprite(*s, one);
@@ -687,7 +693,7 @@ static auto gpuFastMeshChanges() -> void {
     sample(*s);
     s->ge.settleAll();
   }
-  CHECK(gpu->statistics.meshes > before.meshes, true);
+  CHECK(stats(gpu).meshes > before.meshes, true);
   u32 far = 0;
   for(u32 n = 0; n < 64 * 48; n++) {
     for(u32 channel = 0; channel < 4; channel++) {
@@ -727,10 +733,10 @@ static auto gpuLost() -> void {
   auto first = randomSprites(random, 8, false), after = randomSprites(random, 8, false);
   for(System* s : {&software, &hardware}) prepare(*s, 0, 3);
   for(auto& one : first) sprite(hardware, one);
-  CHECK(hardware.memory.vramBusy, true);
+  CHECK(hardware.ge.drawer().memory.vramBusy, true);
   hardware.ge.settleAll();
   CHECK(gpu.ready(), false);
-  CHECK(hardware.memory.vramBusy, false);
+  CHECK(hardware.ge.drawer().memory.vramBusy, false);
   CHECK(apart(software, hardware), 0u);  //(the first sprites, never put in memory, gone)
   u32 runs = pretend.runs;
   for(System* s : {&software, &hardware}) for(auto& one : after) sprite(*s, one);
@@ -1009,6 +1015,171 @@ static auto gpuRefused() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//With the GE on its thread (ge/thread.hpp) and held back before it takes a list that draws a textured sprite on the
+//GPU: the CPU's store into the sprite's texture in RAM just after the list, and its store into VRAM beside the frame
+//buffer, don't wait for the thread (the bytes' old contents kept as versions, from which the render GE decodes the
+//texture as of the sprite's place); the picture and memory come out as the software renderer has them without the
+//thread.
+static auto gpuThreadVersions() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 List = 0x0894'0000, Texture = GPUTexture, Beside = Memory::VRAMBase + (40 * 64 + 40) * 4;
+  auto build = [](Memory& memory) {
+    u32 at = List, vertex = GPUVertices;
+    auto put = [&](u32 command, u32 argument = 0) {
+      memory.write(4, at, command << 24 | (argument & 0xff'ffff)), at += 4;
+    };
+    put(GE::FrameBufferPointer, 0), put(GE::FrameBufferWidth, 64), put(GE::FrameBufferPixelFormat, 3);
+    put(GE::Scissor1, 0), put(GE::Scissor2, 63 | 47 << 10), put(GE::Region2, 1023 | 1023 << 10);
+    put(GE::VertexType, 0x80'019f), put(GE::ShadeMode, 1);
+    put(GE::TextureMappingEnable, 1), put(GE::TextureAddress0, Texture & 0xff'ffff);
+    put(GE::TextureBufferWidth0, (Texture >> 24 & 0xf) << 16 | 16), put(GE::TextureSize0, 4 << 8 | 4);
+    put(GE::TextureFormat, 3), put(GE::TextureFunction, 3 | 1 << 8), put(GE::TextureFilter, 0);
+    put(GE::Base, vertex >> 8 & 0xf'0000), put(GE::VertexAddress, vertex);
+    for(auto [u, x] : {std::pair{0.0f, 8.0f}, std::pair{16.0f, 24.0f}}) {
+      for(float value : {u, u}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      memory.write(4, vertex, 0xffff'ffff), vertex += 4;
+      for(float value : {x, x, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+    }
+    put(GE::Primitive, GE::Sprites << 16 | 2);
+    put(GE::Finish), put(GE::End);
+    for(u32 n = 0; n < 16 * 16; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | n * 0x01'0307);
+  };
+  System software, hardware;
+  software.threadGE(false), hardware.threadGE(true);
+  hardware.ge.setRenderer(gpu);
+  std::atomic<bool> held{true};
+  hardware.geThreading->drain();  //(the thread reads its gate as it takes each record)
+  hardware.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  u64 waits = hardware.geThreading->waits;
+  for(System* s : {&software, &hardware}) {
+    build(s->memory);
+    s->ge.list = {}, s->ge.list.address = List;
+    CHECK(u32(s->ge.run(1000)), u32(GE::Stop::Finished));
+    s->memory.write(4, Texture + (5 * 16 + 5) * 4, 0xffab'cdef);  //(after the list: the sprite draws the old texel)
+    s->memory.write(4, Texture + (9 * 16 + 9) * 4, 0xff12'3456);  //(the page unwatched by the first, as ever: still heard)
+    s->memory.write(4, Beside, 0x1234'5678);
+  }
+  CHECK(held.load(), true);  //(neither store waited for the thread, held still)
+  CHECK(hardware.geThreading->waits, waits);
+  CHECK(hardware.geThreading->versions->versions() > 0, true);
+  held = false;
+  hardware.geThreading->drain();
+  hardware.geThreading->gate = nullptr;
+  software.ge.settleAll(), hardware.ge.settleAll();
+  CHECK(vramApart(software, hardware), 0u);
+  CHECK(software.memory.read(4, Beside), 0x1234'5678u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//With the GE on its thread, caught up (nothing handed over left to do): a store through VRAM's fourth copy onto a pixel
+//the GPU drew, whose check finishes first (a load through the depth views doesn't, a store does), and a block transfer
+//writing half of 8888 pixels, which finishes first too (overwritten()): each write's own record's finish comes before
+//the write in the stream's order, though the render GE makes it after, so the write's old bytes are kept as a version
+//even with nothing else to wait for, and the finish's write-back goes there, under the write. Memory comes out as the
+//software renderer has it without the thread.
+static auto gpuThreadOwnFinish() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000;
+  System software, hardware;
+  software.threadGE(false), hardware.threadGE(true);
+  hardware.ge.setRenderer(gpu);
+  for(System* s : {&software, &hardware}) {
+    for(u32 n = 0; n < 64 * 48 * 4; n += 4) s->memory.write(4, Memory::VRAMBase + At + n, 0x0102'0304 * (n / 4 + 1));
+    prepare(*s, At, 3);
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
+  }
+  u64 finishes = stats(gpu).finishes;
+  u32 seen = Memory::vramSeen(3, At + 20 * 256 + 8 * 4);
+  for(System* s : {&software, &hardware}) s->memory.write(2, 0x0460'0000 + seen, 0x7788);
+  CHECK(stats(gpu).finishes, finishes + 1);
+  for(System* s : {&software, &hardware}) {
+    auto& c = s->ge.commands;
+    for(u32 n = 0; n < 64 * 4; n++) s->memory.write(4, GPUTexture + n * 4, 0xff00'0000 | n * 0x0a'0b0c);
+    c[GE::TransferSource] = GPUTexture & 0xff'fff0, c[GE::TransferSourceWidth] = (GPUTexture >> 24) << 16 | 64;
+    c[GE::TransferSourcePosition] = 0;
+    c[GE::TransferDestination] = At & 0xff'fff0, c[GE::TransferDestinationWidth] = (Memory::VRAMBase >> 24) << 16 | 128;
+    c[GE::TransferDestinationPosition] = 1 | 30 << 10;
+    c[GE::TransferSize] = 15 | 1 << 10, c[GE::TransferStart] = 0;  //(2-byte pixels from the middle of 8888 ones)
+    //(below the stored pixel, over the transfer's rows; the transfer's commands handed over with it)
+    sprite(*s, {{{0, 0, 0, 24}, {0, 0, 64, 48}}, 0xff40'5060});
+  }
+  CHECK(stats(gpu).finishes, finishes + 1);  //(the thread caught up: the transfer hands nothing over before its rows)
+  for(System* s : {&software, &hardware}) s->ge.transfer();
+  CHECK(stats(gpu).finishes, finishes + 2);
+  software.ge.settleAll(), hardware.ge.settleAll();
+  u32 bytes = vramApart(software, hardware);
+  if(bytes) std::printf("  %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  for(System* s : {&software, &hardware}) CHECK(s->memory.read(2, 0x0460'0000 + seen), 0x7788u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//Ghost of Sparta's way, with the GE on its thread held back: a list draws a sprite over its frame buffer on the GPU,
+//copies part of a list from RAM into VRAM over those pixels by a block transfer, and CALLs it there (it draws a second
+//sprite and RETurns). The kernel's GE runs it all without waiting for the thread (the transfer's rows kept as
+//versions where the render GE may read them, the list's words read from VRAM clean: the transfer is newer than the
+//pixels drawn under them); the picture comes out as the software renderer's without the thread (the transfer's bytes
+//over the first sprite, the GPU's finish leaving them be).
+static auto gpuThreadTransferredList() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 List = 0x0894'0000, Called = 0x0895'0000, Vertices = GPUVertices, Into = 32 * 64 * 4;
+  auto build = [](Memory& memory) {
+    u32 at = List, vertex = Vertices;
+    auto put = [&](u32 command, u32 argument = 0) {
+      memory.write(4, at, command << 24 | (argument & 0xff'ffff)), at += 4;
+    };
+    auto sprite = [&](float left, float top, float right, float bottom, u32 color) {
+      u32 words[2] = {GE::Base << 24 | (vertex >> 8 & 0xf'0000), GE::VertexAddress << 24 | (vertex & 0xff'ffff)};
+      for(auto [x, y] : {std::pair{left, top}, std::pair{right, bottom}}) {
+        for(float value : {0.0f, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+        memory.write(4, vertex, color), vertex += 4;
+        for(float value : {x, y, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      }
+      return std::array<u32, 3>{words[0], words[1], u32(GE::Primitive << 24 | GE::Sprites << 16 | 2)};
+    };
+    put(GE::FrameBufferPointer, 0), put(GE::FrameBufferWidth, 64), put(GE::FrameBufferPixelFormat, 3);
+    put(GE::Scissor1, 0), put(GE::Scissor2, 63 | 47 << 10), put(GE::Region2, 1023 | 1023 << 10);
+    put(GE::VertexType, 0x80'019f), put(GE::ShadeMode, 1);
+    for(u32 word : sprite(0, 0, 64, 48, 0xff20'4060)) memory.write(4, at, word), at += 4;
+    //(the called list in RAM: a sprite, RET; 16 words, one row of 16 four-byte pixels)
+    u32 called = Called;
+    for(u32 word : sprite(10, 10, 30, 20, 0xffc0'8040)) memory.write(4, called, word), called += 4;
+    memory.write(4, called, GE::Return << 24), called += 4;
+    while(called < Called + 64) memory.write(4, called, 0), called += 4;  //(NOPs)
+    put(GE::TransferSource, Called), put(GE::TransferSourceWidth, (Called >> 24) << 16 | 16);
+    put(GE::TransferSourcePosition, 0);
+    put(GE::TransferDestination, Memory::VRAMBase + Into);
+    put(GE::TransferDestinationWidth, (Memory::VRAMBase >> 24) << 16 | 64), put(GE::TransferDestinationPosition, 0);
+    put(GE::TransferSize, 15), put(GE::TransferStart, 1);
+    put(GE::Base, (Memory::VRAMBase >> 8) & 0xf'0000), put(GE::Call, (Memory::VRAMBase + Into) & 0xff'ffff);
+    put(GE::Finish), put(GE::End);
+  };
+  System software, hardware;
+  software.threadGE(false), hardware.threadGE(true);
+  hardware.ge.setRenderer(gpu);
+  std::atomic<bool> held{true};
+  hardware.geThreading->drain();  //(the thread reads its gate as it takes each record)
+  hardware.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  u64 waits = hardware.geThreading->waits;
+  for(System* s : {&software, &hardware}) {
+    build(s->memory);
+    s->ge.list = {}, s->ge.list.address = List;
+    CHECK(u32(s->ge.run(1000)), u32(GE::Stop::Finished));
+  }
+  CHECK(held.load(), true);  //(the kernel's GE ran it all, the thread held still)
+  CHECK(hardware.geThreading->waits, waits);
+  held = false;
+  hardware.geThreading->drain();
+  hardware.geThreading->gate = nullptr;
+  software.ge.settleAll(), hardware.ge.settleAll();
+  CHECK(vramApart(software, hardware), 0u);
+  CHECK(software.memory.read(4, Memory::VRAMBase + Into), u32(GE::Base << 24 | (Vertices >> 8 & 0xf'0000)));
+  hardware.ge.setRenderer(nullptr);
+}
+
 //3D for the tests: a 64x48 frame buffer seen through an orthographic camera, its pixels' middles at the GE's, depth
 //32768 plus 30000 times z; a texture 64 texels wide at address (VRAM's start by default) and rows tall, held at its
 //edges (clamp), filtered nearest; and a quad over it from x0 to x1 and y0 to y1 at z, its texels the same columns'
@@ -1060,13 +1231,13 @@ static auto gpuTextureAtVRAMsEnd() -> void {
     prepare(*s, 0, 3);
     c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written)
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'1010}, 30000);
-    if(s == &hardware) finishes = gpu->statistics.finishes;
+    if(s == &hardware) finishes = stats(gpu).finishes;
     orthographic(*s, 512, Memory::VRAMBase + Near, 0);
     c[GE::DepthMask] = 1, c[GE::DepthTest] = 6;  //(greater, not written)
     quad3D(*s, 512, 4, 60, 2, 44, 0, (40000 - 32768) / 30000.0f);  //(at depth 40000)
     c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0, c[GE::TextureMappingEnable] = 0;
   }
-  CHECK(gpu->statistics.finishes, finishes);
+  CHECK(stats(gpu).finishes, finishes);
   CHECK(apart(software, hardware), 0u);
   CHECK(software.memory.read(4, 0x0400'0000 + (20 * 64 + 30) * 4) != 0xff10'1010u, true);  //(the triangles drawn)
   hardware.ge.setRenderer(nullptr);
@@ -1114,7 +1285,7 @@ static auto gpuPalettes() -> void {
         s->ge.loadClut();
         c[GE::ClutFormat] = k.clutFormat | k.shift << 2 | k.mask << 8 | k.offset >> 4 << 16;
         texture(*s, Memory::VRAMBase, 64, 128, 64, k.format == 3 ? 7 : 6);
-        if(s == &hardware) before = gpu->statistics;
+        if(s == &hardware) before = stats(gpu);
         u32 rows = std::min(picture, 64u);
         if(!triangles) {
           sprite(*s, {{{0, 0, 0, 0}, {64, f32(rows), 64, f32(rows)}}, 0});
@@ -1124,7 +1295,7 @@ static auto gpuPalettes() -> void {
         orthographic(*s, 128, Memory::VRAMBase, k.format == 3 ? 7 : 6);
         quad3D(*s, 128, 0, 64, 0, 44, 0);
       }
-      bool taken = gpu->statistics.finishes == before.finishes && gpu->statistics.copies > before.copies;
+      bool taken = stats(gpu).finishes == before.finishes && stats(gpu).copies > before.copies;
       u32 bytes = apart(software, hardware);
       if(!taken || bytes) {
         std::printf("  format %u, palette %u >> %u & %02x | %03x, %s: %u bytes apart, %s\n", k.format, k.clutFormat,
@@ -1159,7 +1330,7 @@ static auto gpuPalettesAgain() -> void {
     for(auto& one : drawn) sprite(*s, one);
     prepare(*s, 0x2'0000, 3);
     texture(*s, Memory::VRAMBase, 64, 64, 64, 7);
-    if(s == &hardware) before = gpu->statistics;
+    if(s == &hardware) before = stats(gpu);
     for(u32 n = 0; n < 3; n++) {
       for(u32 k = 0; k < 256; k++) s->memory.write(4, Palette + k * 4, palettes[n & 1][k]);
       c[GE::ClutAddress] = Palette & 0xff'ffff, c[GE::ClutAddressUpper] = Palette >> 8 & 0xf'0000;
@@ -1170,8 +1341,8 @@ static auto gpuPalettesAgain() -> void {
       sprite(*s, {{{0, top, 0, top}, {64, top + 16, 64, top + 16}}, 0});
     }
   }
-  CHECK(gpu->statistics.finishes, before.finishes);
-  CHECK(gpu->statistics.palettes - before.palettes <= 2, true);
+  CHECK(stats(gpu).finishes, before.finishes);
+  CHECK(stats(gpu).palettes - before.palettes <= 2, true);
   CHECK(apart(software, hardware), 0u);
   hardware.ge.setRenderer(nullptr);
 }
@@ -1195,17 +1366,17 @@ static auto gpuBarriers() -> void {
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff20'4060});
     c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 10 | 10 << 4;  //(fixed A and B, added)
     c[GE::BlendFixedB] = 0x80'8080;
-    if(s == &hardware) before = gpu->statistics;
+    if(s == &hardware) before = stats(gpu);
     for(u32 n = 0; n < 8; n++) {
       c[GE::BlendFixedA] = 0x10'1010 * (n + 1);
       sprite(*s, {{{0, 0, f32(n * 8), 8}, {0, 0, f32(n * 8 + 8), 24}}, 0xff80'40c0});
     }
-    if(s == &hardware) between = gpu->statistics;
+    if(s == &hardware) between = stats(gpu);
     sprite(*s, {{{0, 0, 4, 12}, {0, 0, 60, 30}}, 0xff10'2030});
     c[GE::AlphaBlendEnable] = 0;
   }
   CHECK(between.barriers - before.barriers, 1u);
-  CHECK(gpu->statistics.barriers - between.barriers, 1u);
+  CHECK(stats(gpu).barriers - between.barriers, 1u);
   CHECK(between.draws - before.draws, 8u);
   CHECK(apart(software, hardware), 0u);
   hardware.ge.setRenderer(nullptr);
@@ -1256,11 +1427,11 @@ static auto gpuMemorysRows() -> void {
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 32, 16}}, 0x5a65'4321});
     prepare(*s, 0x2'0000, 3);
     orthographic(*s, 128);
-    if(s == &hardware) before = gpu->statistics;
+    if(s == &hardware) before = stats(gpu);
     quad3D(*s, 128, 0, 64, 0, 44, 0);  //(its texels short of the frame buffer below: see gpuPalettes)
   }
-  CHECK(gpu->statistics.finishes, before.finishes);
-  CHECK(hardware.memory.vramBusy, true);
+  CHECK(stats(gpu).finishes, before.finishes);
+  CHECK(hardware.ge.drawer().memory.vramBusy, true);
   CHECK(apart(software, hardware), 0u);
   hardware.ge.setRenderer(nullptr);
 }
@@ -1284,14 +1455,14 @@ static auto gpuCopiesKept() -> void {
       prepare(*s, 0, 3);
       for(auto& one : drawn) sprite(*s, one);
       orthographic(*s, 32);
-      if(s == &hardware) before = gpu->statistics;
+      if(s == &hardware) before = stats(gpu);
       for(u32 n = 0; n < 8; n++) quad3D(*s, 32, n * 8, n * 8 + 8, 26, 48, 0);
-      if(s == &hardware) between = gpu->statistics;
+      if(s == &hardware) between = stats(gpu);
       quad3D(*s, 32, 0, 32, 0, 22, 24);  //(reading what they drew)
     }
     CHECK(between.copies - before.copies, 1u);
-    CHECK(gpu->statistics.copies - between.copies, 1u);
-    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(stats(gpu).copies - between.copies, 1u);
+    CHECK(stats(gpu).finishes, before.finishes);
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
   }
@@ -1319,14 +1490,14 @@ static auto gpuHeldRows() -> void {
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 48, 16}}, 0x5a12'3456});
       prepare(*s, 0x2'0000, 3);
       orthographic(*s, 64);
-      if(s == &hardware) before = gpu->statistics;
+      if(s == &hardware) before = stats(gpu);
       quad3D(*s, 64, 0, 64, 0, 40, 16);  //(rows 16 to 55)
     }
     if(!gpu->fast) {
-      CHECK(gpu->statistics.finishes > before.finishes, true);
+      CHECK(stats(gpu).finishes > before.finishes, true);
       CHECK(apart(software, hardware), 0u);
     } else {
-      CHECK(gpu->statistics.finishes, before.finishes);
+      CHECK(stats(gpu).finishes, before.finishes);
     }
     hardware.ge.setRenderer(nullptr);
   }
@@ -1458,7 +1629,7 @@ static auto gpuPartialCopies() -> void {
       texture(*s, Memory::VRAMBase, 64, 64, 64);
       s->ge.commands[GE::TextureFunction] = 0 | 1 << 8;  //(modulated by the color, with its alpha)
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     u64 whole = 0;  //(what copies of all that's sampled would take)
     for(u32 n = 0; n < 16; n++) {  //(columns 48-63: rows 0-15 drawn from rows 16-31, then back)
       float from = n & 1 ? 0 : 16, to = n & 1 ? 16 : 0;
@@ -1472,7 +1643,7 @@ static auto gpuPartialCopies() -> void {
     u32 bytes = apart(software, hardware);
     if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
     CHECK(bytes, 0u);
-    u64 copied = gpu->statistics.copied - before.copied;
+    u64 copied = stats(gpu).copied - before.copied;
     if(copied * 2 >= whole) std::printf("  %ux: %llu pixels copied of %llu\n", scale, (unsigned long long)copied,
                                         (unsigned long long)whole);
     CHECK(copied * 2 < whole, true);
@@ -1561,7 +1732,7 @@ static auto gpuStackedTexture() -> void {
       prepare(*s, 0x2'0000, 3);
       texture(*s, Memory::VRAMBase + from * 64 * 4, 64, 64, 64);
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     for(System* s : {&software, &hardware}) {
       sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});  //(the whole texture, shrunk to rows 0-47)
       sprite(*s, {{{8, 40, 4, 4}, {40, 64, 36, 28}}, 0xffff'ffff});  //(across the two)
@@ -1576,8 +1747,8 @@ static auto gpuStackedTexture() -> void {
         sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
       }
     }
-    CHECK(gpu->statistics.finishes, before.finishes);
-    CHECK(gpu->statistics.copies - before.copies >= 2, true);
+    CHECK(stats(gpu).finishes, before.finishes);
+    CHECK(stats(gpu).copies - before.copies >= 2, true);
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
   }
@@ -1592,7 +1763,7 @@ static auto gpuStackedTexture() -> void {
       prepare(*s, 48 * 64 * 4, 3);
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff00'ff00});
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     for(System* s : {&software, &hardware}) {
       prepare(*s, 0x2'0000, 3);
       texture(*s, Memory::VRAMBase, 64, 64, 64);
@@ -1600,7 +1771,7 @@ static auto gpuStackedTexture() -> void {
       prepare(*s, 48 * 64 * 4, 3);
       sprite(*s, {{{0, 0, 0, 20}, {64, 64, 64, 44}}, 0xffff'ffff});  //(rows 20-43 of the second, from both)
     }
-    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(stats(gpu).finishes, before.finishes);
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
   }
@@ -1615,11 +1786,11 @@ static auto gpuStackedTexture() -> void {
       for(auto& one : lower) sprite(*s, one);
       texture(*s, Memory::VRAMBase, 64, 64, 64);
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     for(System* s : {&software, &hardware}) sprite(*s, {{{0, 0, 0, 20}, {64, 64, 64, 44}}, 0x8080'8080});
-    CHECK(gpu->statistics.finishes, before.finishes);
-    CHECK(gpu->statistics.moves, before.moves);
-    CHECK(gpu->statistics.copies - before.copies >= 2, true);
+    CHECK(stats(gpu).finishes, before.finishes);
+    CHECK(stats(gpu).moves, before.moves);
+    CHECK(stats(gpu).copies - before.copies >= 2, true);
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
   }
@@ -1641,13 +1812,13 @@ static auto gpuStackedTexture() -> void {
       prepare(*s, 0x2'0000, 3);
       texture(*s, Memory::VRAMBase, 64, 128, 64);
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     for(System* s : {&software, &hardware}) sprite(*s, {{{0, 0, 0, 0}, {64, 80, 64, 48}}, 0xffff'ffff});
     if(gpu->backend->moves) {
-      CHECK(gpu->statistics.finishes, before.finishes);
-      CHECK(gpu->statistics.moves > before.moves, true);
+      CHECK(stats(gpu).finishes, before.finishes);
+      CHECK(stats(gpu).moves > before.moves, true);
     } else {
-      CHECK(gpu->statistics.finishes > before.finishes, true);
+      CHECK(stats(gpu).finishes > before.finishes, true);
     }
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
@@ -1669,16 +1840,16 @@ static auto gpuStackedTexture() -> void {
       prepare(*s, 0x2'0000, 3);
       texture(*s, Memory::VRAMBase, 64, 128, 64);
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     for(System* s : {&software, &hardware}) {
       prepare(*s, 48 * 64 * 4, 3);
       sprite(*s, {{{0, 0, 0, 40}, {64, 80, 64, 48}}, 0xffff'ffff});
     }
     if(gpu->backend->moves) {
-      CHECK(gpu->statistics.finishes, before.finishes);
-      CHECK(gpu->statistics.moves > before.moves, true);
+      CHECK(stats(gpu).finishes, before.finishes);
+      CHECK(stats(gpu).moves > before.moves, true);
     } else {
-      CHECK(gpu->statistics.finishes > before.finishes, true);
+      CHECK(stats(gpu).finishes > before.finishes, true);
     }
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
@@ -1851,7 +2022,7 @@ static auto gpuMoves() -> void {
           s->memory.write(4, Memory::VRAMBase + 0x2'0000 + n * 4, u32(n * 0x9e37'79b9));
         }
       }
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       struct Pass {
         u32 address, width, format;
         std::vector<Corners> sprites;
@@ -1878,8 +2049,8 @@ static auto gpuMoves() -> void {
           c[GE::ClearMode] = 0, c[GE::TextureMappingEnable] = 0, c[GE::MaskAlpha] = 0, c[GE::StencilTestEnable] = 0;
         }
       }
-      CHECK(gpu->statistics.finishes, before.finishes);
-      CHECK(gpu->statistics.moves - before.moves >= 9, true);
+      CHECK(stats(gpu).finishes, before.finishes);
+      CHECK(stats(gpu).moves - before.moves >= 9, true);
       u32 bytes = vramApart(software, hardware);
       if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
       CHECK(bytes, 0u);
@@ -1910,7 +2081,7 @@ static auto gpuStridedMoves() -> void {
       gpu->resolution(scale);
       System software, hardware;
       hardware.ge.setRenderer(gpu);
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       struct Pass { u32 width, format; std::vector<Corners> sprites; bool clear; };
       std::vector<Pass> passes;
       for(u32 round = 0; round < 2; round++) {
@@ -1933,8 +2104,8 @@ static auto gpuStridedMoves() -> void {
           c[GE::ClearMode] = 0;
         }
       }
-      if(exported) CHECK(gpu->statistics.finishes, before.finishes);
-      CHECK(gpu->statistics.moves - before.moves >= (exported ? 10 : 1), true);
+      if(exported) CHECK(stats(gpu).finishes, before.finishes);
+      CHECK(stats(gpu).moves - before.moves >= (exported ? 10 : 1), true);
       u32 bytes = vramApart(software, hardware);
       if(bytes) std::printf("  %ux%s: %u bytes apart\n", scale, exported ? ", the stencil with the colors" : "", bytes);
       CHECK(bytes, 0u);
@@ -2059,20 +2230,20 @@ static auto gpuSideBySide() -> void {
     for(u32 n = first; n < first + 6; n++) sprite(s, textured[n]);
     c[GE::TextureMappingEnable] = 0, c[GE::DitherEnable] = 0;
   };
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   for(System* s : {&software, &hardware}) {
     for(u32 n = 0; n < 4; n++) draw(*s, At + n * 128, n * 6);
     draw(*s, At + 512 + 128, 24);
   }
-  auto across = gpu->statistics;
+  auto across = stats(gpu);
   for(System* s : {&software, &hardware}) {
     prepare(*s, 0x2'0000, 3);
     texture(*s, Memory::VRAMBase + At, 256, 32, 256, 0);
     sprite(*s, {{{0, 0, 0, 0}, {256, 32, 64, 16}}, 0xffff'ffff});
   }
-  CHECK(gpu->statistics.finishes, before.finishes);
-  CHECK(gpu->statistics.textures, across.textures);  //(none decoded: held)
-  CHECK(gpu->statistics.copies > across.copies, true);
+  CHECK(stats(gpu).finishes, before.finishes);
+  CHECK(stats(gpu).textures, across.textures);  //(none decoded: held)
+  CHECK(stats(gpu).copies > across.copies, true);
   for(System* s : {&software, &hardware}) {
     prepare(*s, At + 192 * 2, 0);
     s->ge.commands[GE::FrameBufferWidth] = 256, s->ge.commands[GE::Scissor2] = 127 | 31 << 10;
@@ -2123,7 +2294,7 @@ static auto gpuTransferOver() -> void {
     texture(*s, Memory::VRAMBase + At, 64, 64, 64);
     sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
   }
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   for(System* s : {&software, &hardware}) {
     transfer(*s, Memory::VRAMBase + At, 8 << 10, 64, 8, 4);    //(rows 8-15, whole)
     transfer(*s, Memory::VRAMBase + At, 4 | 30 << 10, 20, 3, 4);  //(rows 30-32, columns 4-23)
@@ -2139,14 +2310,14 @@ static auto gpuTransferOver() -> void {
   CHECK(read[1], read[0]);
   CHECK(after[1], after[0]);
   CHECK(after[0], 0xff35'79bdu);  //(the stencil, the alpha, kept: the transfer's)
-  CHECK(gpu->statistics.finishes, before.finishes + 1);  //(the CPU's read of the sprite's pixel)
-  before = gpu->statistics;
+  CHECK(stats(gpu).finishes, before.finishes + 1);  //(the CPU's read of the sprite's pixel)
+  before = stats(gpu);
   for(System* s : {&software, &hardware}) {
     prepare(*s, At, 3);
     for(u32 n = 0; n < 8; n++) sprite(*s, drawn[n]);
     transfer(*s, Memory::VRAMBase + At, 1 | 20 << 10, 16, 2, 2);  //(2-byte pixels from the middle of an 8888 one's)
   }
-  CHECK(gpu->statistics.finishes > before.finishes, true);
+  CHECK(stats(gpu).finishes > before.finishes, true);
   for(System* s : {&software, &hardware}) {  //(rows written over the GPU's, then a finish before anything takes them)
     sprite(*s, {{{0, 0, 0, 36}, {0, 0, 64, 48}}, 0xff42'8642});
     transfer(*s, Memory::VRAMBase + At, 40 << 10, 64, 2, 4);
@@ -2190,7 +2361,7 @@ static auto gpuStoresOver() -> void {
       for(auto& one : drawn) sprite(*s, one);
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 24}}, 0xff10'2030});  //(rows 0-23 drawn whole)
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     u32 read[2] = {}, after[2] = {};
     for(System* s : {&software, &hardware}) {
       for(u32 n = 0; n < 2 * rowBytes / 4; n++) {  //(rows 8 and 9)
@@ -2202,7 +2373,7 @@ static auto gpuStoresOver() -> void {
       read[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + 9 * rowBytes + 12);
     }
     CHECK(read[1], read[0]);
-    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(stats(gpu).finishes, before.finishes);
     for(System* s : {&software, &hardware}) {
       prepare(*s, 0x2'0000, 3);  //(a texture over the rows stored: decoded from memory)
       texture(*s, Memory::VRAMBase + At + 8 * rowBytes, 32, 2, 64, format);
@@ -2213,13 +2384,13 @@ static auto gpuStoresOver() -> void {
       after[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + 9 * rowBytes + 48 * 2);
     }
     CHECK(after[1], after[0]);
-    CHECK(gpu->statistics.finishes, before.finishes + 1);  //(the CPU's read of the sprite's pixels)
+    CHECK(stats(gpu).finishes, before.finishes + 1);  //(the CPU's read of the sprite's pixels)
     if(format == 3) {
       for(System* s : {&software, &hardware}) {
         sprite(*s, {{{0, 0, 10, 28}, {0, 0, 40, 34}}, 0xff12'3456});
-        before = gpu->statistics;
+        before = stats(gpu);
         s->memory.write(1, Memory::VRAMBase + At + 30 * rowBytes + 20 * 4 + 1, 0x5a);
-        if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+        if(s == &hardware) CHECK(stats(gpu).finishes, before.finishes + 1);
       }
     }
     for(System* s : {&software, &hardware}) {  //(rows stored over the GPU's, then a finish before anything takes them)
@@ -2230,16 +2401,16 @@ static auto gpuStoresOver() -> void {
     if(format == 3) {
       for(System* s : {&software, &hardware}) {
         sprite(*s, {{{0, 0, 0, 24}, {0, 0, 64, 34}}, 0xff22'4466});
-        before = gpu->statistics;
+        before = stats(gpu);
         s->memory.write(4, 0x0440'0000 + At + 26 * rowBytes + 8, 0xfeed'beefu);  //(VRAM's third copy: the same bytes)
         for(u32 n = 0; n < 16; n++) {  //(each a range of its own: the 17th a finish)
           s->memory.write(4, Memory::VRAMBase + At + 30 * rowBytes + n * 8, n);
-          if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + (n == 15));
+          if(s == &hardware) CHECK(stats(gpu).finishes, before.finishes + (n == 15));
         }
         sprite(*s, {{{0, 0, 0, 24}, {0, 0, 64, 34}}, 0xff66'4422});
-        before = gpu->statistics;
+        before = stats(gpu);
         s->memory.write(4, 0x0420'0000 + At + 28 * rowBytes + 8, 0xdead'beefu);  //(its second copy rearranges them)
-        if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+        if(s == &hardware) CHECK(stats(gpu).finishes, before.finishes + 1);
       }
     }
     u32 bytes = vramApart(software, hardware);
@@ -2347,11 +2518,11 @@ static auto gpuRevived() -> void {
         s->memory.write(4, Memory::VRAMBase + At + ((n & 3) * 64 + 34 + n / 4 * 2) * 4, 0xff00'0000 | n * 0x10'1010);
       }
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     u32 seen[2] = {};
     for(System* s : {&software, &hardware}) {
       sprite(*s, {{{0, 0, 8, 34}, {0, 0, 50, 46}}, 0xff60'a0e0});
-      if(s == &hardware && ranges == 1) CHECK(gpu->statistics.finishes, before.finishes);
+      if(s == &hardware && ranges == 1) CHECK(stats(gpu).finishes, before.finishes);
       seen[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + (40 * 64 + 20) * 4);
     }
     CHECK(seen[1], seen[0]);
@@ -2387,7 +2558,7 @@ static auto gpuTiles() -> void {
       prepare(*s, 0x2'0000, 3);
       texture(*s, Memory::VRAMBase, 64, 64, 64);
     }
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     for(u32 y = 0; y < 4; y++) {
       for(u32 x = 0; x < 6; x++) {  //(each tile 10 by 12, its own texels 1:1: the copy of the corner to its own)
         float left = x * 10, top = y * 12, right = left + 10, bottom = top + 12;
@@ -2396,7 +2567,7 @@ static auto gpuTiles() -> void {
         }
       }
     }
-    u64 copies = gpu->statistics.copies - before.copies;
+    u64 copies = stats(gpu).copies - before.copies;
     if(copies > 8) std::printf("  %ux: %llu copies for 24 tiles\n", scale, (unsigned long long)copies);
     CHECK(copies <= 8, true);
     u32 bytes = apart(software, hardware);
@@ -2412,14 +2583,14 @@ static auto gpuTiles() -> void {
         machine.ge.setRenderer(gpu);
         prepare(machine, 0, 3);
         for(auto& one : drawn) sprite(machine, one);
-        auto made = gpu->statistics.copies;
+        auto made = stats(gpu).copies;
         for(auto [at, reach] : list) {
           prepare(machine, at, 3);
           texture(machine, Memory::VRAMBase + 0x2000, 64, 64, 64);
           machine.ge.commands[GE::TextureFilter] = 1 | 1 << 8;
           sprite(machine, {{{0, 0, 0, 0}, {reach, reach, reach, reach}}, 0xffff'ffff});
         }
-        CHECK(gpu->statistics.copies > made, true);
+        CHECK(stats(gpu).copies > made, true);
         std::vector<std::vector<u32>> pictures(list.size());
         for(u32 n = 0; n < list.size(); n++) {
           u32 size = list[n].second;
@@ -2466,17 +2637,17 @@ static auto gpuTakenInOneDraw() -> void {
       for(auto& one : drawn) sprite(*s, one);
       prepare(*s, 0x2'0000, 3);
       texture(*s, Memory::VRAMBase, 64, 64, 64);
-      if(s == &hardware) before = gpu->statistics;
+      if(s == &hardware) before = stats(gpu);
       sprite(*s, {{{0, 0, 0, 0}, {48, 40, 48, 40}}, 0xffff'ffff});  //(the copy: 48 columns, 40 rows)
-      if(s == &hardware) between = gpu->statistics;
+      if(s == &hardware) between = stats(gpu);
       for(u32 n = 0; n < 6; n++) {
         float u = 3 * n, v = 2 * n, width = 8 + 5 * n, height = 6 + 3 * n, x = 7 * n, y = 40 - height;
         sprite(*s, {{{u, v, x, y}, {u + width, v + height, x + width, y + height}}, 0xffff'ffff});
       }
     }
     CHECK(between.copies - before.copies, 1u);
-    CHECK(gpu->statistics.copies, between.copies);
-    CHECK(gpu->statistics.draws, between.draws);
+    CHECK(stats(gpu).copies, between.copies);
+    CHECK(stats(gpu).draws, between.draws);
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
 
@@ -2504,9 +2675,9 @@ static auto gpuTakenInOneDraw() -> void {
         texture(s, Memory::VRAMBase, 64, 64, 64);
         s.ge.commands[GE::TextureFilter] = 1 | 1 << 8;
         if(larger) sprite(s, {{{0, 0, 0, 0}, {48, 40, 48, 40}}, 0xffff'ffff});
-        u64 first = gpu->statistics.draws;
+        u64 first = stats(gpu).draws;
         for(u32 n = 0; n < 6; n++) if(only < 0 || u32(only) == n) tile(s, n);
-        draws = gpu->statistics.draws - first;
+        draws = stats(gpu).draws - first;
         std::vector<u32> picture;
         CHECK(gpu->picture(0x2'0000, 64, 3, 64, 48, picture, scale), true);
         s.ge.setRenderer(nullptr);
@@ -2578,17 +2749,17 @@ static auto gpuDepthUnused() -> void {
     c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written)
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff00'00ff}, 50000);
     c[GE::DepthTestEnable] = 0;
-    if(s == &hardware) uploads = gpu->statistics.uploads;
+    if(s == &hardware) uploads = stats(gpu).uploads;
     for(u32 n = 0; n < 24; n++) {  //(through the fourth copy: rows 2n and 2n + 1 of depth zeroed, then a PRIM)
       for(u32 x = 0; x < 2 * 64 * 2; x += 4) s->memory.write(4, 0x0460'0000 + 0x1f'0000 + n * 2 * 64 * 2 + x, 0);
       sprite(*s, {{{0, 0, n * 2.0f, 2}, {0, 0, n * 2.0f + 2, 6}}, 0xff00'0000 | n * 0x0b'0d0f});
     }
-    if(s == &hardware) CHECK(gpu->statistics.uploads, uploads);
+    if(s == &hardware) CHECK(stats(gpu).uploads, uploads);
     c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 6, c[GE::DepthMask] = 1;  //(greater, not written)
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff00'ff00}, 30000);
     c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
   }
-  CHECK(gpu->statistics.uploads - uploads >= 1, true);
+  CHECK(stats(gpu).uploads - uploads >= 1, true);
   CHECK(apart(software, hardware), 0u);
   CHECK(u32(software.memory.vram[(30 * 64 + 50) * 4 + 1]), 0xffu);  //(its depth zeroed: drawn over)
   hardware.ge.setRenderer(nullptr);
@@ -3000,21 +3171,21 @@ static auto gpuDepthViewLoads() -> void {
   u32 memorys = 0x0102'0304 * ((Pixel - At) / 4 + 1), drawn = (memorys & 0xff00'0000) | 0x10'2030;  //(the stencil kept)
   for(u32 copy : {1u, 3u}) {
     u32 seen = Memory::VRAMBase + copy * Memory::VRAMSize + Memory::vramSeen(copy, Pixel);
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     CHECK(hardware.memory.read(4, seen), memorys);
-    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(stats(gpu).finishes, before.finishes);
     CHECK(software.memory.read(4, seen), drawn);
   }
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   CHECK(pixel(hardware, At + 30 * 256 + 40), pixel(software, At + 30 * 256 + 40));
-  CHECK(gpu->statistics.finishes, before.finishes + 1);
+  CHECK(stats(gpu).finishes, before.finishes + 1);
   u32 seen = Memory::vramSeen(3, Pixel);
   CHECK(hardware.memory.read(4, 0x0460'0000 + seen), drawn);
   for(System* s : {&software, &hardware}) {
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff40'5060});
-    before = gpu->statistics;
+    before = stats(gpu);
     s->memory.write(2, 0x0460'0000 + seen, 0x7788);
-    if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+    if(s == &hardware) CHECK(stats(gpu).finishes, before.finishes + 1);
   }
   CHECK(apart(software, hardware), 0u);
   hardware.ge.setRenderer(nullptr);
@@ -3038,7 +3209,7 @@ static auto sharedDepth(GPU* gpu) -> void {
     if(forced) scale = 1, gpu->backend->depthAlone = true;
     gpu->resolution(scale);
     gpu->backend->depthCopyAspects = 0;
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
     for(System* s : {&software, &hardware}) {
@@ -3101,8 +3272,8 @@ static auto sharedDepth(GPU* gpu) -> void {
     CHECK(byte(0, 8, 8, 1), 0u), CHECK(byte(0, 8, 30, 1), 0xffu);  //(behind the second's, and not)
     CHECK(byte(0x1'0000, 40, 20, 1), 0x30u);  //(the mesh, in front of all but what the first drew since)
     CHECK(byte(0x1'0000, 8, 30, 3), 0x5au), CHECK(byte(0, 8, 8, 3), 0xa5u);  //(each its own stencil)
-    CHECK(gpu->statistics.depthsTaken - before.depthsTaken >= 3, true);
-    if(gpu->fast && gpu->backend->transforms) CHECK(gpu->statistics.meshes > before.meshes, true);
+    CHECK(stats(gpu).depthsTaken - before.depthsTaken >= 3, true);
+    if(gpu->fast && gpu->backend->transforms) CHECK(stats(gpu).meshes > before.meshes, true);
     hardware.ge.setRenderer(nullptr);
   }
   gpu->resolution(1);
@@ -3128,6 +3299,622 @@ struct DepthMovesKept {  //(Backend::depthMoves as it was, back as it goes)
   bool was = gpu->backend->depthMoves;
   ~DepthMovesKept() { gpu->backend->depthMoves = was; }
 };
+
+//R22 (DESIGN.md 3.7; the review's round four): a frame buffer drawn on the GPU in its rows 0-15 and 32-47, the page of
+//its rows between reached by no rectangle; a block transfer's row running from its row 15 onto that page (overwritten()
+//marks the bytes dead, its pixels memory's from then on); then another frame buffer clearing its depth, whose depth
+//buffer's 16 KiB holds the first one's top page but not the page between: the depth's fill moves the first one's
+//pixels in on the GPU, and first takes its dead bytes from memory again (moveIntoDepth()'s revive()), reading the page
+//between, outside the second's rows and its depth buffer's 16 KiBs. With the GE on its thread held back, the CPU
+//stores over those bytes after the list: the render GE must read them as they were (the store's version), and its
+//read must lie in what the model declares the PRIM may read (the G-interest check: only R22's rule, the rows of the
+//targets with pages in the depth buffer's 16 KiBs, holds that page). Memory comes out as the same list's without the
+//thread, on the same GPU; with the depth moves on, and off (nothing moved, nothing revived there).
+static auto gpuThreadR22() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 List = 0x0894'0000, Row = 0x0897'0000;
+  constexpr u32 Source = 0x10'3000, Between = 0x10'4000, Depth = 0x10'0000;  //(VRAM's offsets)
+  auto build = [](Memory& memory) {
+    u32 at = List, vertex = GPUVertices;
+    auto put = [&](u32 command, u32 argument = 0) {
+      memory.write(4, at, command << 24 | (argument & 0xff'ffff)), at += 4;
+    };
+    auto sprite = [&](float left, float top, float right, float bottom, u32 color) {
+      put(GE::Base, vertex >> 8 & 0xf'0000), put(GE::VertexAddress, vertex);
+      for(auto [x, y] : {std::pair{left, top}, std::pair{right, bottom}}) {
+        for(float value : {0.0f, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+        memory.write(4, vertex, color), vertex += 4;
+        for(float value : {x, y, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      }
+      put(GE::Primitive, GE::Sprites << 16 | 2);
+    };
+    put(GE::Scissor1, 0), put(GE::Scissor2, 63 | 47 << 10), put(GE::Region2, 1023 | 1023 << 10);
+    put(GE::VertexType, 0x80'019f), put(GE::ShadeMode, 1);
+    put(GE::FrameBufferPointer, Source), put(GE::FrameBufferWidth, 64), put(GE::FrameBufferPixelFormat, 3);
+    sprite(0, 0, 64, 16, 0xff20'4060);
+    sprite(0, 32, 64, 48, 0xff60'4020);
+    put(GE::TransferSource, Row), put(GE::TransferSourceWidth, (Row >> 24) << 16 | 128);
+    put(GE::TransferSourcePosition, 0);
+    put(GE::TransferDestination, Memory::VRAMBase + Source + 15 * 256);
+    put(GE::TransferDestinationWidth, (Memory::VRAMBase >> 24) << 16 | 128), put(GE::TransferDestinationPosition, 0);
+    put(GE::TransferSize, 127), put(GE::TransferStart, 1);  //(one row of 128 four-byte pixels: rows 15 and 16)
+    put(GE::FrameBufferPointer, 0), put(GE::FrameBufferWidth, 64);
+    put(GE::DepthBufferPointer, Depth), put(GE::DepthBufferWidth, 64);
+    put(GE::ClearMode, 0x701);
+    sprite(0, 0, 64, 48, 0xff00'0000);
+    put(GE::ClearMode, 0);
+    put(GE::Finish), put(GE::End);
+    for(u32 n = 0; n < 128; n++) memory.write(4, Row + n * 4, 0xff00'0000 | n * 0x01'0101);
+    for(u32 n = 0; n < 0x1000; n += 4) memory.write(4, Memory::VRAMBase + Between + n, 0xff55'aa00 | n >> 2);
+  };
+  constexpr u32 Stored = Memory::VRAMBase + Between + 0x40;  //(row 16, column 16: the transfer's, dead)
+  for(bool moves : depthWays(gpu)) {
+    DepthMovesKept kept{gpu};
+    gpu->backend->depthMoves = moves;
+    System plain, threaded;
+    plain.threadGE(false), threaded.threadGE(true);
+    plain.ge.setRenderer(gpu);
+    build(plain.memory);
+    plain.ge.list = {}, plain.ge.list.address = List;
+    CHECK(u32(plain.ge.run(1000)), u32(GE::Stop::Finished));
+    plain.memory.write(4, Stored, 0x0a0b'0c0d);
+    plain.ge.settleAll();
+    plain.ge.setRenderer(nullptr);
+    u64 moved = stats(gpu).depthsMoved;
+    threaded.ge.setRenderer(gpu);
+    build(threaded.memory);
+    std::atomic<bool> held{true};
+    threaded.geThreading->drain();  //(the thread reads its gate as it takes each record)
+    threaded.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+    u64 waits = threaded.geThreading->waits;
+    threaded.ge.list = {}, threaded.ge.list.address = List;
+    CHECK(u32(threaded.ge.run(1000)), u32(GE::Stop::Finished));
+    threaded.memory.write(4, Stored, 0x0a0b'0c0d);
+    CHECK(held.load(), true);  //(nothing waited for the thread)
+    CHECK(threaded.geThreading->waits, waits);
+    held = false;
+    threaded.geThreading->drain();
+    threaded.geThreading->gate = nullptr;
+    threaded.ge.settleAll();
+    threaded.ge.setRenderer(nullptr);
+    if(moves) CHECK(stats(gpu).depthsMoved > moved, true);  //(the source's pixels moved into the depth)
+    u32 apart = vramApart(plain, threaded);
+    if(apart) std::printf("  %s: %u bytes apart\n", way(moves), apart);
+    CHECK(apart, 0u);
+    CHECK(plain.memory.read(4, Stored), 0x0a0b'0c0du);
+  }
+}
+
+//A list for the tests with the GE on its thread (outside a list a PRIM is drawn at once, the thread drained: a list
+//leaves it behind), from at on: commands one after another, sprites' vertices from GPUVertices on as sprite() writes
+//them, and texture()'s and prepare()'s state as those set it.
+struct ThreadedList {
+  Memory& memory;
+  u32 at = 0x0894'0000, vertex = GPUVertices;
+  auto put(u32 command, u32 argument = 0) -> void {
+    memory.write(4, at, command << 24 | (argument & 0xff'ffff)), at += 4;
+  }
+  auto sprite(const Corners& sprite, float z = 0) -> void {
+    put(GE::Base, vertex >> 8 & 0xf'0000), put(GE::VertexAddress, vertex);
+    for(auto& corner : sprite.at) {
+      for(float value : {corner[0], corner[1]}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      memory.write(4, vertex, sprite.color), vertex += 4;
+      for(float value : {corner[2], corner[3], z}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+    }
+    put(GE::Primitive, GE::Sprites << 16 | 2);
+  }
+  auto texture(u32 address, u32 width, u32 height, u32 bufferWidth, u32 format = 3) -> void {
+    put(GE::TextureMappingEnable, 1);
+    put(GE::TextureAddress0, address), put(GE::TextureBufferWidth0, (address >> 24 & 0xf) << 16 | bufferWidth);
+    put(GE::TextureSize0, std::countr_zero(height) << 8 | std::countr_zero(width));
+    put(GE::TextureFormat, format), put(GE::TextureFunction, 3 | 1 << 8), put(GE::TextureFilter, 0);
+  }
+  auto prepare(u32 buffer, u32 format, u32 rows = 48) -> void {
+    put(GE::FrameBufferPointer, buffer), put(GE::FrameBufferWidth, 64), put(GE::FrameBufferPixelFormat, format);
+    put(GE::DepthBufferPointer, 0x1f'0000), put(GE::DepthBufferWidth, 64);
+    put(GE::Region2, 1023 << 10 | 1023), put(GE::Scissor1, 0), put(GE::Scissor2, 63 | (rows - 1) << 10);
+    put(GE::VertexType, 0x80'019f), put(GE::ShadeMode, 1);
+  }
+  auto end() -> void { put(GE::Finish), put(GE::End); }
+};
+static auto runList(System& s, u32 from) -> void {
+  s.ge.list = {}, s.ge.list.address = from;
+  CHECK(u32(s.ge.run(100'000)), u32(GE::Stop::Finished));
+}
+
+//The GE thread held back before the next record it takes, while this lives (then let go, the thread drained);
+//waited(access): access made while it's held, let go of from another thread after a while, and whether the emulation
+//thread waited for the thread meanwhile (it's held again after). The thread drained first: held over a ring part
+//full, the emulation thread could wait for room it never makes.
+struct HeldBack {
+  GeThread& thread;
+  std::atomic<bool> held{true};
+  explicit HeldBack(GeThread& thread) : thread(thread) {
+    thread.drain();
+    thread.gate = [this](u64) { while(held.load()) std::this_thread::yield(); };
+  }
+  ~HeldBack() { held = false; thread.drain(); thread.gate = nullptr; }
+  template<typename Access> auto waited(const Access& access) -> bool {
+    u64 waits = thread.waits;
+    std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); held = false; });
+    access();
+    release.join();
+    held = true;
+    return thread.waits > waits;
+  }
+};
+
+//R14 (DESIGN.md 3.5, the review's round two): with the GE on its thread, a load through VRAM's fourth copy of a
+//pixel the GPU drew, which today's code reads from memory without finishing, waits for the thread and leaves the
+//pixel the GPU's: the bytes may still change. A block transfer then writes half of a pixel further down the frame
+//buffer (overwritten(): the GPU finished first), the thread held back before it, and a second load of the pixel waits
+//again and reads what the finish put there; had the first load's wait made the bytes clean, it would read memory at
+//once, the finish not made yet. Then the GPU's depth: a load through the depth views reads memory's at once (only a
+//put point puts the GPU's depth there), and after a PRIM sampling that depth through the depth views, the thread
+//held back before it, one waits and reads the depth put there. Every load as a machine without the thread reads.
+static auto gpuThreadR14() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000, Pixel = At + 20 * 256 + 8 * 4, Row = 0x0897'0000;  //(row 20, column 8)
+  constexpr u32 Second = 0x0894'1000, Third = 0x0894'2000;
+  const u32 seen = Memory::VRAMBase + 3 * Memory::VRAMSize + Memory::vramSeen(3, Pixel);
+  const u32 depth = 0x0460'0000 + 0x1f'0000 + (20 * 64 + 8) * 2;  //(through the fourth copy, in order)
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x8'0000; n += 4) memory.write(4, Memory::VRAMBase + n, 0x0102'0304 * (n / 4 + 1));
+    for(u32 n = 0; n < 0x8000; n += 4) memory.write(4, Memory::VRAMBase + 0x1f'0000 + n, 0x1111 * (n / 4 + 1));
+    for(u32 n = 0; n < 32; n++) memory.write(4, Row + n * 4, 0xff00'0000 | n * 0x05'0607);
+    ThreadedList first{memory};
+    first.prepare(At, 3), first.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030}), first.end();
+    ThreadedList second{memory, Second, GPUVertices + 0x100};
+    second.prepare(0x5'0000, 3);
+    second.put(GE::DepthTestEnable, 1), second.put(GE::DepthTest, 1);  //(always, written)
+    second.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff40'5060}, 0x4321), second.end();
+    ThreadedList third{memory, Third, GPUVertices + 0x200};
+    third.prepare(0x6'0000, 3);
+    third.texture(0x0460'0000 + 0x1f'0000, 64, 64, 64, 0);  //(the depth through the fourth copy, as 5650's colors)
+    third.sprite({{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff}), third.end();
+  };
+  auto transfer = [&](System& s) {  //(rows 40 and 41, from the middle of a pixel: 2-byte pixels from column 1)
+    auto& c = s.ge.commands;
+    c[GE::TransferSource] = Row & 0xff'fff0, c[GE::TransferSourceWidth] = (Row >> 24) << 16 | 64;
+    c[GE::TransferSourcePosition] = 0;
+    c[GE::TransferDestination] = At & 0xff'fff0;
+    c[GE::TransferDestinationWidth] = (Memory::VRAMBase >> 24) << 16 | 128;
+    c[GE::TransferDestinationPosition] = 1 | 40 << 10;
+    c[GE::TransferSize] = 15 | 1 << 10, c[GE::TransferStart] = 0;
+    s.ge.transfer();
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  u32 read[4] = {}, expected[4] = {};
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000);
+  expected[0] = plain.memory.read(4, seen);
+  transfer(plain);
+  expected[1] = plain.memory.read(4, seen);
+  runList(plain, Second);
+  expected[2] = plain.memory.read(2, depth);
+  runList(plain, Third);
+  expected[3] = plain.memory.read(2, depth);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    CHECK(back.waited([&] { read[0] = threaded.memory.read(4, seen); }), true);
+    transfer(threaded);
+    CHECK(back.waited([&] { read[1] = threaded.memory.read(4, seen); }), true);
+    runList(threaded, Second);
+    CHECK(back.waited([&] { read[2] = threaded.memory.read(2, depth); }), false);
+    runList(threaded, Third);
+    CHECK(back.waited([&] { read[3] = threaded.memory.read(2, depth); }), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  for(u32 n = 0; n < 4; n++) CHECK(read[n], expected[n]);
+  CHECK(expected[0] != expected[1], true);  //(the finish put the GPU's pixel there)
+  CHECK(expected[3], 0x4321u);              //(the depth put there)
+  CHECK(vramApart(plain, threaded), 0u);
+}
+
+//With the GE on its thread held back after a list draws on the GPU, an HLE function's copy out of VRAM's fourth copy
+//(an 8888 frame buffer's depth view) of bytes nothing drew, on the 16 KiB block the GPU drew in: clean, so it doesn't
+//wait, but today's check for it (pointer()'s busy check, which through that copy covers the whole block) finishes the
+//GPU, and the GE thread makes that check from the copy's Read record where the synchronous GE made it (a finish
+//changes later pictures in Vulkan fast). Seen twice: the GPU finishes as often as without the thread, and a load of a
+//pixel it drew then needn't wait (the finish known). Without the record neither holds.
+static auto gpuThreadCleanCheck() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000, Clean = At + 56 * 256;  //(the sprite draws rows 0-47; row 56 is in the same 16 KiB)
+  const u32 copied = Memory::VRAMBase + 3 * Memory::VRAMSize + Memory::vramSeen(3, Clean);
+  const u32 drawn = Memory::VRAMBase + At + (10 * 64 + 10) * 4;
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x4000; n += 4) memory.write(4, Memory::VRAMBase + At + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList list{memory};
+    list.prepare(At, 3), list.sprite({{{0, 0, 0, 0}, {0, 0, 40, 48}}, 0xff10'2030}), list.end();
+  };
+  u32 bytes[2] = {}, pixel[2] = {};
+  u64 finished[2] = {};
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  u64 finishes = stats(gpu).finishes;
+  runList(plain, 0x0894'0000);
+  CHECK(plain.memory.copyOut(&bytes[0], copied, 4), true);
+  finished[0] = stats(gpu).finishes - finishes;
+  pixel[0] = plain.memory.read(4, drawn);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  finishes = stats(gpu).finishes;  //(before the thread's held back: stats() drains it)
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    CHECK(back.waited([&] { CHECK(threaded.memory.copyOut(&bytes[1], copied, 4), true); }), false);
+  }
+  finished[1] = stats(gpu).finishes - finishes;
+  u64 waits = threaded.geThreading->waits;
+  pixel[1] = threaded.memory.read(4, drawn);
+  CHECK(threaded.geThreading->waits, waits);
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  CHECK(finished[0], 1u);  //(the synchronous GE's check finished the GPU)
+  CHECK(finished[1], finished[0]);
+  CHECK(bytes[1], bytes[0]);
+  CHECK(pixel[1], pixel[0]);
+  CHECK(pixel[0] != 0x0102'0304u * (10 * 64 + 11), true);  //(the GPU's pixel, finished)
+  CHECK(vramApart(plain, threaded), 0u);
+}
+
+//R15 (DESIGN.md 3.6, the review's round two): with the GE on its thread held back after a list draws on the GPU, the
+//CPU's halfword and byte stores into drawn 8888 and 16-bit pixels, one after another with nothing between (each
+//replayed by itself: part of a pixel finishes the GPU first, as today's code does), and two aligned words across the
+//right edge of what it drew (the first's pixel memory's from then on, the second's bytes beside it, kept): none
+//waits, and memory comes out as the same list's and stores' without the thread.
+static auto gpuThreadR15() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Wide = 0x3'0000, Narrow = 0x5'0000;  //(8888, 5650)
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x3'0000; n += 4) memory.write(4, Memory::VRAMBase + Wide + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList list{memory};
+    list.prepare(Wide, 3), list.put(GE::Scissor2, 39 | 47 << 10);  //(a picture 40 pixels wide in rows of 64)
+    list.sprite({{{0, 0, 0, 0}, {0, 0, 40, 48}}, 0xff10'2030});
+    list.prepare(Narrow, 0), list.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff40'5060});
+    list.end();
+  };
+  auto stores = [&](System& s) {
+    auto wide = [&](u32 x, u32 y) { return Memory::VRAMBase + Wide + (y * 64 + x) * 4; };
+    auto narrow = [&](u32 x, u32 y) { return Memory::VRAMBase + Narrow + (y * 64 + x) * 2; };
+    s.memory.write(2, wide(5, 3), 0x1122), s.memory.write(2, wide(5, 3) + 2, 0x3344);  //(a pixel, in halves)
+    s.memory.write(1, wide(9, 7) + 1, 0x55), s.memory.write(1, wide(9, 7) + 2, 0x66);  //(two of a pixel's bytes)
+    s.memory.write(1, narrow(3, 4), 0x77), s.memory.write(1, narrow(3, 4) + 1, 0x88);   //(a 16-bit pixel, in bytes)
+    s.memory.write(1, narrow(10, 20) + 1, 0x99);
+    s.memory.write(4, wide(39, 30), 0xaabb'ccdd), s.memory.write(4, wide(40, 30), 0xeeff'0011);  //(across the edge)
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000);
+  stores(plain);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    u64 waits = threaded.geThreading->waits;
+    stores(threaded);
+    CHECK(threaded.geThreading->waits, waits);
+    CHECK(back.held.load(), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  u32 apart = vramApart(plain, threaded);
+  if(apart) std::printf("  %u bytes apart\n", apart);
+  CHECK(apart, 0u);
+  CHECK(plain.memory.read(4, Memory::VRAMBase + Wide + (3 * 64 + 5) * 4), 0x3344'1122u);
+}
+
+//R16 (DESIGN.md 3.5, the review's round two): a frame buffer drawing with the depth one of the other order drew
+//(Memory::depthCopy(): 5650 against 8888), where the depth buffer's pieces don't start on 32 bytes, takes it through
+//memory (takeDepth()): the drawer's depth put there in its order first (putDepth()), a put point. With the GE on its
+//thread held back, the CPU's store past the taker's rows, into the drawer's, stays over the put (whose write-back,
+//before it in the stream, goes under it), and its load of the depth waits for the thread and reads the depth put
+//there: memory as the same list's and accesses' without the thread, the depth moves on and off.
+static auto gpuThreadR16() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Depth = 0x1f'0010;  //(16 bytes past 32: no runs placed)
+  constexpr u32 Loaded = 0x0420'0000 + Depth + (8 * 64 + 4) * 2;   //(through the second copy, the 5650's order)
+  constexpr u32 Stored = 0x0420'0000 + Depth + (40 * 64 + 4) * 2;  //(row 40: past the taker's 16)
+  auto build = [&](Memory& memory) {
+    ThreadedList list{memory};
+    list.prepare(0x3'0000, 0), list.put(GE::DepthBufferPointer, Depth);
+    list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 1);  //(always, written)
+    list.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030}, 0x2345);
+    list.prepare(0x6'0000, 3, 16), list.put(GE::DepthBufferPointer, Depth);
+    list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 7);  //(greater or equal, written)
+    list.sprite({{{0, 0, 0, 0}, {0, 0, 64, 16}}, 0xff40'5060}, 0x3456);
+    list.end();
+  };
+  for(bool moves : depthWays(gpu)) {
+    DepthMovesKept kept{gpu};
+    gpu->backend->depthMoves = moves;
+    System plain, threaded;
+    plain.threadGE(false), threaded.threadGE(true);
+    plain.ge.setRenderer(gpu);
+    build(plain.memory);
+    u64 put = stats(gpu).depthsPut;
+    runList(plain, 0x0894'0000);
+    CHECK(stats(gpu).depthsPut, put + 1);  //(through memory)
+    plain.memory.write(2, Stored, 0x7777);
+    u32 expected = plain.memory.read(2, Loaded);
+    plain.ge.settleAll();
+    plain.ge.setRenderer(nullptr);
+    threaded.ge.setRenderer(gpu);
+    build(threaded.memory);
+    u32 read = 0;
+    {
+      HeldBack back{*threaded.geThreading};
+      runList(threaded, 0x0894'0000);
+      u64 waits = threaded.geThreading->waits;
+      threaded.memory.write(2, Stored, 0x7777);
+      CHECK(threaded.geThreading->waits, waits);
+      CHECK(back.waited([&] { read = threaded.memory.read(2, Loaded); }), true);
+    }
+    threaded.ge.settleAll();
+    threaded.ge.setRenderer(nullptr);
+    CHECK(read, expected);
+    CHECK(expected, 0x2345u);  //(the drawer's depth, put)
+    u32 apart = vramApart(plain, threaded);
+    if(apart) std::printf("  %s: %u bytes apart\n", way(moves), apart);
+    CHECK(apart, 0u);
+    CHECK(threaded.memory.read(2, Stored), 0x7777u);
+  }
+}
+
+//R24 (DESIGN.md 3.7, the review's round four): a frame buffer taking the depth of a newer drawer with more rows over
+//the same depth buffer (takeDepth()) first fills the drawer's rows memory changed since it drew, which can lie past
+//the taker's: here in the depth buffer's second 16 KiB, which the taker's 32 rows don't reach. With the GE on its
+//thread held back, the CPU changes those rows between the two lists and again after the second: the render GE fills
+//them as they were before the second change (its version), inside what the model declares the PRIM may read (the
+//depth buffer's 16 KiBs to the most rows any frame buffer drew with it). Memory as the same lists' and stores'
+//without the thread, the depth moves on and off.
+static auto gpuThreadR24() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Second = 0x0894'1000;
+  auto build = [&](Memory& memory) {
+    ThreadedList tall{memory};
+    tall.prepare(0x3'0000, 3, 192);  //(its depth's rows 128 on in the depth buffer's second 16 KiB)
+    tall.put(GE::DepthTestEnable, 1), tall.put(GE::DepthTest, 1);  //(always, written)
+    tall.sprite({{{0, 0, 0, 0}, {0, 0, 64, 192}}, 0xff10'2030}, 0x2000);
+    tall.end();
+    ThreadedList taker{memory, Second, GPUVertices + 0x100};
+    taker.prepare(0x9'0000, 3, 32);
+    taker.put(GE::DepthTestEnable, 1), taker.put(GE::DepthTest, 7);  //(greater or equal, written)
+    taker.sprite({{{0, 0, 0, 0}, {0, 0, 64, 32}}, 0xff40'5060}, 0x3000);
+    taker.end();
+  };
+  auto change = [&](System& s, u32 z) {  //(rows 140-179 of the depth, through the fourth copy, in order)
+    for(u32 y = 140; y < 180; y++) {
+      for(u32 x = 0; x < 64; x += 2) s.memory.write(4, 0x0460'0000 + 0x1f'0000 + (y * 64 + x) * 2, z | z << 16);
+    }
+  };
+  for(bool moves : depthWays(gpu)) {
+    DepthMovesKept kept{gpu};
+    gpu->backend->depthMoves = moves;
+    System plain, threaded;
+    plain.threadGE(false), threaded.threadGE(true);
+    plain.ge.setRenderer(gpu);
+    build(plain.memory);
+    runList(plain, 0x0894'0000), change(plain, 0x5000), runList(plain, Second), change(plain, 0x6000);
+    plain.ge.settleAll();
+    plain.ge.setRenderer(nullptr);
+    u64 taken = stats(gpu).depthsTaken;
+    threaded.ge.setRenderer(gpu);
+    build(threaded.memory);
+    {
+      HeldBack back{*threaded.geThreading};
+      u64 waits = threaded.geThreading->waits;
+      runList(threaded, 0x0894'0000), change(threaded, 0x5000), runList(threaded, Second), change(threaded, 0x6000);
+      CHECK(threaded.geThreading->waits, waits);
+      CHECK(back.held.load(), true);
+    }
+    threaded.ge.settleAll();
+    threaded.ge.setRenderer(nullptr);
+    CHECK(stats(gpu).depthsTaken > taken, true);  //(the taker took the tall one's depth)
+    u32 apart = vramApart(plain, threaded);
+    if(apart) std::printf("  %s: %u bytes apart\n", way(moves), apart);
+    CHECK(apart, 0u);
+  }
+}
+
+//R19 (DESIGN.md 3.7, the review's round two): a frame buffer drawing over a page of another's (a move source:
+//begin()) first fills the source's bytes beside its pixels from memory where it keeps more than 16 ranges of them
+//(besideFull: all of them, revive()), wherever they lie in the source's rows: here in its rows 14-31, before the
+//drawer's own rows start (it starts at the source's row 32). With the GE on its thread held back, the CPU writes those
+//bytes (columns 48-63, beside a picture 48 wide) after the first list and again after the second: the render GE fills
+//them as they were before the second writes (their versions), inside what the model declares the PRIM may read (the
+//rows of every frame buffer with pages in its own). Memory as the same lists' and stores' without the thread.
+static auto gpuThreadR19() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Source = 0x3'0000, Second = 0x0894'1000;
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x3000; n += 4) memory.write(4, Memory::VRAMBase + Source + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList source{memory};
+    source.prepare(Source, 3), source.put(GE::Scissor2, 47 | 47 << 10);  //(a picture 48 wide in rows of 64)
+    source.sprite({{{0, 0, 0, 0}, {0, 0, 48, 48}}, 0xff10'2030});
+    source.end();
+    ThreadedList drawer{memory, Second, GPUVertices + 0x100};
+    drawer.prepare(Source + 0x2000, 0, 32);  //(5650 over the source's rows 32-47: its third page)
+    drawer.sprite({{{0, 0, 0, 0}, {0, 0, 64, 32}}, 0xff40'5060});
+    drawer.end();
+  };
+  auto beside = [&](System& s, u32 value) {  //(columns 48-63 of rows 14-31: 18 ranges)
+    for(u32 y = 14; y < 32; y++) {
+      for(u32 x = 48; x < 64; x++) s.memory.write(4, Memory::VRAMBase + Source + (y * 64 + x) * 4, value + y * 64 + x);
+    }
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000), beside(plain, 0x5500'0000), runList(plain, Second), beside(plain, 0x6600'0000);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    u64 waits = threaded.geThreading->waits;
+    runList(threaded, 0x0894'0000), beside(threaded, 0x5500'0000), runList(threaded, Second);
+    beside(threaded, 0x6600'0000);
+    CHECK(threaded.geThreading->waits, waits);
+    CHECK(back.held.load(), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  u32 apart = vramApart(plain, threaded);
+  if(apart) std::printf("  %u bytes apart\n", apart);
+  CHECK(apart, 0u);
+}
+
+//Above 1x (DESIGN.md 3.5, the hull rule): at 2x a sprite with edges half a pixel in (its edge pixels' samples
+//differ), finished by the CPU's load of one of them (which waits for the GE on its thread); then two small sprites at
+//its corners, the target's box grown over the first's pixels but nothing drawn there again. A load of the same pixel
+//finishes again, the box read back at 2x, which may take another of its samples: with the thread held back it waits
+//(the target's hull since its last finish reaches the pixel, drawn since memory's write of it), and reads what the
+//machine without the thread reads.
+static auto gpuThreadAbove1x() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Second = 0x0894'1000, Pixel = Memory::VRAMBase + 0x3'0000 + (4 * 64 + 8) * 4;  //(row 4, column 8)
+  gpu->resolution(2);
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x3000; n += 4) memory.write(4, Memory::VRAMBase + 0x3'0000 + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList first{memory};
+    first.prepare(0x3'0000, 3), first.sprite({{{0, 0, 8.5f, 4.5f}, {0, 0, 23.5f, 11.5f}}, 0xff10'2030}), first.end();
+    ThreadedList second{memory, Second, GPUVertices + 0x100};
+    second.prepare(0x3'0000, 3);
+    second.sprite({{{0, 0, 0, 0}, {0, 0, 4, 2}}, 0xff40'5060});
+    second.sprite({{{0, 0, 28, 14}, {0, 0, 32, 16}}, 0xff70'8090});
+    second.end();
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  u32 expected[2] = {}, read[2] = {};
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000), expected[0] = plain.memory.read(4, Pixel);
+  runList(plain, Second), expected[1] = plain.memory.read(4, Pixel);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    CHECK(back.waited([&] { read[0] = threaded.memory.read(4, Pixel); }), true);
+    runList(threaded, Second);
+    CHECK(back.waited([&] { read[1] = threaded.memory.read(4, Pixel); }), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  gpu->resolution(1);
+  CHECK(read[0], expected[0]), CHECK(read[1], expected[1]);
+  if(expected[0] != expected[1]) std::printf("  (the second finish took another sample: %08x, then %08x)\n",
+                                             expected[0], expected[1]);
+  u32 apart = vramApart(plain, threaded);
+  if(apart) std::printf("  %u bytes apart\n", apart);
+  CHECK(apart, 0u);
+}
+
+//R23 (DESIGN.md 3.5, the review's round four): a frame buffer's depth drawn over two 16 KiB and put into memory (a
+//texture through the depth views); a source drawn over the second 16 KiB's bytes, edges half a pixel in; the frame
+//buffer drawing again with its depth in the first 16 KiB, its rows in the second filled first (the source's pixels
+//moved into them, or with the moves off memory's as it is); the source finished by the CPU's load of one of its
+//pixels; and the depth put into memory again. The second put changes bytes the colour rule has clean again, in a
+//16 KiB whose newest GPU depth write was put back already: above 1x a moved pixel is the move's sample and the finish
+//may take another, and with the moves off the depth filled is the one before the source's, at 1x too (at 1x with the
+//moves the second put changes nothing: a moved pixel is the bytes the finish put there). With the GE on its thread
+//held back, a load of the pixel after the second put waits for the thread where it may change, and reads what the
+//machine without the thread reads. At 1x and 2x, the depth moves on and off.
+static auto gpuThreadR23() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Depth = 0x1f'0000, Source = Depth + 0x4000, Second = 0x0894'1000;
+  constexpr u32 Pixel = Memory::VRAMBase + Source + (10 * 64 + 12) * 4;  //(the source's row 10, column 12)
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x8000; n += 4) memory.write(4, Memory::VRAMBase + Depth + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList first{memory};
+    first.prepare(0x3'0000, 3, 200);  //(its depth's rows 128-199 in the depth buffer's second 16 KiB)
+    first.put(GE::DepthTestEnable, 1), first.put(GE::DepthTest, 1);  //(always, written)
+    first.sprite({{{0, 0, 0, 0}, {0, 0, 64, 200}}, 0xff10'2030}, 0x1000);
+    first.put(GE::DepthTestEnable, 0), first.prepare(0x7'0000, 3);
+    first.texture(0x0460'0000 + Depth, 64, 256, 64, 0);  //(the depth through the fourth copy: put into memory first)
+    first.sprite({{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+    first.put(GE::TextureMappingEnable, 0), first.prepare(Source, 3);
+    first.sprite({{{0, 0, 4.5f, 2.5f}, {0, 0, 40.5f, 30.5f}}, 0xff40'5060});
+    first.prepare(0x3'0000, 3, 24);
+    first.put(GE::DepthTestEnable, 1), first.put(GE::DepthTest, 7);  //(greater or equal, written)
+    first.sprite({{{0, 0, 0, 0}, {0, 0, 64, 24}}, 0xff70'8090}, 0x2000);
+    first.end();
+    ThreadedList second{memory, Second, GPUVertices + 0x200};
+    second.prepare(0x8'0000, 3), second.texture(0x0460'0000 + Depth, 64, 256, 64, 0);
+    second.sprite({{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+    second.end();
+  };
+  for(u32 scale : {1u, 2u}) {
+    for(bool moves : depthWays(gpu)) {
+      DepthMovesKept kept{gpu};
+      gpu->backend->depthMoves = moves;
+      gpu->resolution(scale);
+      System plain, threaded;
+      plain.threadGE(false), threaded.threadGE(true);
+      u32 expected[2] = {}, read[2] = {};
+      plain.ge.setRenderer(gpu);
+      build(plain.memory);
+      u64 put = stats(gpu).depthsPut;
+      runList(plain, 0x0894'0000), expected[0] = plain.memory.read(4, Pixel);
+      runList(plain, Second), expected[1] = plain.memory.read(4, Pixel);
+      CHECK(stats(gpu).depthsPut - put, 2u);
+      plain.ge.settleAll();
+      plain.ge.setRenderer(nullptr);
+      threaded.ge.setRenderer(gpu);
+      build(threaded.memory);
+      {
+        HeldBack back{*threaded.geThreading};
+        runList(threaded, 0x0894'0000);
+        CHECK(back.waited([&] { read[0] = threaded.memory.read(4, Pixel); }), true);
+        runList(threaded, Second);
+        CHECK(back.waited([&] { read[1] = threaded.memory.read(4, Pixel); }), scale > 1 || !moves);
+      }
+      threaded.ge.settleAll();
+      threaded.ge.setRenderer(nullptr);
+      CHECK(read[0], expected[0]), CHECK(read[1], expected[1]);
+      if(expected[0] != expected[1]) {
+        std::printf("  %ux, %s: the second put changed the pixel (%08x, then %08x)\n", scale, way(moves), expected[0],
+                    expected[1]);
+      }
+      u32 apart = vramApart(plain, threaded);
+      if(apart) std::printf("  %ux, %s: %u bytes apart\n", scale, way(moves), apart);
+      CHECK(apart, 0u);
+    }
+  }
+  gpu->resolution(1);
+}
 
 //The depth a frame buffer of format has on the GPU (GPU::depthOf()), its depth buffer at depthBuffer, 512 wide, against
 //the software renderer's memory there (in the order the format keeps it in: memory.hpp): the depths apart, the first
@@ -3223,7 +4010,7 @@ static auto depthOrders(GPU* gpu) -> void {
     gpu->resolution(scale);
     gpu->backend->depthMoves = moves, gpu->backend->depthAlone = alone || forced;
     gpu->backend->depthCopyAspects = 0;
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     u64 copies = gpu->backend->depthCopies;
     const char* how = forced ? ", the image copy forced" : "";
     System software, hardware;
@@ -3267,9 +4054,9 @@ static auto depthOrders(GPU* gpu) -> void {
     CHECK(at(Second, 100, 3), 700u), CHECK(at(Second, 300, 3), picture(0, 300, 3));
     //(the 5551 frame buffer's pixel (20, 4) reads the 8888 one's (260, 4), 300; its (128, 4) the 8888's (64, 4), 900)
     CHECK(at(0x3'0000, 20, 4) & 0x7fff, 0x7fffu), CHECK(at(0x3'0000, 128, 4) & 0x7fff, 0u);
-    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, moves ? 0u : 1u);
-    CHECK(gpu->statistics.depthsMoved > before.depthsMoved, moves);
-    CHECK(gpu->statistics.depthsPut - before.depthsPut, 1u);  //(the texture's, not the depth taken across the formats)
+    CHECK(stats(gpu).depthFinishes - before.depthFinishes, moves ? 0u : 1u);
+    CHECK(stats(gpu).depthsMoved > before.depthsMoved, moves);
+    CHECK(stats(gpu).depthsPut - before.depthsPut, 1u);  //(the texture's, not the depth taken across the formats)
     for(System* s : {&software, &hardware}) frame(*s, 1);
     bytes = apart(software, hardware);
     if(bytes) {
@@ -3278,7 +4065,7 @@ static auto depthOrders(GPU* gpu) -> void {
     }
     CHECK(bytes, 0u);
     CHECK(wrong(1, 0), 0u);
-    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, moves ? 0u : 2u);
+    CHECK(stats(gpu).depthFinishes - before.depthFinishes, moves ? 0u : 2u);
     if(gpu->backend->depthAlone) {  //(the runs copied image to image, of the depth's aspect alone: Vulkan's 2)
       CHECK(gpu->backend->depthCopies > copies, true);
       CHECK(gpu->backend->depthCopyAspects, 2u);
@@ -3377,7 +4164,7 @@ static auto depthCurrent(GPU* gpu) -> void {
   auto run = [&](u32 scale, bool moves, const char* what, std::pair<u32, bool> off,
                  const std::function<void (System&)>& steps) {
     gpu->backend->depthMoves = moves;
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
     for(System* s : {&software, &hardware}) {
@@ -3398,8 +4185,8 @@ static auto depthCurrent(GPU* gpu) -> void {
     if(exact) depths = depthsApart(gpu, software, screen, 1, Depth);
     if(exact) bytes = apartBut(software, hardware, Depth, Depth + 512 * Rows * 2);
     else software.ge.settleAll(), hardware.ge.settleAll();
-    u64 finished = gpu->statistics.depthFinishes - before.depthFinishes;
-    u64 moved = gpu->statistics.depthsMoved - before.depthsMoved;
+    u64 finished = stats(gpu).depthFinishes - before.depthFinishes;
+    u64 moved = stats(gpu).depthsMoved - before.depthsMoved;
     bool none = moves && !screen;  //(no finish: a finish either way where the screen's own pixels are the depth's)
     bool counted = moves ? (finished == 0) == none : finished == off.first;
     if(bytes || depths || !counted || (moved > 0) != none) {
@@ -3533,14 +4320,14 @@ static auto depthMoves(GPU* gpu) -> void {
       if(!scaleTaken(gpu, scale)) continue;
       gpu->resolution(scale);
       gpu->backend->depthMoves = moves;
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       System hardware;
       hardware.ge.setRenderer(gpu);
       machine(hardware, screen, format, place, shape);
       u32 depths = depthsApart(gpu, software, 0, screen, Depth);
-      u64 finished = gpu->statistics.depthFinishes - before.depthFinishes;
-      u64 moved = gpu->statistics.depthsMoved - before.depthsMoved;
-      u64 covered = gpu->statistics.depthsCovered - before.depthsCovered;
+      u64 finished = stats(gpu).depthFinishes - before.depthFinishes;
+      u64 moved = stats(gpu).depthsMoved - before.depthsMoved;
+      u64 covered = stats(gpu).depthsCovered - before.depthsCovered;
       u32 bytes = vramApart(software, hardware);
       bool wrong = (finished == 0) != moves || (moved > 0) != moves || (covered > 0) != (moves && covers);
       if(bytes || depths || wrong) {
@@ -3658,7 +4445,7 @@ static auto stencilAlpha(GPU* gpu) -> void {
   for(u32 format : {3u, 2u, 1u}) {
     for(u32 scale : {1u, 2u}) {
       gpu->resolution(scale);
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       System software, hardware;
       hardware.ge.setRenderer(gpu);
       for(System* s : {&software, &hardware}) {
@@ -3732,8 +4519,8 @@ static auto stencilAlpha(GPU* gpu) -> void {
         CHECK(blended(8, 8), 0u), CHECK(blended(40, 8), 0xc0u), CHECK(blended(40, 44), 0x3fu);
         CHECK(blended(8, 44), 0u);
       }
-      CHECK(gpu->statistics.alphas - before.alphas, 2u);
-      if(gpu->fast && gpu->backend->transforms) CHECK(gpu->statistics.meshes > before.meshes, true);
+      CHECK(stats(gpu).alphas - before.alphas, 2u);
+      if(gpu->fast && gpu->backend->transforms) CHECK(stats(gpu).meshes > before.meshes, true);
       hardware.ge.setRenderer(nullptr);
     }
   }
@@ -3823,7 +4610,7 @@ static auto stencilAlphaWays(GPU* gpu) -> void {
   for(auto& way : ways) {
     for(u32 scale : {1u, 2u}) {
       gpu->resolution(scale);
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       bool dualSource = gpu->backend->dualSource;
       if(way.single) gpu->backend->dualSource = false;
       System software, hardware;
@@ -3849,7 +4636,7 @@ static auto stencilAlphaWays(GPU* gpu) -> void {
       CHECK(bytes, 0u);
       bool shaded = gpu->backend->reads && gpu->backend->readsBlending;
       bool left = way.logic ? gpu->backend->logicOps && !gpu->backend->reads : !way.single || !shaded;
-      CHECK(gpu->statistics.alphas > before.alphas, left);
+      CHECK(stats(gpu).alphas > before.alphas, left);
       hardware.ge.setRenderer(nullptr);
     }
   }
@@ -3943,7 +4730,7 @@ static auto stencilAlphaPaths(GPU* gpu) -> void {
   for(auto& path : paths) {
     for(u32 scale : {1u, 2u}) {
       gpu->resolution(scale);
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       System software, hardware;
       hardware.ge.setRenderer(gpu);
       for(System* s : {&software, &hardware}) {
@@ -3957,9 +4744,9 @@ static auto stencilAlphaPaths(GPU* gpu) -> void {
       u32 bytes = apart(software, hardware);
       if(bytes) std::printf("  %s, %s %ux: %u bytes apart\n", path.name, gpu->fast ? "fast" : "accurate", scale, bytes);
       CHECK(bytes, 0u);
-      CHECK(gpu->statistics.alphas > before.alphas, true);
+      CHECK(stats(gpu).alphas > before.alphas, true);
       bool screens = gpu->fast && gpu->screenMeshes && gpu->backend->transforms && !gpu->backend->reads;
-      if(path.screened && screens) CHECK(gpu->statistics.screened > before.screened, true);
+      if(path.screened && screens) CHECK(stats(gpu).screened > before.screened, true);
       hardware.ge.setRenderer(nullptr);
     }
   }
@@ -3981,7 +4768,7 @@ static auto depthAsTexture(GPU* gpu) -> void {
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
-    u64 put = gpu->statistics.depthsPut;
+    u64 put = stats(gpu).depthsPut;
     for(System* s : {&software, &hardware}) {
       auto& c = s->ge.commands;
       prepare(*s, 0, 3);
@@ -3995,13 +4782,13 @@ static auto depthAsTexture(GPU* gpu) -> void {
       sprite(*s, {{{0, 0, 0, 0}, {64, 24, 64, 24}}, 0xffff'ffff});
       texture(*s, 0x0420'0000 + 0x1f'0000, 64, 64, 64, 0);  //(the second)
       sprite(*s, {{{0, 24, 0, 24}, {64, 48, 64, 48}}, 0xffff'ffff});
-      if(s == &hardware) CHECK(gpu->statistics.depthsPut - put, 1u);
+      if(s == &hardware) CHECK(stats(gpu).depthsPut - put, 1u);
       c[GE::TextureMappingEnable] = 0, c[GE::FrameBufferPointer] = 0, c[GE::DepthTestEnable] = 1;
       sprite(*s, {{{0, 0, 30, 20}, {0, 0, 60, 44}}, 0xff10'2030}, 0x0101);
       c[GE::DepthTestEnable] = 0, c[GE::FrameBufferPointer] = 0x2'0000;
       texture(*s, 0x0460'0000 + 0x1f'0000, 64, 64, 64, 0);
       sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
-      if(s == &hardware) CHECK(gpu->statistics.depthsPut - put, 2u);
+      if(s == &hardware) CHECK(stats(gpu).depthsPut - put, 2u);
       c[GE::TextureMappingEnable] = 0;
     }
     u32 bytes = apart(software, hardware);
@@ -4022,7 +4809,7 @@ static auto depthAsTexture(GPU* gpu) -> void {
 static auto depthChanges(GPU* gpu) -> void {
   System software, hardware;
   hardware.ge.setRenderer(gpu);
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   for(System* s : {&software, &hardware}) {
     auto& c = s->ge.commands;
     auto depths = [&](u32 rows) {  //(through the fourth copy, in order: those rows 0, the rest 40000)
@@ -4053,8 +4840,8 @@ static auto depthChanges(GPU* gpu) -> void {
   CHECK(bytes, 0u);
   auto red = [&](u32 x, u32 y) { return u32(software.memory.vram[0x1'0000 + (y * 64 + x) * 4]); };
   CHECK(red(8, 4), 0xffu), CHECK(red(8, 12), 0xffu), CHECK(red(8, 30), 0u);  //(in front of the second change only)
-  CHECK(gpu->statistics.depthsTaken - before.depthsTaken, 1u);
-  CHECK(gpu->statistics.depthsPut - before.depthsPut, 1u);
+  CHECK(stats(gpu).depthsTaken - before.depthsTaken, 1u);
+  CHECK(stats(gpu).depthsPut - before.depthsPut, 1u);
   hardware.ge.setRenderer(nullptr);
 }
 static auto gpuDepthAsTexture() -> void {
@@ -4094,13 +4881,13 @@ static auto gpuBeside() -> void {
     prepare(*s, 0, 3);
     s->ge.commands[GE::Scissor2] = 47 | 47 << 10;  //(a picture 48 pixels wide in rows of 64)
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 48, 48}}, 0xff00'00ff});
-    finishes = gpu->statistics.finishes;
+    finishes = stats(gpu).finishes;
     for(u32 n = 0; n < 16; n++) s->memory.write(4, list + n * 4, 0x1234'5600 + n);
     for(u32 n = 0; n < 16; n++) read += s->memory.read(4, list + n * 4) == 0x1234'5600 + n;
     sprite(*s, {{{0, 0, 4, 4}, {0, 0, 20, 20}}, 0xff00'ff00});
   }
   CHECK(read, 32u);
-  CHECK(gpu->statistics.finishes, finishes);  //(the hardware machine's writes, reads and sprite: no wait)
+  CHECK(stats(gpu).finishes, finishes);  //(the hardware machine's writes, reads and sprite: no wait)
   for(System* s : {&software, &hardware}) {
     s->ge.commands[GE::Scissor2] = 63 | 47 << 10;
     sprite(*s, {{{0, 0, 40, 8}, {0, 0, 56, 12}}, 0xffff'0000});
@@ -4109,15 +4896,15 @@ static auto gpuBeside() -> void {
   CHECK(software.memory.read(4, list + 12 * 4), 0x1234'560cu);  //(column 60: the list's, not drawn over)
   //a list written a row at a time, in more pieces than the 16 ranges kept (Brave Story's): those filled from memory
   //first, as one rectangle (they reach none of its pixels), nothing finished; then a sprite over them
-  finishes = gpu->statistics.finishes;
-  u64 uploads = gpu->statistics.uploads;
+  finishes = stats(gpu).finishes;
+  u64 uploads = stats(gpu).uploads;
   for(System* s : {&software, &hardware}) {
     sprite(*s, {{{0, 0, 0, 20}, {0, 0, 32, 44}}, 0xff20'4060});
     for(u32 n = 0; n < 24; n++) s->memory.write(4, 0x0400'0000 + ((20 + n) * 64 + 60) * 4, 0x5566'7700 + n);
   }
-  CHECK(gpu->statistics.uploads - uploads <= 2, true);
+  CHECK(stats(gpu).uploads - uploads <= 2, true);
   for(System* s : {&software, &hardware}) sprite(*s, {{{0, 0, 58, 16}, {0, 0, 64, 40}}, 0xff80'a0c0});
-  CHECK(gpu->statistics.finishes, finishes);
+  CHECK(stats(gpu).finishes, finishes);
   CHECK(apart(software, hardware), 0u);
   CHECK(software.memory.read(4, 0x0400'0000 + (43 * 64 + 60) * 4), 0x5566'7717u);
   hardware.ge.setRenderer(nullptr);
@@ -4131,19 +4918,19 @@ static auto gpuCheck() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   std::string error;
-  auto before = gpu->statistics;
+  auto before = stats(gpu);
   bool passed = gpu->check(error);
   if(!passed) std::printf("  %s\n", error.c_str());
   CHECK(passed, true);
   CHECK(gpu->ready(), true);
-  if(gpu->backend->reads) CHECK(gpu->statistics.readingDraws - before.readingDraws >= 128, true);
+  if(gpu->backend->reads) CHECK(stats(gpu).readingDraws - before.readingDraws >= 128, true);
   bool reads = gpu->backend->reads, readsBlending = gpu->backend->readsBlending;
   gpu->backend->reads = gpu->backend->readsBlending = false;
-  before = gpu->statistics, error.clear();
+  before = stats(gpu), error.clear();
   passed = gpu->check(error);
   if(!passed) std::printf("  nothing read: %s\n", error.c_str());
   CHECK(passed, true);
-  CHECK(gpu->statistics.readingDraws, before.readingDraws);
+  CHECK(stats(gpu).readingDraws, before.readingDraws);
   gpu->backend->reads = reads, gpu->backend->readsBlending = readsBlending;
 }
 
@@ -4310,7 +5097,7 @@ static auto gpuBlending() -> void {
     for(u32 format : {3u, 0u, 1u, 2u}) {
       System software, hardware;
       hardware.ge.setRenderer(gpu);
-      auto before = gpu->statistics;
+      auto before = stats(gpu);
       auto base = randomSprites(random, 12, false);
       struct Round { u32 mode, fixedA, fixedB, dither, logic, mask, alphaMask; std::vector<Corners> sprites; };
       std::vector<Round> rounds;
@@ -4351,8 +5138,8 @@ static auto gpuBlending() -> void {
       u32 bytes = apart(software, hardware);
       if(bytes) std::printf("  %ux, format %u: %u bytes apart\n", scale, format, bytes);
       CHECK(bytes, 0u);
-      CHECK(gpu->statistics.readingDraws > before.readingDraws, true);
-      if(!gpu->backend->readsInOrder) CHECK(gpu->statistics.splits > before.splits, true);
+      CHECK(stats(gpu).readingDraws > before.readingDraws, true);
+      if(!gpu->backend->readsInOrder) CHECK(stats(gpu).splits > before.splits, true);
       hardware.ge.setRenderer(nullptr);
     }
   }
@@ -4399,7 +5186,7 @@ static auto gpuBlendingApart() -> void {
   {
     System software, hardware;
     hardware.ge.setRenderer(gpu);
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     auto base = randomSprites(random, 12, false);
     std::vector<Round> rounds;
     for(u32 n = 0; n < 24; n++) {
@@ -4413,7 +5200,7 @@ static auto gpuBlendingApart() -> void {
                         randomSprites(random, 8, false)});
     }
     for(System* s : {&software, &hardware}) draw(*s, 3, base, rounds);
-    CHECK(gpu->statistics.primitives > before.primitives, true);
+    CHECK(stats(gpu).primitives > before.primitives, true);
     software.ge.settleAll(), hardware.ge.settleAll();
     u64 channels = 0, same = 0, far = 0;
     for(u32 n = 0; n < 64 * 48 * 4; n++) {
@@ -4425,8 +5212,8 @@ static auto gpuBlendingApart() -> void {
                 (unsigned long long)channels, (unsigned long long)same, (unsigned long long)far);
     CHECK(far * 1000 <= channels * 3, true);
     CHECK(same * 20 >= channels * 17, true);
-    CHECK(gpu->statistics.readingDraws, before.readingDraws);
-    CHECK(gpu->statistics.splits, before.splits);
+    CHECK(stats(gpu).readingDraws, before.readingDraws);
+    CHECK(stats(gpu).splits, before.splits);
     hardware.ge.setRenderer(nullptr);
   }
   //and dithered, by the source's alpha or a fixed factor, adding or subtracting: the dither goes in the source term
@@ -4438,7 +5225,7 @@ static auto gpuBlendingApart() -> void {
     std::mt19937 dithering{20261083};  //(its own, so the rounds after are as they were)
     System software, hardware;
     hardware.ge.setRenderer(gpu);
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     auto base = randomSprites(dithering, 12, false);
     std::vector<Round> rounds;
     for(u32 n = 0; n < 24; n++) {
@@ -4459,7 +5246,7 @@ static auto gpuBlendingApart() -> void {
                 (unsigned long long)channels, (unsigned long long)same, (unsigned long long)far);
     CHECK(far * 100 <= channels, true);
     CHECK(same * 4 >= channels * 3, true);
-    CHECK(gpu->statistics.readingDraws, before.readingDraws);
+    CHECK(stats(gpu).readingDraws, before.readingDraws);
     hardware.ge.setRenderer(nullptr);
   }
   if(!gpu->backend->reads) {
@@ -4473,7 +5260,7 @@ static auto gpuBlendingApart() -> void {
   for(u32 format : {3u, 0u, 1u, 2u}) {
     System software, hardware;
     hardware.ge.setRenderer(gpu);
-    auto before = gpu->statistics;
+    auto before = stats(gpu);
     auto base = randomSprites(random, 12, false);
     std::vector<Round> rounds;
     for(u32 n = 0; n < 24; n++) {
@@ -4490,16 +5277,16 @@ static auto gpuBlendingApart() -> void {
                         u32(random()) & 0xff'ffff, u32(random()) % 2, logic, mask, randomSprites(random, 8, false)});
     }
     for(System* s : {&software, &hardware}) draw(*s, format, base, rounds);
-    CHECK(gpu->statistics.readingDraws > before.readingDraws, true);
-    CHECK(gpu->statistics.splits > before.splits, true);
+    CHECK(stats(gpu).readingDraws > before.readingDraws, true);
+    CHECK(stats(gpu).splits > before.splits, true);
     if(format != 3) {
-      auto between = gpu->statistics;
+      auto between = stats(gpu);
       for(System* s : {&software, &hardware}) {
         s->ge.commands[GE::AlphaBlendEnable] = 1, s->ge.commands[GE::BlendMode] = 2 | 3 << 4;
         sprite(*s, {{{0, 0, 4, 4}, {0, 0, 36, 28}}, 0x80'40c0ff});
         s->ge.commands[GE::AlphaBlendEnable] = 0;
       }
-      CHECK(gpu->statistics.readingDraws - between.readingDraws, u64(1));
+      CHECK(stats(gpu).readingDraws - between.readingDraws, u64(1));
     }
     u32 bytes = apart(software, hardware);
     if(bytes) std::printf("  format %u: %u bytes apart\n", format, bytes);
@@ -4532,12 +5319,12 @@ static auto gpuTallTexture() -> void {
     prepare(*s, 0x2'0000, 3);
     texture(*s, Memory::VRAMBase, 64, 128, 64);
     s->ge.commands[GE::TextureFilter] = 0x101;
-    if(s == &hardware) before = gpu->statistics;
+    if(s == &hardware) before = stats(gpu);
     sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0});  //(1:1: row 47's v 47.5, rows 47 and 48, 48 at weight 0)
     sprite(*s, {{{2, 1, 0, 0}, {34, 47, 20, 30}}, 0});
   }
-  CHECK(gpu->statistics.finishes, before.finishes);
-  CHECK(gpu->statistics.copies > before.copies, true);
+  CHECK(stats(gpu).finishes, before.finishes);
+  CHECK(stats(gpu).copies > before.copies, true);
   CHECK(apart(software, hardware), 0u);
 
   //late: the frame buffer at 0x2'0000 shown, its shot taken; there once the run is done (finished here)
@@ -4562,16 +5349,16 @@ static auto gpuTallTexture() -> void {
   CHECK(gpu->shoot(0x2'0000, 64, 3, 64, 48), false);  //(the pages memory's now: memory has the picture)
 
   //a short list's end: nothing handed over yet; a long one's, or a finish, hands it over
-  auto submits = gpu->statistics.submits;
+  auto submits = stats(gpu).submits;
   sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 4, 4}}, 0xff12'3456});
-  gpu->submit(hardware.ge);
-  CHECK(gpu->statistics.submits, submits);
+  gpu->submit(hardware.ge.drawer());  //(the GE drawing: the render GE with the GE on its thread)
+  CHECK(stats(gpu).submits, submits);
   for(u32 n = 0; n < 40; n++) {  //(each scissor its own draw)
     hardware.ge.commands[GE::Scissor2] = (24 + n) | 47 << 10;
     sprite(hardware, {{{0, 0, 8, 8}, {0, 0, f32(12 + n % 7), 12}}, 0xff00'0000 | n << 8});
   }
-  gpu->submit(hardware.ge);
-  CHECK(gpu->statistics.submits, submits + 1);
+  gpu->submit(hardware.ge.drawer());
+  CHECK(stats(gpu).submits, submits + 1);
   hardware.ge.settleAll();
   CHECK(hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (3 * 64 + 3) * 4) & 0xff'ffff, 0x12'3456u);
   hardware.ge.setRenderer(nullptr);
@@ -4704,13 +5491,13 @@ static auto gpuGlowParts() -> void {
         System& s = n == 0 ? held : n == 1 ? parts : whole;
         gpu->backend->palettes = n == 0;
         s.ge.setRenderer(gpu);
-        auto before = gpu->statistics;
+        auto before = stats(gpu);
         glow(s, drawn, tiles, palettes);
-        finishes[n] = gpu->statistics.finishes - before.finishes;
-        textures[n] = gpu->statistics.textures - before.textures;
-        palettesMade[n] = gpu->statistics.palettes - before.palettes;
+        finishes[n] = stats(gpu).finishes - before.finishes;
+        textures[n] = stats(gpu).textures - before.textures;
+        palettesMade[n] = stats(gpu).palettes - before.palettes;
         texels[n] = 0, partsKept[n] = 0, rowsKept[n] = 0;
-        for(auto& [key, entry] : s.ge.textures.entries) {
+        for(auto& [key, entry] : s.ge.drawer().textures.entries) {  //(the drawing GE's: ge/thread.hpp)
           texels[n] += entry->texels.size();
           partsKept[n] += entry->part, rowsKept[n] += !entry->part && entry->rows == 48;
         }
@@ -4913,6 +5700,27 @@ auto gpuTests() -> Tests {
     {"gpu blending without rasterization order: the GPU's own, the rest read", gpuBlendingApart},
     {"gpu lost: the software renderer draws instead", gpuLost},
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
+    {"gpu with the GE on its thread: the CPU's stores after a list don't wait, the texture drawn as it was", gpuThreadVersions},
+    {"gpu with the GE on its thread: a list copied into VRAM over drawn pixels and called there, nothing waited for",
+     gpuThreadTransferredList},
+    {"gpu with the GE on its thread, caught up: a write whose own checks finish first, kept under them", gpuThreadOwnFinish},
+    {"gpu with the GE on its thread: R22, a depth fill revives a source's dead bytes on a page no rectangle reaches",
+     gpuThreadR22},
+    {"gpu with the GE on its thread: R14, a waited load through the depth views leaves the GPU's pixels dirty",
+     gpuThreadR14},
+    {"gpu with the GE on its thread: a copy out of clean bytes through the depth views, its check made, the GPU "
+     "finished", gpuThreadCleanCheck},
+    {"gpu with the GE on its thread: R15, halfword and byte stores into drawn pixels, each replayed alone",
+     gpuThreadR15},
+    {"gpu with the GE on its thread: R16, a depth of the other order taken through memory: a put point",
+     gpuThreadR16},
+    {"gpu with the GE on its thread: R24, a taller drawer's changed depth rows filled as they were",
+     gpuThreadR24},
+    {"gpu with the GE on its thread: R19, a move source's bytes beside its pixels, before the drawer's rows",
+     gpuThreadR19},
+    {"gpu with the GE on its thread: above 1x, a finish's box grown over pixels not drawn again: the hull rule",
+     gpuThreadAbove1x},
+    {"gpu with the GE on its thread: R23, a depth put back over pixels a finish put there since", gpuThreadR23},
     {"gpu a frame buffer near VRAM's end sampled as a texture declared past it, nothing finished",
      gpuTextureAtVRAMsEnd},
     {"gpu a frame buffer it drew sampled as palette indices: looked up on the GPU, nothing finished", gpuPalettes},
