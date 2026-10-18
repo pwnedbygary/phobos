@@ -3,10 +3,12 @@
 //ID and its own status (for its priority) first, 175,000 times a frame (half a million calls) till a count another
 //thread or a handler keeps moves on; the Twisted Metal, Disaster Report 3 and Armored Core intro movies ask the
 //movie's ring how full it is (and signal a semaphore already at its most) in 90,000 to 370,000 calls a frame till the
-//reader thread feeds it; Need for Speed: Shift and Resistance ask the GE how it's doing (sceGeDrawSync(1)) thousands
-//of times a frame till it's done drawing. A system call costs the clock one cycle, so a turn of such a loop is a few
-//dozen cycles of the PSP's time, and nothing else happens till the CPU's go ends at the next thing due (Kernel::run():
-//only system functions bring that end sooner, and these, quiet or calm, don't).
+//reader thread feeds it; Resistance asks the GE whether its list is done (sceGeListSync(id, 1)), with the PSP's GE
+//timing some 285,000 times a frame, till it is. (Need for Speed: Shift asks sceGeDrawSync(1) some 45,000 times a
+//frame, but each turn also takes a semaphore that's free, a wait that succeeds at once and so isn't calm: its loop is
+//never one that can be skipped.) A system call costs the clock one cycle, so a turn of such a loop is a few dozen
+//cycles of the PSP's time, and nothing else happens till the CPU's go ends at the next thing due (Kernel::run(): only
+//system functions bring that end sooner, and these, quiet or calm, don't).
 //
 //So once a loop has come round the same way a few times, the kernel proves that its next turn leaves everything a
 //later turn sees as it was, and jumps ahead by whole turns to just before the go's end, the last turns running as

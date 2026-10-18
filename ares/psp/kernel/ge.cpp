@@ -476,7 +476,8 @@ auto Kernel::sceGeListSync() -> void {
   result(geListLook(index, arg(1)));
 }
 
-//What sceGeListSync says of list index in a mode other than 0 (which waits): its state, or the mode refused.
+//What sceGeListSync says of list index in a mode other than 0 (which waits): its state, or the mode refused. It must
+//never read the clock: a spin's skipped turns all get the answer it gives as the skip is made (spins.cpp).
 auto Kernel::geListLook(u32 index, u32 mode) const -> u32 {
   if(mode != 1) return ErrorInvalidMode;
   auto& list = geLists[index];
@@ -506,7 +507,8 @@ auto Kernel::sceGeDrawSync() -> void {
   result(geDrawLook(arg(0)));
 }
 
-//What sceGeDrawSync says in a mode other than 0 (which waits): how the GE is doing, or the mode refused.
+//What sceGeDrawSync says in a mode other than 0 (which waits): how the GE is doing, or the mode refused. Never reading
+//the clock, as geListLook().
 auto Kernel::geDrawLook(u32 mode) const -> u32 {
   if(mode != 1) return ErrorInvalidMode;
   for(u32 index : geQueue) {

@@ -2385,7 +2385,8 @@ static auto geQuietFunctions() -> void {
   }
   //Each quiet function is dispatched as one, and makes nothing due sooner: with a thread delayed, an alarm set, a
   //list's FINISH to come and the controller sampled on a cycle, the next thing's time is where it was after each. So
-  //are the GE's looks, calm each time: sceGeDrawSync and sceGeListSync in mode 1, or a mode or list refused.
+  //are the GE's looks, calm each time: sceGeDrawSync and sceGeListSync in mode 1, or a mode refused, or a list (one
+  //out of range in any mode, 0 too, or a free list's ID in mode 1).
   KernelMachine m;
   auto& memory = m.system.memory;
   s32 uid = m.kernel.createThread("delayed", 0x0880'1000, 0x10, 0x1000, 0, 0);
@@ -2411,7 +2412,8 @@ static auto geQuietFunctions() -> void {
                     Call{"sceKernelSysClock2USecWide", {123'456'789, 0, Out + 0x128, Out + 0x12c}},
                     Call{"sceMpegRingbufferAvailableSize", {Out + 0x140}}, Call{"sceGeDrawSync", {1}},
                     Call{"sceGeListSync", {drawing, 1}}, Call{"sceGeDrawSync", {2}},
-                    Call{"sceGeListSync", {drawing, 2}}, Call{"sceGeListSync", {0x7777, 1}}}) {
+                    Call{"sceGeListSync", {drawing, 2}}, Call{"sceGeListSync", {0x7777, 1}},
+                    Call{"sceGeListSync", {0x7777, 0}}, Call{"sceGeListSync", {Kernel::GeListIDs + 63, 1}}}) {
     u32 n = 0;
     for(u32 value : call.arguments) m.system.ipu.r[n < 4 ? 4 + n : 8 + n - 4] = value, n++;
     u64 next = m.kernel.cycles + m.kernel.untilNextEvent();
