@@ -16493,7 +16493,8 @@ a list's GE time from when the GE could start it to its FINISH.
 ### Checks
 
 - `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
-  577 groups, 0 failures.
+  577 groups, 0 failures; with #266's review rounds and master `dd63f4ffb` (parts 103 and 104) merged in, 582 groups,
+  0 failures.
 - "Fast" against master at #269's base (`a8d5640f5`): the bench runners on 27 scenes, Software and Vulkan-fast, 100
   frames from each scene's state: all 54 the same, every frame's VRAM and picture and the RAM after; each state 22
   bytes longer (layout 33's).
