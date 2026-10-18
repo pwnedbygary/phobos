@@ -3338,10 +3338,11 @@ static auto geThreadConflicts() -> void {
 
 //With the GE on its thread, a frame's end (GeThread::frame(), as System::run() hands it over): the thread takes the
 //frame buffer's bytes as it comes to the record, everything handed over before it drawn (frameBytes(): its rows
-//reached as a picture's reads reach them, so the software renderer's sprite is drawn first), as they were there,
-//however the emulation thread has written them since: a store beside the sprite, made at once and kept as a version,
-//and one onto it, which waits for the thread to pass its own record, after the frame's. Held back, the thread is a
-//frame behind; and with two frames handed over, a wait for at most one behind lasts till the thread is let go.
+//reached as a picture's reads reach them, so the software renderer's sprite, waiting in a batch its drawing threads
+//are held from, the list stalled, is drawn first), as they were there, however the emulation thread has written them
+//since: a store beside the sprite, made at once and kept as a version, and one onto it, which waits for the thread to
+//pass its own record, after the frame's. Held back, the thread is a frame behind; and with two frames handed over, a
+//wait for at most one behind lasts till the thread is let go.
 static auto geThreadFrame() -> void {
   auto build = [](Memory& memory) {
     ListWriter list{memory, ListA};
@@ -3376,17 +3377,31 @@ static auto geThreadFrame() -> void {
   plain.memory.write(4, Inside, 0x0506'0708);
   System s;
   s.threadGE(true);
-  s.ge.setThreads(1);
+  s.ge.setThreads(2);  //(the thread drained: the render GE's)
+  s.ge.drawing.shared = 0;  //(handed to the render GE as a run starts: a lone sprite batched, its workers held below)
+  auto holdDrawing = [&](bool hold) {
+    {
+      std::lock_guard lock(s.renderGE.drawing.mutex);
+      s.renderGE.drawing.held = hold;
+    }
+    s.renderGE.drawing.wake.notify_all();
+  };
+  holdDrawing(true);
   build(s.memory);
   std::atomic<bool> held{true};
   std::vector<u8> taken;
   s.geThreading->drain();  //(the thread reads its gate as it takes each record)
   s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  bool pending = false;  //(the sprite still to be drawn as the thread comes to the frame: else nothing to reach first)
   s.geThreading->frameEnd = [&](const GeThread::Frame& frame) {
+    for(auto& batch : s.renderGE.drawing.batches) pending |= GE::unfinished(batch);
     s.geThreading->frameBytes(frame, [&](const u8* vram) { taken.assign(vram, vram + Bytes); });
   };
-  s.ge.list = {}, s.ge.list.address = ListA;
-  CHECK(u32(s.ge.run(1000)), u32(GE::Stop::Finished));
+  //(the list stalled at its FINISH, as a game's may be as a frame ends: its run over, nothing settles the batch)
+  u32 stall = ListA;
+  while(s.memory.read(4, stall) >> 24 != GE::Finish) stall += 4;
+  s.ge.list = {}, s.ge.list.address = ListA, s.ge.list.stall = stall;
+  CHECK(u32(s.ge.run(1000)), u32(GE::Stop::Stalled));
   s.geThreading->frame({1, VRAM, 64, 3, 64, 48});
   CHECK(s.geThreading->framesBehind(), 1u);
   u64 waits = s.geThreading->waits;
@@ -3399,6 +3414,7 @@ static auto geThreadFrame() -> void {
   CHECK(s.geThreading->waits, waits + 1);
   s.geThreading->waitFrames(0);
   CHECK(s.geThreading->framesBehind(), 0u);
+  CHECK(pending, true);
   CHECK(taken == drawn, true);
   auto color = [&](u32 pixel) { return drawn[pixel * 4] | drawn[pixel * 4 + 1] << 8 | drawn[pixel * 4 + 2] << 16; };
   CHECK(color(10 * 64 + 10), 0x40'80c0u);  //(the sprite drew where the second store lands; not the first)
@@ -3416,6 +3432,7 @@ static auto geThreadFrame() -> void {
   s.geThreading->drain();
   s.geThreading->gate = nullptr;
   s.ge.settleAll();
+  holdDrawing(false);
   CHECK(plain.memory.vram == s.memory.vram, true);
 }
 

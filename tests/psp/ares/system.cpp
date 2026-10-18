@@ -1028,9 +1028,9 @@ auto geThreadFrameBound(const fs::path& programs) -> void {
 }
 
 //The GE on its thread stuck (a driver call that never returns, which a test hook stands for: the thread held at its
-//gate): saving a state gives up after two seconds, with no state; so does unloading, which leaves the thread be with
-//the machine under it (PlayStationPortable::wedged()); a load is refused while it's stuck; let go, it's joined
-//(unwedge()) and a game loads and runs again.
+//gate): saving a state gives up after two seconds, with no state, and loading one gives up the same way, refused; so
+//does unloading, which leaves the thread be with the machine under it (PlayStationPortable::wedged()); a load is
+//refused while it's stuck; let go, it's joined (unwedge()) and a game loads and runs again.
 auto geThreadStuck(const fs::path& programs) -> void {
   std::printf("the GE on its thread stuck: saving and unloading give up, loads wait for it\n");
   PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
@@ -1039,26 +1039,44 @@ auto geThreadStuck(const fs::path& programs) -> void {
   Node::System root;
   if(!CHECK(start(root), "the PSP starts with the GE on its thread")) return;
   for(u32 frame = 0; frame < 10; frame++) root->run();
+  auto healthy = root->serialize(true);  //(saved before it's stuck, loaded while it is)
   std::atomic<bool> held{true};
   psp.geThreading->drain();  //(the thread reads its gate as it takes each record)
   psp.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
   auto shown = psp.kernel.showing();
   psp.geThreading->frame({psp.frames + 1, shown.frameBuffer, shown.bufferWidth, shown.pixelFormat, shown.width,
                           shown.height});
-  auto timed = [](const std::function<void()>& what) {
+  //(each call timed on a thread of its own: one still waiting after 5 s would wait for ever, so the thread is let go
+  //for it to end, and the check after it fails, the checks after that too)
+  auto timed = [&](const std::function<void()>& what) {
     auto started = std::chrono::steady_clock::now();
-    what();
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    std::atomic<bool> done{false};
+    std::thread call([&] { what(), done = true; });
+    while(!done && std::chrono::steady_clock::now() - started < std::chrono::seconds(5)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    if(!done) held = false;
+    call.join();
+    return took;
   };
   serializer state;
   double took = timed([&] { state = root->serialize(true); });
   CHECK(state.size() == 0 && took >= 1.9 && took < 4, "no state saved, after " + std::to_string(took) + " s");
+  bool loaded = true;
+  serializer load{healthy.data(), healthy.size()};
+  took = timed([&] { loaded = root->unserialize(load); });
+  CHECK(!loaded && took >= 1.9 && took < 4, "no state loaded, after " + std::to_string(took) + " s");
   took = timed([&] { root->unload(); });
   CHECK(took >= 1.9 && took < 4, "the unload gives up after " + std::to_string(took) + " s");
   CHECK(PlayStationPortable::wedged(), "the thread left be, stuck");
   Node::System again;
-  CHECK(!PlayStationPortable::load(again, "[Sony] PlayStation Portable"), "a load refused while it's stuck");
-  CHECK(!PlayStationPortable::unwedge(50), "still stuck after 50 ms more");
+  bool refused = false;
+  took = timed([&] { refused = !PlayStationPortable::load(again, "[Sony] PlayStation Portable"); });
+  CHECK(refused && took < 4, "a load refused while it's stuck");
+  bool unwedged = true;
+  took = timed([&] { unwedged = PlayStationPortable::unwedge(50); });
+  CHECK(!unwedged && took < 4, "still stuck after 50 ms more");
   held = false;
   CHECK(PlayStationPortable::unwedge(2000) && !PlayStationPortable::wedged(), "let go, it's joined");
   if(CHECK(start(again), "a game loads again")) {
