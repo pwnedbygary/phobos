@@ -65,7 +65,7 @@ docs/psp-core.md, part 112.
   build put the RAM textures and palette 64 bytes off a 128-byte boundary, and a swizzled texture there costs 7% more
   (time-anchors2: 2,307.5 against 2,154.5 µs on a 1 KiB boundary; 256 to 768 past 1.0 to 1.6%), which is tonight's round
   9 shift (swizzled RAM cases 3 to 11% dearer, unswizzled and VRAM within 0.6%); other placements moved RAM reads up to
-  26% either way. The re-runs: every picture the same bit for bit, the timing medians within 0.0 to 1.5%. Lights: point
+  26% either way. The re-runs: every picture the same bit for bit, the timing medians within 0.0 to 2.1%. Lights: point
   and spot lights alike, 11 a light-vertex diffuse, 19 with shine (8 more); directional ones shine for about 1, but a
   lone one costs 21 more when the disabled light registers hold spotlights (round 8's 20.7 was that). CLUT32 fetches as
   8888; the menu's logged tiles take 3.23 ms, leaving 0.25 ms of the game's 3.48 ms list for its 66 sprites (about 1.7

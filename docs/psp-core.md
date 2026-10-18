@@ -17599,7 +17599,7 @@ times the bus's MHz) at 222/111 unless said; 333/166 agrees within a few percent
     place's.
 - **Repeatability (the re-runs).** Every picture the same bit for bit: rounds 2 and 3's 87 against `ge-round3`
   (2026-10-04), round 6's 28 against `ge-round6` (10-11), rounds 6 and 7's 34 against round 8's session (10-18 morning);
-  rounds 4 and 5 have no earlier PSP run here. Round 6's timing tests within 0.01 to 1.5% at the median of both its
+  rounds 4 and 5 have no earlier PSP run here. Round 6's timing tests within 0.01 to 2.1% at the median of its two
   sessions (95th percentile 0.1 to 4.4%) but for the placements above; round 8's within 0.0 to 1.1% (the CPU's own loops
   within 0.6% for cpu-alu, 0.5% cpu-latency, 2.4% cpu-memory), its tails the placements (RAM swizzled strips and
   textures +7 to +10%, Activision Hits' copyright copy +6%) and cpu-syscalls' DelayThread(0) and thread switch +11 to
