@@ -16484,9 +16484,10 @@ line (`geFoldKept()`): written inline there it cost 0.19% in all three, `geTime(
 - the stress mode (a build with `PHOBOS_GE_STRESS_HOOK`; `PHOBOS_GE_STRESS=97`: the GPU finished at every kick's end
   and before every 97th PRIM, the same places with the thread or not; a scene's 101 finishes become 6,224): the 26
   scenes at 1x and 2x and eight at 4x: all the same;
-- the suite: with the thread Off and On, and On fuzzed each of the three ways, 0 failures (601 groups now, with
-  #265's merged in, the library check's two tests and the review's six; the delay fuzzing on the 590 before them); On
-  under ThreadSanitizer with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it: below).
+- the suite: with the thread Off and On, and On fuzzed each of the three ways, 0 failures (604 groups now, with
+  #265's and #266's merged in, the library check's two tests and the review's six; the delay fuzzing on the 590 before
+  them); On under ThreadSanitizer with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it:
+  below).
 
 **The targeted tests** (tests/psp/gpu.cpp and ge.cpp; each on an explicitly threaded machine, G held back by a test gate
 where it would lag, against the same lists and accesses without the thread, both checks on; each fails with its rule
@@ -16529,10 +16530,12 @@ keeps counts of before a FINISH, reads of nothing reported, and the go split.
   over each, with nothing to go through (and the put points are dropped as a prefix: they come in their places'
   order): Gran Turismo 15 s. And an indexed PRIM's vertices were copied from the vertex address up to its most index,
   a byte at a time, so a big buffer's few vertices were copied whole for every PRIM (85% of E in Jeanne d'Arc); now
-  from the least index to the most, in one copy from RAM: Jeanne d'Arc 123 s → 36 s (Off: 30). The tests: the
-  reports taken at 20,000 loads of VRAM go through as many entries with 8,000 software PRIMs behind as with 500
-  (counted, not timed: `GeThread::reportWork`), and a sprite by indices 4000 and 4001 hands G a record no bigger than
-  one by 0 and 1, which G reads as a run from the copy.
+  from the least index to the most, in one copy from RAM: Jeanne d'Arc 123 s → 36 s (Off: 30). The tests: what the
+  model keeps of the software textures in flight is as big with 8,000 software PRIMs behind as with 500 (kept by
+  PRIM, the list every report went through grew by one entry each), and 20,000 loads of VRAM take less than four
+  times as long with 8,000 behind as with 500, the best of three rounds each (15 times as long with the list kept by
+  PRIM); and a sprite by indices 4000 and 4001 hands G a record no bigger than one by 0 and 1, which G reads as a run
+  from the copy.
 - Found by the independent review. Past 4,096 runs handed over before a FINISH is due (a GU direct list, its stall
   address moved at each draw, makes a run each), G's counts of later runs overwrote earlier ones' that E hadn't
   folded (runs fold only while a FINISH is due), a data race too: the GE's time came out wrong, and differently run

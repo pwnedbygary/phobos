@@ -3334,9 +3334,11 @@ static auto geThreadConflicts() -> void {
 //memory as it's drawn, the emulation thread's look at what the thread may still change costs no more than with a few:
 //loads of VRAM no PRIM reaches, each taking the thread's reports first (those textures' pages: ge/model.hpp). Kept by
 //PRIM, every report taken went through each PRIM not yet drawn, and one is taken at each load of VRAM and each list
-//word there: Ghost of Sparta, its display lists in VRAM, crawled. Counted, not timed (GeThread::reportWork): the
-//entries the reports taken at 20,000 loads go through are as many with 8,000 PRIMs behind as with 500. Then drawn as
-//without the thread.
+//word there: Ghost of Sparta, its display lists in VRAM, crawled. Seen two ways: what the model keeps of those textures
+//is as big with 8,000 PRIMs behind as with 500 (kept by PRIM, the list every report went through grew with them, one
+//entry each); and 20,000 loads take less than four times as long with 8,000 behind as with 500, the best of three
+//rounds each (a ratio, so that the machine's speed and a sanitizer's cancel out; with the list kept by PRIM, 15 times
+//as long). Then drawn as without the thread.
 static auto geThreadManyBehind() -> void {
   constexpr u32 Long = 0x0900'0000, Untouched = VRAM + 0x10'0000;
   auto build = [](Memory& memory) {
@@ -3388,27 +3390,34 @@ static auto geThreadManyBehind() -> void {
   build(s.memory);
   sprites(s.memory, Long, 500);
   sprites(s.memory, second, 7'500);
-  auto loads = [&] {  //(the entries the reports taken at 20,000 loads went through)
-    u64 before = s.geThreading->reportWork;
-    u32 sum = 0;
-    for(u32 n = 0; n < 20'000; n++) sum += s.memory.read(4, Untouched + n % 64 * 4);
-    CHECK(sum, 0u);
-    return s.geThreading->reportWork - before;
+  auto loads = [&] {  //(the best of three rounds of 20,000 loads, in seconds)
+    double best = 1e30;
+    for(u32 round = 0; round < 3; round++) {
+      u32 sum = 0;
+      auto start = std::chrono::steady_clock::now();
+      for(u32 n = 0; n < 20'000; n++) sum += s.memory.read(4, Untouched + n % 64 * 4);
+      best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+      CHECK(sum, 0u);
+    }
+    return best;
   };
   std::atomic<bool> held{true};
   s.geThreading->drain();  //(the thread reads its gate as it takes each record)
   s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
   u64 waits = s.geThreading->waits;
   run(s, Long);
-  u64 few = loads();
+  double few = loads();
+  auto kept = s.geThreading->model.softwareTextures.size();
   run(s, second);
-  u64 many = loads();
+  double many = loads();
+  CHECK(s.geThreading->model.softwareTextures.size(), kept);
   CHECK(held.load(), true);  //(all of it with the thread held)
   CHECK(s.geThreading->waits, waits);
   held = false;
   s.geThreading->drain();
   s.geThreading->gate = nullptr;
-  CHECK(many, few);
+  if(many >= few * 4) std::printf("  loads with 8,000 PRIMs behind took %.1f times as long as with 500\n", many / few);
+  CHECK(many < few * 4, true);
   s.ge.settleAll();
   CHECK(plain.memory.vram == s.memory.vram, true);
 }

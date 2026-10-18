@@ -58,7 +58,7 @@ unchanged (the same file with the thread on or off).
   same; 26 scenes' 600 frames with states every 150 all the same; schedule fuzzing (10 scenes x three ways) and the
   stress mode (a finish every 97th PRIM and kick end, 1x/2x on 26 scenes, 4x on 8) all the same; Ghost of Sparta
   from its start, 2,400 frames, every frame, Software and Vulkan fast, the same; the suite Off, On and On fuzzed three
-  ways 0 failures (601 groups now: #265's merged in, the library check's two tests, the review's six);
+  ways 0 failures (604 groups now: #265's and #266's merged in, the library check's two tests, the review's six);
   ThreadSanitizer over the suite with the thread On, and over every GPU group on MoltenVK with the thread On
   (pspsdk's samples included), no report, nothing suppressed.
   Targeted tests for the review's findings (R14-R16, R19, R22-R24, the hull rule) each fail with their rule out.
