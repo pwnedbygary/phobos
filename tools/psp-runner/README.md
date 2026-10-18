@@ -56,6 +56,10 @@ the runner refuses anything else):
 - `--load-state FILE` — start from a save-state file (the game booted, then the state
   loaded at once)
 - `--interpreter` — run the CPU's interpreter (the recompiler is the default)
+- `--spin-skip on|off` — skip through loops that only poll (docs/psp-core.md, parts 91 and 105), every
+  register, byte and cycle as running them gives: on by default, off with `--ge-profile` unless
+  given, so a profile counts every poll as the PSP's plugin records them; on and off, a run
+  ends the same, only its host time differs
 - `--ge-threads N` — how many threads draw the GE's pictures (0, the default, for one
   fewer than the host's cores)
 - `--renderer NAME` — who draws them: `Software` (the default), `Vulkan` (or `Vulkan-accurate`),
@@ -192,9 +196,12 @@ and when the GE is done with all it has). Times are the PSP's clock in microseco
 sceKernelGetSystemTimeLow gives them. A program that starts itself again (sceKernelLoadExec)
 ends the profile there, as its clock and threads start again: one profile is one program's, and
 the summary says at which frame. The file is written as the run ends (even if the WAV can't be),
-and a summary line (`ge profile:`) gives its records and the PSP's time it covers. `geprof.py FILE`
-then prints the same tables as for a capture from the PSP; with no profile, nothing is recorded,
-at the cost of a test of a pointer at each place that would record.
+and a summary line (`ge profile:`) gives its records and the PSP's time it covers. A profile turns
+the skip of polling loops off (`--spin-skip off`, unless `--spin-skip on` is given), as a loop's
+skipped turns make no calls to record: a game that polls the GE has every poll in it, as the
+PSP's plugin records them. `geprof.py FILE` then prints the same tables as for a capture from the
+PSP; with no profile, nothing is recorded, at the cost of a test of a pointer at each place that
+would record.
 
 ```sh
 psp-runner coo.chd --load-state coo-diff.state --frames 900 --ge-profile coo-diff.bin --ge-profile-from 301
@@ -225,16 +232,17 @@ later layout gets another number):
   bytes;
 - `asked`: the options given, each null where it wasn't (but `late frames`, `true` or `false`,
   and `presses`, a count): the renderer (as the core names it: `Vulkan-fast` is `Vulkan (fast)`),
-  resolution, engine (`interpreter` if asked), GE threads, late frames, frames, start time, state
-  to load, how many presses, the script, the PNGs' schedule (`png every`, `png at`) and folder,
-  the WAV, the frame of the state saved, the memory stick and fonts folders, the pipeline cache,
-  and `screen stops at`;
+  resolution, engine (`interpreter` if asked), spin skip (`on` or `off`), GE threads, late frames,
+  frames, start time, state to load, how many presses, the script, the PNGs' schedule (`png
+  every`, `png at`) and folder, the WAV, the frame of the state saved, the memory stick and fonts
+  folders, the pipeline cache, and `screen stops at`;
 - `ran`: what the run had: the renderer the core used (`Software` if Vulkan didn't start, as it
   falls back), the GPU's device as its driver names it, whether the GPU was lost during the run
-  (`gpu lost`: the software renderer drew from then on), the resolution, the engine, the GE's
-  threads, the clock it started at (seconds since 1970: the host's, the one asked for, or a
-  loaded state's), `TZ`, and the host's offset from UTC at that time (`+hhmm`), which the
-  kernel's time zone follows;
+  (`gpu lost`: the software renderer drew from then on), the resolution, the engine, whether
+  polling loops were skipped through (`spin skip`, `true` or `false`), the GE's threads, the
+  clock it started at (seconds since 1970: the host's, the one asked for, or a loaded state's),
+  `TZ`, and the host's offset from UTC at that time (`+hhmm`), which the kernel's time zone
+  follows;
 - `result`: the frames run, whether the program ended, the frame loop's seconds, its captures'
   seconds, stale captures, `clock restarts` (with `--start-time`: how many times the clock was
   set back, after a game started itself again or a program it asked for couldn't start),
