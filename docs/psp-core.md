@@ -16441,8 +16441,8 @@ the GE's time:
   (one stall update, none finding the GE waiting), and the GE takes 23.5 ms more. What the model leaves out is in the
   GE: its many small textured primitives, the state set between them, and the CALLs.
 - **Activision Hits' copyright screen** is within the gate: the PSP ran it at 222/111, as Phobos does (its boot
-  capture's 333/166 was read before the game's program had started and set its own), where the first comparison had scaled
-  the PSP's time to 333/166 (−39%). Its big CLUT8 texture drawn 512 across is measured all the same.
+  capture's 333/166 was read before the game's program had started and set its own), where the first comparison had
+  scaled the PSP's time to 333/166 (−39%). Its big CLUT8 texture drawn 512 across is measured all the same.
 
 ### What round 8 measures
 
