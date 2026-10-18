@@ -43,6 +43,8 @@ auto Kernel::startCall() -> bool {
   callResumesGe = call.resumesGe;
   callKind = call.kind;
   callID = call.id;
+  callProfile = call.profile;
+  if(callProfile) [[unlikely]] geProfileCallStarted(callProfile);
   if(call.kind == Call::VTimer) vtimerClocks(call.id);
   for(u32 n = 0; n < 4; n++) cpu.ipu.r[4 + n] = call.arguments[n];
   cpu.ipu.r[28] = call.gp;
@@ -68,6 +70,7 @@ auto Kernel::callReturned() -> void {
   interruptsEnabled = true;
   ranSince = cycles;
   if(callKind == Call::Alarm || callKind == Call::VTimer) timerReturned(callKind, callID, returned);
+  if(callProfile) [[unlikely]] geProfileCallReturned(callProfile), callProfile = 0;
   callKind = Call::Plain;
   callID = 0;
   if(callResumesGe) {

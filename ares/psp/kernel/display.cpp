@@ -26,6 +26,7 @@ auto Kernel::sceDisplaySetMode() -> void {
 //width or format set at once that isn't the one shown: what a PSP's display holds as a game starts isn't known
 //here, and a game's first frame buffer mustn't be refused for not matching it.)
 auto Kernel::sceDisplaySetFrameBuf() -> void {
+  ProfiledCall profile{*this, GeProfile::SetFrameBuf};
   if(arg(3) == 1) {
     latchFrameBuffer();  //(one set for an earlier sync, shown by now)
     u64 vsync = nextVblank - VblankCycles + VsyncCycles;  //this blank's
@@ -83,20 +84,24 @@ auto Kernel::waitVblank(bool callbacks, u32 count) -> void {
 }
 
 auto Kernel::sceDisplayWaitVblankStart() -> void {
+  ProfiledCall profile{*this, GeProfile::WaitVblankStart};
   waitVblank(false);
 }
 
 auto Kernel::sceDisplayWaitVblankStartCB() -> void {
+  ProfiledCall profile{*this, GeProfile::WaitVblankStartCB};
   waitVblank(true);
 }
 
 //Waits for the vertical blank: not at all if it's in it now (returning 1), else until the next starts (0).
 auto Kernel::sceDisplayWaitVblank() -> void {
+  ProfiledCall profile{*this, GeProfile::WaitVblank};
   if(inVblank()) return result(1);
   waitVblank(false);
 }
 
 auto Kernel::sceDisplayWaitVblankCB() -> void {
+  ProfiledCall profile{*this, GeProfile::WaitVblankCB};
   if(inVblank()) {
     result(1);
     return callbacksOnReturn(true);
@@ -109,11 +114,13 @@ auto Kernel::sceDisplayWaitVblankCB() -> void {
 //nothing may wait (intr/waits). 0x40f1469c is the one without callbacks, 0x77ed8b3a the CB one; vblankmulti's titles
 //have them the other way round, as its own source calls them.
 auto Kernel::sceDisplayWaitVblankStartMulti() -> void {
+  ProfiledCall profile{*this, GeProfile::WaitVblankStartMulti};
   if(s32(arg(0)) <= 0) return result(ErrorInvalidValue);
   waitVblank(false, arg(0));
 }
 
 auto Kernel::sceDisplayWaitVblankStartMultiCB() -> void {
+  ProfiledCall profile{*this, GeProfile::WaitVblankStartMultiCB};
   if(s32(arg(0)) <= 0) return result(ErrorInvalidValue);
   waitVblank(true, arg(0));
 }

@@ -1,0 +1,23 @@
+# Phobos GE profiler settings: this file goes in ms0:/PHOBOS/prof.txt (ef0:/PHOBOS on a PSP Go without a card).
+# Lines are "name = value"; "#" starts a comment. See README.md in tools/psp-ge-profile.
+
+# dry: the hooks only count calls, and a short report (a .txt) is written. capture: a capture (a .bin) is recorded.
+mode = dry
+
+# Hold these together for a second to start; the capture starts "delay" seconds after you let go.
+buttons = L+R+SELECT
+delay = 1
+
+# A capture (or dry run) this many seconds after the game starts, as well as the buttons; "off" for none.
+start = 20
+
+# Seconds recorded.
+length = 10
+
+# Kernel memory for a capture's events (KB): at most "buffer", leaving "keep" free for the game. Ten seconds of a
+# game's events take 50 to 130 KB.
+buffer = 192
+keep = 256
+
+# On-screen notices (a box at the top left; a small blinking square at the top right while counting): on or off.
+notices = on

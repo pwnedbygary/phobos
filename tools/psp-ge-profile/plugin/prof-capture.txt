@@ -1,0 +1,19 @@
+# Phobos GE profiler settings for captures started by the buttons. Copy this over ms0:/PHOBOS/prof.txt (same name,
+# prof.txt) when the dry run has worked. See README.md in tools/psp-ge-profile.
+
+mode = capture
+
+# Hold these together for a second, then let go: the capture starts a second later and runs "length" seconds.
+buttons = L+R+SELECT
+delay = 1
+
+# No capture at a fixed time.
+start = off
+
+length = 10
+
+buffer = 192
+keep = 256
+
+# On-screen notices: on or off.
+notices = on

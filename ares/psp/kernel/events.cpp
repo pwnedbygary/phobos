@@ -253,6 +253,8 @@ auto Kernel::runCallbacks(Thread& thread) -> void {
   thread.wakeAt = 0;
   thread.timeoutPointer = 0;
   thread.callbacks = false;
+  thread.geProfileCallAside = thread.geProfileCall;
+  thread.geProfileCall = 0;
   if(callNextCallback(thread)) return;
   backFromCallbacks(thread);
 }
@@ -302,8 +304,11 @@ auto Kernel::backFromCallbacks(Thread& thread) -> void {
   thread.waitDone = before.done;
   thread.waitResult = before.resultPointer;
   before = {};
+  thread.geProfileCall = thread.geProfileCallAside;
+  thread.geProfileCallAside = 0;
   if(thread.wait == Wait::None) {
     restore(thread.beforeCallback);
+    if(thread.geProfileCall) [[unlikely]] geProfileResumed(thread);  //(its callbacks ran as it returned)
     return reschedule();
   }
   thread.context = thread.beforeCallback;
