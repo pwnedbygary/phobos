@@ -101,19 +101,36 @@ auto Kernel::geRun() -> void {
 auto Kernel::geTime() -> void {
   u64 pixels = ge.owedPixels, primitives = ge.owedPrimitives;
   ge.owedPixels = ge.owedPrimitives = 0;
-  u32 bus = std::clamp<u32>(powerState.bus, 1, 166);
   if(ge.thread) {  //(counted there: geFold())
-    geRuns.push_back({ge.thread->runsHanded(), cycles, bus});
-    if(geRuns.size() >= GeThread::RunsKept) geFoldKept();
+    geRuns.push_back({ge.thread->runsHanded(), cycles, std::clamp<u32>(powerState.bus, 1, 166)});
+    if(geProfile) [[unlikely]] geProfiledRun();
+    else if(geRuns.size() >= GeThread::RunsKept) geFoldKept();
     return;
   }
-  if(pixels || primitives) geDoneAt = std::max(geDoneAt, cycles) + geOwed(pixels, primitives, bus);
+  if(!pixels && !primitives) return;
+  u64 bus = std::clamp<u32>(powerState.bus, 1, 166);
+  u64 owed = std::max(pixels * 35, primitives * 664) * (CPUFrequency / 1'000'000) / (140 * bus);
+  geDoneAt = std::max(geDoneAt, cycles) + owed;
+  if(geProfile) [[unlikely]] geProfileWork(pixels, primitives, owed);
 }
 
 //(the GE on its thread) The oldest runs folded while the thread keeps no more runs' counts (GeThread::RunsKept) than
 //are waiting to be folded. Out of geTime(), which every run takes.
 NALL_NOINLINE auto Kernel::geFoldKept() const -> void {
   while(geRuns.size() >= GeThread::RunsKept) geFold(true, geRuns.front().run);
+}
+
+//(the GE on its thread, a profile recording) The run just handed over counted at once, its charge recorded where the
+//synchronous GE records it (geProfileWork()), as it is and in the same place among the profile's records; the runs
+//handed over before the profile started folded first, unrecorded, as then.
+NALL_NOINLINE auto Kernel::geProfiledRun() -> void {
+  GeRun run = geRuns.back();
+  geFold(true);
+  GeThread::Owed owed;
+  ge.thread->owedOf(run.run, false, owed);
+  if(owed.pixels || owed.primitives) {
+    geProfileWork(owed.pixels, owed.primitives, geOwed(owed.pixels, owed.primitives, run.bus));
+  }
 }
 
 auto Kernel::geOwed(u64 pixels, u64 primitives, u32 bus) -> u64 {
@@ -209,6 +226,7 @@ auto Kernel::geCall(GeList& list, bool finish, u32 id, bool suspends) -> bool {
   if(suspends) geSuspended = true;
   queueCall(function, callback.gp, id, finish ? callback.finishArgument : callback.signalArgument,
             geOldSdk() ? 0 : ge.list.address, suspends);
+  if(geProfile) [[unlikely]] calls.back().profile = geProfileCallback(finish, list, id);
   return true;
 }
 
@@ -425,11 +443,17 @@ auto Kernel::sceGeEdramSetAddrTranslation() -> void {
 //(list, stall address (0: none), callbacks (sceGeSetCallback's number; negative for none), options): the list goes at
 //the queue's end, and the GE starts on it at once if it's free. Returns the list's ID. The options (PspGeListArgs, if
 //given): their size, where to save the GE's state, and how deep SIGNAL calls may go (32 if not said).
-auto Kernel::sceGeListEnQueue() -> void { geEnqueue(false); }
+auto Kernel::sceGeListEnQueue() -> void {
+  ProfiledCall profile{*this, GeProfile::EnQueue};
+  geEnqueue(false);
+}
 
 //As above, but at the queue's front, paused: it runs when the program calls sceGeContinue. Only while the front list
 //is paused itself, and not still the GE's, or there's none, so as not to cut in on a list the GE has.
-auto Kernel::sceGeListEnQueueHead() -> void { geEnqueue(true); }
+auto Kernel::sceGeListEnQueueHead() -> void {
+  ProfiledCall profile{*this, GeProfile::EnQueueHead};
+  geEnqueue(true);
+}
 
 auto Kernel::geEnqueue(bool head) -> void {
   u32 address = arg(0), stall = arg(1), options = arg(3), context = 0, stackLimit = 32;
@@ -488,6 +512,7 @@ auto Kernel::geEnqueue(bool head) -> void {
 
 //Takes a list out of the queue, unless the GE has started it.
 auto Kernel::sceGeListDeQueue() -> void {
+  ProfiledCall profile{*this, GeProfile::DeQueue};
   s32 index = geIndex(arg(0));
   if(index < 0 || geLists[index].state == GeList::State::None) return result(ErrorInvalidID);
   auto& list = geLists[index];
@@ -499,6 +524,7 @@ auto Kernel::sceGeListDeQueue() -> void {
 
 //(list, stall address): the GE may go as far as the new address. A list that has finished can't be moved on.
 auto Kernel::sceGeListUpdateStallAddr() -> void {
+  ProfiledCall profile{*this, GeProfile::UpdateStallAddr};
   s32 index = geIndex(arg(0));
   if(index < 0) return result(ErrorInvalidID);
   auto& list = geLists[index];
@@ -523,6 +549,7 @@ auto Kernel::sceGeListUpdateStallAddr() -> void {
 //(list, mode): 0 waits for the list to finish; 1 says how it's doing: 0 finished, 1 queued, 2 drawing, 3 stopped at
 //its stall address, 4 paused (or queued again after running).
 auto Kernel::sceGeListSync() -> void {
+  ProfiledCall profile{*this, GeProfile::ListSync};
   s32 index = geIndex(arg(0));
   if(index < 0) return result(ErrorInvalidID);
   auto& list = geLists[index];
@@ -549,6 +576,7 @@ auto Kernel::sceGeListSync() -> void {
 //do, 2 drawing, 3 stopped at a stall address. A list whose finish callback runs is still queued but done: in it, 0
 //if it was the last, 2 with another behind it (pspautotests' gpu/signals and gpu/ge/queue2 recorded both).
 auto Kernel::sceGeDrawSync() -> void {
+  ProfiledCall profile{*this, GeProfile::DrawSync};
   if(arg(0) == 0) {
     if(!mayWait()) return;
     result(0);
@@ -565,6 +593,7 @@ auto Kernel::sceGeDrawSync() -> void {
 //(PspGeCallbackData: signal function and argument, finish function and argument): the callbacks' number, for
 //enqueueing lists with. They run with the global pointer the program had here.
 auto Kernel::sceGeSetCallback() -> void {
+  ProfiledCall profile{*this, GeProfile::SetCallback};
   u32 data = arg(0);
   for(u32 id = 0; id < 16; id++) {
     if(geCallbacks[id].used) continue;
@@ -576,6 +605,7 @@ auto Kernel::sceGeSetCallback() -> void {
 }
 
 auto Kernel::sceGeUnsetCallback() -> void {
+  ProfiledCall profile{*this, GeProfile::UnsetCallback};
   if(arg(0) >= 16) return result(ErrorInvalidID);
   geCallbacks[arg(0)] = {};
   result(0);
@@ -585,6 +615,7 @@ auto Kernel::sceGeUnsetCallback() -> void {
 //FINISH (gpu/ge/queue2), or an older SDK's list paused for its suspending signal's callback (geOldSdk(); unmeasured:
 //gpu/signals/suspend leaves it out, as it crashed the PSP's older driver).
 auto Kernel::sceGeContinue() -> void {
+  ProfiledCall profile{*this, GeProfile::Continue};
   if(geQueue.empty()) return result(0);
   u32 index = geQueue.front();
   auto& list = geLists[index];
@@ -622,6 +653,7 @@ auto Kernel::sceGeContinue() -> void {
 //the lists after it start only once that has returned: the break finds the list done (ALREADY) and breaks none of
 //them off. (Unmeasured: break's "Completed list" is done before its break, as its list draws nothing.)
 auto Kernel::sceGeBreak() -> void {
+  ProfiledCall profile{*this, GeProfile::Break};
   u32 mode = arg(0), parameters = arg(1);
   if(mode > 1) return result(ErrorInvalidMode);
   if((parameters | (parameters + 16)) & 0x8000'0000) return result(ErrorPrivilegeRequired);

@@ -98,6 +98,40 @@ struct VideoDecoder {
   virtual auto reset() -> void = 0;
 };
 
+//geprofile.cpp: how a game drives the GE and the display, recorded in the capture format of tools/psp-ge-profile,
+//whose plugin makes the same records on a PSP (its plugin/profile.h lays them out; its decoder, geprof.py, reads
+//either): each call to the GE driver's and the display's functions, with its arguments, its result, its thread and
+//the GE's state, as it's made and as it returns, in the PSP's time; each FINISH and SIGNAL callback as it runs; each
+//vertical blank; and, Phobos's own, each piece of GE time the model charges (Kernel::geTime()). A host makes one and
+//hands it to the kernel (Kernel::geProfileStart()) for as long as it records (the runner's --ge-profile). Not part
+//of the machine's state.
+struct GeProfile {
+  //profile.h's kinds, and the model's charges, which the plugin never records
+  enum Kind : u8 {
+    EnQueue = 1, EnQueueHead, DeQueue, UpdateStallAddr, ListSync, DrawSync, Break, Continue, SetCallback,
+    UnsetCallback, Signal, Finish, SetFrameBuf, WaitVblankStart, WaitVblankStartCB, WaitVblank, WaitVblankCB,
+    WaitVblankStartMulti, WaitVblankStartMultiCB, Vblank,
+    ModelWork = 64,  //a: pixels, b: primitives, c: cycles charged; exit: when the GE is done with all it has; result:
+                     //the list it runs (its ID; -1: none)
+  };
+  //profile.h's record: times in microseconds of the PSP's clock (sceKernelGetSystemTimeLow's), exit 0 for a call
+  //still waiting when the recording stopped; thread an index into threads (0: an interrupt handler, or no thread);
+  //ge the GE's state as sceGeDrawSync(1) gives it (0 idle, 2 drawing, 3 stopped at a stall address), with the
+  //address of its next command above while a list draws.
+  struct Record {
+    u8 kind = 0, thread = 0;
+    u16 vcount = 0;
+    u32 entry = 0, exit = 0, ge = 0, a = 0, b = 0, c = 0, result = 0;
+  };
+  std::vector<Record> records;
+  std::vector<std::pair<u32, std::string>> threads{{0, "interrupt"}};  //each thread's UID and name
+  u32 startTime = 0, endTime = 0, startVcount = 0, endVcount = 0;
+  u32 cpuMhz = 0, busMhz = 0, cpuMhzEnd = 0, busMhzEnd = 0, firmware = 0;
+  //The capture file: the 256-byte header (the version, disc ID and title as given, cut to fit), the records, the
+  //thread table.
+  auto file(const std::string& version, const std::string& discId, const std::string& title) const -> std::vector<u8>;
+};
+
 struct Kernel {
   //Error codes: pspsdk's pspkerror.h, and those it lacks (the lightweight mutex's, the allocation type's, files',
   //the GE driver's) from uOFW's errors.h.
@@ -425,6 +459,8 @@ struct Kernel {
       u32 stack = 0, size = 0;
     };
     std::vector<Extension> extensions;  //innermost last; stackBlock and stackSize are the innermost's lent stack
+    u32 geProfileCall = 0;  //the GE profile's record (and 1) of the call it waits in, finished as it goes on
+    u32 geProfileCallAside = 0;  //the same, put aside with its wait while its callbacks run (runCallbacks())
   };
   struct Semaphore {
     u32 uid;
@@ -666,6 +702,7 @@ struct Kernel {
   auto sceKernelAllocMemoryBlock() -> void;
   auto sceKernelFreeMemoryBlock() -> void;
   auto sceKernelGetMemoryBlockPtr() -> void;
+  static constexpr u32 DevkitVersion = 0x0606'0110;  //the firmware sceKernelDevkitVersion says the PSP runs
   auto sceKernelDevkitVersion() -> void;
 
   //io.cpp: files and folders on the host folders standing for the PSP's devices, or on the disc in the drive;
@@ -942,10 +979,12 @@ struct Kernel {
     bool vblank = false;  //a vertical blank's handler
     u32 kind = Plain;     //a timer's handler (timers.cpp), and which timer
     u32 id = 0;
+    u32 profile = 0;      //a GE callback's record (and 1) in the GE profile
   };
   std::deque<Call> calls;       //waiting their turn
   bool interrupting = false;    //one is running
   u32 callKind = Call::Plain, callID = 0;  //the one running: a timer's handler?
+  u32 callProfile = 0;          //the one running: its record (and 1) in the GE profile
   u32& interruptsEnabled;       //the CPU's interrupt flag (mfic and mtic's, cpu.scc.interrupts): 1 on, 0 held off
                                 //(sceKernelCpuSuspendIntr), calls held back and the CPU kept for the running thread
   bool rescheduleAfter = false;   //a thread woke during the call: pick who runs once it's over
@@ -1093,6 +1132,7 @@ struct Kernel {
   auto geIndex(u32 id) const -> s32;
   auto geTime() -> void;
   auto geFoldKept() const -> void;
+  auto geProfiledRun() -> void;
   auto geInterrupt() -> bool;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;
@@ -1110,6 +1150,41 @@ struct Kernel {
   auto geWake(Wait wait, u32 index) -> void;
   auto geSaveContext(u32 address) -> void;
   auto geRestoreContext(u32 address) -> void;
+  //geprofile.cpp: the GE profile being recorded (none: nothing is, and each place that would record a thing tests
+  //this pointer alone, or a record number that stays 0)
+  GeProfile* geProfile = nullptr;
+  auto geProfileStart(GeProfile& profile) -> void;
+  auto geProfileStop() -> void;
+  auto geProfileTime() const -> u32;
+  auto geProfileState() const -> u32;
+  auto geProfileThread(const Thread* thread) -> u8;
+  auto geProfileRecord(u8 kind, u8 thread, u32 a, u32 b, u32 c) -> u32;
+  auto geProfileBegin(u8 kind) -> u32;
+  auto geProfileEnd(u32 record, Thread* caller, bool fromCallback) -> void;
+  auto geProfileResumed(Thread& thread) -> void;
+  auto geProfileVblank() -> void;
+  auto geProfileCallback(bool finish, const GeList& list, u32 id) -> u32;
+  auto geProfileCallStarted(u32 record) -> void;
+  auto geProfileCallReturned(u32 record) -> void;
+  auto geProfileWork(u64 pixels, u64 primitives, u64 owed) -> void;
+  //A call to one of the profiled functions: recorded from where it's made (its arguments then) to where it returns,
+  //or, if its thread waits in it, to where the thread goes on (geProfileResumed()).
+  struct ProfiledCall {
+    Kernel& kernel;
+    u32 record = 0;
+    Thread* caller = nullptr;
+    bool fromCallback = false;  //made by one of the thread's callbacks
+    ProfiledCall(Kernel& kernel, u8 kind) : kernel(kernel) {
+      if(kernel.geProfile) [[unlikely]] {
+        record = kernel.geProfileBegin(kind);
+        caller = kernel.interrupting ? nullptr : kernel.current;
+        fromCallback = caller && caller->inCallback;
+      }
+    }
+    ~ProfiledCall() {
+      if(record) [[unlikely]] kernel.geProfileEnd(record, caller, fromCallback);
+    }
+  };
   u32 geTranslation = 0x400;  //sceGeEdramSetAddrTranslation's width (the PSP starts at 0x400)
   auto sceGeEdramGetAddr() -> void;
   auto sceGeEdramGetSize() -> void;
