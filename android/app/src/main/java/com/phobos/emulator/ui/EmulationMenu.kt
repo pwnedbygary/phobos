@@ -460,7 +460,7 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
 private fun PspSection(viewModel: MainViewModel, settings: EmulatorSettings, onRestart: () -> Unit) {
     val started by viewModel.pspStartSettings.collectAsState()
     val chosen = PspStartSettings.of(settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads,
-        settings.pspGraphicsOverlap)
+        graphicsOverlap = settings.pspGraphicsOverlap)
     MenuSection("PlayStation Portable") {
         PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
         PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }

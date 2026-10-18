@@ -114,7 +114,12 @@ object PspGraphicsOverlap {
 }
 
 /** The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. */
-data class PspStartSettings(val renderer: Int, val resolution: Int, val drawingThreads: Int, val graphicsOverlap: Int = PspGraphicsOverlap.OFF) {
+data class PspStartSettings(
+    val renderer: Int,
+    val resolution: Int,
+    val drawingThreads: Int,
+    val graphicsOverlap: Int = PspGraphicsOverlap.OFF,
+) {
     /** Whether a game started with these runs as one started with [other] would: Resolution is the Vulkan renderer's alone. */
     fun runsAs(other: PspStartSettings): Boolean =
         renderer == other.renderer && drawingThreads == other.drawingThreads && graphicsOverlap == other.graphicsOverlap &&
@@ -123,7 +128,7 @@ data class PspStartSettings(val renderer: Int, val resolution: Int, val drawingT
     companion object {
         fun of(renderer: Int, resolution: Int, drawingThreads: Int, graphicsOverlap: Int = PspGraphicsOverlap.OFF) = PspStartSettings(
             PspRenderer.forCore(renderer), PspResolution.forCore(resolution), PspDrawingThreads.forCore(drawingThreads),
-            PspGraphicsOverlap.forCore(graphicsOverlap),
+            graphicsOverlap = PspGraphicsOverlap.forCore(graphicsOverlap),
         )
     }
 }

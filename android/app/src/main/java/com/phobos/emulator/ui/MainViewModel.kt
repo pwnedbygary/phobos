@@ -3039,7 +3039,7 @@ class MainViewModel(
             // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
             val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution,
-                currentSettings.pspDrawingThreads, currentSettings.pspGraphicsOverlap)
+                currentSettings.pspDrawingThreads, graphicsOverlap = currentSettings.pspGraphicsOverlap)
             _pspStartSettings.value = pspStart.takeIf { effectiveSystem == LaunchSystems.PSP }
             // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
             PhobosCore.setPspDrawingThreads(pspStart.drawingThreads)

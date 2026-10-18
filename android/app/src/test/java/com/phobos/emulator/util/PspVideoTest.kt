@@ -66,13 +66,13 @@ class PspVideoTest {
         assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 3, 0)))
         assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 2, 0)))
         // Graphics overlap: another way to run, with any renderer.
-        assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0, PspGraphicsOverlap.ON)))
-        assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, PspGraphicsOverlap.ON)))
-        assertTrue(PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, PspGraphicsOverlap.ON)
-            .runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, PspGraphicsOverlap.ON)))
+        val overlapped = PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)
+        assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0, graphicsOverlap = PspGraphicsOverlap.ON)))
+        assertFalse(vulkan.runsAs(overlapped))
+        assertTrue(overlapped.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)))
         // As the core is told them: a value from elsewhere is its default.
-        assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO, PspGraphicsOverlap.OFF),
-            PspStartSettings.of(7, 0, 3, 9))
+        assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO, graphicsOverlap = PspGraphicsOverlap.OFF),
+            PspStartSettings.of(7, 0, 3, graphicsOverlap = 9))
         assertTrue(software.runsAs(PspStartSettings.of(9, 1, 5)))
     }
 
