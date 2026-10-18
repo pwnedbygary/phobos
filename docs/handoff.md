@@ -70,6 +70,46 @@ PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 22 bytes, and the GE's pi
   reading narrow, vertex formats); the CPU's contention with the GE (the CPU's timing, its own project); fixed-point
   charges before any default change. Part 107 (round 8) is PR #270, part 108 (the display latch) #271, merged.
 
+## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
+
+Branch `cursor/psp-measure-round9-2b67` (PR #276, draft), on master `14e8065dc` (#270, part 107, merged; this branch
+was stacked on it till then); docs/psp-core.md, part 110.
+- **Why**: #269's gate passes 5 of its 9 judged scenes at 15% (part 106). Too fast: Ghost of Sparta's menu −21%, Super
+  Monkey Ball's story −31% (a texture set costs the PSP about the same at 1, 4 or 16 KiB, where the model charges by
+  size), Killzone's second capture −19%; too slow by the gate: Activision Hits' 3D menu +29% (a median across its three
+  lists a frame: list for list its second +100%, the others too fast, the frame −14%). Round 9 measures what the model
+  guesses there: triangles reading narrow textures (taken as sprites'), texture loads and the cache's reuse, vertex
+  formats (8-bit positions 4.5 times the model in round 8), and round 8's `time-lists` again with #270's fix.
+- **What**: a new first menu line, round 9 (about 0.1 MB, `manifest9.txt`): `time-anchors` (15 of round 8's cases,
+  first), `time-tristrips` (88 cases: strips 8 to 512 wide as triangles from seven textures, RAM and VRAM, swizzled and
+  not; sprites over swizzled VRAM; squares of two triangles; 3D; bilinear; shrunk 2:1), `time-loads` (54: new, the
+  same, TEX_FLUSH, the address alone, textures in turn, by size, format and place; sets, flushes and palette loads
+  alone; palettes of 16 to 256 colors; mipmaps), `time-formats` (34: positions, colors, texture coordinates and
+  normals of each width, whole vertices, indices, culled, drawn, through mode, strips), `time-lists2` (round 8's
+  `time-lists` with cached stall addresses, all four clock settings). About a minute on the PSP, two at most.
+- **Test**: "psp measure" runs round 9 after round 8 and checks every record; `tests/psp/programs/pspmeasure.elf`
+  rebuilt.
+- **Results** (the owner's PSP, 2026-10-18; `tests/psp/measurements/ge-round9`, part 110): round 8's anchors repeat
+  within 0.09% (median; one case 2% faster, most likely its texture's alignment in RAM); a texture costs the texels
+  read after a TEX_FLUSH (swizzled RAM about 14 + 0.46 bus clocks a byte, any size of texture; no refetch without
+  the flush), which accounts for round 8's copy of Super Monkey Ball's lists within 8%; triangles reading narrow cost
+  about a sprite's, and wide reads go row by row (a row past about 140 texels, about 270 for CLUT8); shrunk 2:1
+  narrow about 3 times a pixel (not 2); RAM 8888 meshes share the RAM with their vertices; a vertex 0.48 a byte with a
+  floor of 5 (3-byte vertices 8.5), an indexed one 33 to 39; `time-lists2` finished at every setting (the stall
+  case fixed), the front end's lead about 30 sprites.
+- **Fix round** (#270's review, its should-fix 10 here): `cpu.c`'s three waits for the GE keep to the 5 s every
+  other wait has since round 4 (looks with `sceGeListSync(id, 1)` and `sceGeDrawSync(1)`; past it `cpu-syscalls.stalled`
+  and `ge.c`'s reset, shared through `measure.h`); `time-lists`' case 3 gives each wait and the list's end budgets of
+  their own; `time-state`'s case 6 named for GU's TEX_FLUSH. `pspmeasure.elf` rebuilt (`3da289db…`), the round 9
+  EBOOT too (`e6b20588…`); nothing for the owner to run again. #270's head (`502bd680a`: its fixes, master
+  `fe3deab82`) merged in.
+- **Review** (`~/phobos-work/scratch/review-276/REVIEW.md`, approve with should-fixes): part 110 put right where it
+  went past the data (CLUT8's row threshold about 270, not 295; Activision Hits' lists compared list for list; the
+  shared RAM claimed for 8888 alone; five smaller figures), its context since #270 merged, part 107's corrections
+  carried into its own text and `ge.c`'s comment (`pspmeasure.elf` unchanged); the owner's go-ahead for keeping
+  `ge-round9` in the repository, given on 2026-10-18, is recorded in `docs/development-process.md`.
+- **Next**: #269's refit takes round 9's files (no model change here).
+
 ## PSP measure, round 8: the GE's time where part 76's model misses the owner's captures, and the CPU's — 2026-10-16
 
 Branch `cursor/psp-measure-round8-2b67` (PR #270; from master `a8d5640f5`; masters `5442acb8b`, `03eca2a69`,

@@ -9,13 +9,18 @@
 
 //make SMOKE=1 builds a quick version for trying the program in an emulator before a PSP runs it (PPSSPP's
 //PPSSPPHeadless, which has no buttons to press): it runs round 3's VFPU and FPU tests (the big ones cut short by
-//Shrink, a shift), the FPU probes and the GE's rounds 2 to 8 straight away, and leaves when done. Its results say
+//Shrink, a shift), the FPU probes and the GE's rounds 2 to 9 straight away, and leaves when done. Its results say
 //nothing about a PSP.
 #ifdef SMOKE
 enum { Smoke = 1, Shrink = 8 };
 #else
 enum { Smoke = 0, Shrink = 0 };
 #endif
+
+//How long the GE may take over a list before it's taken to have stalled, in microseconds: every list here takes a
+//small part of it. (In round 4 a PSP froze where the GE didn't finish patches cut past 64 times, when this program
+//still waited for the GE as long as it took.) Every wait for the GE, ge.c's and cpu.c's, keeps to it.
+enum { Patience = 5000000 };
 
 //---- results.c
 
@@ -50,8 +55,13 @@ void vfpuStart(void);      //as the program starts (after displayAtStart's two d
 int vfpuRound(int round);  //1-3, or 4 for the FPU probes
 int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4:
                            //parts 29's and 33's; 5: what part 48 left open; 6: what parts 60 and 64 left open;
-                           //7: anti-aliased lines (part 78); 8: the GE's time again, and the CPU's (part 107)
+                           //7: anti-aliased lines (part 78); 8: the GE's time again, and the CPU's (part 107); 9:
+                           //triangles, texture loads, vertex formats, time-lists again (part 110)
 void geEnd(void);          //lets the GE go before the program leaves
+//The GE taken to have stalled on the test `out` is running, `look` (the call that looked: sceGeDrawSync(1) or
+//sceGeListSync(id, 1)) still giving `state` after `waited` microseconds: noted in its <name>.stalled with what its
+//list held, then the GE reset (ge.c)
+void geReset(const Output* out, unsigned int waited, int state, const char* look, const char* what);
 
 //---- cpu.c: round 8's tests of the CPU alone, into results/ge as the round's other files, and what ge.c's test of the
 //CPU beside the GE (cpu-contention) uses
