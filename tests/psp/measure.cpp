@@ -1,12 +1,12 @@
 //tools/psp-measure's program (see its main.c) in Phobos's core, driven through its menu as a person would. With
 //PSP_TEST_PROGRAMS holding pspmeasure.elf, its GE tests must run to the end and write every file, start afresh (the
 //first files kept in results-1), run again and draw the same, and skip what's done on a third run; the GE's rounds
-//3 to 7 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
-//counts running again over what the program before left of them, not over what this one leaves; round 6's timing
-//records complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results folder
-//(results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what differs is
-//listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder this core's
-//files are copied to, for a closer look.
+//3 to 8 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
+//counts running again over what the program before left of them, not over what this one leaves; round 6's and
+//round 8's timing records complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results
+//folder (results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what
+//differs is listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder this
+//core's files are copied to, for a closer look.
 #include "kernel-machine.hpp"
 
 #include <algorithm>
@@ -106,6 +106,20 @@ static const TimingFile timingFiles6[] = {
   {"time-commands", 50, 16, 2}, {"time-primitives", 186, 16, 2}, {"time-fill", 264, 8, 2}, {"time-sizes", 108, 8, 2},
   {"time-transfers", 68, 8, 2}, {"time-texcache", 224, 8, 2}, {"time-signals", 6, 16, 3},
 };
+//Round 8's (tools/psp-measure/ge.c's and cpu.c's tables), each at the clock settings it asks for, in this order:
+//222/111, 333/166, 222 with the bus at 166 (the PLL at 333), 266/133 MHz (settings' bits 0-3). cpu-clocks has a
+//record of its own for each attempt, from 222/111 or 333/166.
+struct TimingFile8 { const char* name; u32 records, repeats, values, settings; };
+static const TimingFile8 timingFiles8[] = {
+  {"time-lists", 80, 16, 3, 15}, {"time-signals2", 24, 8, 3, 3}, {"time-state", 68, 8, 2, 3},
+  {"time-vertices", 228, 16, 2, 3},
+  {"time-setup", 72, 8, 2, 3}, {"time-pixels", 174, 8, 2, 3}, {"time-strips", 280, 8, 2, 3},
+  {"time-textures", 100, 8, 2, 3}, {"time-transfers2", 68, 8, 2, 3}, {"time-clears", 48, 8, 2, 3},
+  {"time-overlap", 10, 8, 2, 3}, {"time-scenes", 68, 8, 2, 15}, {"cpu-contention", 16, 4, 2, 3},
+  {"cpu-alu", 64, 8, 1, 15}, {"cpu-latency", 144, 8, 1, 15}, {"cpu-memory", 104, 4, 1, 15},
+  {"cpu-syscalls", 80, 4, 1, 3},
+};
+static constexpr u32 ClockAttempts8 = 13;
 struct TimingRecord { u32 test, size, clocks, repeats, values; std::vector<u32> times; };
 //The records, or none if the words don't make whole records.
 static auto timingRecords(const std::vector<u32>& words) -> std::vector<TimingRecord> {
@@ -269,8 +283,8 @@ static const char* probeFiles[] = {
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
 enum : u32 {
-  GeRound7Line = 0, GeRound6Line = 1, GeRound5Line = 2, GeRound4Line = 3, GeRound3Line = 5, ProbesLine = 6,
-  GeRound2Line = 8, AfreshLine = 10, LeaveLine = 11
+  GeRound8Line = 0, GeRound7Line = 1, GeRound6Line = 2, GeRound5Line = 3, GeRound4Line = 4, GeRound3Line = 6,
+  ProbesLine = 7, GeRound2Line = 9, AfreshLine = 11, LeaveLine = 12
 };
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
@@ -466,8 +480,14 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 3000, exists(results / "aa-3d.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
+  //the GE's round 8, and the CPU's
+  move(m, GeRound7Line, GeRound8Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 20000, exists(results / "cpu-clocks.bin")), true);
+  press(m, Cross);
+  onlyStallCheckStalled();
   //leaving
-  move(m, GeRound7Line, LeaveLine);
+  move(m, GeRound8Line, LeaveLine);
   press(m, Cross);
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
@@ -584,6 +604,62 @@ static auto pspMeasure() -> void {
     look(file, ours, referenceRound7);
   }
   CHECK(std::filesystem::exists(results / "manifest7.txt"), true);
+  //round 8's records: whole, as many as the program's tables give, at each test's settings in turn (as many records
+  //at each, the clocks the core grants every one asked for), every run finished (time-lists' and time-signals2's
+  //third time, where a case has one, no later than its finish), the CPU's loops taking time (its system calls may
+  //take none here)
+  for(auto& file : timingFiles8) {
+    std::string name = std::string(file.name) + ".bin";
+    auto ours = readWords(results / name);
+    CHECK(ours.size(), file.records * (4 + file.repeats * file.values));
+    auto records = timingRecords(ours);
+    CHECK(records.size(), file.records);
+    static const u32 settingClocks[4] = {222u << 16 | 111, 333u << 16 | 166, 222u << 16 | 166, 266u << 16 | 133};
+    std::vector<u32> clocks;
+    for(u32 setting = 0; setting < 4; setting++) {
+      if(file.settings >> setting & 1) clocks.push_back(settingClocks[setting]);
+    }
+    bool shaped = true, finished = true, ordered = true, timed = true;
+    for(u32 n = 0; n < records.size(); n++) {
+      auto& record = records[n];
+      shaped &= record.repeats == file.repeats && record.values == file.values;
+      shaped &= record.clocks == clocks[n * clocks.size() / records.size()];
+      for(u32 run = 0; run < record.repeats; run++) {
+        u32 finish = record.times[run * record.values];
+        finished &= finish != 0xffff'ffff;
+        u32 third = record.values == 3 ? record.times[run * 3 + 2] : 0xffff'ffff;
+        if(third != 0xffff'ffff) ordered &= third <= finish;
+        for(auto loops : {"cpu-alu", "cpu-latency", "cpu-memory"}) {
+          timed &= std::string(file.name) != loops || finish > 0;
+        }
+      }
+    }
+    CHECK(shaped, true);
+    CHECK(finished, true);
+    CHECK(ordered, true);
+    CHECK(timed, true);
+    if(copy) std::filesystem::copy_file(results / name, std::filesystem::path(copy) / name,
+                                        std::filesystem::copy_options::overwrite_existing);
+  }
+  //cpu-clocks: an attempt a record (1 run of 4 words: what the call gave back, the CPU's and the bus's MHz after, the
+  //loop's time), each from 222/111 or 333/166; the first, 333/333/166, granted
+  auto attempts = timingRecords(readWords(results / "cpu-clocks.bin"));
+  CHECK(attempts.size(), ClockAttempts8);
+  if(attempts.size() == ClockAttempts8) {
+    bool shaped = true;
+    for(auto& attempt : attempts) {
+      shaped &= attempt.repeats == 1 && attempt.values == 4 && attempt.times[3] > 0;
+      shaped &= attempt.clocks == (222u << 16 | 111) || attempt.clocks == (333u << 16 | 166);
+    }
+    CHECK(shaped, true);
+    CHECK(attempts[0].times[0] == 0 && attempts[0].times[1] == 333 && attempts[0].times[2] == 166, true);
+  }
+  //display-start: the display read as the program started (seven words), then each of five frame buffers set from
+  //there (what the call gave back, the address, width and format read after); the next-vblank one, taken
+  auto display = readWords(results / "display-start.bin");
+  CHECK(display.size(), 7u + 5 * 4);
+  if(display.size() == 7 + 5 * 4) CHECK(display[7 + 4 * 4], 0u);
+  CHECK(std::filesystem::exists(results / "manifest8.txt"), true);
   for(auto name : probeFiles) CHECK(readWords(vfpu / (std::string(name) + ".bin")).size(), 4);
 
   //what the files hold, from end to end: the sprite drawn top-left to bottom-right shows its 4x4 texture (texel n,

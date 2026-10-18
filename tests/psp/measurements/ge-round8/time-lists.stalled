@@ -1,0 +1,9 @@
+The GE hadn't finished after 5000 ms (sceGeDrawSync(1) gave 2: 2 drawing, 3 at a stall address).
+Its list: time-lists case 3 (the same, each move once the GE has reached the stall address), size 4, at 222/111 MHz.
+Reset: sceGuBreak(GU_BREAK_CANCEL) gave 0x80000020, sceGuInit 0x00000000. The .bin is what the GE had drawn.
+The GE hadn't finished after 5000 ms (sceGeDrawSync(1) gave 2: 2 drawing, 3 at a stall address).
+Its list: time-lists case 3 (the same, each move once the GE has reached the stall address), size 16, at 222/111 MHz.
+Reset: sceGuBreak(GU_BREAK_CANCEL) gave 0x80000020, sceGuInit 0x00000000. The .bin is what the GE had drawn.
+The GE hadn't finished after 5000 ms (sceGeDrawSync(1) gave 2: 2 drawing, 3 at a stall address).
+Its list: time-lists case 3 (the same, each move once the GE has reached the stall address), size 64, at 222/111 MHz.
+Reset: sceGuBreak(GU_BREAK_CANCEL) gave 0x80000020, sceGuInit 0x00000000. The .bin is what the GE had drawn.

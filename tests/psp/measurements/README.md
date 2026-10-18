@@ -27,18 +27,33 @@ xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS
 Without a round's files (`PSP_GE_RESULTS` or `PSP_GE_ROUND6` set empty), the groups comparing with them say so as a
 skip of `ge-round3` or `ge-round6`; where `PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead.
 
+## `ge-round8/`
+
+Round 8 of the same program (its menu's first line since, "Round 8: the GE's time again, and the CPU's"), run on the
+same PSP on 2026-10-18 (the night's `results/ge`, beside rounds 6 and 7 again): 19 files, the GE's timed lists
+(`time-*`, at 222/111 and 333/166 MHz, `time-lists` and `time-scenes` at 333/222/166 and 266/133 too), the CPU
+beside the GE (`cpu-contention`), the CPU alone (`cpu-*`) and the display as the program starts (`display-start`), laid
+out as `manifest8.txt` describes; `time-lists.stalled` is the program's note of what it took for stalls in its case 3
+(its own timeout, not the GE's: docs/psp-core.md, part 107). Part 107 says what each test is for and what the PSP
+showed. Each `.bin` is packed with xz (`xz -9e`: 140 KB of records as 28 KB, 169 KB as 56 KB with the manifest, the
+note and the sums); `SHA256SUMS` holds the unpacked files' sums. No test reads them yet: #269's
+`tools/psp-measure/ge-fit.py` fits the GE timing's model to them (with #269's model) and a
+`measured8` test will compare the core's run of round 8 with them once that model and this program are both in.
+
 ## `ge-captures/`
 
 The owner's captures of six games on the same PSP with `tools/psp-ge-profile`'s plugin (docs/psp-core.md, parts 103
-and 106): Killzone: Liberation (`UCUS98646`, two moments of a level), Chains of Olympus
+and 106): Friday's 12, Killzone: Liberation (`UCUS98646-1` and `-2`, two moments of a level), Chains of Olympus
 (`UCUS98653`, the difficulty menu), Ghost of Sparta (`UCUS98737`, the main menu and two later scenes), Super Monkey Ball
 Adventure (`ULES00364`, Story Mode), Activision Hits Remixed (`ULUS10186`, its first boot cut short, its second boot's
-copyright screen, the 3D menu) and Army of Two (`ULUS10472`, two moments of play). Each is the plugin's file as it
-wrote it (`profile.h`'s layout: the games' GE and display calls, interrupts and times, the disc ID, title and thread
-names; no game code or data), packed with xz (`xz -9e`); `SHA256SUMS` holds the unpacked files' sums.
-`tools/psp-ge-profile/decoder/gate.py` sets them beside Phobos's profiles of the same scenes with the GE timing "PSP"
-(the owner's bar: every list time within 15% of the PSP's, none more than 15% too slow; part 106 has the table and
-how the profiles are made).
+copyright screen, the 3D menu) and Army of Two (`ULUS10472`, two moments of play); and Sunday's 6, taken with round 9
+(part 110), named apart: `UCUS98646-r9-1` to `-5` (Killzone in one session, 60, 78, 159, 322 and 443 s in, the first
+the courtyard Friday's -1 is of) and `ULUS10186-r9-1` (Activision Hits' 3D menu idle, at the moment of Phobos's
+`ahr-menu` state). Each is the plugin's file as it wrote it (`profile.h`'s layout: the games' GE and display calls,
+interrupts and times, the disc ID, title and thread names; no game code or data), packed with xz (`xz -9e`);
+`SHA256SUMS` holds the unpacked files' sums. `tools/psp-ge-profile/decoder/gate.py` sets them beside Phobos's profiles
+of the same scenes with the GE timing "PSP" (the owner's bar: every list time within 15% of the PSP's, none more than
+15% too slow; part 106 has the table and how the profiles are made).
 
 ## Not here
 
@@ -46,5 +61,5 @@ The VFPU's measurements (`tools/psp-measure`'s `vfpu.c`: rounds 1 to 3, about 67
 of functions like `vlog2` and `vsqrt`) are too big for the repository. The owner keeps them and copies them where
 they're needed; `docs/psp-vfpu-measurements.md` describes what they showed.
 
-Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11), as `docs/development-process.md`
-records.
+Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11, round 8 on 2026-10-18), as
+`docs/development-process.md` records.

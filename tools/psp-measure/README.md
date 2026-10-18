@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-7) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-8) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 8: the GE's time again, and the CPU's (about 1 MB)
    - Round 7: the GE's anti-aliased lines (about 1.5 MB)
    - Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)
    - Round 5: the GE's steps, lighting's share, texels (about 3 MB)
@@ -78,7 +79,8 @@ start the program again first (otherwise it says so, and skips that one test).
 | `main.c` | The menu, starting afresh, and leaving. |
 | `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
-| `ge.c` | The GE's and the controller's tests, and round 6's timed lists. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
+| `ge.c` | The GE's and the controller's tests, and round 6's and round 8's timed lists. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
+| `cpu.c` | Round 8's tests of the CPU alone: its loops in assembly, memory, system and driver calls, the clocks granted. |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
@@ -270,14 +272,57 @@ Round 7 (about 1.5 MB, `manifest7.txt`) takes anti-aliased lines (`GU_LINE_SMOOT
 - **In 3D** (`aa-3d`): colored and textured lines under identity matrices, against through mode's, some with the
   texture scaled and offset.
 
+Round 8 (about 170 KB, `manifest8.txt`, which lists every case) takes the GE's time again (docs/psp-core.md, part
+107). Part 76 fitted a model of the GE's time to round 6's lists, and the owner's captures of games (part 103) show
+where it misses: Killzone's scene lists come out 1.8 to 2 times as long as on his PSP (+77 to +98%, as #266's
+reviewed decoder reads his captures), most of their time a 512x512 VRAM buffer read as a CLUT32 texture in strips 32
+texels wide, which round 6 never drew; Super Monkey Ball
+Adventure's lists 2.5 times as short. Its timed lists are round 6's kind, each queued alone and timed to its finish
+callback, at 222/111 and 333/166 MHz, and `time-lists` and `time-scenes` at 333/222/166 (the CPU's clock apart
+from the bus's, if the PSP grants it) and 266/133 too:
+
+- **Big textures in strips** (`time-strips`): 512-texel-wide textures in VRAM (8888, CLUT32, 5650, CLUT8) and RAM
+  (8888 swizzled or not, CLUT8 512x256 swizzled or not, 5650) drawn texel for pixel in strips 8 to 512 wide.
+- **Other textures** (`time-textures`): shrunk 2:1 and 4:1, stretched, mipmaps, perspective, a texture walked by
+  columns, a texture of its own for each sprite.
+- **Pixels** (`time-pixels`): the depth test passing and failing with textures (does a failing pixel fetch its
+  texel?), the alpha, stencil and color tests, every blend equation, the texture functions, a game's pixel.
+- **Setup** (`time-setup`): squares 8x8 to 64x64 in 3D as games draw them, textured and depth tested; perspective,
+  strips, fans, the near plane's cut, culling, slivers.
+- **Vertices** (`time-vertices`): the front end alone (culled strips): each part of a vertex in each format,
+  indices (and whether reused ones cost less), every kind of light, skinning, morphing, texture coordinates made,
+  fog.
+- **State between draws** (`time-state`): a texture, a palette, a matrix, a blend or depth function set before each
+  sprite, and CALLed lists, as Super Monkey Ball Adventure draws.
+- **Lists** (`time-lists`): a list's own time, lists back to back, a list drawn while its stall address is moved on
+  (with and without waiting for the GE to reach it), CALLs.
+- **A SIGNAL against its list's end** (`time-signals2`): 8 to 1024 sprites or triangles, then a SIGNAL, then the
+  FINISH: when the signal callback comes beside the finish, how far ahead of the drawing the GE's front end gets.
+- **The display as a program starts** (`display-start`): what `sceDisplayGetFrameBuf` reads before anything is set,
+  and which frame buffers set at once the firmware refuses from there.
+- **Transfers, clears, overlap** (`time-transfers2`, `time-clears`, `time-overlap`): narrow transfers and frame
+  buffer copies; clears over 512x256; whether the GE's front and back ends go on at once.
+- **Lists like the captured scenes'** (`time-scenes`): Killzone's, Activision Hits Remixed's, Chains of Olympus's
+  and Super Monkey Ball Adventure's, built to what Phobos's profiles of them show.
+- **The CPU beside the GE** (`cpu-contention`): the CPU's reads of RAM while the GE draws from RAM and from VRAM,
+  and the GE's drawing while a thread reads RAM.
+- **The CPU alone** (`cpu.c`: `cpu-alu`, `cpu-latency`, `cpu-memory`, `cpu-syscalls`, `cpu-clocks`): in every
+  captured scene that syncs, a PSP's CPU took 7 to 9 times Phobos's time between a loop's waits; these time ALU work,
+  branches, loads and stores, multiplies, divides, the FPU's and the VFPU's latencies, memory at working sets from
+  1 KiB to 8 MiB (cached, uncached, the scratchpad, VRAM), system calls, a thread switch and the GE's and the
+  display's calls, at all four clock settings, and record what the power service grants for each clock call.
+
+Round 8 takes a few minutes. It changes the PSP's clocks part of the time and puts them back after each test.
+
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
 menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4
-again over counts left as the earlier program left them, round 5, round 6, round 7, leaving), and checks every file
-is written (that the stall check got past its stall, and round 6's timing records are whole); with `PSP_GE_RESULTS`
-set to a `results/ge` folder, it lists what differs from that folder, and for round 6's timing files each case's
-middle times here and there (`PSP_GE_OURS` keeps the core's own files for a closer look):
+again over counts left as the earlier program left them, round 5, round 6, round 7, round 8, leaving), and checks
+every file is written (that the stall check got past its stall, and round 6's and round 8's timing records are
+whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder, and for round
+6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a closer
+look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs
