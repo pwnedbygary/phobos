@@ -16112,7 +16112,9 @@ Olympus +0.05% (ms +0.2%; over 14 rounds interleaved +0.04%, master's own rounds
 the Off paths back to master's text where the first 2c tree cost +0.40% on Ghost of Sparta: `Memory::changed()`'s
 helpers inline again, `pieces()` inside `copyIn()` and `fill()` again, `pointerElsewhere()`'s `bool load`, a Look as
 it was (the deferred decode's place kept by its batch), `transfer()`'s overwrite master's lambda, and stage 1's
-`geReached()` and `idle()` folding nothing with no runs handed over.
+`geReached()` and `idle()` folding nothing with no runs handed over. The review's fixes, against `0d7e04246` the same
+way: -0.01%, -0.01%, -0.06%, once `geTime()`'s threaded branch was kept as it was, its fold of the oldest runs out of
+line (`geFoldKept()`): written inline there it cost 0.19% in all three, `geTime()` being what every run takes.
 
 **Exactness, measured** (the M1, MoltenVK; the thread On with both debug checks against Off on the same runner):
 - the 78 settled hashes: the 26 scenes (the 21 of the kit, Hot Wheels, Killzone's play and menu, MX vs ATV, Chains of
@@ -16190,8 +16192,9 @@ keeps counts of before a FINISH, reads of nothing reported, and the go split.
   covers the whole 16 KiB block and finishes the GPU wherever it drew there). And a write straddling two pages looks
   at both for a watched texture (an HLE write may).
 
-**ThreadSanitizer and the GPU.** MoltenVK runs under ThreadSanitizer, nothing suppressed: every GPU group (77) with the
-thread On, pspsdk's samples included, the five GE-thread groups and the versions' group: 0 failures, no report. Its first run, with the
+**ThreadSanitizer and the GPU.** MoltenVK runs under ThreadSanitizer, nothing suppressed: every GPU group with the
+thread On, pspsdk's samples included, the GE-thread groups and the versions' group: 0 failures, no report (78, 12 and
+1 groups after the review's fixes, B1's fold and S1's reports among what they ran). Its first run, with the
 samples left out, found one race, in the tests (a test gate set while G was still taking records and reading it:
 the tests now drain the thread before setting it), none in the emulator, the render GE driving the GPU backend
 included; its run with the samples found the starvation above.
