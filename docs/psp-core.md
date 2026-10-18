@@ -16495,10 +16495,10 @@ the RP6.
 ## Part 108: the display's frame buffer for the next vertical sync — sceDisplaySetFrameBuf's sync 1 shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second)
 
 On branch `cursor/psp-display-latch-2b67` (draft PR #271), from master `5442acb8b` (part 102, #265; #264, no part),
-masters `03eca2a69` (#274, no part), `dd63f4ffb` (parts 103 and 104, #266 and #267) and `230c0a731` (part 105, #268)
-merged in. Sources: pspautotests' display/setframebuf and display/isstate (their recordings), pspsdk's
-`pspdisplay.h`. No PPSSPP or JPCSP. Save states: layout 33 (its own: #269's GE timing takes 33 too, and whichever
-lands second renumbers its layout to 34).
+masters `03eca2a69` (#274, no part), `dd63f4ffb` (parts 103 and 104, #266 and #267), `230c0a731` (part 105, #268)
+and `92eddbfea` (part 109, #272; #273, no part) merged in. Sources: pspautotests' display/setframebuf and
+display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP. Save states: layout 33 (its own:
+#269's GE timing takes 33 too, and whichever lands second renumbers its layout to 34).
 
 ### Why
 
@@ -16623,3 +16623,171 @@ picture, the VRAM), `hashes/` and `pacing/` (each scene's display calls, traced 
 `latch/`, `latch2/` and `latch3/`; `latch3/scenes.sh` and `scenes.txt`, the seven scenes' calls by thread, sync and
 line under each try; `combo/`, Army of Two with #269's PSP timing; `phase3/latch-patch.py`, the first try;
 `round8/`, display-start. Nothing was run on the RP6.
+
+## Part 109: the GE's front end on a thread of its own, exact — option "GE Thread" (Off, the default, and On), the emulation thread waiting only where the GE could still change what it reads (GE round 4, part B, first PR)
+
+On branch `cursor/psp-ge-thread-2b67`, on master `a8d5640f5` (part 101, #263) with masters `684ce8561` (#261, #262,
+#249), `a8d5640f5`, `5442acb8b` (#264, the PGD layer's comments, #265: part 102), `03eca2a69` (#274), `a014706e9`
+(#266: part 103), `dd63f4ffb` (#267: part 104) and `230c0a731` (#268: part 105) merged in. The design is GE round
+4's (part 100 was its part A), revision 4, approved by the independent review with two conditions, both met (below).
+Clean room: no PPSSPP for any GE or GPU code (its threaded GPU code included), JPCSP never. Save states: unchanged
+(StateVersion as before; a state is the same file with the thread on or off).
+
+**What it is.** With "GE Thread" On, the kernel's GE on the emulation thread (E) still runs every display list's
+commands as it always has (the control pass: every word, JUMP and CALL, SIGNAL, FINISH and END, bounding boxes, block
+transfers), and hands what draws to a second GE, the render GE, on a thread of its own (G), as records in a ring:
+the state words with their addresses, each PRIM, curved surface and palette with the bytes it reads copied as of its
+place, the CPU's writes the GE hears of, and the reads where G's memory may be busy. G draws them with the renderer and
+the drawing threads, in the same memory seen through a view of its own, and makes the checks the synchronous GE makes
+(its finishes, the drawing first over what it reads) where they come in the stream. Every emulated result is the
+synchronous GE's, by construction:
+- **The value rule** (`ge/model.hpp`): E keeps a model of what each PRIM handed over may change (where it may draw on
+  the GPU and in software, its depth's 16 KiBs, the put points where a depth goes back into memory, above 1x each
+  target's hull since its last finish) and of what G reports done (finishes, depth put back, software pixels drawn).
+  A CPU load, an HLE function's copy out of VRAM and the control pass's reads of lists, vertices and palettes wait
+  for G only where it may still change the bytes; elsewhere they read memory at once.
+- **Versions** (`ge/versions.hpp`): E's writes (the CPU's stores reaching VRAM or a watched page, HLE functions'
+  copies and fills, block transfers' rows) are made at once and handed over; their old bytes are kept as versions
+  where G may still read them or write them back as of an earlier place, and G reads and writes back through them
+  (it never waits while it holds a page: R13). A write over pixels the drawing threads may still draw, or onto a
+  texture they may still read, goes after its record, once G has passed it.
+- **The clock** (`kernel/ge.cpp`): no wait at a kick's end; the runs G counts are folded into the GE's time
+  (`geFold()`), and a go limited by the time's bound is worked out exactly before anything sees it.
+- **Debug checks**, on in every threaded test machine (and with `PHOBOS_GE_CHECK=1`): G runs E's model on the same
+  records and aborts where a finish or a depth put-back changes a byte E may have read clean (the whole rule), or
+  where G reads memory outside what the model declares the PRIM may read (G-interest: its target's rows, the rows of
+  every target with pages there (R19), its depth's 16 KiBs to the most rows any target drew with it (R24) and the
+  targets over them (R22), its texture's bytes, a put point's depth buffers).
+
+**The option.** "GE Thread", Off (the default) or On, the core's option (`system.cpp`) and the runner's `--ge-thread`;
+the app doesn't offer it yet. Part 103's GE profile (`--ge-profile`) records the same with the thread On: while it
+records, each run handed over is counted at once and its charge recorded where the synchronous GE records it
+(`Kernel::geProfiledRun()`), the threads taking turns at each run meanwhile. Part 105's skips through a game's polls of
+the GE's looks (`sceGeListSync(id, 1)`, `sceGeDrawSync(1)`) hold with the thread On as they are: a look reads the
+kernel's lists, which the control pass keeps on E as it always has, and what the GE thread decides is only when a FINISH
+falls due; a skip ends before the go's limit, which is no later than the GE time's bound where the FINISH may come next
+(`untilNextEvent()`), and makes sure by that bound that no FINISH falls due in it (`spinSkip()`), so it skips no further
+than without the thread, at times fewer turns (the GE thread not done counting), which is exact. A test holds the GE
+thread back at every step while a game polls each look, and every step's state is that of a machine without the thread
+running every turn. **The limit of this first part**: the frame is still shown from the emulation thread, which drains G
+at every frame's end (`System::run()`'s `ge.drawer()`), so the two threads overlap within a frame and not across frames;
+showing the frame from G (every GPU call there, at most two frames in flight), the bounded drains and unloading with G
+stuck (R10, R18), and Auto with its handover both ways (R17) are the second part's (design steps 3 and 4), which the
+app's option waits for.
+
+**Speed, in this first part**: On is exact, but on the M1 it's seldom faster than Off and in some games much slower
+(the library's slowest with the software renderer, all 3,600 frames from their start, Off then On: BlazBlue 4 s and
+20 s, SSX on Tour 8 s and 43 s, Aces of War 10 s and 41 s). Every CPU load and store reaching VRAM takes the slow path
+(VRAM is out of E's page table all the while) and each store is a record of its own, G woken for it, about a
+microsecond each: the design's access records only on pages where checks could act, with runs encoded as one record
+(costed there at 5 ns a record), aren't done yet. And a game that touches what G is still drawing, or reads
+the frame back, has the two threads take turns, the frame's end draining G. Auto keeps such a game synchronous;
+until then On is for the tests and the runner.
+
+**Off costs nothing.** Every Off path is master's (or the stage's own arithmetic, measured): the emulation thread's
+retired instructions a frame against master on the M1, Vulkan fast, late frames as the app shows them, 300 frames,
+5 rounds alternating: Super Monkey Ball's story -0.29% (ms -2.4%), Ghost of Sparta's menu -0.02% (ms +0.7%), Chains of
+Olympus +0.05% (ms +0.2%; over 14 rounds interleaved +0.04%, master's own rounds spanning 0.45%). Getting there took
+the Off paths back to master's text where the first 2c tree cost +0.40% on Ghost of Sparta: `Memory::changed()`'s
+helpers inline again, `pieces()` inside `copyIn()` and `fill()` again, `pointerElsewhere()`'s `bool load`, a Look as
+it was (the deferred decode's place kept by its batch), `transfer()`'s overwrite master's lambda, and stage 1's
+`geReached()` and `idle()` folding nothing with no runs handed over. The review's fixes, against `0d7e04246` the same
+way: -0.01%, -0.01%, -0.06%, once `geTime()`'s threaded branch was kept as it was, its fold of the oldest runs out of
+line (`geFoldKept()`): written inline there it cost 0.19% in all three, `geTime()` being what every run takes.
+
+**Exactness, measured** (the M1, MoltenVK; the thread On with both debug checks against Off on the same runner):
+- the 78 settled hashes: the 26 scenes (the 21 of the kit, Hot Wheels, Killzone's play and menu, MX vs ATV, Chains of
+  Olympus) in Vulkan fast, Software and Vulkan accurate, 100 frames, each frame's picture and VRAM with the drawing
+  settled, then RAM and the machine's state: 78 of 78 the same;
+- the 26 scenes 600 frames with only the end hashed and a state saved every 150 frames, each compared: all the same;
+- Ghost of Sparta from its start with the library check's presses, 2,400 frames, each frame's picture and VRAM, then
+  RAM and the state, in Software and Vulkan fast: the same (the clock started at a fixed time: a game booted takes
+  the host's, which runs on between two runs);
+- schedule fuzzing (`PHOBOS_GE_FUZZ=seed,mode,n`: G pausing before records; G held back till E has appended n more,
+  waits for it, fills a quarter of the ring or 2 ms pass; E waiting for every record): 10 scenes three ways, 300
+  frames, states every 100: all the same, none hung (every run under a hang timeout);
+- the stress mode (a build with `PHOBOS_GE_STRESS_HOOK`; `PHOBOS_GE_STRESS=97`: the GPU finished at every kick's end
+  and before every 97th PRIM, the same places with the thread or not; a scene's 101 finishes become 6,224): the 26
+  scenes at 1x and 2x and eight at 4x: all the same;
+- the suite: with the thread Off and On, and On fuzzed each of the three ways, 0 failures (604 groups now, with
+  #265's and #266's merged in, the library check's two tests and the review's six; the delay fuzzing on the 590 before
+  them); On under ThreadSanitizer with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it:
+  below).
+
+**The targeted tests** (tests/psp/gpu.cpp and ge.cpp; each on an explicitly threaded machine, G held back by a test gate
+where it would lag, against the same lists and accesses without the thread, both checks on; each fails with its rule
+taken out): reads waiting only where G may change the bytes; stores waiting only for pixels the drawing threads may
+still draw; deferred texture decodes read as of their own PRIMs; a transfer outside a list; the CPU's stores after a
+list into a texture it draws; Ghost of Sparta's list copied into VRAM over drawn pixels and called there; a write
+whose own checks finish the GPU (below); and the review's findings: R14 (a waited load leaves the GPU's pixels dirty),
+R15 (halfword and byte stores into drawn pixels, each replayed alone), R16 (a depth of the other order taken through
+memory), R19 (a move source's bytes beside its pixels before the drawer's rows), R22 (a depth fill reviving a source's
+dead bytes on a page no rectangle reaches, after a long transfer row onto it), R23 (a depth put back over pixels a
+finish put there since, at 1x and 2x, the moves on and off), R24 (a taller drawer's changed depth rows), and above 1x
+the hull rule; and after the independent review: a store onto a texel a software PRIM reads but doesn't draw over,
+software depth read through the depth views, a copy out of clean bytes on a block the GPU drew in, more runs than G
+keeps counts of before a FINISH, reads of nothing reported, and the go split.
+
+**Found on the way** (each with a test that fails without its fix):
+- A write whose own record's checks finish the GPU (a store through VRAM's depth views onto a drawn pixel, a
+  transfer's half pixels) with G caught up: the finish, before the write in the stream though G makes it after, put
+  the drawn pixels back over it. The write's old bytes are now kept as a version wherever its pages may still be the
+  GPU's, so the finish's write-back goes under it.
+- R25, with the depth moves off (the fallback): a depth fill takes memory's bytes as they are where another target
+  drew on the GPU since the last finish, and a later put writes that depth back over the pixels a finish has put there
+  since, at 1x too, where the model's put rule held only above 1x. It holds now wherever a depth put back may not be
+  memory's newest (above 1x, or the renderer's `depthMoves()` off).
+- Found by ThreadSanitizer over the GPU groups (below): G starved while E writes into pages G writes back. E publishes
+  a version, waits for G's pin to go, copies, makes it ready; G, finding an unready version on a page it pinned, let
+  go and waited for it. With E writing on and on into such a page (pspsdk's samples, the CPU writing VRAM as the GPU
+  finishes there), G saw each next version before its rescan ended, nothing freed while it was stuck on that record:
+  quadratic, and under the sanitizer's slow atomics never done. Now E says it's copying once it has found the page
+  unpinned, then looks at the pins again, and G waits only for a version being copied; one published under its pins,
+  which waits for them, it reads past, memory having the bytes the copy will take (one of the two threads always sees
+  the other's step: both store, then load, in one order). The R13 test's interleavings now include E stopped while
+  copying (G waits) and E stopped after publishing till G is done (G goes on; the old protocol deadlocks there).
+- Found by the coordinator's library check with the thread On (every game from its start, 3,600 frames; the pictures
+  were Off's): two costs of the control pass that grew without bound. The textures the software renderer reads from
+  memory as it draws were kept one entry per PRIM until drawn, and E went through them all at every report it took,
+  which is at each load of VRAM, each list word read from VRAM and each vertex read, and at every write's look for a
+  conflict: quadratic in the PRIMs G had yet to draw. Ghost of Sparta, its lists in VRAM, crawled past the check's 15
+  minutes from its start (Off: 7), and Gran Turismo took 226 s (Off: 14). They're kept by page now, the newest PRIM
+  over each, with nothing to go through (and the put points are dropped as a prefix: they come in their places'
+  order): Gran Turismo 15 s. And an indexed PRIM's vertices were copied from the vertex address up to its most index,
+  a byte at a time, so a big buffer's few vertices were copied whole for every PRIM (85% of E in Jeanne d'Arc); now
+  from the least index to the most, in one copy from RAM: Jeanne d'Arc 123 s → 36 s (Off: 30). The tests: what the
+  model keeps of the software textures in flight is as big with 8,000 software PRIMs behind as with 500 (kept by
+  PRIM, the list every report went through grew by one entry each), and 20,000 loads of VRAM take less than four
+  times as long with 8,000 behind as with 500, the best of three rounds each (15 times as long with the list kept by
+  PRIM); and a sprite by indices 4000 and 4001 hands G a record no bigger than one by 0 and 1, which G reads as a run
+  from the copy.
+- Found by the independent review. Past 4,096 runs handed over before a FINISH is due (a GU direct list, its stall
+  address moved at each draw, makes a run each), G's counts of later runs overwrote earlier ones' that E hadn't
+  folded (runs fold only while a FINISH is due), a data race too: the GE's time came out wrong, and differently run
+  to run. E now folds the oldest as each run past 4,096 is handed over (`Kernel::geTime()`; exact, the fold taking
+  the cycles and the bus's clock kept at the hand-over). G's memory reported no read of nothing, so a texture where
+  nothing is left the count a state keeps (`System::unmappedReports`) short of Off's by the software renderer's texel
+  reads: G's memory reports through E's now, the count atomic and saturating at 16 (the drawing threads report too,
+  with the thread off as well). Three rules no test caught (each taken out, the suites passed with the thread On)
+  have tests now: the software textures' conflicts, page by page; the software depth rectangles; and the busy check
+  made for a read whose page is busy but whose bytes are clean (an HLE copy out of VRAM's depth views, whose check
+  covers the whole 16 KiB block and finishes the GPU wherever it drew there). And a write straddling two pages looks
+  at both for a watched texture (an HLE write may).
+
+**ThreadSanitizer and the GPU.** MoltenVK runs under ThreadSanitizer, nothing suppressed: every GPU group with the
+thread On, pspsdk's samples included, the GE-thread groups and the versions' group: 0 failures, no report (78, 12 and
+1 groups after the review's fixes, B1's fold and S1's reports among what they ran). Its first run, with the
+samples left out, found one race, in the tests (a test gate set while G was still taking records and reading it:
+the tests now drain the thread before setting it), none in the emulator, the render GE driving the GPU backend
+included; its run with the samples found the starvation above.
+
+**The go split is needed.** A go stopped at the GE time's bound runs on from where it stopped, with none of the run
+loop's steps between, and the review found the case that needs it (the design's R5): a call into the program held
+back while interrupts are off (an alarm gone off), the program turning them on with mtic, no system call, so the go
+goes on, inside a go whose limit came from the bound. Ended at the bound, the loop's startCall() would start the call
+there, at count 9,791 where the synchronous GE starts it at 19,583, with either engine. A test has it now, and fails
+with the split taken out (the suite and the scenes didn't).
+
+**Next (the second PR, stacked):** design steps 3 and 4: the frame shown from G (`Present` records, at most two
+frames in flight, `Shot` and `Settings` records, the window handed over through G), the drains bounded and unloading
+with G stuck, then Auto and its handover both ways, with switches forced at seeded frames.

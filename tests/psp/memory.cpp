@@ -194,6 +194,7 @@ static auto bulk() -> void {
 //scratchpad's and main RAM's pages steady (their entries never change), VRAM's not (the GE's workers take them out);
 //and power() keeps the buffers (and so the table) while the sizes stay the same.
 static auto pageTable() -> void {
+  Unthreaded unthreaded;  //(VRAM's pages in the table: threaded, they're all out of it, ge/thread.hpp)
   System s;
   for(u32 address : {0x0001'0000u, 0x0001'3000u, 0x0800'0000u, 0x0880'0000u, 0x09ff'f000u}) {
     CHECK(s.steadyTable[address >> 12], 1);

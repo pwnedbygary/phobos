@@ -26,6 +26,7 @@ struct Scene {
   GE& ge = s.ge;
   Memory& memory = s.memory;
   Scene() {
+    s.threadGE(false);  //(set and drawn by calling the GE directly, as draw.cpp's Canvas)
     auto& c = ge.commands;
     c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = 16, c[GE::FrameBufferPixelFormat] = 3;
     c[GE::DepthBufferPointer] = 0x1'0000, c[GE::DepthBufferWidth] = 16;

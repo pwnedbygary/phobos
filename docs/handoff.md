@@ -37,8 +37,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP display: the frame buffer set for the next vertical sync shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second) — 2026-10-16
 
-Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`, masters `03eca2a69`, `dd63f4ffb` and `230c0a731`
-merged in: #274, #266, #267, #268); docs/psp-core.md, part 108.
+Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`, masters `03eca2a69`, `dd63f4ffb`, `230c0a731` and
+`92eddbfea` merged in: #274, #266, #267, #268, #272, #273); docs/psp-core.md, part 108.
 - **Why**: Army of Two flips from its list's SIGNAL callback for the next sync, then asks which frame buffer is shown
   and waits for the blank while its flip isn't yet: two flips and a wait a frame, 30/20 fps on the owner's PSP.
   Phobos took every frame buffer at once, so the game never waited: master draws 251 frames a second for 60 shown.
@@ -61,6 +61,158 @@ merged in: #274, #266, #267, #268); docs/psp-core.md, part 108.
   call with the latch (Army of Two's two a frame, as the PSP's capture has them).
 - **Left out**: setframebuf's refusals (round 8's display-start first); a frame buffer set in the blank's handler,
   before the sync, taken at that sync (unrecorded).
+
+## PSP GE on a thread of its own, exact: option "GE Thread" (Off, the default, and On; the app doesn't offer it yet), the emulation thread waiting only where the GE could still change what it reads — 2026-10-17
+
+Branch `cursor/psp-ge-thread-2b67` (GE round 4, part B, first PR), on master `a8d5640f5` with `5442acb8b` (#265),
+`03eca2a69` (#274), `a014706e9` (#266, part 103: with the thread On its GE profile records the same),
+`dd63f4ffb` (#267, part 104) and `230c0a731` (#268, part 105: its skips through the GE's looks hold with the thread
+On, no further than the GE time's bound) merged in;
+docs/psp-core.md, part 109, has the evidence; the design (revision 4, approved by the independent review,
+both conditions met) is summed up there. Clean room: no PPSSPP for GE or GPU code, JPCSP not read. Save states
+unchanged (the same file with the thread on or off).
+- **What**: the kernel's GE on the emulation thread runs every list's commands as before and hands the drawing to a
+  render GE on its own thread as records; a model of what each PRIM may change has the emulation thread wait only
+  where the GE could still change bytes it reads; its writes are made at once, their old bytes kept as versions the
+  render GE reads and writes back through; the GE's clock folds the runs the thread counts. Exact by construction,
+  checked by two debug checks on in every threaded test machine (the whole value rule, and G-interest).
+- **The limit of this PR**: the frame is still shown from the emulation thread, which drains the GE thread at every
+  frame's end, so the threads overlap within a frame only. The frame shown from the GE thread, bounded drains and
+  unloading with it stuck, then Auto (design steps 3 and 4) are the stacked second PR's, with the app's option.
+- **Off costs nothing**: the emulation thread's instructions a frame against master on the M1 (Vulkan fast, 300
+  frames, 5 rounds): Super Monkey Ball -0.29%, Ghost of Sparta -0.02%, Chains of Olympus +0.05% (14 rounds +0.04%,
+  master's own spread 0.45%); ms within noise.
+- **Exact, the thread On with the checks against Off**: the 78 settled hashes (26 scenes x three renderers) all the
+  same; 26 scenes' 600 frames with states every 150 all the same; schedule fuzzing (10 scenes x three ways) and the
+  stress mode (a finish every 97th PRIM and kick end, 1x/2x on 26 scenes, 4x on 8) all the same; Ghost of Sparta
+  from its start, 2,400 frames, every frame, Software and Vulkan fast, the same; the suite Off, On and On fuzzed three
+  ways 0 failures (604 groups now: #265's and #266's merged in, the library check's two tests, the review's six);
+  ThreadSanitizer over the suite with the thread On, and over every GPU group on MoltenVK with the thread On
+  (pspsdk's samples included), no report, nothing suppressed.
+  Targeted tests for the review's findings (R14-R16, R19, R22-R24, the hull rule) each fail with their rule out.
+- **Found and fixed on the way**: a write whose own checks finish the GPU had the finish's write-back land over it
+  (now versioned where its pages may be the GPU's); with the depth moves off a later depth put could change bytes the
+  model held clean, at 1x too (R25: the put rule now holds there); ThreadSanitizer over the GPU groups found the GE
+  thread starved while the emulation thread writes into pages it writes back (it waited for every version not yet
+  ready; now only for one being copied) and a race in the tests' gate (they drain first now). The coordinator's
+  library check with the thread On found two costs of the control pass that grew without bound (the pictures were
+  Off's): the software renderer's textures read from memory kept one entry per PRIM until drawn and gone through at
+  every report the emulation thread takes (each VRAM load, each list word in VRAM): Ghost of Sparta from its start
+  crawled past the check's 15 minutes, Gran Turismo 226 s On against 14 Off (now kept by page: 15 s); and an indexed
+  PRIM's vertices copied from the buffer's start to its most index (now least to most: Jeanne d'Arc 123 s → 36 s, Off
+  30). A test each, failing without its fix. The independent review found: past 4,096 runs handed over before a
+  FINISH (GU's direct lists: a run per draw) the thread's counts of later runs overwrote ones not yet folded, a race,
+  the GE's time wrong (the kernel now folds the oldest at each run past 4,096); the render GE's reads of nothing went
+  unreported, so the count a state keeps differed (now reported through the kernel's GE's memory, the count atomic,
+  saturating at 16); and three rules no test caught (software textures' conflicts, software depth rectangles, the
+  busy check for a clean read on a busy page). A test each now, failing with its rule or fix taken out.
+- **Speed**: On is exact but seldom faster than Off on the M1, and in some games much slower (BlazBlue 4 s Off, 20 s
+  On; SSX on Tour 8 s, 43 s): every CPU access to VRAM takes the slow path and each store is a record of its own (the
+  design's narrower access records and run encoding aren't done yet), and games touching what the GE thread still
+  draws have the threads take turns. Auto (step 4) keeps such games synchronous; On is for the tests and the runner.
+- **The clock's go split is needed** (the review found the case: an alarm's call held back with interrupts off, mtic
+  turning them on inside a go limited by the GE time's bound; without the split the call starts at the bound): kept,
+  with a test that fails without it.
+- **Next**: the coordinator's library check with `--ge-thread On` again; then design steps 3-4 and the narrower,
+  batched access records in later PRs.
+
+## Screenshots: a film-strip card pops out of the picture and hops into a folder, and a pill says where it went or why it didn't; named for the game and the time; the core lets the picture go before it encodes — 2026-10-17
+
+Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265), master `03eca2a69` (#274) merged in;
+draft PR #273, with the fix rounds of its review's two rounds (each: approve with should-fixes).
+- **The report** (owner, 17 Oct): Shot in the pause menu gave no sign it worked, so he pressed it three times and fell
+  back to Android's screenshot. It had worked: three files, each named for the ROM's file name and milliseconds
+  (`God of War - Ghost of Sparta.chd_1792260870863.png`, 480x272).
+- **The design** (owner, 17 Oct): a pop-out like Android's own screenshot, a photo reel going into a folder icon,
+  "aesthetic, but performant at all costs", with fun and whimsy. It matches the coordinator's preview
+  (scratch/screenshot-fx/preview.html): its layout, keyframes and CSS easings.
+- **The effect** (ui/ScreenshotEffect.kt): `MainViewModel.takeScreenshot`, which the pause menu's Shot and the
+  screenshot hotkey both call, in every core, takes one shot at a time (a press while one is being taken and written is
+  dropped). `Screenshots.save` makes the file; `PhobosCore.captureScreenshot` takes the picture, which the core keeps,
+  and hands back a copy at most 640 px either way, which goes straight to the effect as a `ScreenshotEvent`; then
+  `writeScreenshot` writes the PNG while the effect plays, and the pill joins once `Screenshots.note` says how that
+  went. Should that be late, the pill waits for it and the slide-off waits for the pill (the card stays in the folder),
+  so the pill always slides in and stays up 660 ms before it all goes. While they wait the clock holds still at
+  2196 ms, by when everything else has stopped, so nothing is drawn; after 8 s the held time stands for the note's
+  (`runSavedShot`). `ScreenshotEffect`, after the pause menu in EmulatorScreen's Box, collects `screenshotEvents` (only
+  the newest waits). Saved, over 2.7 s or a late note's more: a film-strip card holding the picture starts exactly over
+  the game picture, washed white, and springs to the bottom-left corner as it develops (the top-left where the touch
+  controls show in play, even when shot from the pause menu; clear of the system bars and the cutout); the film winds
+  on two holes; a manila folder springs in beside it, its front panel tips open, the card hops in between its panels,
+  the front snaps shut, the folder squashes, nine sparkles burst, and a pill says "Screenshot saved" over "Screenshots
+  › PlayStation Portable" (in the app's own storage, which no file manager shows, where to choose a folder); then it
+  all slides off to the left. On a narrow screen the pill keeps to its title, as the preview does, but for that hint or
+  a failure, which wrap.
+  No picture, or a folder that can't be written: the pill alone, error-tinted, with the reason, 3 s; a write that fails
+  once the card is out: the pill beside the folder says so. A new shot restarts it. Remove animations: the card in the
+  folder with the pill, still, 1.6 s from when the pill shows (a delay, which the animator scale doesn't shorten).
+  TalkBack hears where it went once that's known.
+- **Its cost**: nothing in composition while none runs; one clock (an `Animatable`, linear) and the note's time (a
+  float state, set once), read through `ShotClock` (primitive floats, so nothing's boxed) only in `graphicsLayer {}`
+  and draw lambdas, so a frame recomposes and lays out nothing (EmulatorScreen never recomposes for it; the pill is
+  composed once, when its text is known). One `Layout` places fixed-size nodes once: the folder's back, the card, the
+  front, the sparkles, the pill, each its own small layer, each fading on its own (`ModulateAlpha`: no offscreen
+  buffer, which would cut off the folder's tab, drawn above its node; so the card shows through the front panel as
+  they fade at the end). Paths and brushes cached; no blur; shadows only on the card (none while it covers the
+  picture) and the folder's back (one corner radius, so its outline needs no Path). The effect's own code allocates
+  nothing per frame; Compose UI 1.7.6 does, for each animated layer as its block runs (javap): the block's wrapper
+  lambda and the layer's outline anew (a Rect and an `Outline.Rectangle`; for the card and the folder's back a Rect, a
+  RoundRect and an `Outline.Rounded`), three or four small objects a layer, and the `Animatable` its own. The card's
+  picture is the capture's copy (averaged down in native code) as a hardware bitmap, dropped at the end. No pointer
+  input or focus: the touch controls, the game and the pause menu keep theirs.
+- **The motion** (util/ScreenshotFx.kt, pure Kotlin, internal): `CssEase` (CSS's cubic-bezier, solved as browsers do),
+  `Track` (keyframes as Web Animations hold them), `ShotGeometry` (the preview's layout in hundredths of the screen's
+  width; a tall picture's card, the WonderSwan held upright, goes into the folder narrower than 80% so its bottom
+  stays behind the front panel), `ShotTimeline`, `ShotErrorTimeline`, and `flapCorners` (the front panel's CSS
+  `perspective() rotateX()`, drawn through `Matrix.setPolyToPoly`).
+- **Native** (PhobosRunner.cpp, PhobosJNI.cpp): `takeScreenshot` is now `captureScreenshot` then `writeScreenshot`
+  (both at once for the save states' previews and the desktop). Its general path held `windowMutex`, which `video()`
+  takes for every frame, through the colour conversion of the whole buffer and the PNG encode; it now copies the frame
+  under the lock and converts after. It takes the frame's own size, kept with `lastFrameBuffer` as `video()` writes it
+  (`currentWidth`/`currentHeight` followed the window's target size, which a frame of another size can share, and are
+  gone), and turns a WonderSwan held upright as `video()` turns it for the window (its PNG, and the card, were
+  sideways). The last frame is let go as a game unloads. `writeScreenshot` says whether all of the PNG got there (the
+  file's size, below). The JNI keeps the captured picture for `writeScreenshot` (or `releaseScreenshot`) and hands back
+  its copy, each pixel the average of a square of the picture's; where even the copy's stand-in can't be allocated, it
+  clears the out-of-memory error and there's no screenshot, and a path it can't read is not written. The N64 and PSP
+  Vulkan paths are as they were.
+- **The name** is the ROM's file name without its extension (`romTitle`, as the pause menu's title drops it) and the
+  local date and time: `God of War - Ghost of Sparta 2026-10-17 14-15-45.png`. What FAT, exFAT and SAF's providers
+  refuse (`\ / : * ? " < > |`) becomes `_`, control characters go, so do spaces around the title and dots before it,
+  the title is cut at 150 UTF-8 bytes on a whole character, and it's "Screenshot" when nothing's left. Each file is
+  made (`createNewFile`) before the core writes the picture into it, so a shot never replaces a file, and shots taken
+  in the same second, even at once, get `-2`, `-3`. nall's PNG writer carries on past failed writes (a full disk), so
+  `writeScreenshot` checks the file: the size the encoder writes, 63 + height x (6 + 4 x width) bytes, or, where nall
+  then had `optipng` or `pngcrush` recompress it (a desktop's), smaller and still ending in IEND. A file not written
+  whole, or left empty, is deleted and the pill says the folder can't be written. The folder (`<Screenshots Path, or
+  the app's own>/<system>`) and the PNG are as before, but a WonderSwan held upright's is upright.
+- **Why the core's failure means no picture**: `captureScreenshot` finds none (no frame yet; the PSP's or the N64's
+  picture unreadable) before anything is written, and the file made first shows the folder takes one.
+- **Tests**: `ShotTimelineTest` (at 0 ms the card's picture is the game picture's rectangle, for six screens; it
+  rests in its corner, clear of the system bars; it ends in the folder between its panels with its top showing; the
+  hop; the folder's opening, shutting and sparkles; at the end everything is off to the left and transparent; never
+  NaN, opacities in 0-1; no jump where keyframes meet; Remove animations still, every value; the failure's pill; the
+  easings against values solved apart; the front panel's perspective; 70 values at 20 mid-span times as the preview
+  itself moves, sampled from its animations in Chrome: scratch/screenshot-feedback/golden; a note known by the pill's
+  time changes nothing, a late one keeps the pill's whole slide-in and its 660 ms up before the slide-off, one after
+  the on-time end still gets its pill, and none at all still ends; once settled nothing but the pill and the slide-off
+  moves, and `runSavedShot` holds the clock still there while a late note is awaited, taking the held time for a
+  note that never comes, but never for an on-time one). `ScreenshotsTest` (the name, the characters, long
+  titles, never overwriting, the folder made, no picture, a picture not written whole or left empty, a folder that
+  can't be written, the note: the old message's texts as the pill's two lines and TalkBack's, the hint).
+- **Checks**: on the Mac, modern flavor: `ScreenshotsTest` 9/0, `ShotTimelineTest` 20/0, the suite 379/0 (50
+  classes). The clock's hold tests fail when the clock runs on through the wait or the held time isn't taken on the
+  timeout (each tried, then reverted). Seven mutations each fail a test, each reverted: the review's first four
+  (each span eased with the next span's curve, the 330 ms pose changed, the hop eased out: the golden test; Remove
+  animations' turn ignoring it: its test) and its second round's three spans that looked linear to it (the wind-up,
+  the folder's last settle, the dip back: the golden test at 1115, 1880 and 1735 ms). The native files pass clang's
+  syntax check for arm64-v8a with the build's definitions and include paths; CI compiles them in both flavors' APKs
+  and the desktop builds. The PNG size `writeScreenshot` expects matches nall's own output from 1x1 to 1920x1088 (the
+  review's, to 4800x2720), and must change with nall/encode/png.hpp: a larger file is refused outright. Not run on the
+  RP6: the coordinator measures the effect there. Not seen drawn here (no device, no preview renderer): the
+  `@Preview`s at 420, 1400 and 2000 ms and the failure show it in Android Studio. nall's PNG writer can't run
+  `optipng` or `pngcrush` on Android (nall defines PLATFORM_ANDROID there, and its `execute()` does nothing): the RP6
+  never forks for them; the Linux and macOS desktop builds do.
 
 ## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
 
