@@ -62,7 +62,8 @@ bytes, and the GE's pipeline: 28 and 16 a queued item; "Fast" 46 in all).
   beside the GE (the CPU timing's project). The merge stays held.
 - **Checks**: tests/psp sanitized, 616 groups, 0 failures with the GE thread on (off: all but `measured6`'s textured
   fill, its bound since set to 3% and passed); the ares tests 361 checks, 0 failed; `test_geprof.py` 24 tests; the fit
-  reproduced from a runner built from the tree.
+  reproduced from a runner built from the tree; "Fast" against master on eight scenes, Software and Vulkan-fast: 16 of
+  16 the same, every frame and the states (46 zero bytes put in).
 - **Not yet**: round 10's cases (perspective, turned and mipmapped triangles, CLUT32, wide triangles into 16-bit, a
   light's shine by kind, 8-texel CLUT8 strips); "Fast"'s templates per timing; the CPU's contention with the GE (the
   CPU's timing, its own project); fixed-point charges before any default change.
