@@ -51,15 +51,21 @@ PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 22 bytes, and the GE's pi
   (70% within 10%, 90% within 25%); the command and the terms it couldn't measure in part 106.
 - **"Fast"** is master's bit for bit, with "GE Thread" off and on, and no longer pays for "PSP" (the review measured
   4.5-7.7% more instructions a frame): 0.19 to 0.56% on Vulkan-fast and within master's own spread on Software
-  (against `230c0a731`); exact against master `fe3deab82` with the thread off and on (part 106's checks).
+  (against `230c0a731`); exact against master `fe3deab82` with the GE thread off and on (the review's 33 scenes,
+  Software and Vulkan-fast: 66 of 66 each way).
 - **The GE thread** (part 109): "PSP" keeps the GE on the emulation thread whatever "GE Thread" says
   (`System::threadGE()`; its pipeline takes each run's time as the run ends), so "PSP" with the thread on is "PSP"
-  with it off (part 106's checks); a test has the system refuse the thread with "PSP" and start it with "Fast".
+  with it off (the seven captured scenes and part 105's spin scenes, every frame and state); a test has the system
+  refuse the thread with "PSP" and start it with "Fast".
 - **A SIGNAL** waits for the front end to reach it, its lead kept through stall updates (a test gives the same list
   whole, in one part and a part a sprite).
 - **The gate** (`tools/psp-ge-profile/decoder/gate.py`, the owner's 18 captures in
-  `tests/psp/measurements/ge-captures`, Sunday's 6 taken with round 9): the merged head's table in part 106. The merge stays held.
-- **Checks**: part 106 (the suites with the thread off and on, the ares tests, the exact checks).
+  `tests/psp/measurements/ge-captures`, Sunday's 6 taken with round 9): 6 of the 10 judged rows within 15%
+  (Killzone at `kz-gp`'s moment, the courtyard, against Friday's and Sunday's -1; Activision Hits' menu against both
+  its captures); too fast Ghost of Sparta −21% and Super Monkey Ball −31%, too slow Activision Hits' 3D menu +29% and
+  +27%. The merge stays held.
+- **Checks**: tests/psp sanitized, 614 groups, 0 failures with the GE thread off and on; the ares tests 361 checks, 0 failed; `test_geprof.py` 24
+  tests; CI green on the merged head.
 - **Not yet**: the refit with round 9 (#276, part 110: textures by the texels read after a TEX_FLUSH, triangles
   reading narrow, vertex formats); the CPU's contention with the GE (the CPU's timing, its own project); fixed-point
   charges before any default change. Part 107 (round 8) is PR #270, part 108 (the display latch) #271, merged.
