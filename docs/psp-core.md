@@ -16302,9 +16302,10 @@ screen, which never sync, a loop's whole time):
 - The decoder counts frames by flips; a game that sets the same buffer at every call (Killzone) has each call counted
   as a frame, shown from the next vblank (a note says so): Killzone shows 32.1 and 33.4 frames a second on the PSP,
   27.7 and 29.4 ms of GE time each, and 59.9 in Phobos, 4.3 drawn for each shown.
-- The GE sync spin (#268) works out a polled sceGeDrawSync or sceGeListSync without the call being made, so with it a
-  profile of a game that polls them counts fewer of those calls than the game made. None of these scenes polls: they
-  wait in their syncs (mode 0) or don't sync.
+- The GE sync spin (part 105) works out a polled sceGeDrawSync or sceGeListSync without the call being made, so the
+  runner's `--ge-profile` turns the skip off (`--spin-skip`): a profile counts every poll, as the PSP's plugin
+  records them (with the skip on, a test kept 63 of 587,523). None of these scenes polls: they wait in their syncs
+  (mode 0) or don't sync.
 - The plugin's lines in PLUGINS.TXT: ARK-4's r205 source matches several IDs on a line, but the owner's PSP loaded it
   only from a line of one; one a line is what the README asks.
 - Scratch: `~/phobos-work/scratch/psp-ge-profile` (`NOTES.md`; `stick/`, the owner's files; `stick-diag/`, the load
@@ -16406,13 +16407,98 @@ game from boot in #269's runner, its GE profiled and its files traced). The revi
 the 266 games make in their first 1200 frames, replayed through master's and this branch's rules: no answer changed)
 is in `~/phobos-work/scratch/review-267/trace/`. Nothing was run on the RP6.
 
+## Part 105: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins
+
+On branch `cursor/psp-ge-sync-spin-2b67` (draft PR #268), from master `a8d5640f5` (part 101, #263), masters
+`5442acb8b` (part 102, #265; #264, no part), `03eca2a69` (#274, no part) and `dd63f4ffb` (parts 103 and 104, #266 and
+#267) merged in. The task (the GE timing design's first step, which the owner approved): part 76's GE timing, a PSP's
+time for each list, made the games that poll the GE slower on the host, as they asked for as long as a PSP's GE
+draws: on the RP6 at 5x Resistance went from 59.9 to 40.4 frames a second and Need for Speed: Shift from 45.3 to
+32.9, Shift calling `sceGeDrawSync(1)` some 7000 times a frame with about 765 cycles of its own work between calls
+(part 76's count). Part 91 skips loops of calls that change nothing to just before the CPU's go ends, every register,
+byte and cycle as running them would give; the GE's looks weren't among the calls it could work out. Clean room: our
+code, uOFW for the driver's behaviour, nothing of PPSSPP or JPCSP. Save states are unchanged (layout 32): nothing new
+is kept.
+
+### What changed
+
+- **The looks are calm** (kernel/ge.cpp): `sceGeDrawSync` and `sceGeListSync` in mode 1, or with a mode refused, or
+  a list (one refused in any mode, 0 too), change nothing (`Kernel::calm`), so the call leaves the CPU's go as it was
+  and may be a spin's turn (part 91's `spinTurn()`). A wait (mode 0 with a list there, or `sceGeDrawSync(0)`) isn't
+  one.
+- **Their spin handlers** (spins.cpp: `spinGeDrawSync()`, `spinGeListSync()`) give the shadow the call's answer
+  without making it, through the same function the call answers with (`geDrawLook()`, `geListLook()`), so the two
+  can't differ; a list refused is worked out in any mode, 0 too, but a wait isn't, so a turn calling one isn't
+  skipped. Neither function reads the clock: a skip answers every turn it passes with the answer it gives then.
+- **The runner's `--spin-skip on|off`** (tools/psp-runner): part 91's skip, on by default, off with `--ge-profile`
+  unless given. A skipped turn makes no calls, so a profile kept few of a game's polls (in the test of the looks,
+  63 of 587,523 poll records); with the skip off a profile counts every poll, as the PSP's plugin records them. The
+  report says which ran, so a library check can run the skip on and off in one binary.
+- **Why it's exact.** What the GE and its lists are doing changes only in a system call (an enqueue, a stall update,
+  a list's FINISH taken) or between the CPU's goes (the GE given more of a frame's commands, `geBusy`). A list's
+  FINISH falls due at `geDoneAt`, which `untilNextEvent()` makes the go's end, and `spinSkip()` already refuses a skip
+  past it; the FINISH is taken by the first call after, as before. So every turn a skip passes over would have had
+  the same answer, and the turns left run as they would.
+
+### Tests
+
+- **"the GE's looks polled, skipped as run"** (tests/psp/spins.cpp): a program queues a list of 16 sprites covering
+  the screen (each a fill the GE takes its time over) with a finish callback, then asks how the GE is doing till it
+  says done, the clock noted after each; each variant queues three lists: through `sceGeDrawSync(1)`, through
+  `sceGeListSync(id, 1)`, and with the list held at its start (its stall address) till a mover thread moves that to
+  its end, the looks saying 3 and then 2. On both engines, with the skip on and off, the machine's whole state is
+  the same after every eighth of a frame, and thousands of turns are skipped, the stalled phase's among them (some
+  81,000 before the mover's turn); with a register counting the turns (a loop that isn't one turn over and over)
+  none are. The finish callbacks run once a list, the clock noted moving on.
+- **"the GE's looks polled behind a list, past a SIGNAL, with interrupts held off"** (the review's experiments): a
+  list queued behind another and asked after till done (queued, then drawing); a list's SIGNAL callback running
+  mid-poll; and polling with interrupts held off past the list's FINISH till the vertical blank comes, then on. The
+  same, both engines, each skipped by the thousand.
+- **"the GE's looks polled under a GE profile"**: with a profile recording, the skip on and off leave the machine the
+  same and every record but the looks' the same, and with it off every look is recorded.
+- **"ge FINISH after a quiet function"** (tests/psp/ge.cpp): the looks, and a mode or a list refused (a list in mode 0
+  too, and a free list's ID in mode 1), are dispatched as calm, the next thing's time where it was after each.
+
+### Checks
+
+`tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+574 groups, 0 failures (the new group's list first put where the test machine keeps its stubs, which drew
+nothing: moved to the GE tests' addresses, some 196,000 looks a list for the `sceGeDrawSync` loop and 174,000 for
+`sceGeListSync`'s); with master `dd63f4ffb` merged in (parts 103 and 104), 580 groups, 0 failures, the GE profile's
+groups among them; with the review's fixes, 582 groups, 0 failures. CI runs tests/allegrex, tests/psp twice
+(sanitized, and built as the app is), tests/psp/ares and the builds.
+
+### What it changes
+
+With today's GE (Sony's peaks), a list is done long before most polling loops come round many times, so little
+changes now. With the PSP's GE timing (#269, part 106; the review's runs, 3,600 frames, a fixed clock, the
+library's presses):
+- **Resistance** polls `sceGeListSync(id, 1)` (not `sceGeDrawSync(1)`): 592,699,906 turns skipped in the 3,600
+  frames (some 285,000 a frame from frame 1,800), its state at frame 3,600 the same byte for byte as with the skip
+  off; the host's time 24.8 s, against 30.2 and 32.0 s with it off.
+- **Need for Speed: Shift** polls `sceGeDrawSync(1)` some 45,000 times a frame, but every turn also calls
+  `sceKernelWaitSema(0x109, 1, NULL)` on a binary semaphore that's free (268,404,797 times in the 3,600 frames), which
+  succeeds at once and is given back in the same turn. A wait that succeeds isn't calm, so `syscall()` sets the
+  detector back each turn (kernel.cpp): no turn skipped, 57.8 s with the skip on against 59.0 s off, the run the same.
+
+### Left
+
+- Shift's loop: a wait that succeeds at once and its signal in the same turn, a net change of zero with no thread
+  waiting, made a spin's turn. Its own pull request, after this one.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/sync/` (this part's draft) and `tests.sh` (the suites as the load rules let
+them run); the review's runs, mutations and experiments in `~/phobos-work/scratch/review-268/`. Nothing was run on
+the RP6.
+
 ## Part 108: the display's frame buffer for the next vertical sync — sceDisplaySetFrameBuf's sync 1 shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second)
 
 On branch `cursor/psp-display-latch-2b67` (draft PR #271), from master `5442acb8b` (part 102, #265; #264, no part),
-masters `03eca2a69` (#274, no part) and `dd63f4ffb` (parts 103 and 104, #266 and #267) merged in. Sources:
-pspautotests' display/setframebuf and display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP.
-Save states: layout 33 (its own: #269's GE timing takes 33 too, and whichever lands second renumbers its layout to
-34).
+masters `03eca2a69` (#274, no part), `dd63f4ffb` (parts 103 and 104, #266 and #267) and `230c0a731` (part 105, #268)
+merged in. Sources: pspautotests' display/setframebuf and display/isstate (their recordings), pspsdk's
+`pspdisplay.h`. No PPSSPP or JPCSP. Save states: layout 33 (its own: #269's GE timing takes 33 too, and whichever
+lands second renumbers its layout to 34).
 
 ### Why
 

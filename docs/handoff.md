@@ -37,8 +37,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP display: the frame buffer set for the next vertical sync shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second) — 2026-10-16
 
-Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`, masters `03eca2a69` and `dd63f4ffb` merged in: #274,
-#266, #267); docs/psp-core.md, part 108.
+Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`, masters `03eca2a69`, `dd63f4ffb` and `230c0a731`
+merged in: #274, #266, #267, #268); docs/psp-core.md, part 108.
 - **Why**: Army of Two flips from its list's SIGNAL callback for the next sync, then asks which frame buffer is shown
   and waits for the blank while its flip isn't yet: two flips and a wait a frame, 30/20 fps on the owner's PSP.
   Phobos took every frame buffer at once, so the game never waited: master draws 251 frames a second for 60 shown.
@@ -61,6 +61,33 @@ Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`, masters `03eca2
   Two's two a frame, as the PSP's capture has them).
 - **Left out**: setframebuf's refusals (round 8's display-start first); a frame buffer set in the blank's handler,
   before the sync, taken at that sync (unrecorded).
+
+## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
+
+Branch `cursor/psp-ge-sync-spin-2b67`, on master `a8d5640f5` (part 101, #263), masters `5442acb8b` (#264, #265),
+`03eca2a69` (#274) and `dd63f4ffb` (#266, #267) merged in; draft PR #268. docs/psp-core.md, part 105, has the
+evidence. Clean room: our code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states unchanged
+(layout 32).
+- **Why**: the GE timing design's first step (approved by the owner): part 76's GE timing made polling games slower
+  on the host (Resistance 59.9 to 40.4 and Need for Speed: Shift 45.3 to 32.9 on the RP6 at 5x).
+- **The change** (kernel/ge.cpp, spins.cpp, kernel.cpp, kernel.hpp): the looks (mode 1, or a mode refused, or a list
+  refused in any mode) are calm; their spin handlers answer through the same functions as the calls
+  (`geDrawLook()`, `geListLook()`, which never read the clock); a wait (mode 0) isn't a spin. Exact as part 91's: the
+  GE's state changes only in a system call or between the CPU's goes, and a skip already stops before a list's
+  FINISH falls due. The runner's `--spin-skip on|off` (on by default, off with `--ge-profile`, so a profile counts
+  every poll as the PSP's plugin does).
+- **Measured** (the review, #269's PSP timing, 3,600 frames): Resistance polls `sceGeListSync(id, 1)`: 592,699,906
+  turns skipped, the state at frame 3,600 the same as with the skip off, host 24.8 s against 30.2 and 32.0 s. Shift's
+  `sceGeDrawSync(1)` loop isn't skipped: each turn also takes a free semaphore (a `sceKernelWaitSema` that succeeds
+  at once, not calm), which sets the detector back (57.8 s on, 59.0 s off).
+- **Tests**: "the GE's looks polled, skipped as run" (both engines, the skip on and off, the whole state the same
+  after every eighth of a frame: the two looks and a stalled list, its stalled phase skipped too; a loop counting its
+  turns not skipped); "... behind a list, past a SIGNAL, with interrupts held off" (the review's experiments); "...
+  under a GE profile" (every look recorded with the skip off); "ge FINISH after a quiet function" dispatches the looks
+  and refusals as calm.
+- **Checks**: tests/psp sanitized: 582 groups, 0 failures; CI green.
+- **Left**: Shift's loop (a wait that succeeds at once and its signal in the same turn: no net change, no waiter) as
+  a spin's turn is its own pull request, after this one.
 
 ## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's captures' 333/166, read before the game ran — 2026-10-16
 
