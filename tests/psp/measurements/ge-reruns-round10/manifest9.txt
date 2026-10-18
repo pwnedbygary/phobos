@@ -1,0 +1,206 @@
+psp-measure's GE tests, round 9 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,
+part 110, what each is for). Records of words as round 8's (manifest8.txt): case, size, CPU MHz << 16 | bus MHz
+(as scePower gave them back), repeats | values << 16, then per run `values` times in microseconds from just
+before sceGeListEnQueue: to the finish callback, to sceGeListEnQueue's return, and (time-lists2) to the last
+sceGeListEnQueue's or sceGeListUpdateStallAddr's return; 0xffffffff for a run not finished (see
+<name>.stalled). time-lists2 is round 8's time-lists with its stall addresses cached, at 222/111, 333/166,
+333/222/166 and 266/133 MHz; the rest run at the first two; the clocks as found are put back after each.
+time-anchors' cases are round 8's, built the same way at the same sizes. The cases (test case: what; size):
+time-anchors 0: round 8's time-strips 2: VRAM, 8888 512x512, strips 32 wide; layers
+time-anchors 1: round 8's time-strips 6: VRAM, 8888 512x512, one sprite 512 wide; layers
+time-anchors 2: round 8's time-strips 30: RAM, 8888 512x512 not swizzled, strips 32 wide; layers
+time-anchors 3: round 8's time-strips 37: RAM, 8888 512x512 swizzled, strips 32 wide; layers
+time-anchors 4: round 8's time-strips 41: RAM, 8888 512x512 swizzled, one sprite 512 wide; layers
+time-anchors 5: round 8's time-strips 44: RAM, CLUT8 512x256 swizzled, strips 32 wide; layers
+time-anchors 6: round 8's time-textures 13: 3D: RAM 8888 256x256 swizzled over 256x256 pixels, w 1 at the left to 2 at the right; layers
+time-anchors 7: round 8's time-textures 19: sprites 32x32, each its own CLUT8 32x32 texture (RAM, swizzled, 1 KiB), one palette; sprites
+time-anchors 8: round 8's time-state 0: nothing between the sprites; sprites
+time-anchors 9: round 8's time-state 1: TEX_FLUSH before each; sprites
+time-anchors 10: round 8's time-vertices 0: a strip, float positions; triangles
+time-anchors 11: round 8's time-vertices 2: a strip, 8-bit positions; triangles
+time-anchors 12: round 8's time-pixels 0: the textured fill alone; layers
+time-anchors 13: round 8's time-setup 1: squares 16x16; layers
+time-anchors 14: round 8's time-scenes 0: Killzone's scene list; lists
+time-tristrips 0: RAM, 8888 512x512 swizzled, strips 8 wide as triangles; layers
+time-tristrips 1: RAM, 8888 512x512 swizzled, strips 16 wide as triangles; layers
+time-tristrips 2: RAM, 8888 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 3: RAM, 8888 512x512 swizzled, strips 64 wide as triangles; layers
+time-tristrips 4: RAM, 8888 512x512 swizzled, strips 128 wide as triangles; layers
+time-tristrips 5: RAM, 8888 512x512 swizzled, strips 256 wide as triangles; layers
+time-tristrips 6: RAM, 8888 512x512 swizzled, all 512 wide as two triangles; layers
+time-tristrips 7: RAM, 8888 512x512 not swizzled, strips 8 wide as triangles; layers
+time-tristrips 8: RAM, 8888 512x512 not swizzled, strips 16 wide as triangles; layers
+time-tristrips 9: RAM, 8888 512x512 not swizzled, strips 32 wide as triangles; layers
+time-tristrips 10: RAM, 8888 512x512 not swizzled, strips 64 wide as triangles; layers
+time-tristrips 11: RAM, 8888 512x512 not swizzled, strips 128 wide as triangles; layers
+time-tristrips 12: RAM, 8888 512x512 not swizzled, strips 256 wide as triangles; layers
+time-tristrips 13: RAM, 8888 512x512 not swizzled, all 512 wide as two triangles; layers
+time-tristrips 14: VRAM, 8888 512x512 swizzled, strips 8 wide as triangles; layers
+time-tristrips 15: VRAM, 8888 512x512 swizzled, strips 16 wide as triangles; layers
+time-tristrips 16: VRAM, 8888 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 17: VRAM, 8888 512x512 swizzled, strips 64 wide as triangles; layers
+time-tristrips 18: VRAM, 8888 512x512 swizzled, strips 128 wide as triangles; layers
+time-tristrips 19: VRAM, 8888 512x512 swizzled, strips 256 wide as triangles; layers
+time-tristrips 20: VRAM, 8888 512x512 swizzled, all 512 wide as two triangles; layers
+time-tristrips 21: VRAM, 8888 512x512 not swizzled, strips 8 wide as triangles; layers
+time-tristrips 22: VRAM, 8888 512x512 not swizzled, strips 16 wide as triangles; layers
+time-tristrips 23: VRAM, 8888 512x512 not swizzled, strips 32 wide as triangles; layers
+time-tristrips 24: VRAM, 8888 512x512 not swizzled, strips 64 wide as triangles; layers
+time-tristrips 25: VRAM, 8888 512x512 not swizzled, strips 128 wide as triangles; layers
+time-tristrips 26: VRAM, 8888 512x512 not swizzled, strips 256 wide as triangles; layers
+time-tristrips 27: VRAM, 8888 512x512 not swizzled, all 512 wide as two triangles; layers
+time-tristrips 28: RAM, CLUT8 512x256 swizzled, strips 8 wide as triangles; layers
+time-tristrips 29: RAM, CLUT8 512x256 swizzled, strips 16 wide as triangles; layers
+time-tristrips 30: RAM, CLUT8 512x256 swizzled, strips 32 wide as triangles; layers
+time-tristrips 31: RAM, CLUT8 512x256 swizzled, strips 64 wide as triangles; layers
+time-tristrips 32: RAM, CLUT8 512x256 swizzled, strips 128 wide as triangles; layers
+time-tristrips 33: RAM, CLUT8 512x256 swizzled, strips 256 wide as triangles; layers
+time-tristrips 34: RAM, CLUT8 512x256 swizzled, all 512 wide as two triangles; layers
+time-tristrips 35: VRAM, CLUT8 512x512 swizzled, strips 8 wide as triangles; layers
+time-tristrips 36: VRAM, CLUT8 512x512 swizzled, strips 16 wide as triangles; layers
+time-tristrips 37: VRAM, CLUT8 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 38: VRAM, CLUT8 512x512 swizzled, strips 64 wide as triangles; layers
+time-tristrips 39: VRAM, CLUT8 512x512 swizzled, strips 128 wide as triangles; layers
+time-tristrips 40: VRAM, CLUT8 512x512 swizzled, strips 256 wide as triangles; layers
+time-tristrips 41: VRAM, CLUT8 512x512 swizzled, all 512 wide as two triangles; layers
+time-tristrips 42: RAM, 5650 512x512 swizzled, strips 8 wide as triangles; layers
+time-tristrips 43: RAM, 5650 512x512 swizzled, strips 16 wide as triangles; layers
+time-tristrips 44: RAM, 5650 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 45: RAM, 5650 512x512 swizzled, strips 64 wide as triangles; layers
+time-tristrips 46: RAM, 5650 512x512 swizzled, strips 128 wide as triangles; layers
+time-tristrips 47: RAM, 5650 512x512 swizzled, strips 256 wide as triangles; layers
+time-tristrips 48: RAM, 5650 512x512 swizzled, all 512 wide as two triangles; layers
+time-tristrips 49: sprites: VRAM, 8888 512x512 swizzled, strips 8 wide; layers
+time-tristrips 50: sprites: VRAM, 8888 512x512 swizzled, strips 16 wide; layers
+time-tristrips 51: sprites: VRAM, 8888 512x512 swizzled, strips 32 wide; layers
+time-tristrips 52: sprites: VRAM, 8888 512x512 swizzled, strips 64 wide; layers
+time-tristrips 53: sprites: VRAM, 8888 512x512 swizzled, strips 128 wide; layers
+time-tristrips 54: sprites: VRAM, 8888 512x512 swizzled, strips 256 wide; layers
+time-tristrips 55: sprites: VRAM, 8888 512x512 swizzled, one sprite 512 wide; layers
+time-tristrips 56: sprites: VRAM, CLUT8 512x512 swizzled, strips 8 wide; layers
+time-tristrips 57: sprites: VRAM, CLUT8 512x512 swizzled, strips 16 wide; layers
+time-tristrips 58: sprites: VRAM, CLUT8 512x512 swizzled, strips 32 wide; layers
+time-tristrips 59: sprites: VRAM, CLUT8 512x512 swizzled, strips 64 wide; layers
+time-tristrips 60: sprites: VRAM, CLUT8 512x512 swizzled, strips 128 wide; layers
+time-tristrips 61: sprites: VRAM, CLUT8 512x512 swizzled, strips 256 wide; layers
+time-tristrips 62: sprites: VRAM, CLUT8 512x512 swizzled, one sprite 512 wide; layers
+time-tristrips 63: RAM, 8888 512x512 swizzled, squares 8x8 of two triangles; layers
+time-tristrips 64: RAM, 8888 512x512 swizzled, squares 16x16 of two triangles; layers
+time-tristrips 65: RAM, 8888 512x512 swizzled, squares 32x32 of two triangles; layers
+time-tristrips 66: RAM, 8888 512x512 swizzled, squares 64x64 of two triangles; layers
+time-tristrips 67: VRAM, 8888 512x512 swizzled, squares 8x8 of two triangles; layers
+time-tristrips 68: VRAM, 8888 512x512 swizzled, squares 16x16 of two triangles; layers
+time-tristrips 69: VRAM, 8888 512x512 swizzled, squares 32x32 of two triangles; layers
+time-tristrips 70: VRAM, 8888 512x512 swizzled, squares 64x64 of two triangles; layers
+time-tristrips 71: RAM, CLUT8 512x256 swizzled, squares 8x8 of two triangles; layers
+time-tristrips 72: RAM, CLUT8 512x256 swizzled, squares 16x16 of two triangles; layers
+time-tristrips 73: RAM, CLUT8 512x256 swizzled, squares 32x32 of two triangles; layers
+time-tristrips 74: RAM, CLUT8 512x256 swizzled, squares 64x64 of two triangles; layers
+time-tristrips 75: 3D: RAM, 8888 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 76: 3D: RAM, 8888 512x512 swizzled, strips 256 wide as triangles; layers
+time-tristrips 77: 3D: VRAM, 8888 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 78: 3D: VRAM, 8888 512x512 swizzled, strips 256 wide as triangles; layers
+time-tristrips 79: bilinear: RAM, 8888 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 80: bilinear: VRAM, 8888 512x512 swizzled, strips 32 wide as triangles; layers
+time-tristrips 81: bilinear: RAM, CLUT8 512x256 swizzled, strips 32 wide as triangles; layers
+time-tristrips 82: bilinear: sprites: RAM, 8888 512x512 swizzled, strips 32 wide; layers
+time-tristrips 83: bilinear: sprites: VRAM, 8888 512x512 swizzled, strips 32 wide; layers
+time-tristrips 84: shrunk 2:1 onto 256x256: RAM, 8888 512x512 swizzled, strips 32 pixels wide as triangles; layers
+time-tristrips 85: shrunk 2:1 onto 256x256: VRAM, 8888 512x512 swizzled, strips 32 pixels wide as triangles; layers
+time-tristrips 86: shrunk 2:1 onto 256x256: sprites: RAM, 8888 512x512 swizzled, strips 32 pixels wide; layers
+time-tristrips 87: shrunk 2:1 onto 256x256: sprites: VRAM, 8888 512x512 swizzled, strips 32 pixels wide; layers
+time-loads 0: CLUT8 swizzled in RAM, one 32x32 texture set once; sprites
+time-loads 1: CLUT8 swizzled in RAM, a new 8x8 texture before each sprite (128 bytes; repeating 4 times each way); sprites
+time-loads 2: the same, a new 16x16 texture (256 bytes; repeating twice each way); sprites
+time-loads 3: the same, a new 32x32 texture (1 KiB); sprites
+time-loads 4: the same, a new 64x64 texture (4 KiB), its top-left 32x32 texels; sprites
+time-loads 5: the same, a new 128x128 texture (16 KiB), its top-left 32x32 texels; sprites
+time-loads 6: the same, a new 256x256 texture (64 KiB), its top-left 32x32 texels; sprites
+time-loads 7: CLUT8 swizzled in RAM, one 64x64 texture set once, sprites 64x64; sprites
+time-loads 8: the same, a new 64x64 texture before each sprite 64x64 (all of it); sprites
+time-loads 9: CLUT8 swizzled in RAM, one 128x128 texture set once, sprites 128x128; sprites
+time-loads 10: the same, a new 128x128 texture before each sprite 128x128 (all of it); sprites
+time-loads 11: CLUT8 swizzled in RAM, one 8x8 texture set once, sprites 8x8; sprites
+time-loads 12: the same, a new 8x8 texture before each sprite 8x8; sprites
+time-loads 13: CLUT8 32x32: the same texture set again before each sprite (sceGuTexImage, with TEX_FLUSH); sprites
+time-loads 14: CLUT8 32x32: TEX_FLUSH alone before each sprite; sprites
+time-loads 15: CLUT8 32x32: the same texture's address and buffer width before each sprite, no TEX_FLUSH; sprites
+time-loads 16: CLUT8 32x32: a new texture's address and buffer width before each sprite, no TEX_FLUSH; sprites
+time-loads 17: CLUT8 32x32: two textures in turn (sceGuTexImage, with TEX_FLUSH); sprites
+time-loads 18: CLUT8 32x32: two textures in turn, their addresses and buffer widths alone (no TEX_FLUSH); sprites
+time-loads 19: 8888 swizzled in RAM, one 32x32 texture set once; sprites
+time-loads 20: the same, a new 16x16 texture before each sprite (1 KiB; repeating); sprites
+time-loads 21: the same, a new 32x32 texture (4 KiB); sprites
+time-loads 22: the same, a new 64x64 texture (16 KiB), its top-left 32x32 texels; sprites
+time-loads 23: 8888 not swizzled in RAM, one 32x32 texture set once; sprites
+time-loads 24: the same, a new 16x16 texture before each sprite (1 KiB; repeating); sprites
+time-loads 25: the same, a new 32x32 texture (4 KiB); sprites
+time-loads 26: the same, a new 64x64 texture (16 KiB), its top-left 32x32 texels; sprites
+time-loads 27: 8888 not swizzled in VRAM, one 32x32 texture set once; sprites
+time-loads 28: the same, a new 32x32 texture before each sprite (4 KiB); sprites
+time-loads 29: the same, a new 64x64 texture (16 KiB), its top-left 32x32 texels; sprites
+time-loads 30: 8888 swizzled in VRAM, a new 32x32 texture before each sprite; sprites
+time-loads 31: 5650 swizzled in RAM, one 32x32 texture set once; sprites
+time-loads 32: the same, a new 32x32 texture before each sprite (2 KiB); sprites
+time-loads 33: CLUT4 swizzled in RAM, one 32x32 texture set once; sprites
+time-loads 34: the same, a new 32x32 texture before each sprite (512 bytes); sprites
+time-loads 35: the same, a new 64x64 texture (2 KiB), its top-left 32x32 texels; sprites
+time-loads 36: CLUT8 not swizzled in RAM, a new 32x32 texture before each sprite; sprites
+time-loads 37: CLUT8 swizzled in VRAM, a new 32x32 texture before each sprite; sprites
+time-loads 38: N new CLUT8 32x32 textures set (sceGuTexImage) with no sprite between, then one sprite; textures
+time-loads 39: N TEX_FLUSHes with no sprite between, then one sprite; flushes
+time-loads 40: N palette loads (256 colors, 8888) with no sprite between, then one sprite; loads
+time-loads 41: CLUT8 32x32 set once, a palette of 16 colors (8888, 64 bytes) loaded before each sprite; sprites
+time-loads 42: the same, 32 colors (128 bytes); sprites
+time-loads 43: the same, 64 colors (256 bytes); sprites
+time-loads 44: the same, 128 colors (512 bytes); sprites
+time-loads 45: the same, 256 colors (1 KiB); sprites
+time-loads 46: the same, 256 colors in 5650 (512 bytes); sprites
+time-loads 47: the same, 256 colors (8888) from VRAM; sprites
+time-loads 48: a new CLUT8 32x32 texture and its palette (256 colors) before each sprite; sprites
+time-loads 49: 3D: squares 32x32 of two triangles, each its own CLUT8 32x32 texture, 1:1; squares
+time-loads 50: 3D: the same, each its own CLUT8 64x64 texture with a 32x32 mipmap, level 1 set (1:1 on it); squares
+time-loads 51: 3D: the same 64x64 textures without the mipmap, shrunk 2:1; squares
+time-loads 52: 3D: the same 64x64 textures with the mipmap, the level chosen, shrunk 2:1; squares
+time-loads 53: 3D: one such texture set once, the level chosen, shrunk 2:1; squares
+time-lists2 0: a list of N sprites 4x4 pixels, flat; sprites
+time-lists2 1: N lists of 16 such sprites queued at once, timed to the last one's finish; lists
+time-lists2 2: 64 sprites 256x16 (4 layers), the stall address moved on N times, as fast as the CPU goes; pieces
+time-lists2 3: the same, each move once the GE has reached the stall address; pieces
+time-lists2 4: N CALLs of a list drawing one 4x4 sprite (then its RET); calls
+time-formats 0: 3D, culled: float positions (12 bytes a vertex); triangles
+time-formats 1: 3D, culled: 16-bit positions (6); triangles
+time-formats 2: 3D, culled: 8-bit positions (3); triangles
+time-formats 3: 3D, culled: an 8888 color, float positions (16); triangles
+time-formats 4: 3D, culled: an 8888 color, 16-bit positions (12); triangles
+time-formats 5: 3D, culled: an 8888 color, 8-bit positions (8); triangles
+time-formats 6: 3D, culled: a 5650 color, 16-bit positions (8); triangles
+time-formats 7: 3D, culled: float texture coordinates and positions (20); triangles
+time-formats 8: 3D, culled: 16-bit texture coordinates and positions (10); triangles
+time-formats 9: 3D, culled: 8-bit texture coordinates and positions (5); triangles
+time-formats 10: 3D, culled: float normals and positions (24); triangles
+time-formats 11: 3D, culled: 16-bit normals and positions (12); triangles
+time-formats 12: 3D, culled: 8-bit normals and positions (6); triangles
+time-formats 13: 3D, culled: 16-bit texture coordinates, an 8888 color, 16-bit normals and positions (20); triangles
+time-formats 14: 3D, culled: float texture coordinates, an 8888 color, float normals and positions (36); triangles
+time-formats 15: 3D, culled: 8-bit texture coordinates, an 8888 color, 8-bit normals and positions (16); triangles
+time-formats 16: 3D, culled, through 16-bit indices: float positions; triangles
+time-formats 17: 3D, culled, through 16-bit indices: 16-bit positions; triangles
+time-formats 18: 3D, culled, through 16-bit indices: 8-bit positions; triangles
+time-formats 19: 3D, culled, through 16-bit indices: case 13's vertices (20 bytes); triangles
+time-formats 20: 3D, culled, through 8-bit indices, 85 triangles a draw: float positions; triangles
+time-formats 21: 3D, drawn: float positions; triangles
+time-formats 22: 3D, drawn: 16-bit positions; triangles
+time-formats 23: 3D, drawn: 8-bit positions; triangles
+time-formats 24: 3D, drawn: case 13's vertices; triangles
+time-formats 25: 3D, drawn: an 8888 color, float positions; triangles
+time-formats 26: through mode, drawn: float positions; triangles
+time-formats 27: through mode, drawn: 16-bit positions; triangles
+time-formats 28: through mode: 8-bit positions (pspautotests saw a PSP take them as 0: nothing drawn); triangles
+time-formats 29: through mode, drawn: an 8888 color, 16-bit positions (12); triangles
+time-formats 30: through mode, drawn: 16-bit texture coordinates, an 8888 color, 16-bit positions (16); triangles
+time-formats 31: 3D, culled: strips of 128 triangles, float positions; triangles
+time-formats 32: 3D, culled: strips of 128 triangles, 16-bit positions; triangles
+time-formats 33: 3D, culled: strips of 128 triangles, 8-bit positions; triangles
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.

@@ -1,0 +1,11 @@
+psp-measure's GE tests, round 5 (tools/psp-measure/ge.c in Phobos says what each test draws): each .bin is the
+target's pixels after one test, a little-endian 32-bit word each, row by row, 256x256; but steps-depth-check,
+the depth buffer's 256x256 16-bit values (low half) read through VRAM's fourth copy.
+steps-check, steps-depth-check: 64 random triangles in through mode, their colors (or depths) stepped.
+clip-split: the near plane's cut with the first, second and third corner past it, each way round (6 bands).
+light-share-0 to -3: four normals each, 192 light-times-material products per normal.
+persp-*: perspective texels with a repeating texture and coordinates up to 4096 texels: persp-wall (round 3's
+wall), persp-divide (u / w the same at every corner), persp-w3 (w 3 everywhere), persp-floor (round 2's floor),
+persp-sprite (round 3's 3D sprite).
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.

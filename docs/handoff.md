@@ -76,9 +76,9 @@ docs/psp-core.md, part 112.
   (Super Monkey Ball's lists ×1.38 beside streaming reads, ×1.54 beside a game's mix; wide texels ×1.85 to 3.2; VRAM
   work not at all).
 - **Next**: #269's agent refits with round 10 (no model change here); round 10's files
-  (`tests/psp/measurements/ge-round10`) and the re-runs (`ge-reruns-round10`) are packed in the worktree, uncommitted,
-  with `development-process.md`'s line, until the owner agrees to publishing them; a round 10b would add the spec's
-  polling (11) and before-or-beside (12) patterns and placement as a variable.
+  (`tests/psp/measurements/ge-round10`) and the re-runs of rounds 2 to 9 (`ge-reruns-round10`) are in the repository
+  with the owner's go-ahead (2026-10-18; `development-process.md`); round 10b adds the spec's polling (11) and
+  before-or-beside (12) patterns and placement as a case.
 
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 

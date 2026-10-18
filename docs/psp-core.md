@@ -17743,8 +17743,8 @@ For #269's agent (1fd9133c) to fit; no model change here.
   failures, 1 skipped, "pass psp measure".
 - The results: the owner's 227 files match the device's sums; round 10's nine and the re-runs of rounds 2 to 9 are
   packed for `tests/psp/measurements` (`ge-round10`: 160 KB of records as 36 KB; `ge-reruns-round10`: 44 MB as 3.6 MB),
-  each file unpacking to the device's bytes, and kept out of the repository until the owner agrees to their being
-  published.
+  each file unpacking to the device's bytes; committed with the owner's go-ahead of 2026-10-18 (19:21: "I dont mind the
+  measurements going on the repo"; `development-process.md` records it).
 
 ### Scratch
 
