@@ -633,12 +633,12 @@ auto Kernel::pgdFileRead(OpenFile& open, u64 at, u64 size, u8* bytes) -> bool {
   return got;
 }
 
-//A PGD file's header descriptor, decrypted once (pgd.cpp): why it can't, or nothing. Until then, pgdDataOffset says
-//where the PGD itself starts in the file: 0 for a UMD data file, which is a PGD whole; past the "\0PSPEDAT" header for
-//an NPDRM EDATA (sceNpDrmEdataSetupKey); or where ioctl 0x04100002 put it. The PSP's PGD layer reads the 0x90-byte
-//header there, and the descriptor's data offset counts from there too ("tpu"'s decompilation of it: the data at the
-//PGD's offset plus the descriptor's, the table of block MACs past it), so once the descriptor is read pgdDataOffset
-//says where the data starts: 0x90 for a UMD file, 0x120 for a download's EDATA.
+//A PGD file's header descriptor, decrypted once (pgd.cpp): returns why it can't be decrypted, or nothing (empty) when it
+//was. Until then, pgdDataOffset says where the PGD itself starts in the file — 0 for a UMD data file, which is a PGD as a
+//whole; past the "\0PSPEDAT" header for an NPDRM EDATA (sceNpDrmEdataSetupKey); or where ioctl 0x04100002 last put it. The
+//PSP's PGD layer reads the 0x90-byte header there, and the descriptor's data offset counts from there too ("tpu"'s
+//decompilation of it: the data sits at the PGD's offset plus the descriptor's, with the table of block MACs past it), so
+//once the descriptor is read pgdDataOffset says where the data starts — 0x90 for a UMD file, 0x120 for a download's EDATA.
 auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
   u64 at = open.pgdDataOffset, length = pgdFileLength(open);
   if(at > length) return "a PGD that starts past its file's end";
@@ -662,18 +662,20 @@ auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
   return {};
 }
 
-//A PGD file's key (ioctl 0x04100001), taken as the PSP's PGD layer takes it ("tpu"'s decompilation of iofilemgr_dnas):
-//the 0x90-byte header read where the PGD starts (the file's start, or where 0x04100002 put it), on the disc or the
-//memory stick alike, and checked at once: its DNAS MAC, then its 0x70 MAC against the key given, then its descriptor.
-//0: unlocked, the file reads as its decrypted data from then on (pgdDecryptRead()). 0x80510204: a header cut short or
-//damaged, or a descriptor that puts the data past its file. 0x80510206: a key its MAC refuses. The PGD layer recovers
-//no key, and none is recovered here: a game's key is its file's own (pgd.cpp recovers the version key where no key
-//was checked: an NPDRM EDATA readied with its licensee key, which isn't it, by sceNpDrmEdataSetupKey). Refused, the
-//file is left locked, reading as it is, and keeps where its PGD starts for another key. A file without PGD's header
-//("\0PGD") there is read as it is, and answered 0: the fan translations of 7th Dragon 2020 and its sequel carry their
-//INSDIR data decrypted and set its key all the same, taking anything but success as the drive failing (from the disc,
-//opening the file again for good; installed on the memory stick, turning the install off). The PGD layer answers
-//0x80510204 there, its magic checked first; PPSSPP's notes go on with 0, as here.
+//A PGD file's key (ioctl 0x04100001), taken as the PSP's PGD layer takes it ("tpu"'s decompilation of
+//iofilemgr_dnas): it reads the 0x90-byte header where the PGD starts — the file's start, or where 0x04100002 last put
+//it — on the disc or the memory stick alike, and checks it at once, in order: the DNAS MAC, then the 0x70 MAC against
+//the key given, then the descriptor. The answer is one of:
+//  0 = unlocked, so the file then reads as its decrypted data (pgdDecryptRead());
+//  0x80510204 = a header cut short or damaged, or a descriptor putting the data past the file's end;
+//  0x80510206 = a key the MAC refuses.
+//No key is recovered here: a game's key is its file's own. (pgd.cpp does recover a version key, but only where nothing
+//was checked — an NPDRM EDATA readied with its licensee key by sceNpDrmEdataSetupKey, which isn't the PGD's own.)
+//Refused, the file stays locked and reads as it is, keeping where its PGD starts for another key. A file without PGD's
+//header ("\0PGD") there reads as it is and answers 0: the fan translations of 7th Dragon 2020 and its sequel carry
+//their INSDIR data decrypted and set the key anyway, treating anything but success as the drive failing — reopening
+//the file from the disc for good, or switching the install off on the memory stick. The PGD layer answers 0x80510204
+//there, its magic checked first; PPSSPP's notes go on with 0, as here.
 auto Kernel::pgdUnlock(OpenFile& open, const u8* key) -> u32 {
   u32 at = open.pgdDataOffset;  //where the PGD starts, while it isn't unlocked
   open.pgd = open.pgdReady = false;
@@ -1324,10 +1326,10 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     return pgdUnlock(open, memory.pointer(in, 16));
   //where the PGD starts, relative to the file: the PSP's PGD layer reads its header there when the key is given
   //(0x04100001), and its data where its descriptor says, counted from there ("tpu"'s decompilation; PPSSPP's notes
-  //have npdrm give an EDATA's 0x90 so). Given where its PGD starts already, nothing changes; given anywhere else, no
-  //PGD is open until a key opens one there (the decompilation's sub_E3C), so this alone unlocks nothing, no key
-  //recovered. An unlocked file keeps where its data starts, not its PGD, so its own key tells which: the PGD it opens
-  //there, its data where it was, is the same one.
+  //have npdrm give an EDATA's 0x90 so). This sets that start point, and the result is: where its PGD already starts
+  //there, nothing changes; where it starts elsewhere, no PGD is open yet (the decompilation's sub_E3C), so this alone
+  //unlocks nothing and recovers no key. An unlocked file keeps where its data starts, not where its PGD starts, so its
+  //own key decides which: the PGD opened there, with its data where it was, is the same one.
   case 0x0410'0002: {
     if(open.sectors || inLength < 4 || !memory.reaches(in, 4)) return ErrorFunctionNotSupported;
     u32 at = memory.read(4, in), was = open.pgdDataOffset;
