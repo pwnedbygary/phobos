@@ -17429,7 +17429,7 @@ the RP6.
 
 ## Part 112: psp-measure round 10 — lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective and turned, mipmaps, narrow strips, the CPU beside the GE
 
-On branch `cursor/psp-measure-round10-2b67` (PR PRNUMBER), from master `d428d91f9` (#276, part 110: round 9 and its
+On branch `cursor/psp-measure-round10-2b67` (PR #278), from master `d428d91f9` (#276, part 110: round 9 and its
 results). Round 10 of `tools/psp-measure`, for the owner's PSP: the cases #269's refit with round 9 (`c0d9c14a2`, part
 106) still misses, as its agent (1fd9133c) specified them from each failing scene's terms and a log of the PRIMs' state
 as the games set it. The cases are synthetic: no game's lists, textures or vertices are in the program (`pspmeasure.elf`

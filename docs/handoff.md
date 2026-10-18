@@ -37,7 +37,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP measure, round 10: lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective, mipmaps, the CPU beside the GE — 2026-10-18
 
-Branch `cursor/psp-measure-round10-2b67` (PR PRNUMBER, draft), from master `d428d91f9` (#276, part 110);
+Branch `cursor/psp-measure-round10-2b67` (PR #278, draft), from master `d428d91f9` (#276, part 110);
 docs/psp-core.md, part 112.
 - **Why**: #269's refit with round 9 (`c0d9c14a2`) leaves three scenes outside 15%: Super Monkey Ball −30% (mostly the
   PSP's CPU competing with the GE for RAM), Activision Hits' 3D menu (its first list −19%: spotlights with their shine;
