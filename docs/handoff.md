@@ -61,8 +61,13 @@ Branch `cursor/psp-measure-round9-2b67` (PR #276, draft), stacked on #270's `cur
   about 3 times a pixel (not 2); RAM-textured meshes share the RAM with their vertices; a vertex 0.48 a byte with a
   floor of 5 (3-byte vertices 8.5), an indexed one 33 to 39; `time-lists2` finished at every setting (the stall
   case fixed), the front end's lead about 30 sprites.
-- **Next**: #269's refit takes round 9's files (no model change here); this lands after #270. Part 107's "71 of 80"
-  `time-lists` records lost is 67 (13 finished), for #270 to correct.
+- **Fix round** (#270's review, its should-fix 10 here): `cpu.c`'s three waits for the GE keep to the 5 s every
+  other wait has since round 4 (looks with `sceGeListSync(id, 1)` and `sceGeDrawSync(1)`; past it `cpu-syscalls.stalled`
+  and `ge.c`'s reset, shared through `measure.h`); `time-lists`' case 3 gives each wait and the list's end budgets of
+  their own; `time-state`'s case 6 named for GU's TEX_FLUSH. `pspmeasure.elf` rebuilt (`3da289db…`), the round 9
+  EBOOT too (`e6b20588…`); nothing for the owner to run again. #270's head (`502bd680a`: its fixes, master
+  `fe3deab82`) merged in.
+- **Next**: #269's refit takes round 9's files (no model change here); this lands after #270.
 
 ## PSP measure, round 8: the GE's time where part 76's model misses the owner's captures, and the CPU's — 2026-10-16
 

@@ -17122,10 +17122,10 @@ uOFW's reading of the driver; no PPSSPP or JPCSP.
   takes as dearer than it is: its triangles' texels are the model's guess too.
 - **Vertices**: round 8's culled strips had 8-bit positions take 4.5 times the model's time and 16-bit 1.5 times
   (floats as fitted), the strips' corners falling a little differently in each format.
-- **Lists**: round 8's `time-lists` left 67 of its 80 records empty (13 finished, all at 222/111; part 107 says 71:
-  a slip) (part 107: the driver says the GE has reached a stall address only when the address as given is the GE's
-  own, which it keeps with its top three bits cut, and the program gave the uncached mirror's); #270's program gives
-  cached ones, never yet run on a PSP.
+- **Lists**: round 8's `time-lists` left 67 of its 80 records empty, 13 finished, all at 222/111 (part 107: the
+  driver says the GE has reached a stall address only when the address as given is the GE's own, which it keeps with
+  its top three bits cut, and the program gave the uncached mirror's); #270's program gives cached ones, never yet
+  run on a PSP.
 
 ### What round 9 measures
 
@@ -17355,6 +17355,30 @@ No model changes here: the refit is #269's. Against the gate's rows that fail:
   without TEX_FLUSH (the timing says no refetch; no picture was saved); bilinear or mipmapped textures shrunk,
   perspective, CLUT4 wide.
 
+### The fix round (#270's review)
+
+#270's review (`~/phobos-work/scratch/review-270/REVIEW.md`, approve with should-fixes) left one change to the
+program for this pull request, which carries `cpu.c` to the owner's PSP next (its should-fix 10), and two small
+ones with it; #270's own fixes (part 107's account, comments) and master `fe3deab82` (parts 108 and 109) came in
+with #270's head `502bd680a`.
+
+- **`cpu.c`'s waits for the GE had no deadline**: `cpu-syscalls`' enqueue-and-sync case waited in
+  `sceGeListSync(id, 0)`, its back-to-back case in `sceGeDrawSync(0)` and its stall cases' end in
+  `sceGeListSync(id, 0)`, as long as the GE took. Each now looks (`sceGeListSync(id, 1)` or `sceGeDrawSync(1)`) till
+  the list is done, `Patience` (5 s) at most, as every other wait since round 4; past it the GE is taken to have
+  stalled: `cpu-syscalls.stalled` says so and the GE is reset by `ge.c`'s own path (`geReset`, shared through
+  `measure.h` with the test's file, as `Patience` is), and the GE's cases record their remaining runs as not finished
+  (0xffffffff), calling the GE no more. A look returns at once, so the timed case (an empty list queued, then its
+  sync) costs what it did whenever the list is done by the first look, as an empty list is.
+- **`time-lists`' case 3** (round 8's, and round 9's `time-lists2`): each wait for "stall reached" has its own 5 s
+  from the move before, and the list's end its own from the last move; a wait that runs out is noted as that and
+  the run not kept, where round 8's took it for the GE's stall (the review's nit 8).
+- **`time-state`'s case 6** is named for what it draws: GU's `sceGuTexMode`, with the TEX_FLUSH it adds (its
+  should-fix 6; the owner's `manifest8.txt` keeps the old name).
+- `tests/psp/programs/pspmeasure.elf` rebuilt (`3da289db…`), and the round 9 EBOOT (`e6b20588…`; the owner ran
+  `f554782c…`). Nothing for him to run again: round 8's `cpu-syscalls` and round 9's tests are done on his memory
+  stick, and the waits changed ran through there.
+
 ### Checks
 
 - The program builds without a warning (`-Wall`), with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0)
@@ -17363,15 +17387,18 @@ No model changes here: the refit is #269's. Against the gate's rows that fail:
 - "psp measure" alone (the sanitized test program built with just its group, as part 107 ran it), rounds 2 to 9
   through the menu: 1 group, 0 failures. A check of the case tables beside what each case builds found one row lost in
   an edit (the test's record count caught it too), put back. GitHub's checks on #276 (its base #270's branch): all
-  passed, the PSP system tests among them.
+  passed at its results' head (`27786bc77`), the PSP system tests among them; the fix round's head is checked the
+  same way. The fix round's program builds without a warning, and a second build from the committed source gives the
+  same `pspmeasure.elf`.
 - The results: the owner's files match the device's sums; `ge-round9/SHA256SUMS` holds the unpacked files', checked
   by unpacking the committed `.xz` files. No test reads them (as round 8's); the measure test checks the core's own
   round 9 files.
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/round9/` (`build/` the program as built, `EBOOT.PBP` and `EBOOT.PBP.sha256`
-the copy for the PSP, `measure-r9*.log` the test's runs, `ours*/` the core's round 9 files, `estimate.py` the time
-on the PSP from round 8's medians, `scenes/` the two states' frames for the plugin's captures, `r9results.py` the
-results above); `results-r9/` (the owner's run as the coordinator pulled it, with the device's sums, his first look
-and the captures). Nothing was run on the RP6.
+`~/phobos-work/scratch/psp-ge-profile/round9/` (`build/` the program as built, `EBOOT.PBP` and `EBOOT.PBP.sha256` the
+copy for the PSP, `measure-r9*.log` the test's runs, `ours*/` the core's round 9 files, `estimate.py` the time on the
+PSP from round 8's medians, `scenes/` the two states' frames for the plugin's captures, `r9results.py` the results
+above, `build-fix/` the fix round's program, `EBOOT-run-2026-10-18.PBP` the one the owner ran); `results-r9/` (the
+owner's run as the coordinator pulled it, with the device's sums, his first look and the captures). Nothing was run on
+the RP6.

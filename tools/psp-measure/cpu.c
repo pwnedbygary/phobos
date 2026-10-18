@@ -360,23 +360,46 @@ static unsigned int dirtyAlone(unsigned int calls) {  //the writes alone
   while(calls--) cpuWrite(memory, 16384);
   return 0;
 }
+//The waits for the GE here keep to Patience, as every one since round 4 (ge.c's waitForGe): a list not done by then
+//is taken to have stalled, noted in the test's <name>.stalled and the GE reset (geReset); the GE's cases then call it
+//no more, their runs recorded as not finished (0xffffffff: cpuCases), and the test goes on.
+static int geStuck;
+//Looks at a list (sceGeListSync(id, 1)), or at every list (sceGeDrawSync(1), with `all`), till it's done or Patience
+//has passed; 1 if it's done. A look returns at once, so a list done by the first costs that look alone.
+static int geWait(int id, int all, const char* what) {
+  if(geStuck) return 0;
+  unsigned int began = sceKernelGetSystemTimeLow(), waited = 0;
+  int state;
+  while((state = all ? sceGeDrawSync(1) : sceGeListSync(id, 1)) > PSP_GE_LIST_DONE &&
+        state < PSP_GE_LIST_CANCEL_DONE) {
+    waited = sceKernelGetSystemTimeLow() - began;
+    if(waited >= Patience) break;
+  }
+  if(state <= PSP_GE_LIST_DONE || state >= PSP_GE_LIST_CANCEL_DONE) return 1;
+  geStuck = 1;
+  geReset(&test, waited, state, all ? "sceGeDrawSync(1)" : "sceGeListSync(id, 1)", what);
+  return 0;
+}
 static unsigned int enqueueAndSync(unsigned int calls) {
-  while(calls--) sceGeListSync(sceGeListEnQueue(GE_LISTS, 0, -1, 0), 0);
+  while(calls-- && !geStuck) geWait(sceGeListEnQueue(GE_LISTS, 0, -1, 0), 0, "an empty list (FINISH, END)");
   return 0;
 }
 static unsigned int enqueues(unsigned int calls) {  //(calls 32 at most) queued back to back, then waited for
-  for(unsigned int k = 0; k < calls; k++) sceGeListEnQueue(GE_LISTS + k * 4, 0, -1, 0);
+  for(unsigned int k = 0; k < calls && !geStuck; k++) sceGeListEnQueue(GE_LISTS + k * 4, 0, -1, 0);
   unsigned int queued = sceKernelGetSystemTimeLow();
-  sceGeDrawSync(0);
+  geWait(0, 1, "empty lists (FINISH, END) queued back to back");
   return queued;
 }
 static int waitingList = -1;
 static void prepareWaiting(unsigned int calls) {
   prepareLists(calls);
-  waitingList = sceGeListEnQueue(GE_LISTS + 32 * 4, GE_LISTS + 32 * 4, -1, 0);
+  waitingList = geStuck ? -1 : sceGeListEnQueue(GE_LISTS + 32 * 4, GE_LISTS + 32 * 4, -1, 0);
 }
 static void endWaiting(void) {
-  if(waitingList >= 0) sceGeListUpdateStallAddr(waitingList, GE_LISTS + 32 * 4 + 4), sceGeListSync(waitingList, 0);
+  if(waitingList >= 0) {
+    sceGeListUpdateStallAddr(waitingList, GE_LISTS + 32 * 4 + 4);
+    geWait(waitingList, 0, "two NOPs, FINISH and END, left at its stall address, then moved on past its END");
+  }
   waitingList = -1;
 }
 static unsigned int stallUpdates(unsigned int calls) {
@@ -493,10 +516,10 @@ static const CpuCase syscallCases[] = {
   {"sceKernelDcacheWritebackRange over 64 KiB", "calls", writebackRange, 0, 2, {64, 256}},
   {"16 KiB written, then sceKernelDcacheWritebackAll", "calls", dirtyWriteback, 0, 2, {64, 256}},
   {"16 KiB written alone", "times", dirtyAlone, 0, 2, {64, 256}},
-  {"sceGeListEnQueue of an empty list (FINISH, END), then sceGeListSync(id, 0)", "calls", enqueueAndSync,
-   prepareLists, 2, {64, 256}},
-  {"sceGeListEnQueue of empty lists back to back (then sceGeDrawSync(0), outside the time: see below)", "calls",
-   enqueues, prepareLists, 2, {8, 32}},
+  {"sceGeListEnQueue of an empty list (FINISH, END), then sceGeListSync(id, 1) till it's done", "calls",
+   enqueueAndSync, prepareLists, 2, {64, 256}},
+  {"sceGeListEnQueue of empty lists back to back (then sceGeDrawSync(1) till they're done, outside the time: see "
+   "below)", "calls", enqueues, prepareLists, 2, {8, 32}},
   {"sceGeListUpdateStallAddr, a list waiting at its stall address, left there", "calls", stallUpdates,
    prepareWaiting, 2, {1024, 4096}},
   {"sceGeListSync(id, 1) of that list", "calls", listLooks, prepareWaiting, 2, {1024, 4096}},
@@ -511,13 +534,17 @@ static void save(const char* name) {
   if(!writeOut(&test, name, records, recorded * 4) || !finish(&test, name)) failed = 1;
 }
 //Each case at each setting asked, each size `repeats` times (a size past `limit`, if there is one, cut to it), one
-//word a run: its time. (A case that gives back a time of its own, enqueues', has its end there: the GE's waiting left
-//out.)
+//word a run: its time, or 0xffffffff for a run of the GE's cases once a wait for the GE has run out (geWait). (A case
+//that gives back a time of its own, enqueues', has its end there: the GE's waiting left out.)
+static int usesGe(const CpuCase* c) {
+  return c->run == enqueueAndSync || c->run == enqueues || c->prepare == prepareWaiting;
+}
 static void cpuCases(const char* name, const CpuCase* cases, int count, int repeats, int settings, unsigned int limit) {
   int started = begin(&test, name);
   if(started < 0) failed = 1;
   if(started <= 0) return;
   recorded = 0;
+  geStuck = 0;
   int total = 0, done = 0;
   for(int setting = 0; setting < 4; setting++) total += (settings >> setting & 1) * count;
   for(int setting = 0; setting < 4; setting++) {
@@ -533,7 +560,7 @@ static void cpuCases(const char* name, const CpuCase* cases, int count, int repe
           unsigned int began = sceKernelGetSystemTimeLow(), gave = cases[c].run(size);
           unsigned int ended = cases[c].run == enqueues ? gave : sceKernelGetSystemTimeLow();
           sink += gave;
-          record(ended - began);
+          record(geStuck && usesGe(&cases[c]) ? 0xffffffffu : ended - began);
         }
         if(cases[c].prepare == prepareWaiting) endWaiting();
       }
@@ -684,7 +711,8 @@ void cpuManifest(SceUID file) {
     "cpu-alu, cpu-latency, cpu-memory: each run's time in microseconds; cpu-alu and cpu-latency at all four settings\n"
     "(each case's instructions are the loop's addiu, bnez and nop besides what it says), cpu-memory too (RAM from the\n"
     "user partition: a record's size is the working set; 8 MiB where that much was free), cpu-syscalls at 222/111\n"
-    "and 333/166 (its enqueues case's time ends when the last sceGeListEnQueue returns). cpu-clocks: one record an\n"
+    "and 333/166 (its enqueues case's time ends when the last sceGeListEnQueue returns; its GE cases' runs are\n"
+    "0xffffffff once a wait for the GE ran out its 5 s: see cpu-syscalls.stalled). cpu-clocks: one record an\n"
     "attempt (case, 0, the clocks before, 1 | 4 << 16), then what the call gave back, the CPU's and the bus's MHz\n"
     "after, and the time of 65536 passes of cpu-alu's case 1 at them (us). The cases (test case: what; size):\n";
   sceIoWrite(file, text, sizeof(text) - 1);

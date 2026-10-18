@@ -81,7 +81,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
 | `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8 and 9. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
-| `cpu.c` | Round 8's tests of the CPU alone: its loops in assembly, memory, system and driver calls, the clocks granted. |
+| `cpu.c` | Round 8's tests of the CPU alone: its loops in assembly (memory's in C), memory, system and driver calls, the clocks granted. Its waits for the GE are timed as `ge.c`'s are, sharing its reset (`geReset`). |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |

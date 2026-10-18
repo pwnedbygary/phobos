@@ -147,18 +147,14 @@ static void setUp(int psm) {
   sceGuShadeModel(GU_SMOOTH);
 }
 
-//How long the GE may take over a list before it's taken to have stalled, in microseconds: every list here takes a
-//small part of it. (In round 4 a PSP froze where the GE didn't finish patches cut past 64 times, when this program
-//still waited for the GE as long as it took.)
-enum { Patience = 5000000 };
-
-//Adds text to the running test's <name>.stalled.
-static void noteStall(const char* text) {
-  SceUID file = sceIoOpen(current.stalled, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
+//Adds text to a test's <name>.stalled (noteStall: the running GE test's).
+static void noteStallIn(const Output* out, const char* text) {
+  SceUID file = sceIoOpen(out->stalled, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
   if(file < 0) return;
   sceIoWrite(file, text, strlen(text));
   sceIoClose(file);
 }
+static void noteStall(const char* text) { noteStallIn(&current, text); }
 
 //Waits for the GE to have drawn every list queued, for Patience at most, and returns 1 if it has. If it hasn't, the
 //GE stalled: <name>.stalled says so, and what the list held (what), before anything is done about it, so that if
@@ -180,23 +176,27 @@ static int waitForGe(const char* what) {
   return 0;
 }
 
-//The stall's record and the reset, after waiting `waited` microseconds with sceGeDrawSync(1) still giving state.
-static void resetGe(unsigned int waited, int state, const char* what) {
+//The stall's record and the reset, for the test `out` is running (cpu.c's too), after waiting `waited` microseconds
+//with `look` still giving state.
+void geReset(const Output* out, unsigned int waited, int state, const char* look, const char* what) {
   char text[320];
-  snprintf(text, sizeof(text), "The GE hadn't finished after %u ms (sceGeDrawSync(1) gave %d: 2 drawing, 3 at a "
-           "stall address).\nIts list: %s.\n", waited / 1000, state, what ? what : "see ge.c");
-  noteStall(text);
-  pspDebugScreenSetXY(35, current.line);  //past "running", and the "done" that replaces it
+  snprintf(text, sizeof(text), "The GE hadn't finished after %u ms (%s gave %d: 2 drawing, 3 at a "
+           "stall address).\nIts list: %s.\n", waited / 1000, look, state, what ? what : "see ge.c");
+  noteStallIn(out, text);
+  pspDebugScreenSetXY(35, out->line);  //past "running", and the "done" that replaces it
   print("the GE stalled: resetting");
   unsigned int broken = sceGuBreak(GU_BREAK_CANCEL);
   snprintf(text, sizeof(text), "Reset: sceGuBreak(GU_BREAK_CANCEL) gave 0x%08x", broken);
-  noteStall(text);  //before sceGuInit, which waits for its own list: if the GE is still stuck, it waits for good
+  noteStallIn(out, text);  //before sceGuInit, which waits for its own list: if the GE is still stuck, it waits for good
   sceGuTerm();
   unsigned int started = sceGuInit();
   snprintf(text, sizeof(text), ", sceGuInit 0x%08x. The .bin is what the GE had drawn.\n", started);
-  noteStall(text);
-  pspDebugScreenSetXY(35, current.line);
+  noteStallIn(out, text);
+  pspDebugScreenSetXY(35, out->line);
   print("the GE stalled: reset    ");
+}
+static void resetGe(unsigned int waited, int state, const char* what) {
+  geReset(&current, waited, state, "sceGeDrawSync(1)", what);
 }
 
 //Ends the list and waits for the GE to have drawn it (waitForGe, what saying what the list holds); returns 0 if the GE
@@ -3968,16 +3968,25 @@ static int runLists(int c, int size, const char* what, unsigned int* times) {
       return 0;
     }
   }
+  //Each wait for "stall reached" has Patience from the move before it, and the list's end Patience from the last
+  //move, so a wait that runs out is noted as that, not taken for the GE's stall (as round 8's were).
   unsigned int last = sceKernelGetSystemTimeLow();
+  int reached = 1;
   for(int piece = 1; c != 1 && piece < size; piece++) {
-    while(c == 3 && sceGeListSync(id, 1) != PSP_GE_LIST_STALL_REACHED &&
-          sceKernelGetSystemTimeLow() - began < Patience) {
-      continue;
+    while(c == 3 && reached && sceGeListSync(id, 1) != PSP_GE_LIST_STALL_REACHED) {
+      if(sceKernelGetSystemTimeLow() - last >= Patience) reached = 0;
     }
     sceGeListUpdateStallAddr(id, (void*)pieceEnds[piece]);
     last = sceKernelGetSystemTimeLow();
   }
-  if(!awaitFinishes(lists, began, what)) return 0;
+  if(!awaitFinishes(lists, last, what)) return 0;
+  if(!reached) {  //(the list done, but its time holds a wait that ran out: not kept)
+    char text[240];
+    snprintf(text, sizeof(text), "sceGeListSync(id, 1) didn't say the GE had reached a stall address within %d ms: "
+             "%s.\n", Patience / 1000, what);
+    noteStall(text);
+    return 0;
+  }
   times[0] = finishedAt - began, times[1] = after - began, times[2] = last - began;
   return 1;
 }
@@ -4025,7 +4034,8 @@ static const TimedCase stateCases[] = {
   {"the same texture set again before each", "sprites", 2, {256, 1024}},
   {"a 256-color palette loaded before each (a CLUT8 16x16 texture)", "sprites", 2, {256, 1024}},
   {"a 16-color palette loaded before each (a CLUT4 16x16 texture)", "sprites", 2, {256, 1024}},
-  {"TEX_MODE before each, swizzling on and off in turn", "sprites", 2, {256, 1024}},
+  {"TEX_MODE before each, swizzling on and off in turn (GU's sceGuTexMode, with the TEX_FLUSH it adds)", "sprites", 2,
+   {256, 1024}},
   {"the blend function changed before each (blending on, two functions in turn)", "sprites", 2, {256, 1024}},
   {"the depth function changed before each (ALWAYS and GEQUAL in turn, passing, not writing)", "sprites", 2,
    {256, 1024}},
