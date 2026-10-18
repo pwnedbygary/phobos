@@ -84,7 +84,9 @@ object PspResolution {
  * default, draws a frame's pictures in turn with the game's own work, as the PSP's GE and CPU share one thread; On
  * draws them on a thread of their own while the game goes on with the next frame, so the two overlap. The pictures and
  * everything the game sees are the same either way; whether On is faster depends on the game (it's slower in some that
- * write a lot to the PSP's video memory each frame).
+ * write a lot to the PSP's video memory each frame). What On costs: each picture reaches the screen a frame later (at
+ * a frame's end the screen shows the frame before, the next still being drawn), about 17 ms more at 60 frames a second
+ * between pressing a button and seeing what it did.
  */
 object PspGraphicsOverlap {
     const val OFF = 0

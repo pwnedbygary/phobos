@@ -524,7 +524,7 @@ fun PspDrawingThreadsItem(current: Int, onSelect: (Int) -> Unit) {
 fun PspGraphicsOverlapItem(current: Int, onSelect: (Int) -> Unit) {
     SettingsDropdownItem(
         title = "PSP Graphics Overlap",
-        description = "Whether a PSP game's pictures are drawn on a thread of their own while the game goes on with the next frame. ${PspGraphicsOverlap.description(PspGraphicsOverlap.forCore(current))} The pictures and everything the game sees are the same either way. Applies when a game starts.",
+        description = "Whether a PSP game's pictures are drawn on a thread of their own while the game goes on with the next frame. ${PspGraphicsOverlap.description(PspGraphicsOverlap.forCore(current))} With On, each picture reaches the screen a frame later: about 17 ms more between pressing a button and seeing what it did, at 60 frames a second. The pictures and everything the game sees are the same either way. Applies when a game starts.",
         current = PspGraphicsOverlap.forCore(current),
         options = PspGraphicsOverlap.choices,
         label = PspGraphicsOverlap::label,
