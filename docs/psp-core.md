@@ -16314,12 +16314,105 @@ screen, which never sync, a loop's whole time):
   by the decoder as it is now and as it was, side by side, with Killzone's lists by kind, `kzkinds.py`, and the
   count of lists queued before each capture scored, `ahead.py`). Nothing was run on the RP6.
 
+## Part 104: Activision Hits Remixed's clocks — what a PSP's power service grants a game, the bus asked for alone, and the owner's captures' 333/166, read before the game ran
+
+On branch `cursor/psp-power-clock-2b67` (draft PR #267), on master `a8d5640f5` (part 101, #263), masters `5442acb8b`
+(part 102, #265; #264, no part), `03eca2a69` (#274, no part) and `a014706e9` (part 103, #266) merged in. The question
+(part 103): the owner's captures of Activision Hits Remixed's boot read 333/166 MHz, Phobos's state 222/111, which
+matters once the GE takes a PSP's time (its time goes with the bus's clock). Was `scePowerSetBusClockFrequency`'s
+refusal of anything over 111 the cause? Sources: uOFW's reading of the power service (its `power` branch, pull request
+#82: `clockFrequency.c`, `power.c`), its reading of Init and the module manager; ARK-4's README, settings and clock
+code (systemctrl's `cpuclock.c`, `syspatch.c`, `plugin.c` and `loadercore.c`, the PSP layer's `syspatch.c`, stargate's
+`gamefix.c`: r205's, which the owner runs, and master's `7c03c37` the same). No PPSSPP or JPCSP. Save states are
+unchanged (layout 32).
+
+### What the game asks for, and what a PSP grants
+
+- **The game** (the runner from boot with a scratch build noting each power call, 1200 frames): as it starts, its
+  thread asks for a CPU of 333 (`scePowerSetCpuClockFrequency`) and a bus of 166 (`scePowerSetBusClockFrequency`),
+  then prints what it reads back. It asks for nothing else in the 1200 frames: the copyright screen, the menu's
+  loading, the startup movie.
+- **The power service**, as uOFW reads it: the CPU no faster than the PLL; the bus asked for alone no faster than half
+  the PLL, then set to half the PLL whatever a game asked; `scePowerSetClockFrequency` checks a PLL of 19 to 333, a
+  CPU of 1 to 333 and a bus of 1 to 167, the CPU no faster than the PLL and the bus no faster than half of it. As the
+  system reboots into a game the service sets every clock to its most, 333/333/166 (`_scePowerModuleRebootPhase()`),
+  and so they stay while Init loads the boot modules and then the game's program; with the program loaded, before it
+  starts it, Init calls its boot callbacks of levels 0 to 3 (uOFW's `init.c`, `sub_05F0()`), the power service's
+  among them (level 2), which sets the startup clocks for games, 222/222/111 (`_scePowerInitCallback()`). So the
+  game's first instruction runs at a PLL of 222, both of its requests are refused, as Phobos refused them, and it runs
+  at 222/111.
+- **The owner's PSP did the same**: the captures' 333/166 were read before the game ran. The plugin counts from its
+  own `module_start`, which ARK runs as Init starts `sceMediaSync` (systemctrl's `loadercore.c`), before the game's
+  program is loaded. Each boot capture read 333/166 as it began, boot1's 0.3 s after that and boot2's 4.0 s after,
+  and the game's thread made its first GE call 4.0 s (ULUS10186-boot1) and 4.23 s (-boot2) after it; in Phobos that
+  call (the same list, sync and callbacks) comes 3.6 ms after the program starts, with no file read before it, the
+  clock requests just before it. So the program started about 4.0 s in on boot1 and 4.22 s on boot2, each after its
+  own capture's reading: the 333/166 were the reboot's clocks, Init still loading the 7.6 MB program. boot1's capture,
+  ended by its full buffer 9.6 s in, in the copyright screen, read 222/111 there, and the screen's lists took the same
+  time from its first frame (6.3 s) to that end, and in boot2 to the screen's end: all of it at 222/111. In the menu
+  (31 s) 222/111 too. With ARK's clock settings at Auto, as the owner had them, ARK neither sets the clocks nor
+  touches the setters: `overclock`, `powersave` and `defaultclock` each set a level (1 to 3) that, once the system has
+  booted, `SetSpeed()` applies, setting the clocks with `scePowerSetClockFrequency` and turning the game's setters
+  (`scePowerSetClockFrequency` under each of its five NIDs, `scePowerSetCpuClockFrequency`,
+  `scePowerSetBusClockFrequency`) into functions that return 0; with none set, the level is 0 and neither happens. On
+  a PSP, ARK patches the power service only for the backlight's maximum, and its game fixes that drop the CPU setter
+  are other games' (WWE SmackDown's, ATV Pro's).
+
+### What changed
+
+- `scePowerSetBusClockFrequency` takes a bus up to half the PLL's speed, as uOFW reads it, where it refused anything
+  over 111 whatever the PLL. That changes its answer both ways: at a PLL of 333, 112 to 166 are granted now, and at
+  266, 112 to 133, the bus staying at half the PLL; at 190, 96 to 111, granted before, are refused.
+- `scePowerSetClockFrequency` refuses a bus above half the PLL asked for (222/222/166 was taken, the PLL set to 222;
+  200/200/101 is refused though the PLL would run at 222, as the service checks the request before it rounds the PLL
+  up); a bus of 167 passes the range check, as the service's does, and fails this one at any PLL, and a bus over 167
+  fails the range check before its double is taken.
+- Activision Hits runs as before, at 222/111: what the owner's PSP gave it. Death Jr., Death Jr. II and Sonic Rivals
+  make exactly its two requests as they start, refused before and now alike.
+
+### What it means
+
+- Part 103's comparison of the copyright screen is at the same clocks as it stands: 222/111 on the PSP and in
+  Phobos, no scaling.
+- The owner's captures: a capture that starts before the game runs reads the reboot's 333/166 at its start. With
+  ARK's clock settings at Auto games keep their own clocks; Overclock, Power Save or Balanced would set every game's
+  and make its own setters do nothing. The captures so far are all at the games' own clocks (Chains of Olympus and
+  Ghost of Sparta set 333/166 themselves, Phobos's states have them too; Army of Two sets 222/222/111 itself, 85
+  vblanks after its boot; Killzone, Super Monkey Ball and Activision Hits run at 222/111).
+
+### Tests
+
+"power clocks" (tests/psp/power.cpp): a bus above half the PLL refused by `scePowerSetClockFrequency`, the PLL left as
+it was, the PLL asked for checked and not the speed it would run at (200/200/101 refused), and a bus over 167 refused
+before its double is taken (one whose double wraps to 166); the bus asked for alone granted up to half the PLL's
+speed (112 at 333, the bus staying at 166), 167 refused, 112 refused at 222 and 111 granted, 96 refused at 190 and 95
+granted, 133 granted at 266 and 134 refused; and Activision Hits' start, the CPU's 333 and the bus's 166 refused at a
+PLL of 222, the clocks staying 222/111. The first two fail on master, and so does the test with either of the
+review's two mutants that it let through before (the bus checked against the PLL's rounded speed; no range check of
+a bus over 167).
+
+### Checks
+
+`tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+579 groups, 0 failures. CI runs tests/allegrex, tests/psp/ares and the builds.
+
+### Scratch
+
+In `~/phobos-work/scratch/psp-ge-profile/`: `power/` (`ahr-boot.sh`, the traced boots; `ahr-boot.log`, the last);
+`ref/uofw-power` (uOFW's power branch at `f7ed03aa7`), `ref/uofw/src/kd/init/init.c`, `ref/ark4-r205/README.md` and
+`contrib/SETTINGS.TXT`, `ref/ark4-src` (ARK-4's sources at `7c03c37`) and `ref/ark4-r205-clock` (r205's clock files,
+the same); the boot captures `captures/ULUS10186-boot1-cut.bin`, `-boot2.bin`, `-menu.bin`; `phase3/ahrstart.sh` (the
+game from boot in #269's runner, its GE profiled and its files traced). The review's library trace (every power call
+the 266 games make in their first 1200 frames, replayed through master's and this branch's rules: no answer changed)
+is in `~/phobos-work/scratch/review-267/trace/`. Nothing was run on the RP6.
+
 ## Part 106: the GE's time as the owner's PSP took it — part 76's model behind the option "GE Timing", off by default; the first comparison with the captures; a SIGNAL's interrupt at its time
 
-On branch `cursor/psp-ge-time-2b67`, stacked on #266 (`cursor/psp-ge-profile-2b67`, part 103), from master
-`a8d5640f5`. The design the owner approved: the PSP's timing behind an option, off by default and switched in the app;
-on by default only once every captured scene is within 15%, none more than 15% too slow. Sources: the owner's round 6
-(part 76) and captures (part 103); uOFW's reading of the GE driver. No PPSSPP or JPCSP. Save states: layout 33.
+On branch `cursor/psp-ge-time-2b67` (draft PR #269), from #266's branch (part 103, merged as `a014706e9`) on master
+`a8d5640f5` (part 101, #263), master `dd63f4ffb` (parts 103 and 104, #266 and #267) merged in. The design the owner
+approved: the PSP's timing behind an option, off by default and switched in the app; on by default only once every
+captured scene is within 15%, none more than 15% too slow. Sources: the owner's round 6 (part 76) and captures (part
+103); uOFW's reading of the GE driver. No PPSSPP or JPCSP. Save states: layout 33.
 
 ### The model
 
