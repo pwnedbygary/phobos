@@ -383,6 +383,8 @@ struct Kernel {
   auto spinSignalSema(SpinShadow& shadow, u64 time) -> bool;
   auto spinMpegRingbufferAvailableSize(SpinShadow& shadow, u64 time) -> bool;
   auto spinGetVcount(SpinShadow& shadow, u64 time) -> bool;
+  auto spinGeListSync(SpinShadow& shadow, u64 time) -> bool;
+  auto spinGeDrawSync(SpinShadow& shadow, u64 time) -> bool;
   static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
                        FontReturnCode = 5, MpegReturnCode = 6, ExtendReturnCode = 7;
   static constexpr u32 FirstImportCode = 0x1000;
@@ -1145,6 +1147,8 @@ struct Kernel {
   auto geCall(GeList& list, bool finish, u32 id, bool suspends = false) -> bool;
   auto geOldSdk() const -> bool;
   auto geAtStall(u32 index) const -> bool;
+  auto geListLook(u32 index, u32 mode) const -> u32;
+  auto geDrawLook(u32 mode) const -> u32;
   auto geDrawSynced() -> void;
   auto geRemove(u32 index) -> void;
   auto geWake(Wait wait, u32 index) -> void;

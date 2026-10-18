@@ -24,6 +24,9 @@
 //    --save-state-at F FILE     the machine's state at frame F, as a save-state file
 //    --load-state FILE          start from a save-state file (the game booted, then the state loaded at once)
 //    --interpreter              run the CPU's interpreter (the recompiler is the default)
+//    --spin-skip on|off         skip through loops that only poll (spins.cpp), every register, byte and cycle as running
+//                                them gives: on by default, off with --ge-profile unless given (so a profile counts
+//                                every poll, as the PSP's plugin records them)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
 //    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on
 //    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
@@ -456,7 +459,7 @@ auto main(int argc, char** argv) -> int {
 
   //The options: parsed first, as they name the run's shape.
   fs::path game, outDir, wav, loadState, saveStateFile, memoryStick, fonts, script, geProfileFile;
-  std::string renderer;
+  std::string renderer, spinSkip;
   u32 resolution = 0;  //(0: the core's own, 1)
   u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0, geProfileFrom = 1;
   std::string geThread;
@@ -503,6 +506,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--save-state-at") { saveStateAt = parseUint(next(), option); saveStateFile = next(); }
     else if(option == "--load-state") loadState = next();
     else if(option == "--interpreter") interpreter = true;
+    else if(option == "--spin-skip") spinSkip = next();
     else if(option == "--ge-threads") geThreads = parseUint(next(), option);
     else if(option == "--ge-thread") geThread = next();
     else if(option == "--renderer") renderer = next();
@@ -532,6 +536,11 @@ auto main(int argc, char** argv) -> int {
     std::fprintf(stderr, "--ge-profile-from goes with --ge-profile (the file to record to)\n");
     return 1;
   }
+  if(!spinSkip.empty() && spinSkip != "on" && spinSkip != "off") {
+    std::fprintf(stderr, "--spin-skip is on or off: %s\n", spinSkip.c_str());
+    return 1;
+  }
+  bool spinSkipOn = spinSkip.empty() ? geProfileFile.empty() : spinSkip == "on";
 
   //The script's presses, one per line, "#" beginning a comment.
   if(!script.empty()) {
@@ -680,6 +689,7 @@ auto main(int argc, char** argv) -> int {
   };
   psp.kernel.output = [&](const std::string& text) { record(false, text); };
   psp.kernel.log = [&](const std::string& text) { record(true, text); };
+  psp.kernel.spins = spinSkipOn;
   if(traceSavedata) {
     psp.kernel.savedataTrace = [&](const std::string& text) {
       std::printf("[%06u] savedata: %s\n", frameNumber.load(), text.c_str());
@@ -967,6 +977,7 @@ auto main(int argc, char** argv) -> int {
         << ", \"bytes\": " << (sizeError ? std::string("null") : std::to_string(gameBytes)) << "},\n"
         << "  \"asked\": {\"renderer\": " << text(renderer) << ", \"resolution\": " << number(resolution, resolution)
         << ", \"engine\": " << (interpreter ? jsonText("interpreter") : std::string("null"))
+        << ", \"spin skip\": " << text(spinSkip)
         << ", \"ge threads\": " << number(geThreads, geThreads)
         << ", \"late frames\": " << (lateFrames ? "true" : "false") << ", \"frames\": " << number(framesGiven, frames)
         << ", \"start time\": " << number(startTimeGiven, startTime) << ", \"load state\": " << text(loadState.string())
@@ -980,6 +991,7 @@ auto main(int argc, char** argv) -> int {
         << "  \"ran\": {\"renderer\": " << jsonText(ranRenderer) << ", \"device\": " << text(ranDevice)
         << ", \"gpu lost\": " << (gpuLost ? "true" : "false") << ", \"resolution\": " << ranResolution
         << ", \"engine\": " << jsonText(interpreter ? "interpreter" : "recompiler")
+        << ", \"spin skip\": " << (spinSkipOn ? "true" : "false")
         << ", \"ge threads\": " << ranThreads << ", \"clock start\": " << clockStart / 1'000'000
         << ", \"time zone\": " << (timeZone ? jsonText(timeZone) : std::string("null"))
         << ", \"utc offset\": " << text(offset) << "},\n"
