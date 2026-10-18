@@ -560,12 +560,61 @@ static auto spinsGeProfiled() -> void {
   }
 }
 
+//With the GE on its thread, held back at the start of every step (let go of a few milliseconds in), so that a list
+//handed over isn't counted yet as the poll comes round and the GE's time is only its bound: the GE asked after as it
+//draws, skipped, and every step's state the same as without the thread with every turn run. A skip ends before the
+//go's limit, which goes no further than that bound (untilNextEvent()), and no FINISH falls due within it by the bound
+//(spinSkip()); the FINISH comes at the GE's exact time, once the thread has counted the runs. Turns are skipped all the
+//same (the thread let go of, the time is the exact one).
+static auto spinsGeLooksThreaded() -> void {
+  auto make = [](Look look, bool recompile, bool threaded) {
+    auto m = std::make_unique<KernelMachine>();
+    m->system.threadGE(threaded);
+    m->kernel.startTime = 1'700'000'000ull * 1'000'000;
+    geWait(*m, look);
+    m->kernel.spins = threaded;
+    m->system.recompiler.enabled = recompile;
+    m->system.power(0x0880'1000);
+    s32 uid = m->kernel.createThread("main", 0x0880'1000, 0x20, 0x4000, 0, 0);
+    m->kernel.startThread(*m->kernel.threads[uid], 0, 0);
+    return m;
+  };
+  for(bool recompile : {false, true}) {
+    for(auto look : {Look::Draw, Look::List, Look::Stalled}) {
+      auto held = make(look, recompile, true), every = make(look, recompile, false);
+      std::atomic<bool> hold{false};
+      held->system.geThreading->drain();  //(the thread reads its gate as it takes each record)
+      held->system.geThreading->gate = [&](u64) { while(hold.load()) std::this_thread::yield(); };
+      bool same = true;
+      for(u32 step = 0; step < 32 && !(held->kernel.exited && every->kernel.exited); step++) {
+        hold = true;
+        std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(5)); hold = false; });
+        held->kernel.run(Step);
+        release.join();
+        every->kernel.run(Step);
+        if(saveState(*held) != saveState(*every)) {
+          if(same) std::printf("  look %u: states differ after step %u\n", u32(look), step + 1);
+          same = false;
+        }
+      }
+      held->system.geThreading->drain();
+      held->system.geThreading->gate = nullptr;
+      CHECK(same, true);
+      CHECK(held->kernel.exited && every->kernel.exited, true);
+      CHECK(held->system.memory.read(4, Finished), Rounds);
+      CHECK(held->kernel.spun > 0, true);
+    }
+  }
+}
+
 auto spinTests() -> Tests {
   return {
     {"spins skipped as run", spinsSkipped}, {"spins refused", spinsRefused}, {"a spin skipped directly", spinsDirect},
     {"the GE's looks polled, skipped as run", spinsGeLooks},
     {"the GE's looks polled behind a list, past a SIGNAL, with interrupts held off", spinsGePolls},
     {"the GE's looks polled under a GE profile", spinsGeProfiled},
+    {"the GE's looks polled with the GE on its thread held back: skipped no further than its time's bound",
+     spinsGeLooksThreaded},
   };
 }
 

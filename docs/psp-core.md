@@ -16530,11 +16530,18 @@ synchronous GE's, by construction:
 **The option.** "GE Thread", Off (the default) or On, the core's option (`system.cpp`) and the runner's `--ge-thread`;
 the app doesn't offer it yet. Part 103's GE profile (`--ge-profile`) records the same with the thread On: while it
 records, each run handed over is counted at once and its charge recorded where the synchronous GE records it
-(`Kernel::geProfiledRun()`), the threads taking turns at each run meanwhile. **The limit of this first part**: the frame
-is still shown from the emulation thread, which drains G at every frame's end (`System::run()`'s `ge.drawer()`), so the
-two threads overlap within a frame and not across frames; showing the frame from G (every GPU call there, at most two
-frames in flight), the bounded drains and unloading with G stuck (R10, R18), and Auto with its handover both ways (R17)
-are the second part's (design steps 3 and 4), which the app's option waits for.
+(`Kernel::geProfiledRun()`), the threads taking turns at each run meanwhile. Part 105's skips through a game's polls of
+the GE's looks (`sceGeListSync(id, 1)`, `sceGeDrawSync(1)`) hold with the thread On as they are: a look reads the
+kernel's lists, which the control pass keeps on E as it always has, and what the GE thread decides is only when a FINISH
+falls due; a skip ends before the go's limit, which is no later than the GE time's bound where the FINISH may come next
+(`untilNextEvent()`), and makes sure by that bound that no FINISH falls due in it (`spinSkip()`), so it skips no further
+than without the thread, at times fewer turns (the GE thread not done counting), which is exact. A test holds the GE
+thread back at every step while a game polls each look, and every step's state is that of a machine without the thread
+running every turn. **The limit of this first part**: the frame is still shown from the emulation thread, which drains G
+at every frame's end (`System::run()`'s `ge.drawer()`), so the two threads overlap within a frame and not across frames;
+showing the frame from G (every GPU call there, at most two frames in flight), the bounded drains and unloading with G
+stuck (R10, R18), and Auto with its handover both ways (R17) are the second part's (design steps 3 and 4), which the
+app's option waits for.
 
 **Speed, in this first part**: On is exact, but on the M1 it's seldom faster than Off and in some games much slower
 (the library's slowest with the software renderer, all 3,600 frames from their start, Off then On: BlazBlue 4 s and
