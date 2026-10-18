@@ -95,7 +95,7 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
       for(u32 block = 0; block < GeModel::Blocks; block++) {
         if(point.covers[block]) point.before[block] = model.gpuDepth[block];
       }
-      if(point.covers.any()) model.putPoints.push_back(point);
+      if(point.covers.any()) model.putPoints.push_back(point), model.dirtyings++;
       if(model.declares) declareBlocks(point.covers);
     }
   }
@@ -213,7 +213,7 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
         for(u32 block = 0; block < GeModel::Blocks; block++) {
           if(point.covers[block]) point.before[block] = model.gpuDepth[block];
         }
-        model.putPoints.push_back(point);
+        model.putPoints.push_back(point), model.dirtyings++;
         if(model.declares) declareBlocks(point.covers);
       }
       if(depthWrites) d.newestClass = certain ? mine : (d.newestClass == ~0u ? 0 : d.newestClass) | mine;
@@ -253,6 +253,7 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
         t->hullAt = std::max(t->hullAt, o.hullAt);
       }
       t->hullAt = std::max(t->hullAt, at);
+      model.dirtyings++;
     }
   }
   if(software && textured) {  //(its texture, which the software renderer may read from memory as it draws)

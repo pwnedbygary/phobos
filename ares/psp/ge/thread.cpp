@@ -435,16 +435,32 @@ auto GeThread::load(u32 address, u32 size, bool loading) -> void {
 //without asking again till the next PRIM; else the word looked at, and where it's dirty, the drawnFirst() the render
 //GE makes for it handed over first, and waited for. (The render GE makes run()'s drawnFirst() for every word itself,
 //from the words' addresses: listWordDrawn().)
-auto GeThread::listWord(u32 address) -> bool {
+//(out of line: inlined in the list's loop, its caches changed what the compiler made of the loop with the thread off)
+NALL_NOINLINE auto GeThread::listWord(u32 address) -> bool {
   u32 first, last;
   if(!vramSpan(address & ~0xfffu, 0x1000, first, last)) return true;  //(RAM: the render GE never changes it)
   takeReports();
   if(address >> 12 != dirtyPage) {
-    if(!model.dirty(first, last)) return true;
+    //(asked again after every PRIM: God of War's lists, in pages beside the GPU's pixels, were looked through whole
+    //thousands of times a frame, unchanged)
+    CleanPage seen{address >> 12, 0, 0, model.dirtyings, model.staleDepth, model.scaled};
+    for(u32 page = first >> 12; page <= last >> 12; page++) {
+      seen.gpu = std::max(seen.gpu, model.gpu.pageNewest[page]);
+      seen.software = std::max(seen.software, model.software.pageNewest[page]);
+    }
+    auto& known = cleanPages[seen.page % cleanPages.size()];
+    if(seen == known) return true;
+    if(!model.dirty(first, last)) return known = seen, true;
     dirtyPage = address >> 12;
   }
   vramSpan(address, 4, first, last);
+  //(each word of such a page looked at alone: eight share a piece, clean for all of them as for one)
+  bool onePiece = first >> 5 == last >> 5;
+  CleanPage piece{first >> 5, model.gpu.pageNewest[first >> 12], model.software.pageNewest[first >> 12],
+                  model.dirtyings, model.staleDepth, model.scaled};
+  if(onePiece && piece == cleanPiece) return false;
   if(model.dirty(first, last)) waitFor(drawnFirst(address, 4));
+  else if(onePiece) cleanPiece = piece;
   return false;
 }
 

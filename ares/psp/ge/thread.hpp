@@ -224,6 +224,18 @@ private:
     ~Blocked() { count.fetch_sub(1, std::memory_order_acq_rel); }
   };
   u32 dirtyPage = ~0u;  //(the emulation thread's: a list page found not all clean in this run, its words looked at)
+  //(and pages found all clean, with what would have to change for one not to be: its pages' newest rectangles, the
+  //model's other dirtyings; reports taken and the emulation thread's writes since only make it cleaner. The model may
+  //answer coarser later, rectangles painted into pieces or an older part's bytes given the whole's place, but the
+  //bytes are as clean as they were. Kept by page number, 64 of them: a list's calls jump from page to page)
+  struct CleanPage {
+    u32 page = ~0u;
+    u64 gpu = 0, software = 0, dirtyings = 0;
+    bool staleDepth = false, scaled = false;
+    auto operator==(const CleanPage&) const -> bool = default;
+  };
+  std::array<CleanPage, 64> cleanPages;
+  CleanPage cleanPiece;  //(the last 32-byte piece of a list word found clean on a page not all clean)
 };
 
 }

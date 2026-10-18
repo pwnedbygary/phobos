@@ -47,14 +47,20 @@ struct GeModel {
     //Whether it reaches any of bytes first to last (inside VRAM, first <= last: a piece's, a few rows at most).
     auto reaches(u32 first, u32 last) const -> bool {
       if(empty()) return false;
-      if(span() >= VRAMBytes && rowBytes <= u64(right - left + 1) * bytes) return true;
-      //(as offsets past its address; its rows running on past VRAM's end come round to its start)
+      u64 width = u64(right - left + 1) * bytes;
+      if(span() >= VRAMBytes && rowBytes <= width) return true;
+      //(as offsets past its address; its rows running on past VRAM's end come round to its start. A row width is
+      //nearly always a power of two, its rows found by shifting: God of War's list words, each looked at beside the
+      //GPU's pixels, spent most of the control pass dividing here)
       u64 from = (u64(first) + VRAMBytes - address % VRAMBytes) % VRAMBytes;
+      bool shifts = !(rowBytes & (rowBytes - 1));
+      u32 shift = __builtin_ctz(rowBytes);
+      auto row = [&](u64 offset) -> u64 { return shifts ? offset >> shift : offset / rowBytes; };
       for(u64 base : {u64(0), u64(VRAMBytes)}) {
         u64 low = from + base, high = low + (last - first);
-        u64 y0 = std::max<u64>(low / rowBytes, top), y1 = std::min<u64>(high / rowBytes, bottom);
+        u64 y0 = std::max<u64>(row(low), top), y1 = std::min<u64>(row(high), bottom);
         for(u64 y = y0; y <= y1 && y1 >= y0; y++) {
-          u64 rowLow = y * rowBytes + u64(left) * bytes, rowHigh = y * rowBytes + u64(right + 1) * bytes - 1;
+          u64 rowLow = y * rowBytes + u64(left) * bytes, rowHigh = rowLow + width - 1;
           if(rowLow <= high && low <= rowHigh) return true;
         }
       }
@@ -68,6 +74,17 @@ struct GeModel {
       if(size >= VRAMBytes) { for(u32 page = 0; page < Pages; page++) each(page); return; }
       for(u64 page = from / 4096; page <= (from + size - 1) / 4096; page++) each(u32(page % Pages));
     }
+    //The 32-byte pieces it reaches any byte of, row by row (a piece more than once where rows overlap).
+    template<typename Each> auto pieces(const Each& each) const -> void {
+      if(empty()) return;
+      u64 width = u64(right - left + 1) * bytes;
+      if(span() >= VRAMBytes && rowBytes <= width) { for(u32 piece = 0; piece < Pieces; piece++) each(piece); return; }
+      for(s64 y = top; y <= bottom; y++) {
+        u64 from = (u64(address) + u64(y) * rowBytes + u64(left) * bytes) % VRAMBytes;
+        u64 to = from + std::min<u64>(width, VRAMBytes) - 1;
+        for(u64 piece = from / 32; piece <= to / 32; piece++) each(u32(piece % Pieces));
+      }
+    }
   };
 
   //Rectangles, each with the newest place of a PRIM it's the rectangle of: the last Kept distinct ones as they are
@@ -80,15 +97,10 @@ struct GeModel {
     std::array<u32, Pages> pageSlots{};  //(the slots reaching each page, a bit each)
     std::array<u64, Pages> pageNewest{};  //(the newest place of any rectangle reaching each page)
     u64 uses = 0;
+    //(row by row, each piece a row reaches any byte of: Super Monkey Ball's thousands of rectangles a frame, each
+    //painted through every piece of its span as reaches() found it, spent a seventh of the control pass there)
     auto paint(const Slot& slot) -> void {
-      u64 from = slot.rect.low(), size = std::min<u64>(slot.rect.span(), VRAMBytes);
-      for(u64 offset = from; offset < from + size; offset += 32 - offset % 32) {
-        u32 piece = offset % VRAMBytes / 32;
-        if(painted[piece] < slot.at && slot.rect.reaches(u32(offset % VRAMBytes / 32 * 32),
-                                                         u32(offset % VRAMBytes / 32 * 32 + 31))) {
-          painted[piece] = slot.at;
-        }
-      }
+      slot.rect.pieces([&](u32 piece) { if(painted[piece] < slot.at) painted[piece] = slot.at; });
     }
     auto add(const Rect& rect, u64 at) -> void {
       if(rect.empty()) return;
@@ -199,6 +211,10 @@ struct GeModel {
   //from memory took the bytes as they were before those pixels were finished (Backend::depthMoves).
   bool staleDepth = false;
   bool unsure = false;  //(the renderer refused a PRIM taken as surely its own: from then on none is taken so)
+  //(changes that may make bytes dirty without a rectangle reaching their page: a put point, a hull grown, the model
+  //cleared. Counted, so that bytes found clean are known still clean while it and their pages' newest stay as they
+  //were: GeThread::listWord())
+  u64 dirtyings = 0;
 
   //Declaring (the GE thread's copy of the model, checking: GeThread::checking): the pages the render GE may read memory
   //from as it does a PRIM handed over, as the design's G-interest has them (DESIGN.md 3.7): its target's rows (to its
@@ -300,6 +316,7 @@ struct GeModel {
 
   auto clear() -> void {
     gpu.clear(), software.clear();
+    dirtyings++;
     std::fill(written.begin(), written.end(), Piece{});
     finishKnown = drawnKnown = passed = 0;
     putKnown = {}, gpuDepth = {};
