@@ -76,6 +76,8 @@ are excluded; copying the portable template elsewhere requires explicit adoption
   their PSP's round-3 GE measurements (`tests/psp/measurements/ge-round3`), kept so any machine runs every test.
   Authorized by the owner's task on 2026-10-11: round 6's GE measurements from the same PSP
   (`tests/psp/measurements/ge-round6`, packed with xz), for the same reason.
+  By the owner's task on 2026-10-18 (round 8's results, its measured8 test and the GE timing's fit from the
+  repository): round 8's measurements from the same PSP (`tests/psp/measurements/ge-round8`, packed with xz).
   Do not uninstall or clear app data to run a comparison.
 
 See [coordinator prompt](coordinator-prompt.md),

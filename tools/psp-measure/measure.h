@@ -1,5 +1,5 @@
 //What psp-measure's parts share: main.c (the menu), results.c (the results folder, and each test's file in it),
-//vfpu.c (the VFPU's and the FPU's tests) and ge.c (the GE's and the controller's).
+//vfpu.c (the VFPU's and the FPU's tests), ge.c (the GE's and the controller's) and cpu.c (the CPU's, in round 8).
 #pragma once
 
 #include <pspkernel.h>
@@ -9,7 +9,7 @@
 
 //make SMOKE=1 builds a quick version for trying the program in an emulator before a PSP runs it (PPSSPP's
 //PPSSPPHeadless, which has no buttons to press): it runs round 3's VFPU and FPU tests (the big ones cut short by
-//Shrink, a shift), the FPU probes and the GE's rounds 2 to 7 straight away, and leaves when done. Its results say
+//Shrink, a shift), the FPU probes and the GE's rounds 2 to 8 straight away, and leaves when done. Its results say
 //nothing about a PSP.
 #ifdef SMOKE
 enum { Smoke = 1, Shrink = 8 };
@@ -45,9 +45,22 @@ void drop(Output* out);  //closes the file unkept, as if the test hadn't started
 //---- the parts' rounds, each returning 0 if a file couldn't be written (the VFPU's rounds stop there, the GE's go
 //on with the rest)
 
-void vfpuStart(void);      //first thing when the program starts: what round 1 and round 3 record as found then
+void vfpuStart(void);      //as the program starts (after displayAtStart's two display calls): what round 1 and round 3
+                           //record as found then
 int vfpuRound(int round);  //1-3, or 4 for the FPU probes
 int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4:
                            //parts 29's and 33's; 5: what part 48 left open; 6: what parts 60 and 64 left open;
-                           //7: anti-aliased lines (part 78)
+                           //7: anti-aliased lines (part 78); 8: the GE's time again, and the CPU's (part 107)
 void geEnd(void);          //lets the GE go before the program leaves
+
+//---- cpu.c: round 8's tests of the CPU alone, into results/ge as the round's other files, and what ge.c's test of the
+//CPU beside the GE (cpu-contention) uses
+
+int cpuTests(void);                                      //0 if a file couldn't be written
+void cpuManifest(SceUID file);                           //their lines of manifest8.txt
+void displayAtStart(void);  //what the display holds as the program starts (round 8's display-start): first of all
+unsigned int cpuRead(const void* from, unsigned int bytes);  //reads every word (through from's own addresses, cached
+                                                             //or not), returns their sum
+void cpuChain(void* at, unsigned int nodes, unsigned int apart);  //a chain of pointers `apart` bytes apart, in a
+                                                                  //scrambled order, through all of them
+unsigned int cpuChase(const void* at, unsigned int steps);   //follows it that many steps
