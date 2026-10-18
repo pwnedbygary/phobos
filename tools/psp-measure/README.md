@@ -383,7 +383,8 @@ a game's). Its timed lists are round 8's kind, at 222/111 and 333/166 MHz:
   the CPU. The thread stops after 5 seconds whatever happens, so a stalled GE is reset as ever.
 
 Round 10 takes about two minutes, three at most (its lists about 70 seconds of the GE's time by rounds 8 and 9's
-rates, the runs' own overhead and building the lists the rest); it changes the clocks as round 8 does.
+rates, the runs' own overhead and building the lists the rest); it changes the clocks as round 8 does. The owner
+ran it on the evening of 2026-10-18; part 112 says what it showed.
 
 ### How the GE's comparison works
 

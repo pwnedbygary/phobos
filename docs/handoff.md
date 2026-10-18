@@ -61,8 +61,24 @@ docs/psp-core.md, part 112.
   whatever happens; its memory its own (1 MiB, and VRAM's last 256 KiB), written back and invalidated after each run.
 - **Test**: "psp measure" runs round 10 after round 9 and checks every record; `tests/psp/programs/pspmeasure.elf`
   rebuilt.
-- **Next**: the owner runs round 10 (the EBOOT through the coordinator); its files go to
-  `tests/psp/measurements/ge-round10` with part 112's results and #269's refit.
+- **Results** (the owner's PSP, 2026-10-18 evening, every earlier round again after it; part 112): placement first: this
+  build put the RAM textures and palette 64 bytes off a 128-byte boundary, and a swizzled texture there costs 7% more
+  (time-anchors2: 2,307.5 against 2,154.5 µs on a 1 KiB boundary; 256 to 768 past 1.0 to 1.6%), which is tonight's round
+  9 shift (swizzled RAM cases 3 to 11% dearer, unswizzled and VRAM within 0.6%); other placements moved RAM reads up to
+  26% either way. The re-runs: every picture the same bit for bit, the timing medians within 0.0 to 1.5%. Lights: point
+  and spot lights alike, 11 a light-vertex diffuse, 19 with shine (8 more); directional ones shine for about 1, but a
+  lone one costs 21 more when the disabled light registers hold spotlights (round 8's 20.7 was that). CLUT32 fetches as
+  8888; the menu's logged tiles take 3.23 ms, leaving 0.25 ms of the game's 3.48 ms list for its 66 sprites (about 1.7
+  ms of texels): the log's tiles aren't the game's. The copyright pass matches the game (462,500 against about 450,000
+  bus clocks a pass); its miss is bilinear reading wide (+20%), not 16-bit. Perspective halves wide rows when w changes
+  along the row (10.0 to 4.2 clocks a pixel), not otherwise; a mipmapped 8888 texture reads level 1 at level 0's wide
+  cost (10.3 against 2.2); narrow strips cost by 16-byte units; the CPU's RAM traffic slows the GE's RAM reads by kind
+  (Super Monkey Ball's lists ×1.38 beside streaming reads, ×1.54 beside a game's mix; wide texels ×1.85 to 3.2; VRAM
+  work not at all).
+- **Next**: #269's agent refits with round 10 (no model change here); round 10's files
+  (`tests/psp/measurements/ge-round10`) and the re-runs (`ge-reruns-round10`) are packed in the worktree, uncommitted,
+  with `development-process.md`'s line, until the owner agrees to publishing them; a round 10b would add the spec's
+  polling (11) and before-or-beside (12) patterns and placement as a variable.
 
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 
