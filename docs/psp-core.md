@@ -17245,11 +17245,11 @@ ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like compariso
   - `tests/psp/run-tests.sh` (sanitized, the container-overflow check off as before): 616 groups, 0 failures with
     the GE thread on (`PHOBOS_TESTS_GE_THREAD=On`); with it off, 615 passed and `measured6`'s textured fill came out
     +2.0% against its 2% bound, set to 3% and passed alone. The ares tests 361 checks, 0 failed; `test_geprof.py` 24.
-  - "Fast" against master (`fe3deab82`, whose core `d428d91f9` doesn't change; the refit touches the PSP's paths
-    alone): eight of the review's scenes (Chains of Olympus, Ghost of Sparta, Killzone, Activision Hits' menu, Super
-    Monkey Ball, Army of Two, Twisted Metal: Head-On's play, Need for Speed: Most Wanted's race), Software and Vulkan-fast, 200
-    frames from each state, the GE thread off: 16 of 16 the same, every frame's picture and VRAM and the RAM after;
-    each state master's with layout 34's 46 bytes put in, all 0.
+  - "Fast" against master (`fe3deab82`, whose core `d428d91f9` doesn't change; the refit touches the PSP's paths alone):
+    eight of the review's scenes (Chains of Olympus, Ghost of Sparta, Killzone, Activision Hits' menu, Super Monkey
+    Ball, Army of Two, Twisted Metal: Head-On's play, Need for Speed: Most Wanted's race), Software and Vulkan-fast, 200
+    frames from each state, the GE thread off: 16 of 16 the same, every frame's picture and VRAM and the RAM after; each
+    state master's with layout 34's 46 bytes put in, all 0.
   - The fit reproduced from the repository: a runner built from the tree with `ge-terms.py` gives `GE::Cost` back to
     three figures (above); `gate.py`'s table is the refit's runner's profiles (the final constants but RamShare's
     fourth figure).
