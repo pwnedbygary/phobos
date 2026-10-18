@@ -16602,6 +16602,9 @@ lands second renumbers its layout to 34).
   isn't shown (1,200 and 600, all for the next sync) and 600 vblank waits, where master has the callback's alone; the
   decoder counts a flip a list, the second call setting the same buffer, as it counts the PSP's capture (289 flips of
   565 calls in ULUS10472-1).
+- With master `230c0a731` merged in (part 105): 583 groups, 0 failures. A spin's turns call no display function but
+  `sceDisplayGetVcount`, and a blank ends any skip, so a frame buffer set for the next sync is latched at the same
+  moment with the skip on or off.
 
 ### Not yet
 

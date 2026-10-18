@@ -57,8 +57,8 @@ merged in: #274, #266, #267, #268); docs/psp-core.md, part 108.
   past the next blank. Games that read sceDisplayGetFrameBuf(0) after a next-sync flip are the ones that can change:
   Army of Two, Death Jr. II, Sonic Rivals here.
 - **Checks**: tests/psp/run-tests.sh (sanitized): 577 groups, 0 failures; the new test fails on master. With master
-  `dd63f4ffb` merged in: 580 groups, 0 failures; the GE profile records each frame buffer call with the latch (Army of
-  Two's two a frame, as the PSP's capture has them).
+  `dd63f4ffb` merged in: 580 groups, 0 failures (583 with `230c0a731`); the GE profile records each frame buffer
+  call with the latch (Army of Two's two a frame, as the PSP's capture has them).
 - **Left out**: setframebuf's refusals (round 8's display-start first); a frame buffer set in the blank's handler,
   before the sync, taken at that sync (unrecorded).
 
