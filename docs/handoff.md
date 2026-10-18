@@ -53,10 +53,16 @@ Branch `cursor/psp-measure-round9-2b67` (PR #276, draft), stacked on #270's `cur
   `time-lists` with cached stall addresses, all four clock settings). About a minute on the PSP, two at most.
 - **Test**: "psp measure" runs round 9 after round 8 and checks every record; `tests/psp/programs/pspmeasure.elf`
   rebuilt.
-- **Next**: the owner runs round 9 (copy over `PSP/GAME/PSPMEASURE/EBOOT.PBP` keeping `results/`; ARK's clocks at
-  Auto; charger in; the GE profiler plugin off) and sends `results/ge`; and, with the plugin, captures Activision Hits'
-  3D menu and Killzone's gameplay at the moments of Phobos's `ahr-menu` and `kz-gp` states (part 110). Then #269's fit
-  takes round 9's files.
+- **Results** (the owner's PSP, 2026-10-18; `tests/psp/measurements/ge-round9`, part 110): round 8's anchors repeat
+  within 0.09% (median; one case 2% faster, most likely its texture's alignment in RAM); a texture costs the texels
+  read after a TEX_FLUSH (swizzled RAM about 14 + 0.46 bus clocks a byte, any size of texture; no refetch without
+  the flush), which accounts for round 8's copy of Super Monkey Ball's lists within 7%; triangles reading narrow cost
+  about a sprite's, and wide reads go row by row (a row past about 140 texels, 295 for CLUT8); shrunk 2:1 narrow
+  about 3 times a pixel (not 2); RAM-textured meshes share the RAM with their vertices; a vertex 0.48 a byte with a
+  floor of 5 (3-byte vertices 8.5), an indexed one 33 to 39; `time-lists2` finished at every setting (the stall
+  case fixed), the front end's lead about 30 sprites.
+- **Next**: #269's refit takes round 9's files (no model change here); this lands after #270. Part 107's "71 of 80"
+  `time-lists` records lost is 67 (13 finished), for #270 to correct.
 
 ## PSP measure, round 8: the GE's time where part 76's model misses the owner's captures, and the CPU's — 2026-10-16
 

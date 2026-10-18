@@ -39,11 +39,23 @@ the program's then: docs/psp-core.md, part 107). Part 107 says what each test is
 test reads them yet: `tools/psp-measure/ge-fit.py` fits the GE timing's model to them (with #269's model) and a
 `measured8` test will compare the core's run of round 8 with them once that model and this program are both in.
 
+## `ge-round9/`
+
+Round 9 of the same program (its menu's first line since, "Round 9: the GE's triangles, textures, vertices"), run on
+the same PSP on 2026-10-18 (the morning after round 8): 6 files, the GE's timed lists laid out as `manifest9.txt`
+describes (round 8's records): `time-anchors` (15 of round 8's cases again), `time-tristrips` (triangles reading
+narrow textures, and sprites), `time-loads` (a texture's loads and the cache's reuse, palettes, mipmaps),
+`time-formats` (vertex formats) and `time-lists2` (round 8's `time-lists` with its stall addresses cached), at
+222/111 and 333/166 MHz, `time-lists2` at 333/222/166 and 266/133 too; nothing stalled. Part 110 says what each test
+is for and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 97 KB as 18 KB); `SHA256SUMS` holds the
+unpacked files' sums (and the manifest's). No test reads them yet, as round 8's: they're for the GE timing's fit
+(#269).
+
 ## Not here
 
 The VFPU's measurements (`tools/psp-measure`'s `vfpu.c`: rounds 1 to 3, about 670 MB each, mostly exhaustive sweeps
 of functions like `vlog2` and `vsqrt`) are too big for the repository. The owner keeps them and copies them where
 they're needed; `docs/psp-vfpu-measurements.md` describes what they showed.
 
-Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11, round 8 on 2026-10-18), as
+Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11, rounds 8 and 9 on 2026-10-18), as
 `docs/development-process.md` records.

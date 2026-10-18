@@ -337,12 +337,13 @@ timed lists are round 8's kind, at 222/111 and 333/166 MHz, `time-lists2` at all
   8-bit, 16-bit and float positions alone and with a color, texture coordinates or a normal of each width, whole
   vertices of each width; through 16- and 8-bit indices; culled, drawn in 3D and drawn in through mode; strips.
   Round 8's culled strips had 8-bit positions 4.5 times the model's time and 16-bit 1.5 times.
-- **Lists again** (`time-lists2`): round 8's `time-lists` with its stall addresses cached (round 8's run lost 71 of
-  its 80 records: the driver says "stall reached" only when the stall address as given is the GE's own, kept with its
-  top three bits cut), every case at 222/111, 333/166, 333/222/166 and 266/133.
+- **Lists again** (`time-lists2`): round 8's `time-lists` with its stall addresses cached (round 8's run left 67 of
+  its 80 records empty: the driver says "stall reached" only when the stall address as given is the GE's own, kept with
+  its top three bits cut), every case at 222/111, 333/166, 333/222/166 and 266/133.
 
 Round 9 takes about a minute, two at most (its lists about 35 seconds of the GE's time by round 8's rates, the runs'
-own overhead and building the lists the rest); it changes the clocks as round 8 does.
+own overhead and building the lists the rest); it changes the clocks as round 8 does. The owner ran it on 2026-10-18
+(`tests/psp/measurements/ge-round9`); part 110 says what it showed.
 
 ### How the GE's comparison works
 
