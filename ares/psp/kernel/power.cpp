@@ -15,7 +15,8 @@
 namespace {
   //psppower.h's PSP_POWER_CB_* bits: on the charger, a battery in, and its charge (a percentage) in the low 7 bits
   constexpr u32 PowerOnCharger = 0x1000, PowerBattery = 0x80, PowerBatteryFull = 100;
-  //the PLL runs at one of four speeds; a speed asked for is taken to the next of them (PPSSPP's notes)
+  //a game's PLL runs at one of four speeds, the use mask uOFW's power.c sets for games (190, 222, 266, 333); a speed
+  //asked for is taken to the next of them (its clockFrequency.c)
   auto pllSpeed(u32 mhz) -> u32 {
     if(mhz <= 190) return 190;
     if(mhz <= 222) return 222;

@@ -37,8 +37,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's captures' 333/166, read before the game ran — 2026-10-16
 
-Branch `cursor/psp-power-clock-2b67` (from master `a8d5640f5`, masters `5442acb8b`, `03eca2a69` and `a014706e9`
-merged in: #264, #265, #274, #266); docs/psp-core.md, part 104.
+Branch `cursor/psp-power-clock-2b67`, on master `a8d5640f5` (part 101, #263), masters `5442acb8b` (#264, #265),
+`03eca2a69` (#274) and `a014706e9` (part 103, #266) merged in; draft PR #267. docs/psp-core.md, part 104, has the
+evidence. Clean room: uOFW and ARK-4's sources; no PPSSPP or JPCSP. Save states unchanged.
 - **The question** (part 103): the owner's captures of Activision Hits' boot read 333/166, Phobos 222/111.
 - **The game** asks, as it starts, for a CPU of 333 and a bus of 166 with the separate setters, and nothing else in
   1200 frames (traced). uOFW's power service refuses both at a game's startup PLL of 222 (set by its Init callback
@@ -47,10 +48,14 @@ merged in: #264, #265, #274, #266); docs/psp-core.md, part 104.
   call came 4.0 and 4.23 s in); boot1's capture read 222/111 in the copyright screen, whose lists took the same time
   throughout. ARK with its clock settings at Auto, as the owner had them, passes the setters through untouched (its
   clock code read). Phobos's 222/111 is the owner's PSP's.
-- **The change** (power.cpp): `scePowerSetBusClockFrequency` up to half the PLL (was: nothing over 111);
-  `scePowerSetClockFrequency` refuses a bus above half the PLL. "power clocks" tests both and the game's start.
+- **The change** (power.cpp): `scePowerSetBusClockFrequency` up to half the PLL (was: nothing over 111), so at a PLL
+  of 333 it now grants 112-166 and at 266 112-133, and at 190 refuses 96-111, which it granted;
+  `scePowerSetClockFrequency` refuses a bus above half the PLL asked for. "power clocks" tests both, at 333, 266, 222
+  and 190, and the game's start. The review replayed every power call the 266 games make in their first 1200 frames
+  through master's and this branch's rules: no answer changed.
 - **For the GE timing work**: the copyright screen is at 222/111 on both, compared unscaled; ARK's clock settings
   stay at Auto for the owner's captures.
+- **Checks**: tests/psp sanitized: 579 groups, 0 failures; CI green.
 
 ## PSP GE: how the games drive the GE on a PSP and in Phobos — tools/psp-ge-profile's plugin on the owner's PSP, the same records from the core (the runner's --ge-profile) — 2026-10-16
 
