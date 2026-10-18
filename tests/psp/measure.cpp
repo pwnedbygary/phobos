@@ -1,9 +1,9 @@
 //tools/psp-measure's program (see its main.c) in Phobos's core, driven through its menu as a person would. With
 //PSP_TEST_PROGRAMS holding pspmeasure.elf, its GE tests must run to the end and write every file, start afresh (the
 //first files kept in results-1), run again and draw the same, and skip what's done on a third run; the GE's rounds
-//3 to 8 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
-//counts running again over what the program before left of them, not over what this one leaves; round 6's and
-//round 8's timing records complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results
+//3 to 9 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
+//counts running again over what the program before left of them, not over what this one leaves; the timing records
+//of rounds 6, 8 and 9 complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results
 //folder (results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what
 //differs is listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder this
 //core's files are copied to, for a closer look.
@@ -118,6 +118,12 @@ static const TimingFile8 timingFiles8[] = {
   {"time-overlap", 10, 8, 2, 3}, {"time-scenes", 68, 8, 2, 15}, {"cpu-contention", 16, 4, 2, 3},
   {"cpu-alu", 64, 8, 1, 15}, {"cpu-latency", 144, 8, 1, 15}, {"cpu-memory", 104, 4, 1, 15},
   {"cpu-syscalls", 80, 4, 1, 3},
+};
+//Round 9's (ge.c's tables), the same way: time-anchors' 15 cases are round 8's at their sizes (33 in all),
+//time-tristrips 88 cases at 2 sizes, time-loads 54 at 2, time-lists2 round 8's time-lists, time-formats 34 at 3.
+static const TimingFile8 timingFiles9[] = {
+  {"time-anchors", 66, 8, 2, 3}, {"time-tristrips", 352, 8, 2, 3}, {"time-loads", 216, 8, 2, 3},
+  {"time-lists2", 80, 16, 3, 15}, {"time-formats", 204, 16, 2, 3},
 };
 static constexpr u32 ClockAttempts8 = 13;
 struct TimingRecord { u32 test, size, clocks, repeats, values; std::vector<u32> times; };
@@ -283,8 +289,8 @@ static const char* probeFiles[] = {
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
 enum : u32 {
-  GeRound8Line = 0, GeRound7Line = 1, GeRound6Line = 2, GeRound5Line = 3, GeRound4Line = 4, GeRound3Line = 6,
-  ProbesLine = 7, GeRound2Line = 9, AfreshLine = 11, LeaveLine = 12
+  GeRound9Line = 0, GeRound8Line = 1, GeRound7Line = 2, GeRound6Line = 3, GeRound5Line = 4, GeRound4Line = 5,
+  GeRound3Line = 7, ProbesLine = 8, GeRound2Line = 10, AfreshLine = 12, LeaveLine = 13
 };
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
@@ -484,8 +490,14 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 20000, exists(results / "cpu-clocks.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
+  //the GE's round 9, its time-lists2 at every setting (the stall moves waiting for the GE to reach each)
+  move(m, GeRound8Line, GeRound9Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 20000, exists(results / "time-formats.bin")), true);
+  press(m, Cross);
+  onlyStallCheckStalled();
   //leaving
-  move(m, GeRound8Line, LeaveLine);
+  move(m, GeRound9Line, LeaveLine);
   press(m, Cross);
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
@@ -602,11 +614,11 @@ static auto pspMeasure() -> void {
     look(file, ours, referenceRound7);
   }
   CHECK(std::filesystem::exists(results / "manifest7.txt"), true);
-  //round 8's records: whole, as many as the program's tables give, at each test's settings in turn (as many records
-  //at each, the clocks the core grants every one asked for), every run finished (time-lists' and time-signals2's
-  //third time, where a case has one, no later than its finish), the CPU's loops taking time (its system calls may
-  //take none here)
-  for(auto& file : timingFiles8) {
+  //the records of rounds 8 and 9: whole, as many as the program's tables give, at each test's settings in turn (as
+  //many records at each, the clocks the core grants every one asked for), every run finished (the third time of
+  //time-lists, time-lists2 and time-signals2, where a case has one, no later than its finish), the CPU's loops taking
+  //time (its system calls may take none here)
+  auto timedFile = [&](const TimingFile8& file) {
     std::string name = std::string(file.name) + ".bin";
     auto ours = readWords(results / name);
     CHECK(ours.size(), file.records * (4 + file.repeats * file.values));
@@ -638,7 +650,10 @@ static auto pspMeasure() -> void {
     CHECK(timed, true);
     if(copy) std::filesystem::copy_file(results / name, std::filesystem::path(copy) / name,
                                         std::filesystem::copy_options::overwrite_existing);
-  }
+  };
+  for(auto& file : timingFiles8) timedFile(file);
+  for(auto& file : timingFiles9) timedFile(file);
+  CHECK(std::filesystem::exists(results / "manifest9.txt"), true);
   //cpu-clocks: an attempt a record (1 run of 4 words: what the call gave back, the CPU's and the bus's MHz after, the
   //loop's time), each from 222/111 or 333/166; the first, 333/333/166, granted
   auto attempts = timingRecords(readWords(results / "cpu-clocks.bin"));

@@ -29,8 +29,9 @@ again on 2026-10-12 with round 7 (part 78), in pspdev's Docker image
 (`ghcr.io/pspdev/pspdev@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f`), and on
 2026-10-16 with round 8 (part 107) with pspdev's v20261001 release for macOS on arm64 (its psp-gcc 15.2.0), and
 again on 2026-10-18 with round 8's time-lists giving its stall addresses cached (part 107) with the same release (the
-round 8 source as it was rebuilds to the earlier file byte for byte), the rest left as they were. They hold no Sony
-code, no game and no firmware. Their parts come from:
+round 8 source as it was rebuilds to the earlier file byte for byte), again that day with round 9 (part 110), and
+again with round 9's fix round (`cpu.c`'s waits for the GE timed: part 110), each with the same release, the rest
+left as they were. They hold no Sony code, no game and no firmware. Their parts come from:
 - Phobos's own sources (the programs in `tools/psp-test-programs` and `tools/psp-measure`);
 - pspsdk, the free PSP SDK, including its GU samples (pspsdk's BSD-style license; see the pspsdk sources);
 - newlib, pspdev's C library (BSD-style licenses; see the newlib sources).
@@ -62,6 +63,6 @@ f0e8d94d22a410fcf7db6e8f8507a1401276586bc2a24f03e7de10c21fec842b  envmap.elf
 039c63dc8a7fa7eb2adeb58221a809b8b7d6e80a23164ce8149197a2e26b0dd5  gu.elf
 ce08aad78b4a886a08982413d1ecfd79639b3cda0b7de7fc26a21b81be663feb  hello.elf
 287a42e38c907710723379a408e12640142549230df3babd6e62ac369e5e3910  hello.prx
-3c7448b289e3a33e079d53863f0b470995f020d793121acec5106006a4e04e28  pspmeasure.elf
+3da289dbd9503cdbf1f8de52534009567273bf290daa93e63cfb0a35edfef302  pspmeasure.elf
 c7a041b4b9182d1c3e01913b13e1fd8b2495307ece8e53412d9f11225c39cbb1  system.elf
 ```
