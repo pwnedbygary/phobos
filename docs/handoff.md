@@ -35,6 +35,60 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE on a thread of its own, exact: option "GE Thread" (Off, the default, and On; the app doesn't offer it yet), the emulation thread waiting only where the GE could still change what it reads — 2026-10-17
+
+Branch `cursor/psp-ge-thread-2b67` (GE round 4, part B, first PR), on master `a8d5640f5` with `5442acb8b` (#265),
+`03eca2a69` (#274), `a014706e9` (#266, part 103: with the thread On its GE profile records the same),
+`dd63f4ffb` (#267, part 104) and `230c0a731` (#268, part 105: its skips through the GE's looks hold with the thread
+On, no further than the GE time's bound) merged in;
+docs/psp-core.md, part 109, has the evidence; the design (revision 4, approved by the independent review,
+both conditions met) is summed up there. Clean room: no PPSSPP for GE or GPU code, JPCSP not read. Save states
+unchanged (the same file with the thread on or off).
+- **What**: the kernel's GE on the emulation thread runs every list's commands as before and hands the drawing to a
+  render GE on its own thread as records; a model of what each PRIM may change has the emulation thread wait only
+  where the GE could still change bytes it reads; its writes are made at once, their old bytes kept as versions the
+  render GE reads and writes back through; the GE's clock folds the runs the thread counts. Exact by construction,
+  checked by two debug checks on in every threaded test machine (the whole value rule, and G-interest).
+- **The limit of this PR**: the frame is still shown from the emulation thread, which drains the GE thread at every
+  frame's end, so the threads overlap within a frame only. The frame shown from the GE thread, bounded drains and
+  unloading with it stuck, then Auto (design steps 3 and 4) are the stacked second PR's, with the app's option.
+- **Off costs nothing**: the emulation thread's instructions a frame against master on the M1 (Vulkan fast, 300
+  frames, 5 rounds): Super Monkey Ball -0.29%, Ghost of Sparta -0.02%, Chains of Olympus +0.05% (14 rounds +0.04%,
+  master's own spread 0.45%); ms within noise.
+- **Exact, the thread On with the checks against Off**: the 78 settled hashes (26 scenes x three renderers) all the
+  same; 26 scenes' 600 frames with states every 150 all the same; schedule fuzzing (10 scenes x three ways) and the
+  stress mode (a finish every 97th PRIM and kick end, 1x/2x on 26 scenes, 4x on 8) all the same; Ghost of Sparta
+  from its start, 2,400 frames, every frame, Software and Vulkan fast, the same; the suite Off, On and On fuzzed three
+  ways 0 failures (604 groups now: #265's and #266's merged in, the library check's two tests, the review's six);
+  ThreadSanitizer over the suite with the thread On, and over every GPU group on MoltenVK with the thread On
+  (pspsdk's samples included), no report, nothing suppressed.
+  Targeted tests for the review's findings (R14-R16, R19, R22-R24, the hull rule) each fail with their rule out.
+- **Found and fixed on the way**: a write whose own checks finish the GPU had the finish's write-back land over it
+  (now versioned where its pages may be the GPU's); with the depth moves off a later depth put could change bytes the
+  model held clean, at 1x too (R25: the put rule now holds there); ThreadSanitizer over the GPU groups found the GE
+  thread starved while the emulation thread writes into pages it writes back (it waited for every version not yet
+  ready; now only for one being copied) and a race in the tests' gate (they drain first now). The coordinator's
+  library check with the thread On found two costs of the control pass that grew without bound (the pictures were
+  Off's): the software renderer's textures read from memory kept one entry per PRIM until drawn and gone through at
+  every report the emulation thread takes (each VRAM load, each list word in VRAM): Ghost of Sparta from its start
+  crawled past the check's 15 minutes, Gran Turismo 226 s On against 14 Off (now kept by page: 15 s); and an indexed
+  PRIM's vertices copied from the buffer's start to its most index (now least to most: Jeanne d'Arc 123 s → 36 s, Off
+  30). A test each, failing without its fix. The independent review found: past 4,096 runs handed over before a
+  FINISH (GU's direct lists: a run per draw) the thread's counts of later runs overwrote ones not yet folded, a race,
+  the GE's time wrong (the kernel now folds the oldest at each run past 4,096); the render GE's reads of nothing went
+  unreported, so the count a state keeps differed (now reported through the kernel's GE's memory, the count atomic,
+  saturating at 16); and three rules no test caught (software textures' conflicts, software depth rectangles, the
+  busy check for a clean read on a busy page). A test each now, failing with its rule or fix taken out.
+- **Speed**: On is exact but seldom faster than Off on the M1, and in some games much slower (BlazBlue 4 s Off, 20 s
+  On; SSX on Tour 8 s, 43 s): every CPU access to VRAM takes the slow path and each store is a record of its own (the
+  design's narrower access records and run encoding aren't done yet), and games touching what the GE thread still
+  draws have the threads take turns. Auto (step 4) keeps such games synchronous; On is for the tests and the runner.
+- **The clock's go split is needed** (the review found the case: an alarm's call held back with interrupts off, mtic
+  turning them on inside a go limited by the GE time's bound; without the split the call starts at the bound): kept,
+  with a test that fails without it.
+- **Next**: the coordinator's library check with `--ge-thread On` again; then design steps 3-4 and the narrower,
+  batched access records in later PRs.
+
 ## Screenshots: a film-strip card pops out of the picture and hops into a folder, and a pill says where it went or why it didn't; named for the game and the time; the core lets the picture go before it encodes — 2026-10-17
 
 Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265), master `03eca2a69` (#274) merged in;
