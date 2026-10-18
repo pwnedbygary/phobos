@@ -72,7 +72,7 @@ was stacked on it till then); docs/psp-core.md, part 110.
   went past the data (CLUT8's row threshold about 270, not 295; Activision Hits' lists compared list for list; the
   shared RAM claimed for 8888 alone; five smaller figures), its context since #270 merged, part 107's corrections
   carried into its own text and `ge.c`'s comment (`pspmeasure.elf` unchanged); the owner's go-ahead for keeping
-  `ge-round9` in the repository goes into `docs/development-process.md` once he gives it.
+  `ge-round9` in the repository, given on 2026-10-18, is recorded in `docs/development-process.md`.
 - **Next**: #269's refit takes round 9's files (no model change here).
 
 ## PSP measure, round 8: the GE's time where part 76's model misses the owner's captures, and the CPU's — 2026-10-16
