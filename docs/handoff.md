@@ -38,31 +38,233 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6 and 8, behind the option "GE Timing" (off by default), the gate against the captures, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
-`dd63f4ffb` (#266, #267) and `230c0a731` (#268) merged in; draft PR #269, its merge held by the owner till the gate
-passes. docs/psp-core.md, part 106, has the evidence (part 76, the first model's fit, is here too). Clean room: our
-code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 33 (22 bytes, and the GE's
-pipeline: 28 and 16 a queued item; "Fast" 50 in all).
+`dd63f4ffb` (#266, #267), `230c0a731` (#268) and `fe3deab82` (#272, the GE thread; #271, the display latch; #273)
+merged in; draft PR #269, its merge held by the owner till the gate passes. docs/psp-core.md, part 106, has the
+evidence (part 76, the first model's fit, is here too). Clean room: our code, uOFW for the GE driver's behaviour; no
+PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 22 bytes, and the GE's pipeline: 28 and 16 a queued item;
+"Fast" 50 in all).
 - **The model** (`GE::Cost`, `GE::Pipe`): the front end (words, PRIMs, vertices, lights, cuts) hands each primitive,
   transfer and palette load to the back end (rows, pixels, texels) through an 83-entry queue (round 8's
   time-signals2); a sprite's rows spanning 256 distinct texels read wide; triangles read 16- and 32-bit texels at
   rates of their own; the pipeline is carried through stall updates and SIGNALs.
 - **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6 and 8, 2,054 timed lists, 5.5% at the median
   (70% within 10%, 90% within 25%); the command and the terms it couldn't measure in part 106.
-- **"Fast"** is master's bit for bit and no longer pays for "PSP" (the review measured 4.5-7.7% more instructions a
-  frame): now 0.19 to 0.56% on Vulkan-fast and within master's own spread on Software; exact against master
-  `230c0a731` on the review's 33 scenes, Software and Vulkan-fast (66 of 66, states master's with 50 bytes put in).
+- **"Fast"** is master's bit for bit, with "GE Thread" off and on, and no longer pays for "PSP" (the review measured
+  4.5-7.7% more instructions a frame): 0.19 to 0.56% on Vulkan-fast and within master's own spread on Software
+  (against `230c0a731`); exact against master `fe3deab82` with the thread off and on (part 106's checks).
+- **The GE thread** (part 109): "PSP" keeps the GE on the emulation thread whatever "GE Thread" says
+  (`System::threadGE()`; its pipeline takes each run's time as the run ends), so "PSP" with the thread on is "PSP"
+  with it off (part 106's checks); a test has the system refuse the thread with "PSP" and start it with "Fast".
 - **A SIGNAL** waits for the front end to reach it, its lead kept through stall updates (a test gives the same list
   whole, in one part and a part a sprite).
-- **The gate** (`tools/psp-ge-profile/decoder/gate.py`, the 12 captures in `tests/psp/measurements/ge-captures`):
-  5 of the 9 judged rows within 15% (Chains of Olympus −13%, Killzone's scene list −9% against its first capture
-  and its full-screen list −1%, the copyright screen −2%); too fast Ghost of Sparta −21%, Super Monkey Ball −31%,
-  Killzone −19% against its second capture; too slow Activision Hits' menu +29%. The merge stays held.
-- **Checks**: tests/psp sanitized, 586 groups, 0 failures; `test_geprof.py`, 24 tests. GitHub's checks wait for the
-  merge turn: the branch conflicts with master `92eddbfea` (part 109's GE thread, in the GE driver and the kernel).
-- **Not yet**: the CPU's contention with the GE (the CPU's timing, its own project); round 9 (triangles reading narrow
-  textures from swizzled RAM and VRAM, the texture cache's reuse, vertex formats, the scenes at the captures'
-  moments); fixed-point charges before any default change. Part 107 (round 8) is PR #270; part 108 (the display's
-  next-vblank switching) PR #271.
+- **The gate** (`tools/psp-ge-profile/decoder/gate.py`, the owner's 18 captures in
+  `tests/psp/measurements/ge-captures`, Sunday's 6 taken with round 9): the merged head's table in part 106. The merge stays held.
+- **Checks**: part 106 (the suites with the thread off and on, the ares tests, the exact checks).
+- **Not yet**: the refit with round 9 (#276, part 110: textures by the texels read after a TEX_FLUSH, triangles
+  reading narrow, vertex formats); the CPU's contention with the GE (the CPU's timing, its own project); fixed-point
+  charges before any default change. Part 107 (round 8) is PR #270, part 108 (the display latch) #271, merged.
+
+## PSP display: the frame buffer set for the next vertical sync shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second) — 2026-10-16
+
+Branch `cursor/psp-display-latch-2b67` (draft PR #271; from master `5442acb8b`, masters `03eca2a69`, `dd63f4ffb`,
+`230c0a731` and `92eddbfea` merged in: #274, #266, #267, #268, #272, #273); docs/psp-core.md, part 108. Clean room:
+pspautotests' display/setframebuf and isstate, round 8's display-start (part 107), pspsdk's pspdisplay.h; no PPSSPP
+or JPCSP. Save states: layout 33 (#269 takes 33 too: the second to land renumbers to 34).
+- **Why**: Army of Two flips from its list's SIGNAL callback for the next sync, then asks which frame buffer is shown
+  and waits for the blank while its flip isn't yet: two flips and a wait a frame, 30/20 fps on the owner's PSP.
+  Phobos took every frame buffer at once, so the game never waited: master draws 251 frames a second for 60 shown.
+- **Change** (display.cpp): sceDisplaySetFrameBuf's sync 1 sets the address shown from the next blank's start, or,
+  set in a blank before its vertical sync (631.5 us in), from that sync; the width and format at once (pspautotests'
+  setframebuf, isstate; round 8's display-start); sceDisplayGetFrameBuf's which 1 reads the one coming, 0 the one
+  shown; the screen shows the last one set in the frame after the blank, as before (its picture taken as the blank
+  starts: one set in the blank before its sync, after that, shows a frame later than on a PSP, as on master). Layout
+  33 keeps one waiting (13 bytes); a state with one due past the next blank's start is refused.
+- **Effect** (34 scenes x Software, Vulkan, Vulkan-fast against master; their display calls traced): 31 the same in
+  every frame. Army of Two: 120 frames a second drawn instead of 251 (gameplay; menu 194), two a blank, a blank
+  waited for every second one, a new picture each (with #269's PSP timing, both merged: 30/20 fps, two flips and a
+  wait a frame, as on the PSP); Death Jr. II's character screen: pictures the same, the VRAM in alternate frames and
+  the RAM not (its handler's and main thread's reads before the sync find the old buffer). The first try (the next
+  blank's start for every next-sync flip) also showed Death Jr. II's gameplay, Sonic Rivals, Disaster Report 3's
+  intro and Twisted Metal's logos a blank late: now master's. In those 34 scenes no picture repeats where master's
+  doesn't (Army of Two's intro does, in the library check: each of its video's pictures held two frames, master's one
+  to three); no wait past the next blank. Games that read sceDisplayGetFrameBuf(0) after a next-sync flip are the
+  ones that can change: Army of Two, Death Jr. II, Sonic Rivals here.
+- **Library check** (the coordinator's: 266 games, Software and Vulkan-fast, the clock fixed, against `230c0a731`):
+  0 newly failing; two real differences, in both renderers, this change's doing and not faults: Army of Two shows
+  master's very pictures 4 frames later (its loading frames now wait for the blank, so EALogo.bik opens 58,550 us
+  later; each video picture then held two frames); Sonic Rivals 2 presents master's frame buffer at all 3,600 frames,
+  but its flip from a GE FINISH callback reads back as not shown yet, as on a PSP, so its second list is queued at
+  the next blank and its animation sampled at other moments (1,739 pictures byte for byte master's; the boot
+  notice's fade, frames 190-201, a frame ahead of master's; the rest the title screen's sub-pixel motion).
+- **Checks**: tests/psp/run-tests.sh (sanitized): 577 groups, 0 failures; the new test fails with sync 1 taken at
+  once. With master `dd63f4ffb` merged in: 580 groups, 0 failures (583 with `230c0a731`; 610 with `92eddbfea`
+  and the review's fixes); the GE profile records each frame buffer call with the latch (Army of Two's two a frame,
+  as the PSP's capture has them).
+- **Review fixes** (review of `96383388d`: approve with should-fixes, no blockers): master `92eddbfea` merged, its
+  two system.cpp conflicts keeping both sides (the frame from presentedFrameBuffer() under #272's renderer checks):
+  Army of Two's first 400 frames and Sonic Rivals 2's first 600, Software and Vulkan-fast, #271's every picture with
+  the GE thread off and on. New tests catch the review's four surviving mutants (the latch dropped from
+  sceDisplaySetFrameBuf, sceDisplayIsForeground or events(), or made 0.3 ms before the sync) and system.cpp's two
+  uses of presentedFrameBuffer() (a pretend GPU: the frame read back and presented); the new state fields are in
+  "state fields", and the loader refuses one due past the next blank's start; round 8's display-start is cited.
+- **Left out** (follow-ups): setframebuf's refusals and the start's format, with a library check of their own (round
+  8's display-start: a PSP starts at address 0, width 0, format 3, Phobos at format 0; not in the foreground; every
+  frame buffer set at once refused from there, 0x80000107, or 0x80000104 for the start's width of 0, the display
+  left as it was; one for the next vblank taken); when a PSP takes one set as a blank starts (at that sync here,
+  unrecorded: a set at a blank's start read back before and after the sync would say); perhaps the picture taken at
+  the sync rather than as the blank starts.
+
+## PSP GE on a thread of its own, exact: option "GE Thread" (Off, the default, and On; the app doesn't offer it yet), the emulation thread waiting only where the GE could still change what it reads — 2026-10-17
+
+Branch `cursor/psp-ge-thread-2b67` (GE round 4, part B, first PR), on master `a8d5640f5` with `5442acb8b` (#265),
+`03eca2a69` (#274), `a014706e9` (#266, part 103: with the thread On its GE profile records the same),
+`dd63f4ffb` (#267, part 104) and `230c0a731` (#268, part 105: its skips through the GE's looks hold with the thread
+On, no further than the GE time's bound) merged in;
+docs/psp-core.md, part 109, has the evidence; the design (revision 4, approved by the independent review,
+both conditions met) is summed up there. Clean room: no PPSSPP for GE or GPU code, JPCSP not read. Save states
+unchanged (the same file with the thread on or off).
+- **What**: the kernel's GE on the emulation thread runs every list's commands as before and hands the drawing to a
+  render GE on its own thread as records; a model of what each PRIM may change has the emulation thread wait only
+  where the GE could still change bytes it reads; its writes are made at once, their old bytes kept as versions the
+  render GE reads and writes back through; the GE's clock folds the runs the thread counts. Exact by construction,
+  checked by two debug checks on in every threaded test machine (the whole value rule, and G-interest).
+- **The limit of this PR**: the frame is still shown from the emulation thread, which drains the GE thread at every
+  frame's end, so the threads overlap within a frame only. The frame shown from the GE thread, bounded drains and
+  unloading with it stuck, then Auto (design steps 3 and 4) are the stacked second PR's, with the app's option.
+- **Off costs nothing**: the emulation thread's instructions a frame against master on the M1 (Vulkan fast, 300
+  frames, 5 rounds): Super Monkey Ball -0.29%, Ghost of Sparta -0.02%, Chains of Olympus +0.05% (14 rounds +0.04%,
+  master's own spread 0.45%); ms within noise.
+- **Exact, the thread On with the checks against Off**: the 78 settled hashes (26 scenes x three renderers) all the
+  same; 26 scenes' 600 frames with states every 150 all the same; schedule fuzzing (10 scenes x three ways) and the
+  stress mode (a finish every 97th PRIM and kick end, 1x/2x on 26 scenes, 4x on 8) all the same; Ghost of Sparta
+  from its start, 2,400 frames, every frame, Software and Vulkan fast, the same; the suite Off, On and On fuzzed three
+  ways 0 failures (604 groups now: #265's and #266's merged in, the library check's two tests, the review's six);
+  ThreadSanitizer over the suite with the thread On, and over every GPU group on MoltenVK with the thread On
+  (pspsdk's samples included), no report, nothing suppressed.
+  Targeted tests for the review's findings (R14-R16, R19, R22-R24, the hull rule) each fail with their rule out.
+- **Found and fixed on the way**: a write whose own checks finish the GPU had the finish's write-back land over it
+  (now versioned where its pages may be the GPU's); with the depth moves off a later depth put could change bytes the
+  model held clean, at 1x too (R25: the put rule now holds there); ThreadSanitizer over the GPU groups found the GE
+  thread starved while the emulation thread writes into pages it writes back (it waited for every version not yet
+  ready; now only for one being copied) and a race in the tests' gate (they drain first now). The coordinator's
+  library check with the thread On found two costs of the control pass that grew without bound (the pictures were
+  Off's): the software renderer's textures read from memory kept one entry per PRIM until drawn and gone through at
+  every report the emulation thread takes (each VRAM load, each list word in VRAM): Ghost of Sparta from its start
+  crawled past the check's 15 minutes, Gran Turismo 226 s On against 14 Off (now kept by page: 15 s); and an indexed
+  PRIM's vertices copied from the buffer's start to its most index (now least to most: Jeanne d'Arc 123 s → 36 s, Off
+  30). A test each, failing without its fix. The independent review found: past 4,096 runs handed over before a
+  FINISH (GU's direct lists: a run per draw) the thread's counts of later runs overwrote ones not yet folded, a race,
+  the GE's time wrong (the kernel now folds the oldest at each run past 4,096); the render GE's reads of nothing went
+  unreported, so the count a state keeps differed (now reported through the kernel's GE's memory, the count atomic,
+  saturating at 16); and three rules no test caught (software textures' conflicts, software depth rectangles, the
+  busy check for a clean read on a busy page). A test each now, failing with its rule or fix taken out.
+- **Speed**: On is exact but seldom faster than Off on the M1, and in some games much slower (BlazBlue 4 s Off, 20 s
+  On; SSX on Tour 8 s, 43 s): every CPU access to VRAM takes the slow path and each store is a record of its own (the
+  design's narrower access records and run encoding aren't done yet), and games touching what the GE thread still
+  draws have the threads take turns. Auto (step 4) keeps such games synchronous; On is for the tests and the runner.
+- **The clock's go split is needed** (the review found the case: an alarm's call held back with interrupts off, mtic
+  turning them on inside a go limited by the GE time's bound; without the split the call starts at the bound): kept,
+  with a test that fails without it.
+- **Next**: the coordinator's library check with `--ge-thread On` again; then design steps 3-4 and the narrower,
+  batched access records in later PRs.
+
+## Screenshots: a film-strip card pops out of the picture and hops into a folder, and a pill says where it went or why it didn't; named for the game and the time; the core lets the picture go before it encodes — 2026-10-17
+
+Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265), master `03eca2a69` (#274) merged in;
+draft PR #273, with the fix rounds of its review's two rounds (each: approve with should-fixes).
+- **The report** (owner, 17 Oct): Shot in the pause menu gave no sign it worked, so he pressed it three times and fell
+  back to Android's screenshot. It had worked: three files, each named for the ROM's file name and milliseconds
+  (`God of War - Ghost of Sparta.chd_1792260870863.png`, 480x272).
+- **The design** (owner, 17 Oct): a pop-out like Android's own screenshot, a photo reel going into a folder icon,
+  "aesthetic, but performant at all costs", with fun and whimsy. It matches the coordinator's preview
+  (scratch/screenshot-fx/preview.html): its layout, keyframes and CSS easings.
+- **The effect** (ui/ScreenshotEffect.kt): `MainViewModel.takeScreenshot`, which the pause menu's Shot and the
+  screenshot hotkey both call, in every core, takes one shot at a time (a press while one is being taken and written is
+  dropped). `Screenshots.save` makes the file; `PhobosCore.captureScreenshot` takes the picture, which the core keeps,
+  and hands back a copy at most 640 px either way, which goes straight to the effect as a `ScreenshotEvent`; then
+  `writeScreenshot` writes the PNG while the effect plays, and the pill joins once `Screenshots.note` says how that
+  went. Should that be late, the pill waits for it and the slide-off waits for the pill (the card stays in the folder),
+  so the pill always slides in and stays up 660 ms before it all goes. While they wait the clock holds still at
+  2196 ms, by when everything else has stopped, so nothing is drawn; after 8 s the held time stands for the note's
+  (`runSavedShot`). `ScreenshotEffect`, after the pause menu in EmulatorScreen's Box, collects `screenshotEvents` (only
+  the newest waits). Saved, over 2.7 s or a late note's more: a film-strip card holding the picture starts exactly over
+  the game picture, washed white, and springs to the bottom-left corner as it develops (the top-left where the touch
+  controls show in play, even when shot from the pause menu; clear of the system bars and the cutout); the film winds
+  on two holes; a manila folder springs in beside it, its front panel tips open, the card hops in between its panels,
+  the front snaps shut, the folder squashes, nine sparkles burst, and a pill says "Screenshot saved" over "Screenshots
+  › PlayStation Portable" (in the app's own storage, which no file manager shows, where to choose a folder); then it
+  all slides off to the left. On a narrow screen the pill keeps to its title, as the preview does, but for that hint or
+  a failure, which wrap.
+  No picture, or a folder that can't be written: the pill alone, error-tinted, with the reason, 3 s; a write that fails
+  once the card is out: the pill beside the folder says so. A new shot restarts it. Remove animations: the card in the
+  folder with the pill, still, 1.6 s from when the pill shows (a delay, which the animator scale doesn't shorten).
+  TalkBack hears where it went once that's known.
+- **Its cost**: nothing in composition while none runs; one clock (an `Animatable`, linear) and the note's time (a
+  float state, set once), read through `ShotClock` (primitive floats, so nothing's boxed) only in `graphicsLayer {}`
+  and draw lambdas, so a frame recomposes and lays out nothing (EmulatorScreen never recomposes for it; the pill is
+  composed once, when its text is known). One `Layout` places fixed-size nodes once: the folder's back, the card, the
+  front, the sparkles, the pill, each its own small layer, each fading on its own (`ModulateAlpha`: no offscreen
+  buffer, which would cut off the folder's tab, drawn above its node; so the card shows through the front panel as
+  they fade at the end). Paths and brushes cached; no blur; shadows only on the card (none while it covers the
+  picture) and the folder's back (one corner radius, so its outline needs no Path). The effect's own code allocates
+  nothing per frame; Compose UI 1.7.6 does, for each animated layer as its block runs (javap): the block's wrapper
+  lambda and the layer's outline anew (a Rect and an `Outline.Rectangle`; for the card and the folder's back a Rect, a
+  RoundRect and an `Outline.Rounded`), three or four small objects a layer, and the `Animatable` its own. The card's
+  picture is the capture's copy (averaged down in native code) as a hardware bitmap, dropped at the end. No pointer
+  input or focus: the touch controls, the game and the pause menu keep theirs.
+- **The motion** (util/ScreenshotFx.kt, pure Kotlin, internal): `CssEase` (CSS's cubic-bezier, solved as browsers do),
+  `Track` (keyframes as Web Animations hold them), `ShotGeometry` (the preview's layout in hundredths of the screen's
+  width; a tall picture's card, the WonderSwan held upright, goes into the folder narrower than 80% so its bottom
+  stays behind the front panel), `ShotTimeline`, `ShotErrorTimeline`, and `flapCorners` (the front panel's CSS
+  `perspective() rotateX()`, drawn through `Matrix.setPolyToPoly`).
+- **Native** (PhobosRunner.cpp, PhobosJNI.cpp): `takeScreenshot` is now `captureScreenshot` then `writeScreenshot`
+  (both at once for the save states' previews and the desktop). Its general path held `windowMutex`, which `video()`
+  takes for every frame, through the colour conversion of the whole buffer and the PNG encode; it now copies the frame
+  under the lock and converts after. It takes the frame's own size, kept with `lastFrameBuffer` as `video()` writes it
+  (`currentWidth`/`currentHeight` followed the window's target size, which a frame of another size can share, and are
+  gone), and turns a WonderSwan held upright as `video()` turns it for the window (its PNG, and the card, were
+  sideways). The last frame is let go as a game unloads. `writeScreenshot` says whether all of the PNG got there (the
+  file's size, below). The JNI keeps the captured picture for `writeScreenshot` (or `releaseScreenshot`) and hands back
+  its copy, each pixel the average of a square of the picture's; where even the copy's stand-in can't be allocated, it
+  clears the out-of-memory error and there's no screenshot, and a path it can't read is not written. The N64 and PSP
+  Vulkan paths are as they were.
+- **The name** is the ROM's file name without its extension (`romTitle`, as the pause menu's title drops it) and the
+  local date and time: `God of War - Ghost of Sparta 2026-10-17 14-15-45.png`. What FAT, exFAT and SAF's providers
+  refuse (`\ / : * ? " < > |`) becomes `_`, control characters go, so do spaces around the title and dots before it,
+  the title is cut at 150 UTF-8 bytes on a whole character, and it's "Screenshot" when nothing's left. Each file is
+  made (`createNewFile`) before the core writes the picture into it, so a shot never replaces a file, and shots taken
+  in the same second, even at once, get `-2`, `-3`. nall's PNG writer carries on past failed writes (a full disk), so
+  `writeScreenshot` checks the file: the size the encoder writes, 63 + height x (6 + 4 x width) bytes, or, where nall
+  then had `optipng` or `pngcrush` recompress it (a desktop's), smaller and still ending in IEND. A file not written
+  whole, or left empty, is deleted and the pill says the folder can't be written. The folder (`<Screenshots Path, or
+  the app's own>/<system>`) and the PNG are as before, but a WonderSwan held upright's is upright.
+- **Why the core's failure means no picture**: `captureScreenshot` finds none (no frame yet; the PSP's or the N64's
+  picture unreadable) before anything is written, and the file made first shows the folder takes one.
+- **Tests**: `ShotTimelineTest` (at 0 ms the card's picture is the game picture's rectangle, for six screens; it
+  rests in its corner, clear of the system bars; it ends in the folder between its panels with its top showing; the
+  hop; the folder's opening, shutting and sparkles; at the end everything is off to the left and transparent; never
+  NaN, opacities in 0-1; no jump where keyframes meet; Remove animations still, every value; the failure's pill; the
+  easings against values solved apart; the front panel's perspective; 70 values at 20 mid-span times as the preview
+  itself moves, sampled from its animations in Chrome: scratch/screenshot-feedback/golden; a note known by the pill's
+  time changes nothing, a late one keeps the pill's whole slide-in and its 660 ms up before the slide-off, one after
+  the on-time end still gets its pill, and none at all still ends; once settled nothing but the pill and the slide-off
+  moves, and `runSavedShot` holds the clock still there while a late note is awaited, taking the held time for a
+  note that never comes, but never for an on-time one). `ScreenshotsTest` (the name, the characters, long
+  titles, never overwriting, the folder made, no picture, a picture not written whole or left empty, a folder that
+  can't be written, the note: the old message's texts as the pill's two lines and TalkBack's, the hint).
+- **Checks**: on the Mac, modern flavor: `ScreenshotsTest` 9/0, `ShotTimelineTest` 20/0, the suite 379/0 (50
+  classes). The clock's hold tests fail when the clock runs on through the wait or the held time isn't taken on the
+  timeout (each tried, then reverted). Seven mutations each fail a test, each reverted: the review's first four
+  (each span eased with the next span's curve, the 330 ms pose changed, the hop eased out: the golden test; Remove
+  animations' turn ignoring it: its test) and its second round's three spans that looked linear to it (the wind-up,
+  the folder's last settle, the dip back: the golden test at 1115, 1880 and 1735 ms). The native files pass clang's
+  syntax check for arm64-v8a with the build's definitions and include paths; CI compiles them in both flavors' APKs
+  and the desktop builds. The PNG size `writeScreenshot` expects matches nall's own output from 1x1 to 1920x1088 (the
+  review's, to 4800x2720), and must change with nall/encode/png.hpp: a larger file is refused outright. Not run on the
+  RP6: the coordinator measures the effect there. Not seen drawn here (no device, no preview renderer): the
+  `@Preview`s at 420, 1400 and 2000 ms and the failure show it in Android Studio. nall's PNG writer can't run
+  `optipng` or `pngcrush` on Android (nall defines PLATFORM_ANDROID there, and its `execute()` does nothing): the RP6
+  never forks for them; the Linux and macOS desktop builds do.
 
 ## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
 

@@ -128,8 +128,8 @@ edit("ares/psp/ge/curves.cpp", '''    pipe.vertices = f64(columns * rows) * Cost
     geterms::add("F", "PatchVertex", f64(columns * rows));
     drawVertices(drawn, format, vertices, columns * 2);
     if(culls && owedPixels == pixels) pipe = kept, geterms::counts() = termsKept;''')
-edit("ares/psp/kernel/ge.cpp", '''  if(gePspTiming) {
-    ge.pipeStop(commands);''', '''  if(gePspTiming) {
+edit("ares/psp/kernel/ge.cpp", '''  if(gePspTiming) {  //(never with the GE on its thread: System::threadGE())
+    ge.pipeStop(commands);''', '''  if(gePspTiming) {  //(never with the GE on its thread: System::threadGE())
     geterms::add("F", "Command", f64(commands));
     geterms::run();
     ge.pipeStop(commands);''')

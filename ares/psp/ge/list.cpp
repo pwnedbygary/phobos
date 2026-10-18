@@ -13,21 +13,39 @@ auto GE::run(u64 budget) -> Stop {
 //Runs commands from list.address until something stops it (the stall address, an END, a fault) or budget commands
 //have run (Busy: call again to go on); ran says how many did, the one that stopped it among them. Every command's
 //word is kept, whatever the command. Meanwhile primitives wait to be drawn together (threads.cpp), and as it returns
-//they're drawn, or go on being drawn by the GE's workers while the CPU runs on.
+//they're drawn, or go on being drawn by the GE's workers while the CPU runs on. (With the GE on a thread of its own,
+//the loop hands its words over as it goes, thread.hpp: one made for each, so that the thread off costs it nothing.)
 auto GE::run(u64 budget, u64& ran) -> Stop {
-  running = &ran;  //(with the PSP's timing, its words' time: pipeItem())
+  wordsRun = &ran;  //(with the PSP's timing, its words' time: pipeItem())
+  return thread ? runList<true>(budget, ran) : runList<false>(budget, ran);
+}
+
+template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
   resume();  //(what the last list left being drawn goes on being drawn: threads.cpp)
   drawing.deferring = drawing.threads > 1;
   //As it returns, a hardware renderer hands the GPU what it drew, to go on drawing while the CPU runs; without the
   //CPU's owner's guard over VRAM's busy pages (Memory::vramGuard), it puts them back in memory's VRAM at once.
+  //(Threaded, the render GE does that as the thread hands it the run's end, and counts what the run's primitives owe
+  //for the kernel's clock: thread.cpp.)
+  if constexpr(Threaded) {
+    running = true;
+    handSwitches(), handState();
+    thread->runStart();
+  }
   struct Drawn {
     GE& ge;
     ~Drawn() {
       ge.drawing.deferring = false;
-      ge.launch(true);
-      if(!ge.renderer) return;
-      if(ge.memory.vramGuard) ge.renderer->submit(ge);
-      else ge.renderer->finish(ge);
+      if constexpr(Threaded) {
+        ge.running = false;
+        ge.thread->runEnd();
+        ge.handedState = ge.stateOf(), ge.handedStateValid = true;  //(the render GE takes every word the run ran)
+      } else {
+        ge.launch(true);
+        if(!ge.renderer) return;
+        if(ge.memory.vramGuard && !GE::stressed()) ge.renderer->submit(ge);
+        else ge.renderer->finish(ge);
+      }
     }
   } drawn{*this};
   //(a page of the list's found with nothing drawn or waiting to be drawn over any of its bytes, which stays so until a
@@ -40,8 +58,13 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
     u32 at = list.address;
     if(at >> 12 != undrawn) {  //(a list in VRAM, where what waits may draw: drawn first, then read without asking again)
-      drawnFirst(at, 4);
-      undrawn = undrawnPage(at) ? at >> 12 : ~0u;
+      if constexpr(Threaded) {  //(the render GE does the drawnFirst()s from the words' addresses; read as the GE thread
+                                //may still change it: thread.cpp)
+        undrawn = thread->listWord(at) ? at >> 12 : ~0u;
+      } else {
+        drawnFirst(at, 4);
+        undrawn = undrawnPage(at) ? at >> 12 : ~0u;
+      }
       Memory::KnownDrawn known;
       words = undrawn != ~0u ? memory.pointer(at & ~0xfffu, 0x1000) : nullptr;
     }
@@ -56,6 +79,12 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     list.address = (at + 4) & 0x0fff'ffff;
     u32 command = word >> 24, argument = word & 0xff'ffff;
     commands[command] = word;
+    if constexpr(Threaded) {
+      listWordAt = at;
+      if(command != Primitive && command != Bezier && command != Spline && command != ClutLoad) {
+        thread->word(word, at);  //(the render GE's state: those four hand over their own, thread.cpp)
+      }
+    }
     switch(command) {
     case VertexAddress: vertexAddress = relative(argument); break;
     case IndexAddress:  indexAddress = relative(argument); break;

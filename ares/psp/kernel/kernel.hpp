@@ -315,6 +315,8 @@ struct Kernel {
   auto dispatch(u32 code, bool& quiet) -> bool;
   auto dispatchImport(u32 code, bool& quiet) -> bool;
   auto runUntilNextEvent() -> void;
+  auto runUntilNextEventThreaded() -> void;
+  auto goThreaded(u64 end) -> void;
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
   auto note(const std::string& text) -> void;
@@ -944,11 +946,17 @@ struct Kernel {
   //display.cpp: where the program's frame is, and the vertical blank
   struct Display {
     u32 mode = 0, width = 480, height = 272;
-    u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0;
+    u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0;  //the frame buffer shown; the width and format last set
     u32 hcountBase = 0;  //what the accumulated count of lines adds (sceDisplayAdjustAccumulatedHcount)
+    u32 nextFrameBuffer = 0;  //set for the next vertical blank (sceDisplaySetFrameBuf's sync 1), shown from nextAt
+    bool nextSet = false;
+    u64 nextAt = 0;
   } display;
   static constexpr u64 LineCycles = CPUFrequency * 525 / 9'000'000;  //a line: 525 dots at 9 MHz (286 to a frame)
   static constexpr u64 VblankLength = CPUFrequency * 77 / 100'000;    //the vertical blank lasts 0.77 ms
+  static constexpr u64 VsyncCycles = CPUFrequency * 6315 / 10'000'000;  //its vertical sync, 631.5 us into it
+  auto latchFrameBuffer() -> void;
+  auto presentedFrameBuffer() const -> u32;
   auto inVblank() const -> bool;
   auto waitVblank(bool callbacks, u32 count = 1) -> void;
   auto sceDisplaySetMode() -> void;
@@ -1104,20 +1112,46 @@ struct Kernel {
   s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
   u64 geLeft = GeBudget;    //commands the GE may still run this frame (each vertical blank gives it GeBudget again)
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
-  u64 geDoneAt = 0;         //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
+  mutable u64 geDoneAt = 0; //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
+  bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   bool gePspTiming = false; //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", geTime());
                             //power() leaves it
-  bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   u64 geReachAt = 0;        //when (cycles) a PSP's GE's front end would have got through what it was last given
   bool geSignalDue = false; //with the PSP's timing, the list met a SIGNAL, its interrupt taken from geReachAt on, the
                             //GE waiting there (geRun())
   u64 gePipeAt = 0;         //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
                             //a list's, from one of its runs to the next)
+  //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
+  //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
+  //takes for it as it's handed over, and geDoneAt is a lower bound of the synchronous GE's till none is left
+  //(geFold()). A time compared with it takes the bound where that decides (geBound(): with the run under way's counts
+  //so far), else waits for the GE thread's counts (geReached()). Folded runs are kept (geFolded) while a go of the
+  //CPU's has limits worked out from the bound, for run() to work out their exact values once it ends (GeLimit).
+  struct GeRun { u64 run, cycles; u32 bus; u64 pixels = 0, primitives = 0; };
+  mutable std::deque<GeRun> geRuns, geFolded;
+  mutable u64 geFoldedRun = 0;  //the last run folded
+  static auto geOwed(u64 pixels, u64 primitives, u32 bus) -> u64;
+  auto geFold(bool wait, u64 through = ~0ull) const -> void;
+  auto geBound() const -> u64;
+  auto geReached() -> bool;
+  auto geClearRuns() -> void;  //(geDoneAt set afresh: the runs before don't count)
+  //A limit of the go's worked out from the bound: the go's instructions before it, the time then, the other events'
+  //first, whether a FINISH was due, the cap the go's start puts on it, and the fold's state then (geFoldedRun, geDoneAt)
+  //with the last run handed over; untilNextEvent() leaves its own in geLimit where it took the bound (geBounded).
+  struct GeLimit { u64 before, cycles, others, cap, foldedRun, foldedAt, run; bool due; };
+  mutable bool geBounded = false;
+  mutable GeLimit geLimit{};
+  std::vector<GeLimit> geLimits;  //the go's limits from the bound, not yet worked out exactly
+  u64 goOffset = 0;               //the go's instructions run before the CPU's run under way (run(): a go's parts)
+  u64 goExact = ~0ull;            //the least of the go's limits known exactly (in the go's instructions)
+  auto geExactLimit(const GeLimit& limit) -> u64;
   auto geIndex(u32 id) const -> s32;
   auto geTime(u64 commands) -> void;
   auto geResume() -> void;
   auto geOwe(f64 clocks) -> void;
   auto geDriven(u64 cpuCycles) -> void;
+  auto geFoldKept() const -> void;
+  auto geProfiledRun() -> void;
   auto geInterrupt() -> bool;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;
@@ -2125,7 +2159,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 33;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 34;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

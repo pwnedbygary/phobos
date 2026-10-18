@@ -47,6 +47,14 @@ struct System {
   Processor cpu{memory};
   GE ge{memory};
   Kernel kernel{cpu, memory, ge};
+  //The GE on a thread of its own (option "GE Thread": ge/thread.hpp): the render GE draws there, through its own
+  //view of memory, what the kernel's GE hands it as it runs the lists.
+  string geThread = "Off";     //"Off" or "On"
+  Memory renderMemory;
+  GE renderGE{renderMemory};
+  std::unique_ptr<GeThread> geThreading;
+  auto threadGE(bool on) -> void;
+  auto renderFromState() -> void;
 
   string memoryStick;          //the host folder standing for ms0: (option "Memory Stick")
   string fonts;                //the host folder with the PSP's system fonts, from the owner's flash0 (option "Fonts")
@@ -92,7 +100,7 @@ private:
   auto late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> bool;
   std::vector<s16> sound;      //the frame's sound, left and right samples side by side (Kernel::audioOutput())
   f64 soundOwed = 0;           //sound frames due to the speakers: 44100 a second, so 735.7 a frame
-  u32 unmappedReports = 0;     //accesses to nothing, reported (the first few only)
+  std::atomic<u32> unmappedReports{0};  //accesses to nothing, reported (the first few only, from any thread)
   u64 programHash = 0;         //the program that started (hash()): states carry it, to load into it alone
 
   auto allocate(Node::Port port) -> Node::Peripheral;

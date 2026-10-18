@@ -221,6 +221,8 @@ auto Kernel::events() -> void {
   while(cycles >= nextVblank) {
     nextVblank += VblankCycles;
     vblanks++;
+    //(one set for the sync and due by now, read since or not: a state saved as a frame starts is the same either way)
+    latchFrameBuffer();
     if(geProfile) [[unlikely]] geProfileVblank();
     geLeft = GeBudget;  //the GE's commands for the next frame
     for(auto& [uid, thread] : threads) {
@@ -285,11 +287,22 @@ auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
 auto Kernel::untilNextEvent() const -> u64 {
   u64 next = std::min({nextVblank, nextAudioEvent(), nextAsyncEvent(), nextTimerEvent()});
   if(controller.cycle) next = std::min(next, controller.nextSample);
-  //a FINISH or SIGNAL met whose time is to come (one due already is taken once it may be)
-  u64 due = geSignalDue ? geReachAt : geDoneAt;
-  if((geFinishDue || geSignalDue) && due > cycles) next = std::min(next, due);
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
+  }
+  //(with the PSP's GE timing, a SIGNAL met whose time is to come, the GE waiting there: never with runs on the GE's
+  //thread, nor with a FINISH due)
+  if(geSignalDue && geReachAt > cycles) next = std::min(next, geReachAt);
+  //(the GE's time, due already: taken once it may be. Where runs are still being counted on the GE's thread and its
+  //bound doesn't put it past the rest, a time no later than it, the inputs left for run() to work out exactly: geLimit)
+  if(geFinishDue) {
+    if(geRuns.empty()) {
+      if(geDoneAt > cycles) next = std::min(next, geDoneAt);
+    } else if(u64 bound = geBound(); bound < next) {
+      geBounded = true;
+      geLimit = {0, cycles, next, ~0ull, geFoldedRun, geDoneAt, ge.thread ? ge.thread->runsHanded() : 0, true};
+      next = std::min(next, std::max(bound, cycles + 1));
+    }
   }
   return next > cycles ? next - cycles : 1;
 }
@@ -316,6 +329,8 @@ auto Kernel::idle(u64 end) -> bool {
     stuck = true;
     return false;
   }
+  //(the GE's exact time, where it may be the next thing: ge/thread.hpp)
+  if(geFinishDue && !geRuns.empty()) geFold(true);
   cycles = std::min(end, cycles + untilNextEvent());
   events();
   return true;

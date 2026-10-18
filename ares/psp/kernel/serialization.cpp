@@ -1029,7 +1029,13 @@ auto Kernel::serialize(serializer& s) -> bool {
   //the display: its one mode, 480x272 (sceDisplaySetMode refuses any other)
   s(display.mode); s(display.width); s(display.height);
   s(display.frameBuffer); s(display.bufferWidth); s(display.pixelFormat); s(display.hcountBase);
+  //a frame buffer set for the next vertical sync, and when it's shown (layout 33 on: an older layout's were shown at
+  //once)
+  if(s.reading() && stateLayout < 33) display.nextFrameBuffer = 0, display.nextSet = false, display.nextAt = 0;
+  else s(display.nextFrameBuffer), s(display.nextSet), s(display.nextAt);
   check(display.mode == 0 && display.width == 480 && display.height == 272);
+  //(one waiting is due by the next blank's start at the latest: this blank's sync, or that start)
+  check(!display.nextSet || display.nextAt <= nextVblank);
 
   //calls into the program. The interrupt flag is the CPU's (its state, loaded before this, has it): on or held off,
   //1 or 0, as mtic and the kernel leave it
@@ -1110,21 +1116,23 @@ auto Kernel::serialize(serializer& s) -> bool {
         || geTranslation == 0x1000);
   //when the GE will have drawn what it was given, and whether the list it runs has met its FINISH (layout 24 on: an
   //older layout's lists were done the moment the GE met their FINISH, which left it nothing to draw)
+  if(s.writing()) geFold(true);  //(every run handed to the GE's thread counted first: ge/thread.hpp)
+  if(s.reading()) geClearRuns();
   if(s.reading() && stateLayout < 24) geDoneAt = 0, geFinishDue = false;
   else s(geDoneAt), s(geFinishDue);
-  //the texture the GE's cache holds whole, for the PSP's GE timing (GE::owePrimitive(); layout 33 on: none in older
+  //the texture the GE's cache holds whole, for the PSP's GE timing (GE::owePrimitive(); layout 34 on: none in older
   //states)
-  if(s.reading() && stateLayout < 33) ge.cachedTexture = {};
+  if(s.reading() && stateLayout < 34) ge.cachedTexture = {};
   else s(ge.cachedTexture.address), s(ge.cachedTexture.format), s(ge.cachedTexture.size), s(ge.cachedTexture.held);
   //when the GE's front end will have got through what it was given, and whether, with the PSP's timing, the list it
-  //runs has met a SIGNAL whose interrupt waits for that (layout 33 on: an older layout's were taken the moment the
+  //runs has met a SIGNAL whose interrupt waits for that (layout 34 on: an older layout's were taken the moment the
   //GE met them)
-  if(s.reading() && stateLayout < 33) geReachAt = 0, geSignalDue = false;
+  if(s.reading() && stateLayout < 34) geReachAt = 0, geSignalDue = false;
   else s(geReachAt), s(geSignalDue);
   //with the PSP's timing, the list's pipeline as its last run left it (GE::Pipe, Kernel::geResume()): when its times
   //count from, when its front end and its back end will be done, and the items its queue holds, each's entries and
-  //when it's drawn (layout 33 on: an older state's list runs on from an empty pipeline)
-  if(s.reading() && stateLayout < 33) {
+  //when it's drawn (layout 34 on: an older state's list runs on from an empty pipeline)
+  if(s.reading() && stateLayout < 34) {
     gePipeAt = 0, ge.pipeStart();
   } else {
     auto& pipe = ge.pipe;

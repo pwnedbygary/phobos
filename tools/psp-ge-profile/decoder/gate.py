@@ -3,11 +3,12 @@
 PSP-1000 (tests/psp/measurements/ge-captures, part 103) beside Phobos's GE profile of the same scene made with the GE
 timing "PSP". For each, a list's GE time (from when the GE could begin it to its FINISH, as geprof.py measures it): the
 median over each one's window of whole seconds, and Phobos's miss against the PSP's: part 106's first comparison's
-measure, windows and pairs. Killzone queues a scene list and a full-screen one in turn: its scene lists are judged
-against each of its captures (two moments of the level), and its full-screen lists too. The two kinds are told apart by
-their turns (the first comparison took lists over 5 ms, which the first model's full-screen lists were too). A scene
-passes within 15% of the PSP's; none may be more than 15% too slow (a model too slow makes a game run worse than a
-PSP). Captures of moments Phobos has no state of are shown, not judged.
+measure, windows and pairs. Killzone queues a scene list and a full-screen one in turn, told apart by their turns
+(the first comparison took lists over 5 ms, which the first model's full-screen lists were too): both are judged
+against the captures of kz-gp's moment, the courtyard standing still (Friday's and Sunday's), its scene list taking
+24 to 35 ms on the PSP elsewhere in the level. A scene passes within 15% of the PSP's; none may be more than 15% too
+slow (a model too slow makes a game run worse than a PSP). Captures of moments Phobos has no state of are shown, not
+judged.
 
 Phobos's profiles: tools/psp-runner's --ge-timing psp --ge-profile NAME.bin over 900 frames from each scene's state,
 the profile from frame 301 (--ge-profile-from 301), ahr-legal's 360 frames from frame 1 (part 106 has the commands).
@@ -26,18 +27,30 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CAPTURES = os.path.normpath(os.path.join(HERE, "..", "..", "..", "tests", "psp", "measurements", "ge-captures"))
 BAR = 0.15
 
-#(what, capture, PSP window (s), Phobos scene, Phobos window (s), kind, judged)
+#(what, capture, PSP window (s), Phobos scene, Phobos window (s), kind, judged). The -r9 captures are the owner's of
+#Sunday's round 9 (Killzone one session, 60, 78, 159, 322 and 443 s in; Activision Hits' 3D menu idle at the ahr-menu
+#state's moment); Killzone's courtyard, standing still, is kz-gp's moment (Friday's -1 and Sunday's -1, the owner
+#says), the rest of the level more demanding gameplay Phobos has no state of.
 ROWS = [
     ("Chains of Olympus, difficulty menu", "UCUS98653-5", (0, 10), "coo-diff", (0, 10), None, True),
     ("Ghost of Sparta, main menu", "UCUS98737-1", (0, 10), "gos-menu", (0, 10), None, True),
-    ("Ghost of Sparta, a later scene (no state)", "UCUS98737-2", (0, 10), "gos-menu", (0, 10), None, False),
-    ("Ghost of Sparta, a later scene (no state)", "UCUS98737-3", (0, 10), "gos-menu", (0, 10), None, False),
+    ("Ghost of Sparta, a later scene (another moment)", "UCUS98737-2", (0, 10), "gos-menu", (0, 10), None, False),
+    ("Ghost of Sparta, a later scene (another moment)", "UCUS98737-3", (0, 10), "gos-menu", (0, 10), None, False),
     ("Super Monkey Ball Adventure, Story Mode", "ULES00364-1", (0, 7), "smba-story", (0, 10), None, True),
-    ("Killzone, gameplay: scene list", "UCUS98646-1", (0, 10), "kz-gp", (0, 10), "scene", True),
-    ("Killzone, gameplay: scene list", "UCUS98646-2", (0, 10), "kz-gp", (0, 10), "scene", True),
-    ("Killzone, gameplay: full-screen list", "UCUS98646-1", (0, 10), "kz-gp", (0, 10), "full", True),
-    ("Killzone, gameplay: full-screen list", "UCUS98646-2", (0, 10), "kz-gp", (0, 10), "full", True),
+    ("Killzone, the courtyard: scene list", "UCUS98646-1", (0, 10), "kz-gp", (0, 10), "scene", True),
+    ("Killzone, the courtyard: scene list", "UCUS98646-r9-1", (0, 10), "kz-gp", (0, 10), "scene", True),
+    ("Killzone, later in the level (another moment): scene list", "UCUS98646-2", (0, 10), "kz-gp", (0, 10), "scene",
+     False),
+    ("Killzone, 78 s in (another moment): scene list", "UCUS98646-r9-2", (0, 10), "kz-gp", (0, 10), "scene", False),
+    ("Killzone, 159 s in (another moment): scene list", "UCUS98646-r9-3", (0, 10), "kz-gp", (0, 10), "scene", False),
+    ("Killzone, 322 s in (another moment): scene list", "UCUS98646-r9-4", (0, 10), "kz-gp", (0, 10), "scene", False),
+    ("Killzone, 443 s in (another moment): scene list", "UCUS98646-r9-5", (0, 10), "kz-gp", (0, 10), "scene", False),
+    ("Killzone, the courtyard: full-screen list", "UCUS98646-1", (0, 10), "kz-gp", (0, 10), "full", True),
+    ("Killzone, the courtyard: full-screen list", "UCUS98646-r9-1", (0, 10), "kz-gp", (0, 10), "full", True),
+    ("Killzone, later in the level (another moment): full-screen list", "UCUS98646-2", (0, 10), "kz-gp", (0, 10),
+     "full", False),
     ("Activision Hits Remixed, 3D main menu", "ULUS10186-menu", (0, 10), "ahr-menu", (0, 10), None, True),
+    ("Activision Hits Remixed, 3D main menu, idle", "ULUS10186-r9-1", (0, 10), "ahr-menu", (0, 10), None, True),
     ("Activision Hits Remixed, copyright screen", "ULUS10186-boot2", (3, 7), "ahr-legal", (0, 2), None, True),
     ("Activision Hits Remixed, a first boot capture cut short", "ULUS10186-boot1-cut", (0, 99), "ahr-legal", (0, 2),
      None, False),

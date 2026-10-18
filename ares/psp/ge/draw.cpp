@@ -340,7 +340,7 @@ auto GE::pipeDrain() -> void {
 auto GE::pipeItem(f64 back, f64 entries) -> void {
   auto& q = pipe;
   constexpr u32 Room = Pipe::Room;
-  if(running) q.pending += f64(*running - q.words) * Cost::Command, q.words = *running;
+  if(wordsRun) q.pending += f64(*wordsRun - q.words) * Cost::Command, q.words = *wordsRun;
   f64 front = q.front + q.pending;
   q.pending = 0;
   while(q.count && (q.entries + entries > Cost::Queue || q.count == Room)) {
@@ -396,6 +396,7 @@ static auto keep15(float coordinate) -> float {
 //address or by the indices at the index address; then the next carries on where this one stopped: after its
 //indices if it had them, else after its vertices.
 auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
+  if(copied.ranges) return readCopiedVertices(count, format);  //(the render GE's, handed over: thread.cpp)
   u32 ambient = (commands[AmbientColor] & 0xff'ffff) | (commands[AmbientAlpha] & 0xff) << 24;
   u32 indexBytes = format.indexFormat == 3 ? 4 : format.indexFormat;
   auto& vertices = primitiveVertices;  //(kept from one primitive to the next, with room for them)
@@ -467,6 +468,7 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
 }
 
 auto GE::primitive(u32 kind, u32 count) -> void {
+  if(render) return handPrimitive(Primitive << 24 | (kind & 7) << 16 | (count & 0xffff), count, false);  //(thread.cpp)
   if(!drawing.deferring) settle();  //(called by itself, outside run(): what the last list left being drawn first)
   auto format = vertexFormat();
   if(pspTiming) pipePrimitive(kind, count);  //(the GE's time: Pipe)
@@ -641,6 +643,9 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //first, and the texture decoded for the region it draws in; and at once, not left waiting in the batch, as what
   //the renderer draws next takes its pixels from memory, and a batch's settle gives every busy page back to the CPU,
   //the renderer's too (freeVRAM()).
+#if defined(PHOBOS_GE_STRESS_HOOK)
+  if(stressEvery && renderer && ++stressPrims % stressEvery == 0) renderer->finish(*this);
+#endif
   hardware = renderer && renderer->ready();
   bool refused = false;
   //A primitive drawn with settings that leave every pixel as it was (keepsPixels()) is set up as ever, and what it
@@ -752,6 +757,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region, vertices, t)) {
+    if(renderer->ready()) renderer->refusedForRoom() ? roomRefusals++ : refusals++;
     renderer->finish(*this);
     hardware = false, refused = true;
     if(textured) {
@@ -769,6 +775,9 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
   if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)
     for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
+    if(versioned()) {
+      drawing.batch->asOf.push_back({&drawn, {place, declared != nullptr, declared ? *declared : GeModel::Interest{}}});
+    }
   }
   if(!format.through && !transformed) {
     //(a renderer transforming its own: the triangles the GE would draw whole handed over as they are)

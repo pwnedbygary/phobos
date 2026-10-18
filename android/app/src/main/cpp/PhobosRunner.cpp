@@ -304,11 +304,14 @@ namespace ares {
 
   static std::mutex windowMutex;
   static bool windowChanged = false;
-  static u32 currentWidth = 0;
-  static u32 currentHeight = 0;
   static u32 bufferWidth = 0;
   static u32 bufferHeight = 0;
+  // The last frame video() drew, for screenshots: as the core gave it (red in the low byte), its own size, and
+  // whether the window shows it turned upright (a WonderSwan held upright). The buffer only grows.
   static std::vector<u32> lastFrameBuffer;
+  static u32 lastFrameWidth = 0;
+  static u32 lastFrameHeight = 0;
+  static bool lastFrameRotated = false;
   static std::vector<u32> widenedLine;  // video(): a row of the PSP's picture, each pixel repeated
 
   // Performance Monitoring
@@ -1997,8 +2000,6 @@ namespace ares {
       if (windowChanged || targetW != bufferWidth || targetH != bufferHeight) {
           bufferWidth = targetW;
           bufferHeight = targetH;
-          currentWidth = width;
-          currentHeight = height;
           windowChanged = false;
       }
 
@@ -2013,6 +2014,9 @@ namespace ares {
           presentN64Scanout(dest, destStride, width, height);
       } else if (data) {
           if (lastFrameBuffer.size() < (u64)width * height) lastFrameBuffer.resize((u64)width * height);
+          lastFrameWidth = width;
+          lastFrameHeight = height;
+          lastFrameRotated = rotate;
           u32 sourceStride = pitch / 4;
           u32 colors = screen->colors();
           if (rotate) {
@@ -2880,6 +2884,14 @@ namespace ares {
     msxGameTapePosition = 0;
     ::ares::MSX::tapeDeck.recordArmed = false;
     removeTempCopies();
+    // The last frame goes with the game (its Screen thread is gone): a screenshot before the next game's first frame
+    // has no picture rather than this one's.
+    {
+      lock_guard<std::mutex> lock(windowMutex);
+      std::vector<u32>().swap(lastFrameBuffer);
+      lastFrameWidth = lastFrameHeight = 0;
+      lastFrameRotated = false;
+    }
     // [Phobos] The emulation thread has exited cleanly (we acquired runMutex and
     // joined/witnessed its exit). Drop the stale pthread handle so the next
     // setEmulationRunning(true) -> ensureThread() doesn't log the misleading
@@ -5061,36 +5073,80 @@ else if (port->type() == "Keyboard") {
     }
     return count;
   }
-  auto takeScreenshot(const char* path) -> bool {
+  auto captureScreenshot(ScreenshotPicture& picture) -> bool {
     #if defined(CORE_N64)
     // N64 Vulkan frames are presented straight from the scanout buffer and never
     // pass through lastFrameBuffer, so read the retained scanout (valid while
     // paused) and convert RGBA bytes to the ARGB the PNG encoder expects.
     if (isN64VulkanSession() && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
-      std::vector<u32> pixels;
-      u32 width = 0, height = 0;
-      if (!::ares::Nintendo64::vulkan.readScanout(pixels, width, height)) return false;
-      for (auto& p : pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
-      return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
+      if (!::ares::Nintendo64::vulkan.readScanout(picture.pixels, picture.width, picture.height)) return false;
+      for (auto& p : picture.pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
+      return true;
     }
     #endif
     // A PSP game presented by its Vulkan renderer: the picture it presented last (red in the low byte, as the
     // window's are)
     if (root && root->name() == "PlayStation Portable" && ::ares::PlayStationPortable::presenting()) {
-      std::vector<u32> pixels;
-      u32 width = 0, height = 0;
-      if (!::ares::PlayStationPortable::shot(pixels, width, height)) return false;
-      for (auto& p : pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
-      return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
+      if (!::ares::PlayStationPortable::shot(picture.pixels, picture.width, picture.height)) return false;
+      for (auto& p : picture.pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
+      return true;
     }
-    lock_guard<mutex> lock(windowMutex);
-    if (lastFrameBuffer.empty() || currentWidth == 0 || currentHeight == 0) return false;
-    std::vector<u32> converted;
-    converted.resize(lastFrameBuffer.size());
-    for(u32 i = 0; i < lastFrameBuffer.size(); i++) {
-        u32 p = lastFrameBuffer[i];
-        converted[i] = (p & 0xFF00FF00) | ((p >> 16) & 0x000000FF) | ((p << 16) & 0x00FF0000);
+    // The last frame is copied under windowMutex, which video() takes for every frame, and converted after it's let
+    // go, so a screenshot never holds up the picture.
+    std::vector<u32> frame;
+    u32 width = 0, height = 0;
+    bool rotated = false;
+    {
+      lock_guard<std::mutex> lock(windowMutex);
+      width = lastFrameWidth;
+      height = lastFrameHeight;
+      rotated = lastFrameRotated;
+      u64 pixels = (u64)width * height;
+      if (pixels == 0 || lastFrameBuffer.size() < pixels) return false;
+      frame.assign(lastFrameBuffer.data(), lastFrameBuffer.data() + pixels);
     }
-    return nall::Encode::PNG::RGBA8(path, converted.data(), (s32)currentWidth * 4, (s32)currentWidth, (s32)currentHeight);
+    auto argb = [](u32 p) -> u32 { return (p & 0xFF00FF00) | ((p >> 16) & 0x000000FF) | ((p << 16) & 0x00FF0000); };
+    if (!rotated) {
+      for (auto& p : frame) p = argb(p);
+      picture.pixels = std::move(frame);
+      picture.width = width;
+      picture.height = height;
+      return true;
+    }
+    // Turned upright as video() turns it for the window: 90 degrees clockwise, (x, y) -> (height - 1 - y, x).
+    picture.pixels.resize((u64)width * height);
+    for (u32 y = 0; y < height; y++) {
+      const u32* line = frame.data() + (u64)y * width;
+      for (u32 x = 0; x < width; x++) picture.pixels[(u64)x * height + (height - 1 - y)] = argb(line[x]);
+    }
+    picture.width = height;
+    picture.height = width;
+    return true;
+  }
+
+  auto writeScreenshot(const ScreenshotPicture& picture, const char* path) -> bool {
+    if (!nall::Encode::PNG::RGBA8(path, picture.pixels.data(), picture.width * 4, picture.width, picture.height)) return false;
+    // nall's encoder carries on past failed writes (a full disk), so the file is checked: it must be the size the
+    // encoder writes (signature 8, IHDR 25, IDAT 12 + 6 + 6 + 4 x width a row, IEND 12), or, where the encoder then had
+    // optipng or pngcrush recompress it (a desktop: nall runs nothing on Android), smaller and still ending in IEND.
+    // This size must change with nall/encode/png.hpp: a larger file is refused outright, so a chunk added to the
+    // encoder would make every shot "not saved" and delete it.
+    u64 whole = 63 + (u64)picture.height * (6 + 4 * (u64)picture.width);
+    u64 size = file::size(path);
+    if (size == whole) return true;
+    if (size < 12 || size > whole) return false;
+    static const u8 iend[12] = {0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82};
+    auto fp = file::open(path, file::mode::read);
+    if (!fp) return false;
+    fp.seek(size - 12);
+    for (u8 byte : iend) {
+      if (fp.read() != byte) return false;
+    }
+    return true;
+  }
+
+  auto takeScreenshot(const char* path) -> bool {
+    ScreenshotPicture picture;
+    return captureScreenshot(picture) && writeScreenshot(picture, path);
   }
 }

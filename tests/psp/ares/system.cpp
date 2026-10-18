@@ -660,9 +660,10 @@ auto states(const fs::path& programs) -> void {
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
     //deactivated (part 37). Layouts 15 and 16 load with the message-dialog abort counters defaulted (part 42).
     //Each older layout is refused by its header, before anything is touched (even the compiled code, which any load
-    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 33,
-    //and takes it out of this list), and 34, past this one. 27, 28, 31 and 32 (parts 87, 88, 82 and 95) load.
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 34}) {
+    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 34,
+    //and takes it out of this list), and 35, past this one. 27, 28, 31, 32 and 33 (parts 87, 88, 82, 95 and 108)
+    //load.
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 35}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};
@@ -823,6 +824,114 @@ auto drawingThreads() -> void {
   PlayStationPortable::option("GE Threads", "0");
 }
 
+//The GE on a thread of its own and the PSP's GE timing (docs/psp-core.md, part 106): that timing takes each run's time
+//as the run ends on the emulation thread, so with "GE Timing" "PSP" the GE stays there whatever "GE Thread" says, the
+//thread never started, nor when asked for again (System::threadGE()); with "Fast", "GE Thread" On starts it.
+auto geThreadAndPspTiming() -> void {
+  std::printf("the GE's thread and the PSP's GE timing\n");
+  host.game.reset();
+  PlayStationPortable::option("GE Thread", "On");
+  for(bool pspTiming : {true, false}) {
+    std::string timing = pspTiming ? "PSP" : "Fast";
+    PlayStationPortable::option("GE Timing", timing.c_str());
+    Node::System root;
+    reports([&] {
+      if(!CHECK(start(root), "the PSP starts, GE Thread On, GE Timing " + timing)) return;
+      CHECK(psp.kernel.gePspTiming == pspTiming, "GE Timing " + timing + " taken");
+      CHECK((bool)psp.geThreading == !pspTiming && (psp.ge.thread != nullptr) == !pspTiming,
+            "GE Timing " + timing + ": the GE on its thread " + (pspTiming ? "refused" : "started"));
+      psp.threadGE(true);
+      CHECK((bool)psp.geThreading == !pspTiming, "GE Timing " + timing + ": the thread asked for again");
+      root->unload();
+    });
+  }
+  PlayStationPortable::option("GE Thread", "Off");
+  PlayStationPortable::option("GE Timing", "Fast");
+}
+
+//The frame the system shows (System::run(), and present() where the GPU presents on the host's window itself, as
+//Android's does) is of the frame buffer the frame after the blank shows: one set for the coming vertical sync, if
+//one is (Kernel::presentedFrameBuffer(), part 108), else the one shown; from the GPU's target where the GPU drew it.
+//A pretend GPU (no Vulkan needed) holds two frame buffers, each drawn whole by a sprite, and says which target each
+//frame is read back from, or presented from.
+auto presentedFrame() -> void {
+  std::printf("the frame shown: the frame buffer set for the coming vertical sync, from the GPU\n");
+  using ares::PlayStationPortable::GE;
+  using ares::PlayStationPortable::GPU;
+  struct Pretend : GPU::Backend {
+    u32 targets = 0, textures = 0;
+    u32 readFrom = 0, presentedFrom = 0;  //the target the last Readback and the last Present named
+    bool presenting = false;
+    std::vector<u32> colors = std::vector<u32>(480 * 272, 0xff00'0000);
+    std::vector<u8> stencils = std::vector<u8>(480 * 272);
+    auto name() const -> std::string override { return "pretend"; }
+    auto makeTarget(u32, u32) -> u32 override { return ++targets; }
+    auto dropTarget(u32) -> void override {}
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return ++textures; }
+    auto dropTexture(u32) -> void override {}
+    auto run(const GPU::Recorded& r) -> bool {
+      for(auto& c : r.commands) {
+        if(c.kind == GPU::Command::Kind::Readback) readFrom = c.target;
+        if(c.kind == GPU::Command::Kind::Present) presentedFrom = c.target, presented = true;
+      }
+      return true;
+    }
+    auto submit(const GPU::Recorded& r) -> bool override { return run(r); }
+    auto finish(const GPU::Recorded& r) -> bool override { return run(r); }
+    auto read(u32, const u32*& c, const u8*& s) -> bool override {
+      return c = colors.data(), s = stencils.data(), true;
+    }
+    auto presents() const -> bool override { return presenting; }
+  };
+  host.game.reset();
+  Node::System root;
+  if(!CHECK(start(root), "the PSP starts")) return;
+  auto backend = std::make_unique<Pretend>();
+  auto& pretend = *backend;
+  psp.gpu = std::make_unique<GPU>(std::move(backend));
+  psp.ge.setRenderer(psp.gpu.get());
+  //two frame buffers in VRAM, 512 pixels a row in 8888, each drawn whole: a sprite over its 480x272 (through mode:
+  //float u, v; 8888 color; float position), the depth buffer apart from both
+  constexpr u32 Vertices = 0x0896'0000, First = 0, Second = 0x8'8000;
+  auto bits = [](float value) { u32 word; std::memcpy(&word, &value, 4); return word; };
+  for(u32 n : range(2)) {
+    auto& c = psp.ge.commands;
+    c[GE::FrameBufferPointer] = n ? Second : First, c[GE::FrameBufferWidth] = 512, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::DepthBufferPointer] = 0x11'0000, c[GE::DepthBufferWidth] = 512;
+    c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = 479 | 271 << 10;
+    c[GE::VertexType] = 0x80'019f, c[GE::ShadeMode] = 1;
+    u32 to = Vertices;
+    for(float corner : {0.0f, 1.0f}) {
+      for(u32 word : {bits(0), bits(0), 0xffff'ffffu, bits(480 * corner), bits(272 * corner), bits(0)}) {
+        psp.memory.write(4, to, word), to += 4;
+      }
+    }
+    psp.ge.vertexAddress = Vertices;
+    psp.ge.primitive(GE::Sprites, 2);  //(not settled: that would put the pixels in memory, the pages memory's)
+  }
+  //(nothing runs: each frame is its picture alone)
+  auto& display = psp.kernel.display;
+  display.bufferWidth = 512, display.pixelFormat = 3;
+  psp.kernel.exited = true;
+  constexpr u32 None = ~0u;
+  auto frame = [&](u32 shown, u32 next) {  //the target the frame came from (0: memory's picture)
+    display.frameBuffer = 0x0400'0000 | shown;
+    display.nextSet = next != None, display.nextFrameBuffer = next != None ? 0x0400'0000 | next : 0;
+    display.nextAt = psp.kernel.nextVblank;
+    pretend.readFrom = pretend.presentedFrom = 0;
+    root->run();
+    return pretend.presenting ? pretend.presentedFrom : pretend.readFrom;
+  };
+  for(bool presenting : {false, true}) {
+    pretend.presenting = presenting;
+    std::string how = presenting ? "presented: " : "read back: ";
+    u32 first = frame(First, None), second = frame(Second, None);
+    CHECK(first && second && first != second, how + "each frame buffer shown alone from a target of its own");
+    CHECK(frame(Second, First) == first, how + "the one set for the coming vertical sync, not the one shown");
+  }
+  root->unload();
+}
+
 //Where the host gives no memory that code may run from, the recompiler turns itself off, and the interpreter runs
 //the program instead. (Asking for no code memory at all stands for that: the host refuses the mapping.)
 auto noCodeMemory(const fs::path& programs) -> void {
@@ -933,6 +1042,8 @@ auto main() -> int {
   names();
   nodeTree();
   drawingThreads();
+  geThreadAndPspTiming();
+  presentedFrame();
   bool programsRun = false;
   if(auto programs = std::getenv("PSP_TEST_PROGRAMS"); programs && fs::exists(fs::path{programs} / "hello.elf")) {
     programsRun = true;

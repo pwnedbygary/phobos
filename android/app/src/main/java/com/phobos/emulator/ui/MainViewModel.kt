@@ -64,6 +64,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -91,8 +92,10 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.text.SimpleDateFormat
+import java.time.LocalDateTime
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipInputStream
 import kotlin.math.roundToInt
 
@@ -121,6 +124,9 @@ import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspResolution
 import com.phobos.emulator.util.PspStartSettings
 import com.phobos.emulator.util.PspFonts
+import com.phobos.emulator.util.ScreenshotNote
+import com.phobos.emulator.util.ScreenshotResult
+import com.phobos.emulator.util.Screenshots
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
 import com.phobos.emulator.util.cueWithTracksIn
@@ -1902,24 +1908,45 @@ class MainViewModel(
         PhobosCore.setSkipBootRom(enabled)
     }
 
+    // Each shot for the game screen's effect (ScreenshotEffect), which says where it went or why it didn't. Only the
+    // newest waits to be taken; with no game screen showing, it's dropped.
+    private val _screenshotEvents = MutableSharedFlow<ScreenshotEvent>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val screenshotEvents: SharedFlow<ScreenshotEvent> = _screenshotEvents.asSharedFlow()
+
+    // One screenshot at a time: a press while one is being taken and written is dropped (at 10x each is a 52 MB copy
+    // and PNG), and the effect already showing says where that one went.
+    private val takingScreenshot = AtomicBoolean(false)
+
+    /**
+     * The pause menu's Shot and the screenshot hotkey: takes the picture and hands a copy of it straight to the game
+     * screen's effect, then writes the PNG while the effect plays; the effect's pill says how that went.
+     */
     fun takeScreenshot(systemName: String, romName: String) {
+        if (!takingScreenshot.compareAndSet(false, true)) return
         viewModelScope.launch(Dispatchers.IO) {
-            // Task 41: resolve the SAF path to a REAL filesystem path; fall back to
-            // internal storage when unset or unresolvable (SAF URIs aren't usable
-            // as native file paths).
-            val baseDir = resolveSafPath(settings.value.screenshotsPath)
-                ?: File(context.filesDir, "screenshots").absolutePath
-            val dir = File(baseDir, systemName)
-            if (!dir.exists()) dir.mkdirs()
-            
-            val fileName = "${romName}_${System.currentTimeMillis()}.png"
-            val file = File(dir, fileName)
-            
-            val success = PhobosCore.takeScreenshot(file.absolutePath)
-            if (success) {
-                Log.i("Phobos", "Screenshot saved: ${file.absolutePath}")
-            } else {
-                Log.e("Phobos", "Failed to take screenshot")
+            val note = MutableStateFlow<ScreenshotNote?>(null)
+            var shown = false
+            try {
+                // Task 41: resolve the SAF path to a REAL filesystem path; fall back to
+                // internal storage when unset or unresolvable (SAF URIs aren't usable
+                // as native file paths).
+                val baseDir = resolveSafPath(settings.value.screenshotsPath)
+                    ?: File(context.filesDir, "screenshots").absolutePath
+                val result = Screenshots.save(File(baseDir, systemName), romName, LocalDateTime.now()) { file ->
+                    val copy = PhobosCore.captureScreenshot(CARD_PICTURE_MAX_SIZE) ?: return@save Screenshots.Capture.NoPicture
+                    shown = _screenshotEvents.tryEmit(ScreenshotEvent(card = true, picture = cardPicture(copy), note = note))
+                    if (PhobosCore.writeScreenshot(file.absolutePath)) Screenshots.Capture.Written else Screenshots.Capture.NotWritten
+                }
+                if (result is ScreenshotResult.Saved) {
+                    Log.i("Phobos", "Screenshot saved: ${result.file.absolutePath}")
+                } else {
+                    Log.e("Phobos", "Screenshot not saved: $result")
+                }
+                note.value = Screenshots.note(result, Environment.getExternalStorageDirectory().absolutePath, context.filesDir.absolutePath)
+                if (!shown) _screenshotEvents.tryEmit(ScreenshotEvent(card = false, picture = null, note = note))
+            } finally {
+                PhobosCore.releaseScreenshot()
+                takingScreenshot.set(false)
             }
         }
     }
