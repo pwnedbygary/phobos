@@ -221,7 +221,8 @@ auto Kernel::events() -> void {
   while(cycles >= nextVblank) {
     nextVblank += VblankCycles;
     vblanks++;
-    latchFrameBuffer();  //(one set for the last blank's sync: sceDisplaySetFrameBuf)
+    //(one set for the sync and due by now, read since or not: a state saved as a frame starts is the same either way)
+    latchFrameBuffer();
     if(geProfile) [[unlikely]] geProfileVblank();
     geLeft = GeBudget;  //the GE's commands for the next frame
     for(auto& [uid, thread] : threads) {

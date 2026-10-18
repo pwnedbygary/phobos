@@ -18,18 +18,25 @@ auto Kernel::sceDisplaySetMode() -> void {
 //from that sync; the width and format at once. pspautotests' display/setframebuf recorded the one shown keeping its
 //address till the next blank (read just after sceDisplayWaitVblankStart) but taking the width and format (both its
 //readings, sceDisplayGetFrameBuf's 0 and 1, gave them at once), and display/isstate a frame buffer of 0 so set still
-//shown in the foreground and the sync 631.5 microseconds into the blank. Games set theirs as a blank starts (Twisted
-//Metal's display thread, the blank waited for; Death Jr. II's and Sonic Rivals' vertical blank handlers) for the
-//frame after it; Army of Two sets its mid-frame and, after its draw sync, while it isn't shown yet, sets it again and
-//waits for the blank. The screen shows the last one set in the frame after a blank (presentedFrameBuffer()). One set
-//at once after one for the next sync replaces it (unrecorded). (Not here: the refusals setframebuf recorded, as of a
-//width or format set at once that isn't the one shown: what a PSP's display holds as a game starts isn't known
-//here, and a game's first frame buffer mustn't be refused for not matching it.)
+//shown in the foreground and the sync 631.5 microseconds into the blank; round 8's display-start (part 107) the same
+//from a program's start: the address read back as it was till the blank, the width and format at once. Games set
+//theirs as a blank starts (Twisted Metal's display thread, the blank waited for; Death Jr. II's and Sonic Rivals'
+//vertical blank handlers) for the frame after it; Army of Two sets its mid-frame and, after its draw sync, while it
+//isn't shown yet, sets it again and waits for the blank. The screen shows in the frame after a blank the last one set
+//(presentedFrameBuffer()), its picture taken as the blank starts (System::run()): one set in the blank before its
+//sync, after that, shows a frame later than on a PSP, as it did when every one was taken at once. One set at once
+//after one for the next sync replaces it (unrecorded). (Left out, for scope: the refusals. A PSP starts at address
+//0, width 0 and format 3 (8888; 0 here), not in the foreground, and refuses every frame buffer set at once from
+//there, leaving the display as it was: 0x80000107, or 0x80000104 for the start's width of 0 (display-start;
+//setframebuf the same for a width or format set at once that isn't the one shown). Taking them, and the start's
+//format, would change what every game meets as it starts: a change of their own, with a library check.)
 auto Kernel::sceDisplaySetFrameBuf() -> void {
   ProfiledCall profile{*this, GeProfile::SetFrameBuf};
   if(arg(3) == 1) {
     latchFrameBuffer();  //(one set for an earlier sync, shown by now)
-    u64 vsync = nextVblank - VblankCycles + VsyncCycles;  //this blank's
+    //(this blank's. A go can run a few instructions past the next blank's start before events() takes it: one set
+    //then counts as set before that blank, shown from its start rather than from its sync.)
+    u64 vsync = nextVblank - VblankCycles + VsyncCycles;
     display.nextFrameBuffer = arg(0), display.nextSet = true;
     display.nextAt = cycles < vsync ? vsync : nextVblank;
   } else {

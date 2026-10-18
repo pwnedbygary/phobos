@@ -726,6 +726,65 @@ static auto frameBufferNextSync() -> void {
   CHECK(shown(), 0x0404'4000);
 }
 
+//A frame buffer set for the next vertical sync becomes the one shown just as its time comes, taken by whatever
+//looks first: sceDisplayGetFrameBuf (read a cycle before the sync, the one before still), sceDisplayIsForeground (a
+//frame buffer of 0 set as a blank starts leaves the foreground at that sync, nothing else read), another set for the
+//next sync (one set as a blank starts and one after its sync, nothing read between: the first shown from that sync,
+//the second from the next blank's start), or the blank (each takes one due by then, so a state saved as a frame
+//starts is the same whether the program looked since or not).
+static auto frameBufferLatched() -> void {
+  KernelMachine m;
+  constexpr u32 Got = KernelMachine::Results;
+  auto shown = [&] {
+    m.call("sceDisplayGetFrameBuf", {Got, 0, 0, 0});
+    return m.system.memory.read(4, Got);
+  };
+  auto set = [&](u32 address, u32 sync) { return m.call("sceDisplaySetFrameBuf", {address, 512, 3, sync}); };
+  auto at = [&](u64 time) {  //(the kernel's clock moved on, the blanks between taken)
+    m.kernel.cycles = time;
+    m.kernel.events();
+  };
+  u64 blank = Kernel::VblankCycles;  //the first blank's start
+  at(blank + Kernel::VblankCycles / 2);
+  CHECK(set(0x0400'0000, 0), 0);
+  //read a cycle before the sync
+  blank += Kernel::VblankCycles;
+  at(blank + 1);
+  CHECK(set(0x0404'4000, 1), 0);
+  at(blank + Kernel::VsyncCycles - 1);
+  CHECK(shown(), 0x0400'0000);
+  at(blank + Kernel::VsyncCycles);
+  CHECK(shown(), 0x0404'4000);
+  //asked whether it's in the foreground at the sync, nothing else read
+  blank += Kernel::VblankCycles;
+  at(blank + 1);
+  CHECK(set(0, 1), 0);
+  at(blank + Kernel::VsyncCycles - 1);
+  CHECK(m.call("sceDisplayIsForeground", {}), 1);
+  at(blank + Kernel::VsyncCycles);
+  CHECK(m.call("sceDisplayIsForeground", {}), 0);
+  //one set as a blank starts and another after its sync, nothing read between
+  blank += Kernel::VblankCycles;
+  at(blank + 1);
+  CHECK(set(0x0408'8000, 1), 0);
+  at(blank + Kernel::VsyncCycles + 1);
+  CHECK(set(0x0404'4000, 1), 0);
+  CHECK(shown(), 0x0408'8000);
+  at(blank + Kernel::VblankCycles - 1);
+  CHECK(shown(), 0x0408'8000);
+  at(blank + Kernel::VblankCycles);
+  CHECK(shown(), 0x0404'4000);
+  //set mid-frame and not read: as the next frame starts, nothing is left for a read to take
+  blank += Kernel::VblankCycles;
+  at(blank + Kernel::VblankCycles / 2);
+  CHECK(set(0x0400'0000, 1), 0);
+  at(blank + Kernel::VblankCycles);
+  auto state = saveState(m);
+  m.kernel.latchFrameBuffer();  //(what every read does first)
+  CHECK(saveState(m) == state, true);
+  CHECK(shown(), 0x0400'0000);
+}
+
 //A vertical blank handler (sub-interrupt 2): called at each blank with (2, its argument) and the global pointer it
 //was registered with, while enabled, not while interrupts are held off (it runs once they're let back on: the
 //program spins across a blank meanwhile, a delay being refused then), and no more once released. Its semaphore wakes
@@ -1270,6 +1329,7 @@ auto callbackTests() -> Tests {
     {"callbacks after a semaphore, one in line with its wait set aside", callbackAfterSemaphoreAside},
     {"callbacks by priority", byPriority}, {"callbacks called directly", callbackCalls},
     {"display vblank timing", vblankTiming}, {"display frame buffer set for the next vsync", frameBufferNextSync},
+    {"display frame buffer set for the next vsync, taken by whatever looks first", frameBufferLatched},
     {"interrupts vblank handler", vblankHandler},
     {"interrupts held off, delivered once", heldOffOnce}, {"interrupts handlers longer than a frame", longHandlers},
     {"interrupts numbers", interruptTable}, {"interrupts held off keep the CPU", heldOffKeepsCpu},

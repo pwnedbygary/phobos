@@ -1034,6 +1034,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   if(s.reading() && stateLayout < 33) display.nextFrameBuffer = 0, display.nextSet = false, display.nextAt = 0;
   else s(display.nextFrameBuffer), s(display.nextSet), s(display.nextAt);
   check(display.mode == 0 && display.width == 480 && display.height == 272);
+  //(one waiting is due by the next blank's start at the latest: this blank's sync, or that start)
+  check(!display.nextSet || display.nextAt <= nextVblank);
 
   //calls into the program. The interrupt flag is the CPU's (its state, loaded before this, has it): on or held off,
   //1 or 0, as mtic and the kernel leave it

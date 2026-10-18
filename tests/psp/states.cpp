@@ -670,6 +670,9 @@ static auto stateFields() -> void {
     {"display frameBuffer", [&] { k.display.frameBuffer ^= 0x10; }},
     {"display bufferWidth", [&] { k.display.bufferWidth ^= 0x10; }},
     {"display pixelFormat", [&] { k.display.pixelFormat ^= 1; }},
+    {"display nextFrameBuffer", [&] { k.display.nextFrameBuffer = 0x0404'4000; }},
+    {"display nextSet", [&] { k.display.nextSet = true; }},
+    {"display nextAt", [&] { k.display.nextAt = k.nextVblank; }},
     //calls into the program
     {"call function", [&] { k.calls[0].function ^= 4; }}, {"call gp", [&] { k.calls[0].gp ^= 4; }},
     {"call arguments", [&] { k.calls[0].arguments[2] ^= 1; }},
@@ -1483,6 +1486,9 @@ static auto stateFields() -> void {
   refuses("more unread samples than the ring keeps", [&] { k.controller.unread = 64; });
   refuses("a display mode there isn't", [&] { k.display.mode = 1; });
   refuses("a display size there isn't", [&] { k.display.width = 4096; });
+  refuses("a frame buffer waiting for a sync past the next blank's start", [&] {
+    k.display.nextSet = true, k.display.nextAt = k.nextVblank + 1;
+  });
   refuses("a list three CALLs deep", [&] { k.geLists[list].registers.depth = 3; });
   refuses("a SIGNAL call three CALLs deep", [&] { k.geLists[list].stack[0].registers.depth = 3; });
   refuses("a list's stack deeper than it allows", [&] { k.geLists[list].stackLimit = 0; });
