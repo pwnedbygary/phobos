@@ -86,7 +86,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
 | `fit.py` | Fits the model behind the maths functions (128 segments of integer coefficients per function) from the results alone, and checks it reproduces every recorded value. It gave the core's `vfpu-segments.hpp`. Needs numpy. |
-| `ge-terms.py`, `ge-fit.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md part 106): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6 and 8's timed lists. Python alone. |
+| `ge-terms.py`, `ge-fit.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md part 106): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6, 8 and 9's timed lists. Python alone. |
 
 ## The VFPU and the FPU
 
@@ -393,7 +393,7 @@ vertical ramps); only VRAM's fourth copy reads the depth buffer in order. The fi
 
 ### The GE timing's fit
 
-`GE::Cost` (`ares/psp/ge/ge.hpp`), the clocks of the GE timing "PSP", is fitted to round 6's and round 8's timed lists
+`GE::Cost` (`ares/psp/ge/ge.hpp`), the clocks of the GE timing "PSP", is fitted to rounds 6, 8 and 9's timed lists
 (docs/psp-core.md, part 106): `ge-terms.py` counts, for each run of the GE, what each of its terms multiplies, in a
 runner built from a patched copy of the source (the core itself carries no counting code), and `ge-fit.py` fits the
 clocks to the PSP's times. To fit them again:
@@ -404,17 +404,20 @@ python3 tools/psp-measure/ge-terms.py /tmp/terms
 (cd /tmp/terms && tools/psp-runner/build.sh)     # its last line names the runner
 ```
 
-Then the program's rounds 8 and 6 in that runner with the GE timing "PSP", each with its terms written to a file:
-`EBOOT.PBP` (`make` here, with round 8) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
-chosen with presses (round 8 the first line; round 6 two lines down), each run's `results/ge` kept beside its terms:
+Then the program's rounds 9, 8 and 6 in that runner with the GE timing "PSP", each with its terms written to a
+file: `EBOOT.PBP` (`make` here, with round 9) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
+chosen with presses (round 9 the first line, round 8 the second, round 6 the fourth), each run's `results/ge` kept
+beside its terms, the stick emptied between runs:
 
 ```
-PHOBOS_GE_TERMS=r8.txt RUNNER STICK/PSP/GAME/PSPMEASURE/EBOOT.PBP --memory-stick STICK --ge-timing psp \
-  --frames 15000 --press 60:Cross,66:Cross! --start-time 1791290096                       # then keep results/ge as ours8
-PHOBOS_GE_TERMS=r6.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Cross,106:Cross! ...   # as ours6
-python3 tools/psp-measure/ge-fit.py PSP_RESULTS r8.txt ours8 r6.txt ours6
+PHOBOS_GE_TERMS=r9.txt RUNNER STICK/PSP/GAME/PSPMEASURE/EBOOT.PBP --memory-stick STICK --ge-timing psp \
+  --frames 15000 --press 60:Cross,66:Cross! --start-time 1791290096                       # then keep results/ge as ours9
+PHOBOS_GE_TERMS=r8.txt ... --press 60:Down,66:Down!,80:Cross,86:Cross! ...                       # as ours8
+PHOBOS_GE_TERMS=r6.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Cross,126:Cross! ...
+python3 tools/psp-measure/ge-fit.py PSP_RESULTS r9.txt ours9 r8.txt ours8 r6.txt ours6
 ```
 
-`PSP_RESULTS` holds the PSP's files of both rounds (`tests/psp/measurements/ge-round6` and `ge-round8` unpacked into
-one folder). `ge-fit.py` prints each term's clocks under `GE::Cost`'s names, then how far the fitted model misses each
-test's lists; part 106 has the command that gave the clocks in `ge.hpp` (and the terms it holds fixed).
+`PSP_RESULTS` holds the PSP's files of the three rounds (`tests/psp/measurements/ge-round6`, `ge-round8` and
+`ge-round9` unpacked into one folder). `ge-fit.py` prints each term's clocks under `GE::Cost`'s names, then how far
+the fitted model misses each test's lists (and round 9's `time-anchors`, round 8's cases again, as a check it doesn't
+fit); part 106 has the command that gave the clocks in `ge.hpp` (and the terms it holds fixed).

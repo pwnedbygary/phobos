@@ -35,40 +35,37 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6 and 8, behind the option "GE Timing" (off by default), the gate against the captures, a SIGNAL's interrupt at its time — 2026-10-18
+## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8 and 9, behind the option "GE Timing" (off by default), the gate against the captures by list and by frame, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
-`dd63f4ffb` (#266, #267), `230c0a731` (#268) and `fe3deab82` (#272, the GE thread; #271, the display latch; #273)
-merged in; draft PR #269, its merge held by the owner till the gate passes. docs/psp-core.md, part 106, has the
-evidence (part 76, the first model's fit, is here too). Clean room: our code, uOFW for the GE driver's behaviour; no
-PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 22 bytes, and the GE's pipeline: 28 and 16 a queued item;
-"Fast" 50 in all).
-- **The model** (`GE::Cost`, `GE::Pipe`): the front end (words, PRIMs, vertices, lights, cuts) hands each primitive,
-  transfer and palette load to the back end (rows, pixels, texels) through an 83-entry queue (round 8's
-  time-signals2); a sprite's rows spanning 256 distinct texels read wide; triangles read 16- and 32-bit texels at
-  rates of their own; the pipeline is carried through stall updates and SIGNALs.
-- **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6 and 8, 2,054 timed lists, 5.5% at the median
-  (70% within 10%, 90% within 25%); the command and the terms it couldn't measure in part 106.
-- **"Fast"** is master's bit for bit, with "GE Thread" off and on, and no longer pays for "PSP" (the review measured
-  4.5-7.7% more instructions a frame): 0.19 to 0.56% on Vulkan-fast and within master's own spread on Software
-  (against `230c0a731`); exact against master `fe3deab82` with the GE thread off and on (the review's 33 scenes,
-  Software and Vulkan-fast: 66 of 66 each way).
-- **The GE thread** (part 109): "PSP" keeps the GE on the emulation thread whatever "GE Thread" says
-  (`System::threadGE()`; its pipeline takes each run's time as the run ends), so "PSP" with the thread on is "PSP"
-  with it off (the seven captured scenes and part 105's spin scenes, every frame and state); a test has the system
-  refuse the thread with "PSP" and start it with "Fast".
-- **A SIGNAL** waits for the front end to reach it, its lead kept through stall updates (a test gives the same list
-  whole, in one part and a part a sprite).
-- **The gate** (`tools/psp-ge-profile/decoder/gate.py`, the owner's 18 captures in
-  `tests/psp/measurements/ge-captures`, Sunday's 6 taken with round 9): 6 of the 10 judged rows within 15%
-  (Killzone at `kz-gp`'s moment, the courtyard, against Friday's and Sunday's -1; Activision Hits' menu against both
-  its captures); too fast Ghost of Sparta −21% and Super Monkey Ball −31%, too slow Activision Hits' 3D menu +29% and
-  +27%. The merge stays held.
-- **Checks**: tests/psp sanitized, 614 groups, 0 failures with the GE thread off and on; the ares tests 361 checks, 0 failed; `test_geprof.py` 24
-  tests; CI green on the merged head.
-- **Not yet**: the refit with round 9 (#276, part 110: textures by the texels read after a TEX_FLUSH, triangles
-  reading narrow, vertex formats); the CPU's contention with the GE (the CPU's timing, its own project); fixed-point
-  charges before any default change. Part 107 (round 8) is PR #270, part 108 (the display latch) #271, merged.
+`dd63f4ffb` (#266, #267), `230c0a731` (#268), `fe3deab82` (#272, the GE thread; #271, the display latch; #273),
+`14e8065dc` (#270, round 8) and `d428d91f9` (#276, round 9) merged in; draft PR #269, its merge held by the owner till
+the gate passes. docs/psp-core.md, part 106, has the evidence (part 76, the first model's fit, is here too). Clean
+room: our code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 18
+bytes, and the GE's pipeline: 28 and 16 a queued item; "Fast" 46 in all).
+- **The model** (`GE::Cost`, `GE::Pipe`): the front end (words, PRIMs, vertices at 0.513 a byte with a floor of 5.02,
+  lights, cuts) hands each primitive, transfer and palette load to the back end (rows, pixels, texels) through an
+  83-entry queue; the texture cache keeps the texels fetched since the last TEX_FLUSH (a box in whole fetches, 8 KiB),
+  a primitive paying for what it reads outside it; rows read wide past 140 texels (270 indices), a triangle's share
+  1 − (140/W)²; the pipeline is carried through stall updates and SIGNALs.
+- **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6, 8 and 9, 2,832 timed lists, 5.0% at the
+  median (72% within 10%, 93% within 25%), its own fixed point; ten cases the model's texels can't follow (perspective,
+  turned, a big mipmap) shown as checks; `measured8` tests rounds 8 and 9 in the core.
+- **"Fast"** is master's bit for bit (the refit touches the PSP's paths alone; checks below) and pays 0.19 to 0.56% on
+  Vulkan-fast for "PSP" (the template-per-timing follow-up would take that away).
+- **The GE thread** (part 109): "PSP" keeps the GE on the emulation thread (`System::threadGE()`); a design for a
+  threaded "PSP" is in part 106 (not built).
+- **The gate** (`tools/psp-ge-profile/decoder/gate.py`, the owner's 18 captures, lists paired by their place in the
+  frame, each list and each frame): frames 6 of 8 within 15%, none too slow; lists 9 of 15, the worst too slow
+  Activision Hits' menu's second list (+56%, CLUT32 triangles); too fast Super Monkey Ball (−30%) and the copyright
+  screen (−22%). Ghost of Sparta's menu passes (−10.8%); what's left there and in Super Monkey Ball fits the CPU
+  beside the GE (the CPU timing's project). The merge stays held.
+- **Checks**: tests/psp sanitized, 616 groups, 0 failures with the GE thread on (off: all but `measured6`'s textured
+  fill, its bound since set to 3% and passed); the ares tests 361 checks, 0 failed; `test_geprof.py` 24 tests; the fit
+  reproduced from a runner built from the tree.
+- **Not yet**: round 10's cases (perspective, turned and mipmapped triangles, CLUT32, wide triangles into 16-bit, a
+  light's shine by kind, 8-texel CLUT8 strips); "Fast"'s templates per timing; the CPU's contention with the GE (the
+  CPU's timing, its own project); fixed-point charges before any default change.
 
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 

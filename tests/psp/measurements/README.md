@@ -24,8 +24,9 @@ xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS
 `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another folder), and
 `tests/psp/measured6.cpp` compares the core's run of round 6 with them.
 
-Without a round's files (`PSP_GE_RESULTS` or `PSP_GE_ROUND6` set empty), the groups comparing with them say so as a
-skip of `ge-round3` or `ge-round6`; where `PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead.
+Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8` or `PSP_GE_ROUND9` set empty), the groups
+comparing with them say so as a skip of `ge-round3`, `ge-round6`, `ge-round8` or `ge-round9`; where
+`PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead.
 
 ## `ge-round8/`
 
@@ -36,9 +37,9 @@ beside the GE (`cpu-contention`), the CPU alone (`cpu-*`) and the display as the
 out as `manifest8.txt` describes; `time-lists.stalled` is the program's note of what it took for stalls in its case 3
 (its own timeout, not the GE's: docs/psp-core.md, part 107). Part 107 says what each test is for and what the PSP
 showed. Each `.bin` is packed with xz (`xz -9e`: 140 KB of records as 28 KB, 169 KB as 56 KB with the manifest, the
-note and the sums); `SHA256SUMS` holds the unpacked files' sums. No test reads them yet: #269's
-`tools/psp-measure/ge-fit.py` fits the GE timing's model to them (with #269's model) and a
-`measured8` test will compare the core's run of round 8 with them once that model and this program are both in.
+note and the sums); `SHA256SUMS` holds the unpacked files' sums. `tests/psp/run-tests.sh` unpacks them
+(`PSP_GE_ROUND8`, as round 6's), `tools/psp-measure/ge-fit.py` fits the GE timing's model to them (part 106), and
+`tests/psp/measured8.cpp` compares the core's run of round 8's timed lists with them.
 
 ## `ge-round9/`
 
@@ -50,8 +51,8 @@ narrow textures, and sprites), `time-loads` (a texture's loads and the cache's r
 222/111 and 333/166 MHz, `time-lists2` at 333/222/166 and 266/133 too; nothing stalled. Part 110 says what each test
 is for and what the PSP showed. He ran `7445a290a`'s `pspmeasure.elf` (its EBOOT `f554782c…`); the one in
 `tests/psp/programs` is the later fix round's, which draws round 9's lists the same way. Each `.bin` is packed with xz
-(`xz -9e`, 97 KB as 18 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). No test reads them yet,
-as round 8's: they're for the GE timing's fit (#269).
+(`xz -9e`, 97 KB as 18 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). As round 8's, they're
+unpacked (`PSP_GE_ROUND9`), fitted (`ge-fit.py`) and compared with the core's run (`tests/psp/measured8.cpp`).
 
 ## `ge-captures/`
 

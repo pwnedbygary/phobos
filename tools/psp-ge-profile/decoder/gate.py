@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """The GE timing's gate (docs/psp-core.md, part 106; the owner's plan): each of the owner's captures of a game on his
-PSP-1000 (tests/psp/measurements/ge-captures, part 103) beside Phobos's GE profile of the same scene made with the GE
-timing "PSP". For each, a list's GE time (from when the GE could begin it to its FINISH, as geprof.py measures it): the
-median over each one's window of whole seconds, and Phobos's miss against the PSP's: part 106's first comparison's
-measure, windows and pairs. Killzone queues a scene list and a full-screen one in turn, told apart by their turns
-(the first comparison took lists over 5 ms, which the first model's full-screen lists were too): both are judged
-against the captures of kz-gp's moment, the courtyard standing still (Friday's and Sunday's), its scene list taking
-24 to 35 ms on the PSP elsewhere in the level. A scene passes within 15% of the PSP's; none may be more than 15% too
-slow (a model too slow makes a game run worse than a PSP). Captures of moments Phobos has no state of are shown, not
+PSP-1000 (tests/psp/measurements/ge-captures, parts 103 and 110) beside Phobos's GE profile of the same scene made with
+the GE timing "PSP". A list's GE time is from when the GE could begin it to its FINISH, as geprof.py measures it. Lists
+are paired by their place in the frame: a frame is the lists queued between two flips (a sceDisplaySetFrameBuf to
+another buffer than the call before, or every call where a game keeps one buffer, as Killzone does: geprof.py's flips),
+a list's place its order among them; in the frames holding the scene's usual count of lists (the commonest), each
+place's median GE time over the window of whole seconds, the PSP's against Phobos's, and the median of the frames'
+totals the same way (Killzone's scene list and full-screen list are its places 1 and 2). A list or a frame passes
+within 15% of the PSP's; none may be more than 15% too slow (a model too slow makes a game run worse than a PSP); the
+table gives both measures, each list's and the frame's. Killzone is judged at kz-gp's moment, the courtyard standing
+still (Friday's -1 and Sunday's -1, the owner confirmed); captures of moments Phobos has no state of are shown, not
 judged.
 
 Phobos's profiles: tools/psp-runner's --ge-timing psp --ge-profile NAME.bin over 900 frames from each scene's state,
 the profile from frame 301 (--ge-profile-from 301), ahr-legal's 360 frames from frame 1 (part 106 has the commands).
 
 usage: gate.py PROFILES_DIR [CAPTURES_DIR]   (PROFILES_DIR holds coo-diff.bin, gos-menu.bin, smba-story.bin,
-kz-gp.bin, ahr-menu.bin, ahr-legal.bin, a2-gp.bin; prints the table, and exits 1 if a judged scene fails)"""
+kz-gp.bin, ahr-menu.bin, ahr-legal.bin, a2-gp.bin; prints the table, and exits 1 if a judged list or frame fails)"""
+import bisect
 import lzma
 import os
 import statistics
@@ -27,62 +30,70 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CAPTURES = os.path.normpath(os.path.join(HERE, "..", "..", "..", "tests", "psp", "measurements", "ge-captures"))
 BAR = 0.15
 
-#(what, capture, PSP window (s), Phobos scene, Phobos window (s), kind, judged). The -r9 captures are the owner's of
-#Sunday's round 9 (Killzone one session, 60, 78, 159, 322 and 443 s in; Activision Hits' 3D menu idle at the ahr-menu
-#state's moment); Killzone's courtyard, standing still, is kz-gp's moment (Friday's -1 and Sunday's -1, the owner
-#says), the rest of the level more demanding gameplay Phobos has no state of.
+#(what, capture, PSP window (s), Phobos scene, Phobos window (s), judged). The -r9 captures are the owner's of Sunday's
+#round 9 (Killzone in one session, 60, 78, 159, 322 and 443 s in; Activision Hits' 3D menu idle at the ahr-menu state's
+#moment); Killzone's courtyard, standing still, is kz-gp's moment (Friday's -1 and Sunday's -1), the rest of the level
+#more demanding gameplay Phobos has no state of.
 ROWS = [
-    ("Chains of Olympus, difficulty menu", "UCUS98653-5", (0, 10), "coo-diff", (0, 10), None, True),
-    ("Ghost of Sparta, main menu", "UCUS98737-1", (0, 10), "gos-menu", (0, 10), None, True),
-    ("Ghost of Sparta, a later scene (another moment)", "UCUS98737-2", (0, 10), "gos-menu", (0, 10), None, False),
-    ("Ghost of Sparta, a later scene (another moment)", "UCUS98737-3", (0, 10), "gos-menu", (0, 10), None, False),
-    ("Super Monkey Ball Adventure, Story Mode", "ULES00364-1", (0, 7), "smba-story", (0, 10), None, True),
-    ("Killzone, the courtyard: scene list", "UCUS98646-1", (0, 10), "kz-gp", (0, 10), "scene", True),
-    ("Killzone, the courtyard: scene list", "UCUS98646-r9-1", (0, 10), "kz-gp", (0, 10), "scene", True),
-    ("Killzone, later in the level (another moment): scene list", "UCUS98646-2", (0, 10), "kz-gp", (0, 10), "scene",
-     False),
-    ("Killzone, 78 s in (another moment): scene list", "UCUS98646-r9-2", (0, 10), "kz-gp", (0, 10), "scene", False),
-    ("Killzone, 159 s in (another moment): scene list", "UCUS98646-r9-3", (0, 10), "kz-gp", (0, 10), "scene", False),
-    ("Killzone, 322 s in (another moment): scene list", "UCUS98646-r9-4", (0, 10), "kz-gp", (0, 10), "scene", False),
-    ("Killzone, 443 s in (another moment): scene list", "UCUS98646-r9-5", (0, 10), "kz-gp", (0, 10), "scene", False),
-    ("Killzone, the courtyard: full-screen list", "UCUS98646-1", (0, 10), "kz-gp", (0, 10), "full", True),
-    ("Killzone, the courtyard: full-screen list", "UCUS98646-r9-1", (0, 10), "kz-gp", (0, 10), "full", True),
-    ("Killzone, later in the level (another moment): full-screen list", "UCUS98646-2", (0, 10), "kz-gp", (0, 10),
-     "full", False),
-    ("Activision Hits Remixed, 3D main menu", "ULUS10186-menu", (0, 10), "ahr-menu", (0, 10), None, True),
-    ("Activision Hits Remixed, 3D main menu, idle", "ULUS10186-r9-1", (0, 10), "ahr-menu", (0, 10), None, True),
-    ("Activision Hits Remixed, copyright screen", "ULUS10186-boot2", (3, 7), "ahr-legal", (0, 2), None, True),
+    ("Chains of Olympus, difficulty menu", "UCUS98653-5", (0, 10), "coo-diff", (0, 10), True),
+    ("Ghost of Sparta, main menu", "UCUS98737-1", (0, 10), "gos-menu", (0, 10), True),
+    ("Ghost of Sparta, a later scene (another moment)", "UCUS98737-2", (0, 10), "gos-menu", (0, 10), False),
+    ("Ghost of Sparta, a later scene (another moment)", "UCUS98737-3", (0, 10), "gos-menu", (0, 10), False),
+    ("Super Monkey Ball Adventure, Story Mode", "ULES00364-1", (0, 7), "smba-story", (0, 10), True),
+    ("Killzone, the courtyard", "UCUS98646-1", (0, 10), "kz-gp", (0, 10), True),
+    ("Killzone, the courtyard", "UCUS98646-r9-1", (0, 10), "kz-gp", (0, 10), True),
+    ("Killzone, later in the level (another moment)", "UCUS98646-2", (0, 10), "kz-gp", (0, 10), False),
+    ("Killzone, 78 s in (another moment)", "UCUS98646-r9-2", (0, 10), "kz-gp", (0, 10), False),
+    ("Killzone, 159 s in (another moment)", "UCUS98646-r9-3", (0, 10), "kz-gp", (0, 10), False),
+    ("Killzone, 322 s in (another moment)", "UCUS98646-r9-4", (0, 10), "kz-gp", (0, 10), False),
+    ("Killzone, 443 s in (another moment)", "UCUS98646-r9-5", (0, 10), "kz-gp", (0, 10), False),
+    ("Activision Hits Remixed, 3D main menu", "ULUS10186-menu", (0, 10), "ahr-menu", (0, 10), True),
+    ("Activision Hits Remixed, 3D main menu, idle", "ULUS10186-r9-1", (0, 10), "ahr-menu", (0, 10), True),
+    ("Activision Hits Remixed, copyright screen", "ULUS10186-boot2", (3, 7), "ahr-legal", (0, 2), True),
     ("Activision Hits Remixed, a first boot capture cut short", "ULUS10186-boot1-cut", (0, 99), "ahr-legal", (0, 2),
-     None, False),
-    ("Army of Two, gameplay (another moment)", "ULUS10472-1", (0, 10), "a2-gp", (0, 10), None, False),
-    ("Army of Two, gameplay (another moment)", "ULUS10472-2", (0, 10), "a2-gp", (0, 10), None, False),
+     False),
+    ("Army of Two, gameplay (another moment)", "ULUS10472-1", (0, 10), "a2-gp", (0, 10), False),
+    ("Army of Two, gameplay (another moment)", "ULUS10472-2", (0, 10), "a2-gp", (0, 10), False),
 ]
 
 
-def report(path):
-    """geprof.py's report of a capture or profile (.bin, or .bin.xz)"""
+def load(path):
+    """geprof.py's report of a capture or profile (.bin, or .bin.xz), and the capture"""
     data = open(path, "rb").read()
     if path.endswith(".xz"):
         data = lzma.decompress(data)
     capture = geprof.parse_capture(data)
-    return geprof.report_json(capture), capture.header
+    return geprof.report_json(capture), capture
 
 
-def list_time(path, window, kind):
-    """the median GE time (ms) of the lists queued in the window; for Killzone, of its scene or full-screen lists"""
+def frames(path, window):
+    """the lists queued in the window, frame by frame (each frame's GE times, ms, in their order): only the frames
+    holding the commonest count of lists; with the clocks"""
     if not os.path.exists(path):
         return None, None
-    j, header = report(path)
+    j, capture = load(path)
+    calls = [(r.entry, r.a) for r in capture.records if r.kind == geprof.SET_FRAMEBUF and r.result >= 0]
+    one = len(calls) > 1 and len({a for _, a in calls}) == 1
+    flips, last = [], None
+    for at, address in calls:
+        if address != last or one:
+            flips.append(at)
+        last = address
     lo, hi = window[0] * 1e6, window[1] * 1e6
-    lists = sorted((g for g in j["lists"] if g["queued"] is not None and lo <= g["queued"] < hi and g["ge_us"]),
-                   key=lambda g: g["queued"])
-    times = [g["ge_us"] for g in lists]
-    if kind and len(times) > 1:  #(the half with the longer median, taken in turns, is the scene's)
-        a, b = times[0::2], times[1::2]
-        scene, full = (a, b) if statistics.median(a) > statistics.median(b) else (b, a)
-        times = scene if kind == "scene" else full
+    by = {}
+    for g in sorted((g for g in j["lists"] if g["queued"] is not None and lo <= g["queued"] < hi),
+                    key=lambda g: g["queued"]):
+        by.setdefault(bisect.bisect_right(flips, g["queued"]), []).append(g["ge_us"])
+    whole = [f for f in by.values() if all(t for t in f)]
+    if not whole:
+        return [], None
+    count = statistics.mode(len(f) for f in whole)
     clocks = "%d/%d" % (j["header"]["cpuMhz"], j["header"]["busMhz"])
-    return (statistics.median(times) / 1000 if times else None), clocks
+    return [[t / 1000 for t in f] for f in whole if len(f) == count], clocks
+
+
+def verdict(miss):
+    return "passes" if abs(miss) <= BAR else ("too slow" if miss > 0 else "too fast")
 
 
 def main(argv=None):
@@ -92,30 +103,43 @@ def main(argv=None):
         return 2
     profiles = argv[0]
     captures = argv[1] if len(argv) > 1 else CAPTURES
-    print("| Scene | Capture | PSP | Phobos, PSP timing | Against the PSP | 15% bar |")
-    print("| --- | --- | --- | --- | --- | --- |")
-    judged, failed = [], False
-    for what, capture, pwin, scene, owin, kind, judge in ROWS:
-        psp, pclock = list_time(os.path.join(captures, capture + ".bin.xz"), pwin, kind)
-        ours, oclock = list_time(os.path.join(profiles, scene + ".bin"), owin, kind)
-        if psp is None:
+    print("| Scene | Capture | List | PSP | Phobos, PSP timing | Against the PSP | 15% bar |")
+    print("| --- | --- | --- | --- | --- | --- | --- |")
+    lists, framed, failed = [], [], False
+    for what, capture, pwin, scene, owin, judge in ROWS:
+        psp, pclock = frames(os.path.join(captures, capture + ".bin.xz"), pwin)
+        ours, oclock = frames(os.path.join(profiles, scene + ".bin"), owin)
+        if not psp:
             continue
-        miss = None if ours is None else ours / psp - 1
-        verdict = "-"
-        if miss is not None:
-            verdict = "passes" if abs(miss) <= BAR else ("too slow" if miss > 0 else "too fast")
-            if not judge:
-                verdict += " (not judged)"
-            else:
-                judged.append(miss)
-                failed |= abs(miss) > BAR
-        print("| %s | %s | %.2f ms (%s) | %s | %s | %s |" % (what, capture, psp, pclock,
-              "-" if ours is None else "%.2f ms (%s)" % (ours, oclock),
-              "-" if miss is None else "%+.0f%%" % (100 * miss), verdict))
-    if judged:
-        print("\njudged: %d; within 15%%: %d; most too slow %+.0f%%; median miss %.1f%%" % (
-            len(judged), sum(abs(m) <= BAR for m in judged), 100 * max(judged),
-            100 * statistics.median(abs(m) for m in judged)))
+        rows = []
+        count = len(psp[0])
+        same = bool(ours) and len(ours[0]) == count
+        for place in range(count):
+            a = statistics.median(f[place] for f in psp)
+            b = statistics.median(f[place] for f in ours) if same else None
+            rows.append(("%d of %d" % (place + 1, count), a, b))
+        a = statistics.median(sum(f) for f in psp)
+        b = statistics.median(sum(f) for f in ours) if ours else None
+        rows.append(("frame", a, b))
+        for n, (label, a, b) in enumerate(rows):
+            miss = None if b is None else b / a - 1
+            mark = "-"
+            if miss is not None:
+                mark = verdict(miss)
+                if not judge:
+                    mark = "not judged (%s)" % mark
+                else:
+                    (framed if label == "frame" else lists).append(miss)
+                    failed |= abs(miss) > BAR
+            print("| %s | %s | %s | %.2f ms%s | %s | %s | %s |" % (
+                what if n == 0 else "", capture if n == 0 else "", label, a, " (%s)" % pclock if n == 0 else "",
+                "-" if b is None else "%.2f ms%s" % (b, " (%s)" % oclock if n == 0 else ""),
+                "-" if miss is None else "%+.1f%%" % (100 * miss), mark))
+    for name, misses in (("lists", lists), ("frames", framed)):
+        if misses:
+            print("judged %s: %d; within 15%%: %d; most too slow %+.0f%%; median miss %.1f%%" % (
+                name, len(misses), sum(abs(m) <= BAR for m in misses), 100 * max(misses),
+                100 * statistics.median(abs(m) for m in misses)))
     return 1 if failed else 0
 
 

@@ -73,35 +73,39 @@ edit("ares/psp/ge/draw.cpp", '''  f64 back = Cost::Primitive;
     }
     if(p.format == 3 && (p.clear ? p.clearDepth : p.depthTest)) back += f64(pixels) * Cost::DepthPixel,
       geterms::add("B", "DepthPixel", f64(pixels));''')
-edit("ares/psp/ge/draw.cpp", '''    cachedTexture = now;
-    return bytes * Cost::LoadByte[vram ? 2 : t.swizzled ? 0 : 1];''', '''    cachedTexture = now;
-    geterms::add("B", geterms::indexed("LoadByte", {vram ? 2u : t.swizzled ? 0u : 1u}), bytes);
-    return bytes * Cost::LoadByte[vram ? 2 : t.swizzled ? 0 : 1];''')
-edit("ares/psp/ge/draw.cpp", '''  if(t.format >= 8) return fetched * Cost::CompressedByte;''',
-     '''  if(t.format >= 8) return geterms::add("B", "CompressedByte", fetched), fetched * Cost::CompressedByte;''')
-edit("ares/psp/ge/draw.cpp", '''  if(!sprite && !indices) return fetched * Cost::TriangleTexelByte[from][wide];
-  return fetched * Cost::TexelByte[indices][from][wide];''', '''  if(!sprite && !indices) {
-    geterms::add("B", geterms::indexed("TriangleTexelByte", {from, wide ? 1u : 0u}), fetched);
-    return fetched * Cost::TriangleTexelByte[from][wide];
-  }
-  geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, wide ? 1u : 0u}), fetched);
-  return fetched * Cost::TexelByte[indices][from][wide];''')
+edit("ares/psp/ge/draw.cpp", '''      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * Cost::FetchByte[(vram ? 2 : 0) + !t.swizzled];''',
+     '''      clocks = (c.fetched ? 0 : Cost::FetchFixed) + fresh * Cost::FetchByte[(vram ? 2 : 0) + !t.swizzled];
+      if(!c.fetched) geterms::add("B", "FetchFixed", 1);
+      geterms::add("B", geterms::indexed("FetchByte", {(vram ? 2u : 0u) + !t.swizzled}), fresh);''')
+edit("ares/psp/ge/draw.cpp", '''  if(t.format >= 8) return wide * Cost::CompressedByte;''',
+     '''  if(t.format >= 8) return geterms::add("B", "CompressedByte", wide), wide * Cost::CompressedByte;''')
+edit("ares/psp/ge/draw.cpp", '''  return (1 - rowsWide) * narrow * narrowRate + rowsWide * wide * Cost::TexelByte[indices][from][1];''',
+     '''  if(sprite) geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 0u}), (1 - rowsWide) * narrow);
+  else geterms::add("B", geterms::indexed("TriangleTexelByte", {indices ? 1u : 0u, from}), (1 - rowsWide) * narrow);
+  geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 1u}), rowsWide * wide);
+  return (1 - rowsWide) * narrow * narrowRate + rowsWide * wide * Cost::TexelByte[indices][from][1];''')
+edit("ares/psp/ge/draw.cpp", '''    if(physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow) back += share * Cost::RamShare;''',
+     '''    if(physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow) back += share * Cost::RamShare,
+      geterms::add("B", "RamShare", share);''')
 edit("ares/psp/ge/draw.cpp", '''  pipeItem(height * Cost::TransferRow + f64(width) * height * bytes * perByte, 1);''',
      '''  geterms::add("B", "TransferRow", height);
   geterms::add("B", geterms::indexed("TransferByte", {inVRAM(source) ? 1u : 0u, inVRAM(destination) ? 1u : 0u}),
                f64(width) * height * bytes);
   pipeItem(height * Cost::TransferRow + f64(width) * height * bytes * perByte, 1);''')
-edit("ares/psp/ge/texture.cpp", '''  if(pspTiming) pipeDrain(), pipeItem(bytes * Cost::PaletteByte, 1);''',
-     '''  if(pspTiming) pipeDrain(), pipeItem(bytes * Cost::PaletteByte, 1), geterms::add("B", "PaletteByte", bytes);''')
+edit("ares/psp/ge/texture.cpp", '''  if(pspTiming) pipeDrain(), pipeItem(Cost::PaletteLoad + bytes * Cost::PaletteByte, 1);''',
+     '''  if(pspTiming) pipeDrain(), pipeItem(Cost::PaletteLoad + bytes * Cost::PaletteByte, 1),
+    geterms::add("B", "PaletteLoad", 1), geterms::add("B", "PaletteByte", bytes);''')
 
 #the front end: a PRIM's own, its vertices, their lights and weights; jumps, calls, cuts, patches; words (per run)
 edit("ares/psp/ge/draw.cpp", '''  pipe.pending += pipe.vertices + Cost::Prim;
   pipe.vertices = 0;''', '''  pipe.pending += pipe.vertices + Cost::Prim;
   pipe.vertices = 0;
   geterms::add("F", "Prim", 1);''')
-edit("ares/psp/ge/draw.cpp", '''    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : f64(count) * format.size * Cost::VertexByte;''',
-     '''    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : f64(count) * format.size * Cost::VertexByte;
+edit("ares/psp/ge/draw.cpp", '''    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : count * each;''',
+     '''    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : count * each;
     if(format.indexFormat) geterms::add("F", "IndexedVertex", count);
+    else if(format.size == 3) geterms::add("F", "Vertex3", count);
+    else if(format.size * Cost::VertexByte < Cost::VertexFloor) geterms::add("F", "VertexFloor", count);
     else geterms::add("F", "VertexByte", f64(count) * format.size);''')
 edit("ares/psp/ge/draw.cpp", '''      f64 each = t.weights * Cost::Weight;
       for(auto& light : t.lights) {

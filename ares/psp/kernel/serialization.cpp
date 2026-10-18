@@ -1120,10 +1120,10 @@ auto Kernel::serialize(serializer& s) -> bool {
   if(s.reading()) geClearRuns();
   if(s.reading() && stateLayout < 24) geDoneAt = 0, geFinishDue = false;
   else s(geDoneAt), s(geFinishDue);
-  //the texture the GE's cache holds whole, for the PSP's GE timing (GE::owePrimitive(); layout 34 on: none in older
-  //states)
-  if(s.reading() && stateLayout < 34) ge.cachedTexture = {};
-  else s(ge.cachedTexture.address), s(ge.cachedTexture.format), s(ge.cachedTexture.size), s(ge.cachedTexture.held);
+  //the texels the GE's texture cache holds since the last TEX_FLUSH, for the PSP's GE timing (GE::texelClocks(); layout
+  //34 on: none in older states)
+  if(s.reading() && stateLayout < 34) ge.texelCache = {};
+  else s(ge.texelCache.u0), s(ge.texelCache.v0), s(ge.texelCache.u1), s(ge.texelCache.v1), s(ge.texelCache.fetched);
   //when the GE's front end will have got through what it was given, and whether, with the PSP's timing, the list it
   //runs has met a SIGNAL whose interrupt waits for that (layout 34 on: an older layout's were taken the moment the
   //GE met them)

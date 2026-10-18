@@ -623,9 +623,9 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
 //the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
 //memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 34
-//since the PSP's GE timing keeps its state (part 106): the texture the GE's cache holds whole, when the GE's front end
-//reaches a SIGNAL and whether one is due, and the list's pipeline (when its times count from, when its front end and
-//back end are done, its queue's items); 33 since the display keeps a frame buffer set for the next vertical blank,
+//since the PSP's GE timing keeps its state (part 106): the texels the GE's texture cache holds since a TEX_FLUSH,
+//when the GE's front end reaches a SIGNAL and whether one is due, and the list's pipeline (when its times count from,
+//when its front end and back end are done, its queue's items); 33 since the display keeps a frame buffer set for the next vertical blank,
 //shown from its start (part 108); 32
 //since an open memory stick file emptied as it was opened keeps the PSP's length of it and its host file's length,
 //the host file keeping the bytes past them until it's cut (part 95); 31 since the kernel keeps sceVaudio's hold on the
@@ -671,7 +671,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //list, 15 to 26 with no glyph held by a font nor being read into one, 15 to 27 with no module's imported variables
 //known (none linked, as those builds left them), 15 to 28 with sceVaudio holding nothing, 15 to 31 with no file
 //emptied as it was opened keeping its host file's bytes, 15 to 32 with no frame buffer waiting for a vertical blank,
-//and 15 to 33 with no texture held in the GE's cache, no SIGNAL due and the PSP's GE timing's pipeline empty; 29 and
+//and 15 to 33 with the GE's texture cache empty, no SIGNAL due and the PSP's GE timing's pipeline empty; 29 and
 //30 (other branches' layouts) and older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
 static constexpr u32 StateVersion = 34;

@@ -138,7 +138,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
     case TransferStart:          transfer(), undrawn = ~0u; break;  //(after the drawing it depends on: threads.cpp)
     case ClutLoad:               loadClut(); break;
-    case TextureFlush:           cachedTexture.held = false; break;  //(the GE's time: its cache emptied, Cost)
+    case TextureFlush:           texelCache = {}; break;  //(the GE's time: its cache emptied, Cost)
     }
   }
   return Stop::Busy;

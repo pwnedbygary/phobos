@@ -356,6 +356,47 @@ auto round6Files() -> std::filesystem::path {
   return round6Kept->path;
 }
 
+//Rounds 8's and 9's GE timing files as this core writes them, for measured8.cpp's comparisons with the owner's PSP, the
+//same way: the program's round alone (line, its last file last) once, with the GE timed as the PSP's.
+template<size_t N>
+static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* last, const TimingFile8 (&files)[N],
+                       const char* manifest) -> std::filesystem::path {
+  if(kept) return kept->path;
+  auto program = testProgram("pspmeasure.elf");
+  if(program.empty()) return {};
+  HostFolder stick;
+  auto game = stick.path / "PSP/GAME/PSPMEASURE";
+  std::filesystem::create_directories(game);
+  KernelMachine m;
+  m.system.recompiler.enabled = true;
+  m.kernel.gePspTiming = true;
+  m.system.threadGE(false);
+  m.kernel.mount("ms0", stick.path.string());
+  std::string error;
+  bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
+  CHECK(loaded, true);
+  if(!loaded) return {};
+  auto results = game / "results" / "ge";
+  move(m, 0, line);
+  press(m, Cross);
+  CHECK(waitFor(m, 20000, [&] { return std::filesystem::exists(results / last); }), true);
+  kept = std::make_unique<HostFolder>();
+  std::vector<std::string> names = {manifest};
+  for(auto& file : files) names.push_back(std::string(file.name) + ".bin");
+  for(auto& name : names) {
+    std::error_code error;
+    std::filesystem::copy_file(results / name, kept->path / name, error);
+  }
+  return kept->path;
+}
+static std::unique_ptr<HostFolder> round8Kept, round9Kept;
+auto round8Files() -> std::filesystem::path {
+  return timedRound(round8Kept, GeRound8Line, "cpu-clocks.bin", timingFiles8, "manifest8.txt");
+}
+auto round9Files() -> std::filesystem::path {
+  return timedRound(round9Kept, GeRound9Line, "time-formats.bin", timingFiles9, "manifest9.txt");
+}
+
 static auto pspMeasure() -> void {
   auto program = testProgram("pspmeasure.elf");
   if(program.empty()) return;

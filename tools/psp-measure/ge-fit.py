@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The GE timing model's fit (GE::Cost, docs/psp-core.md parts 76 and 106) to the owner's timed lists, in Python alone
-(no numpy). Inputs, for each round (6 and 8): the terms of each run of the GE as a runner counted them (ge-terms.py's
+(no numpy). Inputs, for each round (6, 8 and 9): the terms of each run of the GE as a runner counted them (ge-terms.py's
 PHOBOS_GE_TERMS file, the program's round run with the GE timing "PSP"), that run's own results folder (its records
 say how many runs each case had) and the PSP's results folder (the median of each case's runs is the time to fit).
 
@@ -11,7 +11,8 @@ list started plus, for each run, the longer of its front end's terms and its bac
 same for a list of one kind of work; it lets the two ends overlap only as far as its queue). The fit is a least squares
 on the relative error; each run's longer end is taken from the last fit's coefficients until no run changes ends, as
 part 76 did; a term that would go below 0 is left out (0) and the rest fitted again. Lists whose CPU moves their stall
-address (time-lists' cases 2 and 3) are left out.
+address (time-lists' and time-lists2's cases 2 and 3) are left out; time-anchors (round 8's cases again, on round 9's
+day) and the cases OUTSIDE names are checks, not fitted: their misses are shown apart.
 
 usage: ge-fit.py PSP_RESULTS TERMS OURS [TERMS OURS ...] [--fix TERM=VALUE,...] [--show N]
 prints each term's fitted value (GE::Cost's names), the median miss by test, and the furthest lists"""
@@ -22,6 +23,13 @@ import sys
 
 UNFINISHED = 0xffffffff
 SPACING = 16384 * 4  #ge.c's ListSpacing: case 1's lists, queued at once
+CHECKS = {"time-anchors"}
+#Cases whose texels the model can't follow, shown as checks: 3D squares in perspective (round 8's time-textures 13-15
+#and round 6's time-fill 39: v changes along each pixel row; time-fill 38, the same at w 1, takes 1.8 times as long)
+#and turned a quarter (time-textures 16-18: the rows run down the texture's columns), which the PSP reads at a fraction
+#of the wide rows' rate, and mipmapped squares (time-textures 10-12: level 1 of a 256x256 texture, 4.5 times a 1:1
+#strip as wide) (docs/psp-core.md, part 106).
+OUTSIDE = {("time-textures", c) for c in range(10, 19)} | {("time-fill", 39)}
 
 
 def records(path):
@@ -94,7 +102,7 @@ def load(psp, pairs):
             for c, s, cpu, bus, runs in mine:
                 group = groups[at + len(runs) - 1]  #(the last run: the cache as a run finds it)
                 at += len(runs)
-                if test == "time-lists" and c in (2, 3):
+                if test in ("time-lists", "time-lists2") and c in (2, 3):
                     continue
                 read = {(222, 166): 221, (266, 133): 265}.get((cpu, bus), cpu)
                 psp_runs = theirs.get((c, s, read, bus)) or theirs.get((c, s, cpu, bus))
@@ -103,7 +111,8 @@ def load(psp, pairs):
                     continue
                 sides = [({k[2:]: v for k, v in run.items() if k.startswith("F.")},
                           {k[2:]: v for k, v in run.items() if k.startswith("B.")}) for run in group[0]]
-                recs.append({"key": (test, c, s, cpu, bus), "y": t * bus, "lists": group[1], "runs": sides})
+                recs.append({"key": (test, c, s, cpu, bus), "y": t * bus, "lists": group[1], "runs": sides,
+                             "check": test in CHECKS or (test, c) in OUTSIDE})
     return recs
 
 
@@ -193,6 +202,8 @@ def main(argv):
         print(__doc__)
         return 2
     recs = load(args[0], list(zip(args[1::2], args[2::2])))
+    checks = [r for r in recs if r["check"]]
+    recs = [r for r in recs if not r["check"]]
     coef = fit(recs, fixed)
     seen = {"List"} | {k for r in recs for F, B in r["runs"] for k in list(F) + list(B)}
     for k in sorted(seen | set(coef)):
@@ -213,6 +224,11 @@ def main(argv):
                                                                             100 * sum(m <= .1 for m in v) / len(v)))
     for e, r in sorted(errors, key=lambda x: -abs(x[0]))[:show]:
         print("    %+6.0f%% %s" % (100 * e, r["key"]))
+    if checks:
+        print("checks (not fitted):")
+        for r in checks:
+            print("  %-16s case %2d size %4d at %d/%d: %+6.1f%%" % (r["key"][0], r["key"][1], r["key"][2], r["key"][3],
+                                                                  r["key"][4], 100 * (predict(r, coef) / r["y"] - 1)))
     return 0
 
 

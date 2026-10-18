@@ -16934,45 +16934,59 @@ library's presses):
 them run); the review's runs, mutations and experiments in `~/phobos-work/scratch/review-268/`. Nothing was run on
 the RP6.
 
-## Part 106: the GE's time as the owner's PSP took it — its two ends and the queue between them, fitted to rounds 6 and 8, behind the option "GE Timing" (off by default); the gate against the owner's captures; a SIGNAL's interrupt at its time
+## Part 106: the GE's time as the owner's PSP took it — its two ends and the queue between them, fitted to rounds 6, 8 and 9, behind the option "GE Timing" (off by default); the gate against the owner's captures, list by list and frame by frame; a SIGNAL's interrupt at its time
 
 On branch `cursor/psp-ge-time-2b67` (draft PR #269), from #266's branch (part 103, merged as `a014706e9`) on master
 `a8d5640f5` (part 101, #263), masters `dd63f4ffb` (parts 103 and 104, #266 and #267), `230c0a731` (part 105, #268)
 and `fe3deab82` (part 109, #272: the GE on a thread of its own; part 108, #271: the display's frame buffer for the
-next vertical sync; #273) merged in. The design the owner approved: the PSP's timing behind an option, off by default
+next vertical sync; #273), `14e8065dc` (part 107, #270: round 8) and `d428d91f9` (part 110, #276: round 9) merged in.
+The design the owner approved: the PSP's timing behind an option, off by default
 and switched in the app; on by default only once every captured scene is within 15%, none more than 15% too slow, and
-he holds this pull request until then. Sources: the owner's rounds 6 and 8 (parts 76 and 107; round 8's program and
-files are #270's) and his captures (part 103, and Sunday's with round 9, part 110); uOFW's reading of the GE driver.
+he holds this pull request until then. Sources: the owner's rounds 6, 8 and 9 (parts 76, 107 and 110) and his
+captures (part 103, and Sunday's with round 9, part 110); uOFW's reading of the GE driver.
 Clean room: our own code; no PPSSPP or JPCSP. Save states: layout 34 (#271 took 33). The first version (part 76's
 model) was reviewed (changes needed: "Fast" paid for "PSP", a SIGNAL lost its lead at a stall update, and neither the
-refit nor the gate could be run again from the repository); this is the round after round 8 and that review, with
-master's GE thread merged in.
+refit nor the gate could be run again from the repository); the round after round 8 and that review merged
+master's GE thread, and this round refits the model with round 9 (the owner's "the refit with round 9": the texels
+fetched after a TEX_FLUSH, the wide rows, a vertex's floor, a palette's load) and pairs the gate's lists by their place
+in the frame.
 
 ### The model (`GE::Cost` and `GE::Pipe`, ge.hpp; draw.cpp; kernel/ge.cpp)
 
-- **Two ends and a queue between them.** The front end reads the list (a word 2.32 clocks, a JUMP 41.3, a CALL or RET
-  23.3), takes each PRIM (59.9 of its own, however many primitives it draws), fetches its vertices (0.523 a byte in
-  order, 35.7 an indexed vertex: no cache of vertices), skins them (4.22 a weight), lights them (11.2 a point light
-  or spotlight, 1.43 more for a light's shine; a directional light nothing to speak of), cuts triangles at the near
-  plane (29.0) and makes curved surfaces' vertices (91.6 a patch, 13.8 a vertex). It hands each primitive on, and
-  each block transfer and palette load, as soon as the queue has room: 83 entries, a primitive one and one for each
-  of its vertices (a sprite three, a triangle four). A PRIM's vertex work is shared out among the primitives it draws
-  as they come. The back end takes each in turn: a primitive's rows, each at least 1.62; its pixels, 0.356 each up to
-  32 pixels wide, wider 0.541 into a 32-bit frame buffer and 0.333 into a 16-bit one, 0.190 more each for the depth
-  test into 32-bit; its texels; a transfer 35.5 a row and 0.34 to 0.88 a byte by where from and to; a palette 0.362 a
-  byte, once the queue has emptied. A list takes 2281 as it starts; the driver's own CPU time stays
-  (`sceGeListEnQueue` 5200 cycles, `sceGeListUpdateStallAddr` 510).
-- **Texels** (round 8's time-strips and time-textures, part 107). A texture of 8 KiB or less is held whole by the
-  cache and charged as it's loaded (0.132 a byte swizzled from RAM, 0.509 not, 0.497 from VRAM); a bigger one is read a
-  part at a time, so many bytes a pixel: the square root of the texels a pixel (at most 64), at the level TEX_LEVEL
-  picks. A sprite whose rows span 256 distinct texels (384 indices) reads wide, its rows over and over: 16- and 32-bit
-  texels 0.335 a byte swizzled from RAM (3.11 wide), 1.41 unswizzled up to 64 KiB, 1.73 over that (13.7 wide), 0.275
-  from VRAM (1.91); indices 0.39 to 1.55 (2.8 to 11.9 wide); DXT 20.3. Triangles read 16- and 32-bit texels at rates
-  of their own (sprites read along rows; triangles seem to go in blocks): wide 1.37 swizzled from RAM, 6.68
-  unswizzled, 0.770 from VRAM; narrow from an unswizzled texture up to 64 KiB 0.034 (time-overlap's 32x32 squares;
-  time-setup's 16x16 ones over a 64x64 texture took ten times as much, the cache's reuse, which the model doesn't
-  follow). No list in rounds 6 or 8 measured triangles reading narrow from swizzled RAM, from RAM over 64 KiB or from
-  VRAM (what games mostly draw): those take a sprite's rates, as before, and are round 9's first question.
+- **Two ends and a queue between them.** The front end reads the list (a word 2.34 clocks, a JUMP 41.8, a CALL or RET
+  22.1), takes each PRIM (60.2 of its own, however many primitives it draws), fetches its vertices (0.513 a byte in
+  order, at least 5.02 a vertex, 9.08 for the 3-byte format of 8-bit positions alone; 35.0 an indexed vertex: no
+  cache of vertices), skins them (4.28 a weight), lights them (11.2 a point light or spotlight, 1.49 more for a
+  light's shine; a directional light nothing to speak of), cuts triangles at the near plane (25.9) and makes curved
+  surfaces' vertices (92.7 a patch, 13.8 a vertex). It hands each primitive on, and each block transfer and palette
+  load, as soon as the queue has room: 83 entries, a primitive one and one for each of its vertices (a sprite three,
+  a triangle four). A PRIM's vertex work is shared out among the primitives it draws as they come. The back end takes
+  each in turn: a primitive's rows, each at least 1.82; its pixels, 0.334 each up to 32 pixels wide, wider 0.542 into
+  a 32-bit frame buffer and 0.332 into a 16-bit one, 0.185 more each for the depth test into 32-bit; its texels; a
+  transfer 34.8 a row and 0.34 to 0.88 a byte by where from and to; a palette 6.64 and 0.226 a byte (231 a KiB), once
+  the queue has emptied. A list takes 2350 as it starts; the driver's own CPU time stays (`sceGeListEnQueue` 5200
+  cycles, `sceGeListUpdateStallAddr` 510).
+- **Texels: what's fetched after a TEX_FLUSH** (round 9's time-loads, part 110). The GE's texture cache keeps the
+  texels it has fetched since the last TEX_FLUSH (`GE::texelCache`: a box at the level read, in whole fetches of 16
+  bytes across and, from a swizzled texture, 8 rows down). A primitive's texels (the box its corners' texture
+  coordinates make, at the level TEX_LEVEL picks: a mipmap's own) are fetched where the cache doesn't hold them, while
+  they fit in 8 KiB: 26.0 for the first fetch after a flush, then 0.495 a byte from swizzled RAM, 1.59 from
+  unswizzled RAM, 0.352 from swizzled VRAM and 0.404 from unswizzled VRAM. So a texture costs the texels read, not its
+  size (a 64x64 texture's 32x32 corner as the 32x32 texture), a texture drawn again, or another at the same texels,
+  without a flush costs nothing (the cache doesn't look at the address), meshes whose triangles share their texels
+  fetch them once (Super Monkey Ball's ten 5x5 triangles a list over one 32x32 corner of their texture), and an
+  8-texel CLUT8 strip fetches 16 texels a row. A primitive reading more than 8 KiB reads as its pixels take the texels
+  (round 8's rates, refitted): narrow, a pixel takes its texels up to 4 (shrunk 2:1: 2.8 to 3.4 times the 1:1 time,
+  time-tristrips 84 to 87; past 2:1 unmeasured, the square root's growth); 16- and 32-bit texels 0.374 a byte from
+  swizzled RAM for sprites (0.412 for triangles), 1.41 unswizzled up to 64 KiB, 1.73 over (triangles 1.88), 0.268
+  from VRAM (triangles 0.334); indices 0.32 to 1.45. A row reads wide past 140 distinct texels (270 indices: round
+  9's cliffs at 139 to 141 32-bit texels, 133 to 137.5 5650, about 270 CLUT8): a sprite's rows all span its width; a
+  triangle's split it, so a share 1 − (140/W)² of its pixels lie in rows past the cliff, read at a wide sprite's rate
+  (3.09 a byte from swizzled RAM, 13.7 unswizzled, 1.93 from VRAM; indices 2.20 to 11.9), the square root of the
+  texels a pixel. DXT 20.3 a byte.
+- **What the fit leaves the model at** (each a fitted term, part 110's leads): a RAM-textured primitive's vertex
+  reads add 0.0602 of their clocks to its back end (`RamShare`: the two share the RAM, but the fit finds little
+  beyond the other terms), a palette's load 6.64 of its own.
 - **Carried from run to run.** A list's pipeline (both ends' times and the queue's items) stays from one run of the GE
   to the next, through stall updates and SIGNALs: `Kernel::gePipeAt` and `geResume()` move it on to when the GE goes
   on, the items drawn meanwhile leaving the queue; a new list starts it afresh once the last list is drawn. Pixels are
@@ -16985,28 +16999,37 @@ master's GE thread merged in.
   transfers' rows and bytes; the core carries no counting code); `ge-fit.py` fits the clocks to the PSP's times, in
   Python alone: least squares on the relative error, each run of the GE its longer end, taken from the last fit's
   clocks until no run changes ends (part 76's way), and a term that would go below 0 left out. `GE::Cost` is its fit
-  of rounds 6 and 8 to three figures, from this branch's runner with `ge-terms.py` (tools/psp-measure/README.md, "The
-  GE timing's fit"), with no term held fixed:
+  of rounds 6, 8 and 9 to three figures, from this branch's runner with `ge-terms.py` (tools/psp-measure/README.md,
+  "The GE timing's fit"; round 9's program, its menu's lines 1, 2 and 4), with no term held fixed:
 
   ```
-  python3 tools/psp-measure/ge-fit.py PSP_RESULTS r8.txt ours8 r6.txt ours6
+  python3 tools/psp-measure/ge-fit.py PSP_RESULTS r9.txt ours9 r8.txt ours8 r6.txt ours6
   ```
 
-  The fit leaves out a primitive's setup (`Primitive`, 0: it hides behind its rows). Besides the triangles' rates
-  above, it has no list for sprites reading wide from unswizzled textures up to 64 KiB (taken as over 64 KiB). The
-  queue (83 entries, from time-signals2) and the driver's cycles are measured, not fitted.
-- Against the PSP's medians, as the fit reckons them: round 6's 906 lists 4.7% at the median (72% within 10%, 90%
-  within 25%), round 8's 1,148 6.1% (69%, 90%); the core's own runs of both rounds (the pipeline itself, its queue
-  and all) 4.8% (72%, 89%) and 6.0% (69%, 91%). Round 8's strips 4.2% at the median, its pixels 2.1%, its copies of
-  the captured scenes 4.4%; furthest out, vertices with 8-bit positions (4.5 times as long on the PSP; 16-bit 1.5
-  times, floats as fitted), a directional light's shine (2.3 times), time-setup's 16x16 textured squares (3 times),
-  triangles shrinking a texture in 3D (time-textures 9 to 12: 1.6 to 1.9 times), and a texture of its own for each
-  sprite (time-textures 19 to 24: 7.6 microseconds a sprite on the PSP whatever the texture's size, 1, 4 or 16 KiB,
-  where the model charges by size: 0.6 to 1.1 times). Round 6's own lists moved too where round 8 disagreed with them:
-  a new 4 KiB texture for each sprite (time-texcache 50), within 2% with part 76's load rate (1.41 clocks a byte),
-  now 2.5 times as long on the PSP (round 8's 1 KiB reloads, 374 clocks, set 0.509), and four point lights fading with
-  their shine (time-primitives 13) 1.3 times. A texture's load wants a model of its own (not by the byte), and a
-  light's shine its own rate by the light's kind.
+  The fit is its own fixed point: a runner built with these constants gives the same fit to three figures (RamShare
+  0.0602 to 0.0603; the floor of a vertex and RamShare moved once from the first runner's guesses, 10-byte vertices
+  then counted by their bytes). It leaves out a primitive's setup (`Primitive`, 0: it hides behind its rows). Not
+  fitted, for want of a list: sprites reading wide from unswizzled textures up to 64 KiB (taken as over 64 KiB) and
+  triangles reading narrow from one, or indices from unswizzled RAM (a sprite's rates). Measured, not fitted: the
+  queue (83 entries, time-signals2), the driver's cycles, the cache's 8 KiB and its fetches' 16 bytes and 8 rows, the
+  wide rows' 140 and 270 texels, the 2:1 shrink's limit. `time-lists`' and `time-lists2`'s cases 2 and 3 are left out
+  (the CPU moves their stall addresses), and so are ten cases the model's texels can't follow, shown as checks:
+  round 8's 3D squares in perspective (time-textures 13 to 15, and round 6's time-fill 39: v changes along each pixel
+  row, and the PSP takes them in about half the time of the same squares at w 1, time-fill 38 against 39: 654,290
+  clocks against 354,922), turned a quarter (16 to 18: the rows run down the texture's columns) and mipmapped (10 to
+  12: level 1 of a 256x256 texture, 4.5 times as long as a 1:1 strip of its width; part 110's small mipmaps fit).
+- Against the PSP's medians, as the fit reckons them: 2,832 lists 5.0% at the median (72% within 10%, 93% within 25%;
+  the first version's fit of rounds 6 and 8, 2,054 lists, 5.5%, 70% and 90%): round 6's 900 3.8% (75%, 93%), round 8's
+  1,112 4.9% (72%, 95%), round 9's 820 6.4% (70%, 92%); round 9's time-anchors (round 8's cases on round 9's day, a
+  check) 3.4%. The core's own runs (the pipeline itself, its queue and all; the refit's runner): round 6 3.9% (75%,
+  92%), round 8 4.6% (72%, 95%), round 9 6.3% (68%, 91%), time-lists2 the furthest (24.5% at the median: lists queued at
+  once, which the fit takes a run at a time). Round 9's tests: the triangles 6.0%, the loads 8.1%, the vertex formats
+  6.1%. What moved: a new 4 KiB texture for each sprite (round 6's time-texcache 50) from 2.5 times as long on the PSP
+  to within 10 to 14% (the texels fetched after each flush), Super Monkey Ball's CALLed lists (round 8's time-scenes 5)
+  from −24% to −12%, round 8's sprites with their own textures within 0 to 9%, the wide sprites' pixels (time-pixels)
+  2.3%. The furthest left: 8-texel strips of CLUT8 from VRAM (−50%: the 16-texel fetch isn't all of it), round 6's
+  transfers 2 to 4 (+50 to +66%), round 8's vertex case 22 (−56%), time-setup's 16x16 squares (15.7% at the median), and
+  the outside cases (perspective +80 to +154%, turned +39 to +53%, mipmapped −75 to −80%).
 
 ### The option, and "Fast"'s cost
 
@@ -17036,12 +17059,13 @@ master's GE thread merged in.
   construction (measured: Checks, below); a test ("the GE's thread and the PSP's GE timing",
   tests/psp/ares/system.cpp) has the system refuse the thread with "PSP", even when asked again, and start it with
   "Fast", and the test machines that time the GE as the PSP's turn their thread off as the system would.
-- Save states: layout 34 (#271's display took 33) adds 22 bytes (the GE's cached texture, 13; when its front end
-  reaches a SIGNAL, 8, and whether one is due, 1: the first version said 13 and 1 here and 14 in its tests) and the
-  pipeline: 28 more (when its times count from, the two ends' times, the queue's count) and 16 for each item queued.
-  "Fast" leaves the queue empty, so a "Fast" state is master's with 50 bytes put in. Older layouts load with none of
-  them (an empty pipeline), master's layout 33 among them; master refuses a layout-34 state at its header check,
-  before anything of the machine changes.
+- Save states: layout 34 (#271's display took 33) adds 18 bytes (the texels the GE's texture cache holds since its last
+  TEX_FLUSH, a box and whether it has fetched, 9; when its front end reaches a SIGNAL, 8, and whether one is due, 1) and
+  the pipeline: 28 more (when its times count from, the two ends' times, the queue's count) and 16 for each item queued.
+  "Fast" leaves the queue empty, so a "Fast" state is master's with 46 bytes put in. (This draft's layout 34 first held
+  the cached texture, 13 bytes, for 50 in all; round 9's refit, below, replaced it before any merge.) Older layouts load
+  with none of them (an empty pipeline), master's layout 33 among them; master refuses a layout-34 state at its header
+  check, before anything of the machine changes.
 
 ### A SIGNAL at its time
 
@@ -17056,92 +17080,154 @@ master's GE thread merged in.
   as GU gives a list built as it's drawn, had its SIGNAL at its drawing's end (the review's experiment: 24 sprites of
   64x32 with a SIGNAL after them, at 333/166, the SIGNAL 22,049 cycles in given whole and 58,298, the drawing's end,
   given in parts). Now the pipeline is carried from run to run (`geResume()`), and the SIGNAL keeps its lead however
-  the list comes: given whole, 8,440 cycles in, the drawing going on to 58,110; as the sprites' part and then the
-  SIGNAL's, 9,065, the drawing to 58,734; a part for each sprite, as the last stall update's call returns (the front
-  end there 9 cycles after it), 17,950, the drawing to 58,734.
+  the list comes: given whole, 8,585 cycles in, the drawing going on to 58,347; as the sprites' part and then the
+  SIGNAL's, 9,071, the drawing to 58,833; a part for each sprite, as the last stall update's call returns, 17,950, the
+  drawing to 58,833 (the refit's clocks; the last version's were 8,440, 9,065 and 17,950, to 58,110 and 58,734).
 - With the display switching at the next vblank as a PSP's does (part 108, PR #271), Army of Two flips twice and
   waits for the vblank once a frame, as on the PSP: 30 fps while the GE takes up to about 32.6 ms a frame, 20 above.
 
 ### The gate (`tools/psp-ge-profile/decoder/gate.py`)
 
-The owner's 18 captures of six games (`tests/psp/measurements/ge-captures`: Friday's 12, and Sunday's 6 taken with
-round 9, part 110: `UCUS98646-r9-1` to `-5`, Killzone in one session 60, 78, 159, 322 and 443 s in, and
-`ULUS10186-r9-1`, Activision Hits' 3D menu idle at the `ahr-menu` state's moment) beside Phobos's profiles of the same
-scenes with the GE timing "PSP" (the runner on Software with 2 GE threads, 900 frames from each scene's state, the
-profile from frame 301; Activision Hits' copyright screen 360 frames from frame 1; the merged head's runner). The first
-comparison's measure (a list's GE time, from when the GE could begin it to its FINISH: the median over each window of
-whole seconds), windows and pairs. Killzone is judged at `kz-gp`'s moment, the courtyard standing still (Friday's -1
-and Sunday's -1, which the owner confirmed: Sunday's repeats Friday's, 23.89 against 24.31 ms), its scene list and its
-full-screen list; the rest of its level (Friday's -2, Sunday's -2 to -5) is more demanding gameplay Phobos has no state
-of, shown as other moments as Ghost of Sparta's later scenes and Army of Two's are: there the PSP's scene list took
-24.50 to 32.47 ms, 10 to 32% above Phobos's courtyard (not a like-for-like comparison, but the spread of the level).
+The owner's 18 captures of six games (`tests/psp/measurements/ge-captures`: Friday's 12, and Sunday's 6 taken with round
+9, part 110: `UCUS98646-r9-1` to `-5`, Killzone in one session 60, 78, 159, 322 and 443 s in, and `ULUS10186-r9-1`,
+Activision Hits' 3D menu idle at the `ahr-menu` state's moment) beside Phobos's profiles of the same scenes with the GE
+timing "PSP" (the runner on Software with 2 GE threads, 900 frames from each scene's state, the profile from frame 301;
+Activision Hits' copyright screen 360 frames from frame 1; the refit's runner). A list's GE time is from when the GE
+could begin it to its FINISH, as before; lists are now paired by their place in the frame (the owner's item 2). A frame
+is the lists queued between two flips: a `sceDisplaySetFrameBuf` to another buffer than the call before, or every call
+where a game keeps one buffer, as Killzone does (`geprof.py`'s flips); a list's place is its order in its frame. In the
+frames holding the scene's usual count of lists (the commonest; a frame cut by the window's edge, or with a list more or
+less, is left out), each place's median over the window of whole seconds, the PSP's against Phobos's, and the median of
+the frames' totals the same way: Killzone's scene list and full-screen list are its places 1 and 2 of 2, Activision
+Hits' menu's lists 1 to 3 of 3, its copyright screen's 1 and 2 of 2, the others one list a frame. How they're told
+apart, checked for Activision Hits' menu (the list the first gate took, +100%): the furthest GE address sampled in each
+place's list buffer is the same on the PSP and in Phobos (place 1 11,852 bytes, place 2 980, place 3 9,292), so the
+places pair the same lists. The table gives each place and the frame; the 15% bar is unchanged, and which measure judges
+is the owner's to say. Killzone is judged at `kz-gp`'s moment, the courtyard standing still (Friday's -1 and Sunday's
+-1, which the owner confirmed: Sunday's repeats Friday's, 23.89 against 24.31 ms), its scene list and its full-screen
+list; the rest of its level (Friday's -2, Sunday's -2 to -5) is more demanding gameplay Phobos has no state of, shown as
+other moments as Ghost of Sparta's later scenes and Army of Two's are: there the PSP's scene list took 24.50 to 32.47
+ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like comparison, but the spread of the level).
 
-| Scene | Capture | PSP | Phobos, PSP timing | Against the PSP | 15% bar |
-| --- | --- | --- | --- | --- | --- |
-| Chains of Olympus, difficulty menu | UCUS98653-5 | 27.60 ms (333/166) | 24.14 ms (333/166) | −13% | passes |
-| Ghost of Sparta, main menu | UCUS98737-1 | 29.62 ms (333/166) | 23.52 ms (333/166) | −21% | too fast |
-| Ghost of Sparta, a later scene (another moment) | UCUS98737-2 | 32.93 ms (333/166) | 23.52 ms (333/166) | −29% | not judged (too fast) |
-| Ghost of Sparta, a later scene (another moment) | UCUS98737-3 | 31.72 ms (333/166) | 23.52 ms (333/166) | −26% | not judged (too fast) |
-| Super Monkey Ball Adventure, Story Mode | ULES00364-1 | 23.64 ms (222/111) | 16.30 ms (222/111) | −31% | too fast |
-| Killzone, the courtyard: scene list | UCUS98646-1 | 24.31 ms (222/111) | 22.09 ms (222/111) | −9% | passes |
-| Killzone, the courtyard: scene list | UCUS98646-r9-1 | 23.89 ms (222/111) | 22.09 ms (222/111) | −8% | passes |
-| Killzone, later in the level (another moment): scene list | UCUS98646-2 | 27.30 ms (222/111) | 22.09 ms (222/111) | −19% | not judged (too fast) |
-| Killzone, 78 s in (another moment): scene list | UCUS98646-r9-2 | 24.50 ms (222/111) | 22.09 ms (222/111) | −10% | not judged (passes) |
-| Killzone, 159 s in (another moment): scene list | UCUS98646-r9-3 | 28.84 ms (222/111) | 22.09 ms (222/111) | −23% | not judged (too fast) |
-| Killzone, 322 s in (another moment): scene list | UCUS98646-r9-4 | 32.47 ms (222/111) | 22.09 ms (222/111) | −32% | not judged (too fast) |
-| Killzone, 443 s in (another moment): scene list | UCUS98646-r9-5 | 29.37 ms (222/111) | 22.09 ms (222/111) | −25% | not judged (too fast) |
-| Killzone, the courtyard: full-screen list | UCUS98646-1 | 1.72 ms (222/111) | 1.71 ms (222/111) | −1% | passes |
-| Killzone, the courtyard: full-screen list | UCUS98646-r9-1 | 1.72 ms (222/111) | 1.71 ms (222/111) | −1% | passes |
-| Killzone, later in the level (another moment): full-screen list | UCUS98646-2 | 1.72 ms (222/111) | 1.71 ms (222/111) | −1% | not judged (passes) |
-| Activision Hits Remixed, 3D main menu | ULUS10186-menu | 5.41 ms (222/111) | 6.97 ms (222/111) | +29% | too slow |
-| Activision Hits Remixed, 3D main menu, idle | ULUS10186-r9-1 | 5.47 ms (222/111) | 6.97 ms (222/111) | +27% | too slow |
-| Activision Hits Remixed, copyright screen | ULUS10186-boot2 | 4.46 ms (333/166) | 4.37 ms (222/111) | −2% | passes |
-| Activision Hits Remixed, a first boot capture cut short | ULUS10186-boot1-cut | 1.07 ms (333/166) | 4.37 ms (222/111) | +308% | not judged (too slow) |
-| Army of Two, gameplay (another moment) | ULUS10472-1 | 31.85 ms (222/111) | 23.89 ms (222/111) | −25% | not judged (too fast) |
-| Army of Two, gameplay (another moment) | ULUS10472-2 | 32.65 ms (222/111) | 23.89 ms (222/111) | −27% | not judged (too fast) |
+| Scene | Capture | List | PSP | Phobos, PSP timing | Against the PSP | 15% bar |
+| --- | --- | --- | --- | --- | --- | --- |
+| Chains of Olympus, difficulty menu | UCUS98653-5 | 1 of 1 | 27.60 ms (333/166) | 25.88 ms (333/166) | −6.2% | passes |
+|  |  | frame | 27.60 ms | 25.88 ms | −6.2% | passes |
+| Ghost of Sparta, main menu | UCUS98737-1 | 1 of 1 | 29.62 ms (333/166) | 26.42 ms (333/166) | −10.8% | passes |
+|  |  | frame | 29.62 ms | 26.42 ms | −10.8% | passes |
+| Ghost of Sparta, a later scene (another moment) | UCUS98737-2 | 1 of 1 | 32.93 ms (333/166) | 26.42 ms (333/166) | −19.8% | not judged (too fast) |
+|  |  | frame | 32.93 ms | 26.42 ms | −19.8% | not judged (too fast) |
+| Ghost of Sparta, a later scene (another moment) | UCUS98737-3 | 1 of 1 | 31.72 ms (333/166) | 26.42 ms (333/166) | −16.7% | not judged (too fast) |
+|  |  | frame | 31.72 ms | 26.42 ms | −16.7% | not judged (too fast) |
+| Super Monkey Ball Adventure, Story Mode | ULES00364-1 | 1 of 1 | 23.64 ms (222/111) | 16.56 ms (222/111) | −29.9% | too fast |
+|  |  | frame | 23.64 ms | 16.56 ms | −29.9% | too fast |
+| Killzone, the courtyard | UCUS98646-1 | 1 of 2 | 24.31 ms (222/111) | 20.95 ms (222/111) | −13.8% | passes |
+|  |  | 2 of 2 | 1.72 ms | 1.68 ms | −2.6% | passes |
+|  |  | frame | 26.03 ms | 22.62 ms | −13.1% | passes |
+| Killzone, the courtyard | UCUS98646-r9-1 | 1 of 2 | 23.89 ms (222/111) | 20.95 ms (222/111) | −12.3% | passes |
+|  |  | 2 of 2 | 1.72 ms | 1.68 ms | −2.7% | passes |
+|  |  | frame | 25.61 ms | 22.62 ms | −11.7% | passes |
+| Killzone, later in the level (another moment) | UCUS98646-2 | 1 of 2 | 27.30 ms (222/111) | 20.95 ms (222/111) | −23.3% | not judged (too fast) |
+|  |  | 2 of 2 | 1.72 ms | 1.68 ms | −2.6% | not judged (passes) |
+|  |  | frame | 29.02 ms | 22.62 ms | −22.0% | not judged (too fast) |
+| Killzone, 78 s in (another moment) | UCUS98646-r9-2 | 1 of 2 | 24.50 ms (222/111) | 20.95 ms (222/111) | −14.5% | not judged (passes) |
+|  |  | 2 of 2 | 1.72 ms | 1.68 ms | −2.6% | not judged (passes) |
+|  |  | frame | 26.20 ms | 22.62 ms | −13.7% | not judged (passes) |
+| Killzone, 159 s in (another moment) | UCUS98646-r9-3 | 1 of 2 | 28.84 ms (222/111) | 20.95 ms (222/111) | −27.4% | not judged (too fast) |
+|  |  | 2 of 2 | 1.72 ms | 1.68 ms | −2.7% | not judged (passes) |
+|  |  | frame | 30.56 ms | 22.62 ms | −26.0% | not judged (too fast) |
+| Killzone, 322 s in (another moment) | UCUS98646-r9-4 | 1 of 2 | 32.47 ms (222/111) | 20.95 ms (222/111) | −35.5% | not judged (too fast) |
+|  |  | 2 of 2 | 1.72 ms | 1.68 ms | −2.6% | not judged (passes) |
+|  |  | frame | 34.18 ms | 22.62 ms | −33.8% | not judged (too fast) |
+| Killzone, 443 s in (another moment) | UCUS98646-r9-5 | 1 of 2 | 29.37 ms (222/111) | 20.95 ms (222/111) | −28.7% | not judged (too fast) |
+|  |  | 2 of 2 | 1.72 ms | 1.68 ms | −2.7% | not judged (passes) |
+|  |  | frame | 31.08 ms | 22.62 ms | −27.2% | not judged (too fast) |
+| Activision Hits Remixed, 3D main menu | ULUS10186-menu | 1 of 3 | 21.20 ms (222/111) | 17.09 ms (222/111) | −19.4% | too fast |
+|  |  | 2 of 3 | 3.48 ms | 5.42 ms | +55.7% | too slow |
+|  |  | 3 of 3 | 5.40 ms | 5.97 ms | +10.5% | passes |
+|  |  | frame | 30.30 ms | 28.49 ms | −6.0% | passes |
+| Activision Hits Remixed, 3D main menu, idle | ULUS10186-r9-1 | 1 of 3 | 21.25 ms (222/111) | 17.09 ms (222/111) | −19.6% | too fast |
+|  |  | 2 of 3 | 3.48 ms | 5.42 ms | +55.8% | too slow |
+|  |  | 3 of 3 | 5.47 ms | 5.97 ms | +9.1% | passes |
+|  |  | frame | 30.39 ms | 28.49 ms | −6.3% | passes |
+| Activision Hits Remixed, copyright screen | ULUS10186-boot2 | 1 of 2 | 0.96 ms (333/166) | 0.89 ms (222/111) | −8.3% | passes |
+|  |  | 2 of 2 | 8.14 ms | 6.19 ms | −23.9% | too fast |
+|  |  | frame | 9.10 ms | 7.08 ms | −22.2% | too fast |
+| Activision Hits Remixed, a first boot capture cut short | ULUS10186-boot1-cut | 1 of 2 | 0.96 ms (333/166) | 0.89 ms (222/111) | −8.3% | not judged (passes) |
+|  |  | 2 of 2 | 8.11 ms | 6.19 ms | −23.6% | not judged (too fast) |
+|  |  | frame | 9.08 ms | 7.08 ms | −22.0% | not judged (too fast) |
+| Army of Two, gameplay (another moment) | ULUS10472-1 | 1 of 1 | 31.85 ms (222/111) | 24.79 ms (222/111) | −22.2% | not judged (too fast) |
+|  |  | frame | 31.85 ms | 24.79 ms | −22.2% | not judged (too fast) |
+| Army of Two, gameplay (another moment) | ULUS10472-2 | 1 of 1 | 32.64 ms (222/111) | 24.79 ms (222/111) | −24.1% | not judged (too fast) |
+|  |  | frame | 32.64 ms | 24.79 ms | −24.1% | not judged (too fast) |
 
-- **6 of the 10 judged rows within 15%; the gate fails, and the merge stays held.** Too fast: Ghost of Sparta's menu
-  (−21%) and Super Monkey Ball (−31%); too slow: Activision Hits' 3D menu against both its captures (+29% and +27%):
-  Sunday's, idle at the state's moment, repeats Friday's (5.47 against 5.41 ms), so the miss is the model's. The first
-  version, by the same gate: 3 of 9 (Chains of Olympus +11%, Ghost of Sparta +3%, the copyright screen −9%),
-  Killzone's scene list +98% and +77% and its full-screen list +453%, Activision Hits' menu +138%, Super Monkey Ball
-  −59%. (The Activision Hits copyright screen's times are at 222/111 on both: the boot capture's 333/166 was read
-  before the game's program had set its own, part 104.)
-- **The failing rows' terms** (the merged model's terms over each scene, a runner with `ge-terms.py`):
-  - Activision Hits' 3D menu draws three lists a frame (Phobos 15.3, 7.0 and 3.5 ms; the PSP 21.2, 3.5 and 5.4 at the
-    median, the first growing over the capture as the menu moves); the gate's median is the second, a steady 3.5 ms
-    on the PSP and 7.0 here: 769,000 of the back end's clocks a list, 53% of them triangles reading narrow 16- and
-    32-bit texels from VRAM, the class rounds 6 and 8 never measured (taken at a sprite's rate, 0.275 a byte), the
-    rest narrow pixels (19%), a sprite's VRAM texels (12%) and palettes (11%). The PSP's whole list is 388,000 clocks,
-    where the model's pixels, palettes and the sprite's texels alone come to 338,000: on the PSP those triangles'
-    texels cost next to nothing. Round 9's time-tristrips measures that class.
-  - Super Monkey Ball's front end is the longer (1.26 million clocks a list: vertex bytes 22%, PRIMs 21%, words 10%,
-    CALLs 8%; the back end 0.77 million), and the PSP's list, 2.62 million, is longer than both ends added: what's
-    missing is work, not overlap. Round 9 has two candidates: a texture costs the texels read after each TEX_FLUSH (a
-    32x32 CLUT8 sprite's about 490 clocks where the model loads 1 KiB whole for 135) and a palette about 200 clocks a
-    kilobyte, and RAM-textured meshes share the RAM with their vertices (the model overlaps the two ends freely); its
-    copy of the game's lists (round 8's time-scenes 5) comes within 7% with them (part 110).
-  - Ghost of Sparta's menu is back-end bound but close (2.69 and 1.75 million clocks a list: 32-bit pixels 20%,
-    triangles' VRAM texels 10%, the depth test 9%, transfers 8%; vertex bytes 17%, skinning weights 9%). Round 9's
-    findings push both ways: a texture shrunk 2:1 while read narrow costs 2.8 to 3.4 times a pixel (the model's
-    square root, 2; it reads its frame buffers at two texels a pixel), and rows read wide from about 140 texels (the
-    model's 256), but its triangles' VRAM texels may cost next to nothing as Activision Hits' do. What's left would be
-    the CPU beside the GE (round 8's cpu-contention), the CPU timing's.
-- **Which misses are the model's**: round 8's copies of the scenes (time-scenes, each list alone, the CPU idle) fit
-  within 7% (Killzone's scene list +4 to +7%, its full-screen list within 2%, the copyright screen −3%, Activision
-  Hits' menu +4 to +6%, Chains of Olympus's +5%), but for Super Monkey Ball's, −24% (above). Killzone's courtyard, its
-  copy and Chains of Olympus within 15%; Ghost of Sparta's game lists longer on the PSP than its copy, as the RAM-heavy
-  scenes' are: the CPU beside the GE (round 8's cpu-contention: a thread reading RAM made the GE's RAM-textured
-  drawing 2.12 times as long), which the model leaves to the CPU's timing, a project of its own.
+- **The verdict: the gate fails, and the merge stays held.** By the frame (each frame's lists added): 6 of the 8
+  judged frames within 15%, none too slow (the worst −6%); too fast, Super Monkey Ball (−29.9%) and Activision Hits'
+  copyright screen (−22.2%). By the list: 9 of the 15 judged lists within 15%; too fast, Super Monkey Ball, the
+  copyright screen's second list (−23.9%) and Activision Hits' menu's first (−19.4% and −19.6%); too slow, the menu's
+  second (+55.7% and +55.8%). The last version, by the same pairing: frames 5 of 8 (Ghost of Sparta −21%, Activision
+  Hits' menu −15.1% idle), lists 7 of 15 (the menu's second +100%). Which measure judges is the owner's to say; the
+  list's has one too slow, the frame's none.
+- **What moved, and why** (each scene's terms, the refit's runner with `ge-terms.py`):
+  - Chains of Olympus −13% to −6% and Ghost of Sparta's menu −21% to −10.8%: the texels fetched as regions (their
+    RAM CLUT4 and CLUT8 textures, three quarters of their textured pixels from textures of 8 KiB or less: Ghost of
+    Sparta's VRAM fetches 26% of its back end), the vertex floor and the refitted pixels.
+  - Killzone's scene list −9% to −13.8% (Friday's) and −12.3% (Sunday's): its CLUT32 strips from VRAM read at the
+    refitted narrow rate (0.268 a byte for 0.275) and its pixels at 0.334 (0.356); its copy (round 8's time-scenes 0)
+    comes within 0 to 3%, so what the game adds is the CPU's (below).
+  - Activision Hits' menu: the second list +100% to +56%, its 720 CLUT32 triangles from VRAM (32 texels across) now
+    fetched as regions, 211,000 clocks where the last version streamed 431,000; the third −35% to +10.5% (its RAM
+    8888 triangles read wide by the row rule); the first −28% to −19%. The frame −15% to −6%.
+  - The copyright screen's second list −3.7% to −23.9%: it draws the 480x256 CLUT8 image twice, each time as
+    triangles (round 8's copy, time-scenes 2, draws it as one sprite, and fits within 1 to 5%). The PSP takes each
+    pass in what the copy's sprite takes (about 450,000 clocks); the row rule reads only 72% of a triangle's pixels
+    wide (1 − (270/480)²), where the last version read all of them wide. Round 9's two triangles over the same
+    texture (time-tristrips 34) fit the rule within 1%, into an 8888 frame buffer; the copyright screen draws into
+    5650, where a pixel costs less and the texels may show more. Not changed here: no round has timed it.
+- **Item 3, Activision Hits' second list against round 9's data.** My expectation (that narrow textured triangles
+  from VRAM cost nearly nothing) doesn't survive round 9: they cost about a sprite's (time-tristrips 14 to 27, within
+  3 to 25% of the sprites'). Part 110's leads don't fit this list either: its triangles are narrow (32 texels across,
+  not taken as wide), and each pass reads about 480 KiB of different texels (1 texel a pixel over 391,680 pixels),
+  far more than the cache holds. Yet the PSP's whole list is 386,000 clocks, and the model's pixels (145,000),
+  palettes (57,000) and sprites' texels (184,000) alone come to 386,000: on the PSP the triangles' texels cost next
+  to nothing. They're CLUT32 (32-bit indices), the one format no round has timed; a round could time the game's own
+  triangles alone.
+- **The fronts left too fast.** Activision Hits' menu's first list is front-end bound (1.26 million clocks a list
+  against the back end's 0.93 million: point lights 55% of the front end, PRIMs 15%, vertex bytes 11%, shine 7%):
+  four point lights fading with their shine are round 6's furthest light (time-primitives 13, −25.5%), so a light's
+  shine wants its own rate by the light's kind (part 76's note still). Super Monkey Ball's is front-end bound too
+  (1.22 million against 0.86: vertex bytes 36%, PRIMs 35%, words 16%, CALLs 12%), every part of it read from RAM; its
+  copy (time-scenes 5, the PSP's CPU idle) comes within 9 to 13%, the game 30% short.
+- **Ghost of Sparta's remainder (item 5).** Its menu passes now (−10.8%; its later scenes, not judged, −16.7% and
+  −19.8%). Its list comes whole (no stall updates), and the model's 26.4 ms are the pipeline's: the back end's work
+  19.6 ms a list (3.26 million clocks: 32-bit pixels 28%, VRAM fetches 26%, the depth test 12%, RAM-to-VRAM
+  transfers 11%), the front end's 10.4 ms (1.73 million: vertex bytes 42%, skinning weights 24%, PRIMs 16%), the rest
+  the two ends waiting on each other through the queue. What the model's terms can't explain is 3.2 ms a list (about
+  530,000 clocks, 11%), up to 20% at its later moments. That is about what the CPU beside the GE would cost: the
+  list's words and vertices (the front end's 1.73 million clocks) and a fifth of the back end's work (633,000 clocks:
+  RAM textures, transfers from RAM) read RAM, and round 8's cpu-contention had a CPU thread reading RAM make the GE's
+  RAM-textured drawing 2.12 times as long; on the PSP the CPU is busy 7 to 9 times as long a loop as Phobos's (part
+  103), so it reads RAM while the GE draws, and a slowdown of a fifth to two fifths of those reads covers the 530,000
+  clocks. The same reading fits the scenes whose copies fit and whose games don't (Super Monkey Ball, Killzone's
+  courtyard at −12 to −14% against its copy's 0 to 3%). That's the CPU timing's project (part 107's cpu-contention,
+  the CPU's own probes); nothing of it is built here.
 
 ### Tests
 
 - measured6's "measured round 6 GE time" and "measured round 6 driver statuses": the model against round 6's timed
   lists and the driver's statuses, round 6's program run with the PSP's timing (measure.cpp's `round6Files()`, its
-  machine's GE thread off): half within 5%, 72% within 10%, 89% within 25%, and the lists the model's terms rest on
-  within 2 to 10% (NOPs 21%, a strip 30%), but for two the joint fit moved from part 76's: four point lights fading
-  with their shine (−25%) and a new 4 KiB texture for each sprite (−60%: part 76 had a small texture's load at 1.41
-  clocks a byte, round 8's reloads put it at 0.509; a load isn't so much a byte).
+  machine's GE thread off): half within 5%, three quarters within 10%, nine in ten within 25%, and the lists the
+  model's terms rest on within 2 to 10% (a new 4 KiB texture for each sprite 12%, NOPs 22%, a strip 30%), but for four
+  point lights fading with their shine (−26%).
+- measured8's "measured round 8 GE time" and "measured round 9 GE time" (new, `tests/psp/measured8.cpp`): the same for
+  rounds 8 and 9 (`round8Files()`, `round9Files()`: the program's rounds run in the core with the PSP's timing;
+  `run-tests.sh` unpacks `ge-round8` and `ge-round9` into `PSP_GE_ROUND8` and `PSP_GE_ROUND9`, and CI requires both),
+  the cases `ge-fit.py` leaves out left out here too: round 8's 1,112 lists half within 5%, 72% within 10%, 95% within
+  25%, none off by 60%, its wide sprite from swizzled RAM within 4%, the textured fill 3%, a new 1 KiB texture for each
+  sprite 2%, Super Monkey Ball's CALLed lists 13%; round 9's 882 half within 7%, 68% within 10%, 91% within 25%, none
+  off by 65%, a new 32x32 CLUT8 texture for each sprite within 6%, a 256x256 one's 32x32 corner 5%, a palette of 256
+  colors before each sprite 16%, float and 8-bit vertices 4%, narrow VRAM triangles 7%, wide RAM ones 4%, shrunk 2:1
+  6%.
 - "ge time, the PSP's": a list's start, the driver's own time, the two ends and the queue, stall updates, PAUSE, SYNC,
   a list queued at the head, `sceGeBreak` at a FINISH, states; a SIGNAL waiting for its time, a state keeping it,
   "Fast" going past it at once. "... a SIGNAL's lead through stall updates": the 24 sprites given whole, as one part,
@@ -17150,11 +17236,18 @@ of, shown as other moments as Ghost of Sparta's later scenes and Army of Two's a
 - "the GE's thread and the PSP's GE timing" (tests/psp/ares/system.cpp): "GE Thread" On with "GE Timing" "PSP" leaves
   the thread unstarted, asked for again too; with "Fast" it starts.
 - "ge profile": the header's flag 16 with each timing; the decoder's test of the same (`test_geprof.py`).
-- The layout tests (states.cpp, font.cpp) with layout 34's 50 bytes (a "Fast" machine's) and #271's layout 33: a
+- The layout tests (states.cpp, font.cpp) with layout 34's 46 bytes (a "Fast" machine's) and #271's layout 33: a
   master layout-33 state loads, the loader resetting this branch's fields; master's tests otherwise cover "Fast".
 
 ### Checks
 
+- The refit (this round, on `d428d91f9` merged in):
+  - `tests/psp/run-tests.sh` (sanitized, the container-overflow check off as before): 616 groups, 0 failures with
+    the GE thread on (`PHOBOS_TESTS_GE_THREAD=On`); with it off, 615 passed and `measured6`'s textured fill came out
+    +2.0% against its 2% bound, set to 3% and passed alone. The ares tests 361 checks, 0 failed; `test_geprof.py` 24.
+  - The fit reproduced from the repository: a runner built from the tree with `ge-terms.py` gives `GE::Cost` back to
+    three figures (above); `gate.py`'s table is the refit's runner's profiles (the final constants but RamShare's
+    fourth figure).
 - The merged head (`fe3deab82` and then `14e8065dc` merged in; the bench runners, O3 with thin LTO, against master's):
   - "Fast" against master `fe3deab82`, the review's 33 scenes (every scene with a state), Software and Vulkan-fast,
     200 frames from each state, with the GE thread off and on (both runners `--ge-thread on`): 66 of 66 the same each
@@ -17178,16 +17271,45 @@ of, shown as other moments as Ghost of Sparta's later scenes and Army of Two's a
 
 ### Not yet
 
-- The refit with round 9 (#276, part 110): a texture by the texels read after a TEX_FLUSH and a palette's load,
-  triangles reading narrow (from VRAM above all: Activision Hits' list), a vertex's floor, the wide threshold; and
-  `measured8` (#270's program and this model, both in now).
+- What the refit can't follow, each a case for a round 10: triangles in perspective (half the time of the same at w
+  1) and turned a quarter, a big texture's mipmap (round 8's time-textures 10 to 18 and round 6's time-fill 39, left
+  out of the fit); triangles reading CLUT32 (Activision Hits' second list, its texels next to nothing on the PSP);
+  triangles reading wide into a 16-bit frame buffer (the copyright screen's, read like a sprite); a light's shine by
+  the light's kind (four point lights with their shine −26%); 8-texel CLUT8 strips from VRAM (−50%).
+- "Fast"'s last 0.2 to 0.6% on Vulkan-fast (the owner's item 6): each drawing function a template for each timing,
+  chosen once a PRIM, so "Fast" doesn't test the option a primitive. Not done in this round (it touches every
+  drawing function's signature and wants the exact checks against master again); a follow-up of its own.
 - Fixed-point charges in place of doubles, the design's step for determinism, before the default could change.
 - The CPU beside the GE: round 8's cpu-contention has a CPU thread reading RAM make the GE's RAM-textured drawing 2.12
   times as long (from VRAM about the same), and in every captured scene the PSP's CPU is busy far longer than
   Phobos's (part 103: 7 to 9 times a loop), so it overlaps the GE's drawing; the scenes drawing most from RAM come out
   short here. That's the CPU's timing, a project of its own.
-- "PSP" with the GE on its thread: the pipeline counted on the render GE and its runs folded in order, the SIGNAL's
-  reach waited for at each SIGNAL; not needed while "PSP" is for measuring.
+- "PSP" with the GE on its thread: a design below, not built while "PSP" is for measuring.
+
+### A threaded "PSP" (a design note; not built)
+
+What "PSP" would need to run with part 109's GE thread, the same bit for bit as on the emulation thread (for the GE
+thread's second pull request to weigh; nothing here is built):
+
+- **Each run's time travels with the run.** "Fast" hands each run over as a ring entry (`Kernel::GeRun`: the run's
+  number, the cycles and the bus's clock it started at) and folds the pixels and primitives the thread counted for it
+  later (`geFold()`), because a run's charge needs nothing but its own counts. "PSP"'s doesn't: a run's time is the
+  pipeline as the run before left it (`GE::Pipe`, `gePipeAt`), moved on to the run's start (`geResume()`), a list's
+  own time where one starts (`geOwe()`), then every primitive's share in order. All of that is known on the GE thread
+  once each entry also says whether a list starts with it (and the time the list before would be done, which the
+  thread has from its own last run). So the render GE would keep the pipeline, take each run's time in order as
+  `geTime()` does now, and leave in the run's entry the `geDoneAt` and `geReachAt` it came to, in place of the
+  pixels and primitives; `geFold()` would take those in order.
+- **Bounds while a run is under way** (`geBound()`): a pipeline only gets longer as primitives join it (the front
+  end's time and the back end's both grow), so the run's time so far is a lower bound for `geDoneAt`, as "Fast"'s
+  counts so far are, and the same for `geReachAt`.
+- **A SIGNAL** waits for the run that meets it to be folded before its interrupt is due (`geSignalDue` from that
+  run's `geReachAt`), or takes the bound while that's later than now. A FINISH as now (`geReached()`).
+- **States** wait for every run to be folded (as now) and save the pipeline from the render GE; the thread's GE
+  restored from it, as the synchronous GE's is.
+- **What it moves**: the per-primitive work of "PSP" (shares, texels, the queue) goes to the GE thread with the
+  drawing, off the emulation thread; the doubles are summed in the same order on either thread, so the times are
+  the same.
 
 ### Scratch
 
@@ -17197,7 +17319,12 @@ of, shown as other moments as Ghost of Sparta's later scenes and Army of Two's a
 `final/` (the cost against master, the exact check, the suites' summaries), `final.sh`; the master merge's
 `merge.sh` and `merge/` (the suites, the ares tests, the exact checks with the GE thread off and on, `pspthread/`),
 `gate-gate2.txt` (the merged head's table) and `sceneterms/` with `sceneterms.py` (the failing scenes' terms); the
-first model's in `../phase3/`. The review's in `~/phobos-work/scratch/review-269/`. Nothing was run on the RP6.
+first model's in `../phase3/`. The review's in `~/phobos-work/scratch/review-269/`. Round 9's refit: `terms9.sh`
+(a runner built with `ge-terms.py`, then rounds 9, 8 and 6 from round 9's EBOOT), `terms/terms3-*` to `terms8-*`
+(`terms8` the final constants' runner, its fit `fit-terms8.txt`, the fit's fixed point), `diag9.py`, `fitstats9.py`
+and `ours9.py` (the fit's and the core's misses by case and round), `gate-refit9.txt` and `scenes/refit9-*` (the
+gate), `sceneterms9/` and `sceneterms9.py` (the failing scenes' terms), `suites/` (the tests). Nothing was run on the
+RP6.
 
 ## Part 107: psp-measure round 8 — the GE's time where part 76's model misses the owner's captures, and the CPU's
 

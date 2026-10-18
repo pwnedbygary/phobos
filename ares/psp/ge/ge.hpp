@@ -760,65 +760,71 @@ struct GE {
   std::vector<u32> handed, handing;  //(handing: room for a PRIM's corners as they're found, handed over in runs)
 
   //What a PSP's GE takes over its work, in its clocks (the bus's, half the PLL's), as tools/psp-measure timed lists of
-  //known work on the owner's PSP: round 6's 906 and round 8's 1,148 (docs/psp-core.md, parts 76 and 106), at 222/111
-  //and 333/166 MHz (and some of round 8's at 333/222/166 and 266/133 too: the GE's time follows the bus's clock
-  //alone). The GE reads its list and fetches, transforms and lights vertices (its front end), and hands each primitive
-  //on to be set up and drawn (its back end): the two go on at once as far as the queue between them lets them (Pipe).
+  //known work on the owner's PSP: round 6's 906, round 8's 1,148 and round 9's 918 (docs/psp-core.md, parts 76, 106
+  //and 110), at 222/111 and 333/166 MHz (and some of rounds 8 and 9's at 333/222/166 and 266/133 too: the GE's time
+  //follows the bus's clock alone). The GE reads its list and fetches, transforms and lights vertices (its front end),
+  //and hands each primitive on to be set up and drawn (its back end): the two go on at once as far as the queue
+  //between them lets them (Pipe).
   //A list also takes some time of its own as it starts. Used with the option "GE Timing" "PSP"; "Fast", the default,
   //charges Sony's peak rates instead (owedPixels, owedPrimitives). The clocks are tools/psp-measure/ge-fit.py's fit of
-  //rounds 6 and 8 (to three figures; part 106 has the command), but where a comment says otherwise.
+  //rounds 6, 8 and 9 (to three figures; part 106 has the command), but where a comment says otherwise.
   struct Cost {
-    static constexpr f64 List = 2281;           //a list, as it starts
+    static constexpr f64 List = 2350;           //a list, as it starts
     //the front end
-    static constexpr f64 Command = 2.32;        //a word of the list
-    static constexpr f64 Jump = 41.3;           //JUMP (or BJUMP taken): the list fetched afresh
-    static constexpr f64 Call = 23.3;           //CALL, or RET
-    static constexpr f64 Prim = 59.9;           //PRIM, BEZIER or SPLINE: its own, however many primitives it draws
-    static constexpr f64 VertexByte = 0.523;    //a vertex's byte, fetched in order
-    static constexpr f64 IndexedVertex = 35.7;  //a vertex fetched through its index (one used again costs as much)
-    static constexpr f64 Weight = 4.22;         //a vertex's skinning weight
+    static constexpr f64 Command = 2.34;        //a word of the list
+    static constexpr f64 Jump = 41.8;           //JUMP (or BJUMP taken): the list fetched afresh
+    static constexpr f64 Call = 22.1;           //CALL, or RET
+    static constexpr f64 Prim = 60.2;           //PRIM, BEZIER or SPLINE: its own, however many primitives it draws
+    static constexpr f64 VertexByte = 0.513;    //a vertex's byte, fetched in order (round 9's time-formats: from 12
+    static constexpr f64 VertexFloor = 5.02;    //bytes up), at least this a vertex,
+    static constexpr f64 Vertex3 = 9.08;        //and the 3-byte format (8-bit positions alone) this
+    static constexpr f64 IndexedVertex = 35.0;  //a vertex fetched through its index (one used again costs as much)
+    static constexpr f64 Weight = 4.28;         //a vertex's skinning weight
     static constexpr f64 PointLight = 11.2;     //a vertex lit by a point light or a spotlight (a directional one's
                                                 //light costs nothing to speak of)
-    static constexpr f64 SpecularLight = 1.43;  //and by a light's shine
-    static constexpr f64 Cut = 29.0;            //a triangle cut at the near plane
-    static constexpr f64 Patch = 91.6, PatchVertex = 13.8;  //a curved surface's patch, and each vertex made
+    static constexpr f64 SpecularLight = 1.49;  //and by a light's shine
+    static constexpr f64 Cut = 25.9;            //a triangle cut at the near plane
+    static constexpr f64 Patch = 92.7, PatchVertex = 13.8;  //a curved surface's patch, and each vertex made
     //the back end
     static constexpr f64 Primitive = 0;         //a primitive set up (the fit leaves it out: it hides behind its rows)
-    static constexpr f64 Row = 1.62;            //the least a row of a primitive's pixels takes
+    static constexpr f64 Row = 1.82;            //the least a row of a primitive's pixels takes
     static constexpr s64 NarrowColumns = 32;    //a primitive at most this many pixels wide takes NarrowPixel (round
                                                 //6's time-sizes: 32 wide and narrower alike a pixel)
-    static constexpr f64 NarrowPixel = 0.356;   //a pixel of a narrow primitive
-    static constexpr f64 Pixel32 = 0.541, Pixel16 = 0.333;  //of a wider one, into a 32- or 16-bit frame buffer
-    static constexpr f64 DepthPixel = 0.190;    //more for the depth test (or clear mode's depth), into 32-bit only
-    //A texture's bytes, where it's over 8 KiB and so held a part at a time: [8- and 4-bit indices][from RAM swizzled,
-    //RAM not (up to 64 KiB), RAM not (more), VRAM][wide]. A sprite taking 256 distinct texels across, or 384 indices,
-    //takes them wide: it fetches its rows over and over (round 8's time-strips, a texel a pixel: 5 to 7.6 times the
-    //narrow rate; a texture repeating across takes as many as it has; 8-bit indices 256 across narrow, 480 wide).
-    //Wide from RAM unswizzled up to 64 KiB, which no list measured, is taken as more than 64 KiB is.
-    static constexpr f64 TexelByte[2][4][2] = {{{0.335, 3.11}, {1.41, 13.7}, {1.73, 13.7}, {0.275, 1.91}},
-                                               {{0.395, 2.82}, {1.32, 11.9}, {1.55, 11.9}, {0.583, 3.70}}};
-    //A triangle takes 16- and 32-bit texels at rates of its own, [from][wide] as above (sprites read along rows,
-    //triangles seem to go in blocks): wide, round 8's time-textures in 3D; narrow from RAM unswizzled up to 64 KiB,
-    //its time-overlap (32x32 squares, where its time-setup's 16x16 ones over a 64x64 texture took ten times as much: the
-    //cache's reuse, which the model doesn't follow). No list measured the rest (narrow from RAM swizzled, from RAM
-    //over 64 KiB and from VRAM; wide from RAM up to 64 KiB), taken as a sprite's (or wide, as over 64 KiB). Indices as a
-    //sprite's (Activision Hits Remixed's copyright screen, part 103's capture).
-    static constexpr f64 TriangleTexelByte[4][2] = {{0.335, 1.37}, {0.0342, 6.68}, {1.73, 6.68}, {0.275, 0.770}};
-    static constexpr f64 WholeBytes = 8192;     //a texture of at most this many bytes is held whole (LoadByte: the
-                                                //cache's 8 KiB, round 6's time-texcache)
-    static constexpr f64 SmallBytes = 65536;    //an unswizzled one from RAM up to this many takes the smaller rate
-                                                //(round 8: 64x64, 16 KiB, against 512 wide, 1 MiB)
-    static constexpr f64 WideTexels = 256, WideIndices = 384;  //distinct texels across a sprite takes wide (time-strips:
-                                                //128 narrow, 256 wide; indices 256 narrow, 480 wide)
-    static constexpr f64 TexelsMost = 64;       //texels a pixel counted at most: a pixel's take is their square root
-                                                //(round 8's time-textures and time-scenes: shrunk 2:1, 1.9 times
-                                                //the 1:1 time, 4:1 3.6 times, stretched 1:2 half)
+    static constexpr f64 NarrowPixel = 0.334;   //a pixel of a narrow primitive
+    static constexpr f64 Pixel32 = 0.542, Pixel16 = 0.332;  //of a wider one, into a 32- or 16-bit frame buffer
+    static constexpr f64 DepthPixel = 0.185;    //more for the depth test (or clear mode's depth), into 32-bit only
+    //A texture is fetched into the GE's cache as it's read after a TEX_FLUSH (round 9's time-loads): the texels a
+    //primitive may read (its box, in whole fetches of 16 bytes across and, swizzled, 8 rows down: an 8-texel CLUT8
+    //strip fetches 16), not the texture's size, at FetchFixed for the first fetch and FetchByte a byte [from RAM
+    //swizzled, RAM not, VRAM swizzled, VRAM not]. The cache keeps what it has fetched, up to CacheBytes, till the next
+    //TEX_FLUSH: a primitive pays for what it reads outside that alone (a texture set again, or another at the same
+    //texels, without a TEX_FLUSH, costs nothing: the cache doesn't look at the address). A primitive reading more than
+    //CacheBytes reads as its pixels take the texels, at TexelByte a byte [8- and 4-bit indices][from RAM swizzled, RAM
+    //not (up to SmallBytes), RAM not (more), VRAM][wide]. A row reads wide past WideTexels distinct texels
+    //(WideIndices for indices): a sprite's rows all span its width; a triangle's rows split it, so 1 - (T/W)^2 of its
+    //pixels lie in rows past T (round 9's time-tristrips: T 139 to 141 for 32-bit texels, 133 to 137.5 for 5650,
+    //about 270 for CLUT8), read at a wide sprite's rate, the rest at TriangleTexelByte's [indices][from] narrow rate.
+    //Read narrow, a pixel takes its texels up to ShrunkMost (shrunk 2:1, 2.8 to 3.4 times the 1:1 time: round 9's
+    //time-tristrips 84 to 87), the square root's growth past that (unmeasured); wide, their square root (round 8's
+    //512-wide sprite, 1.9 times); at the mipmap level TEX_LEVEL picks, whose texels alone are fetched.
+    //(No list reads wide from an unswizzled RAM texture of 64 KiB or less: taken as over it. No triangle reads narrow
+    //from one, nor indices from unswizzled RAM: a sprite's rates.)
+    static constexpr f64 TexelByte[2][4][2] = {{{0.374, 3.09}, {1.41, 13.7}, {1.73, 13.7}, {0.268, 1.93}},
+                                               {{0.324, 2.79}, {1.32, 11.9}, {1.45, 11.9}, {0.358, 2.20}}};
+    static constexpr f64 TriangleTexelByte[2][4] = {{0.412, 1.41, 1.88, 0.334}, {0.392, 1.32, 1.45, 0.365}};
+    static constexpr f64 CacheBytes = 8192;     //(time-loads: a 4 KiB texture kept, a 16 KiB one fetched each time)
+    static constexpr f64 SmallBytes = 65536;    //(round 8: 64x64, 16 KiB, against 512 wide, 1 MiB)
+    static constexpr f64 WideTexels = 140, WideIndices = 270;
+    static constexpr f64 TexelsMost = 64;       //texels a pixel counted at most
+    static constexpr f64 ShrunkMost = 4;
+    static constexpr f64 FetchFixed = 26.0;
+    static constexpr f64 FetchByte[4] = {0.495, 1.59, 0.352, 0.404};
     static constexpr f64 CompressedByte = 20.3; //a DXT texture's byte
-    static constexpr f64 LoadByte[3] = {0.132, 0.509, 0.497};  //of one of 8 KiB at most, loaded whole into the cache:
-                                                               //from RAM swizzled, RAM not, VRAM
-    static constexpr f64 PaletteByte = 0.362;   //CLUT_LOAD's
-    static constexpr f64 TransferRow = 35.5;    //a block transfer's row
-    static constexpr f64 TransferByte[2][2] = {{0.881, 0.620}, {0.338, 0.382}};  //from RAM or VRAM, to RAM or VRAM
+    static constexpr f64 PaletteLoad = 6.64, PaletteByte = 0.226;  //CLUT_LOAD's, and a byte of it (time-loads)
+    static constexpr f64 RamShare = 0.0602;     //of a RAM-textured primitive's vertices' work, the back end's too (the
+                                                //two read the RAM: time-tristrips' meshes; the fit finds little)
+    static constexpr f64 TransferRow = 34.8;    //a block transfer's row
+    static constexpr f64 TransferByte[2][2] = {{0.879, 0.619}, {0.338, 0.381}};  //from RAM or VRAM, to RAM or VRAM
     //The queue between the two ends, in entries, measured rather than fitted: a primitive takes one and one for each
     //of its vertices (a sprite three, a triangle four), a transfer or a palette's load one. Round 8's time-signals2: a
     //SIGNAL's callback after 128 sprites of 64x64 came with 28 of them left to draw, after 128 triangles 20.5 (84.6 and
@@ -878,17 +884,21 @@ struct GE {
   //triangle cut at the near plane, its pieces) and their pixels inside the scissor rectangle.
   u64 owedPixels = 0, owedPrimitives = 0;
   auto owe(u64 pixels) -> void { owedPixels += pixels, owedPrimitives++; }  //(those alone: owePrimitive() does both)
-  //The texture the GE's cache holds whole (8 KiB at most: texelClocks()), kept until another is drawn with or
-  //TEX_FLUSH empties the cache; saved in states (layout 33 on).
-  struct CachedTexture {
-    u32 address = 0, format = 0, size = 0;  //size: TEXTURE_SIZE0's word
-    bool held = false;
-  } cachedTexture;
-  //A primitive met: its pixels, rows and widest row in pixels, its texels a pixel and across, its entries in the queue
-  //between the GE's two ends (Cost::Queue), and whether it's a sprite.
-  auto owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 texels, f64 across, f64 entries,
-                    bool sprite = false) -> void;
-  auto texelClocks(const Look& look, u64 pixels, f64 texels, f64 across, bool sprite) -> f64;
+  //The GE's texture cache (texelClocks()): the texels it holds since the last TEX_FLUSH, a box at the level read (from
+  //u0 to u1 across, v0 to v1 down, in whole fetches: none where u1 is at most u0), and whether it has fetched since;
+  //saved in states (layout 34 on).
+  struct TexelCache {
+    u16 u0 = 0, v0 = 0, u1 = 0, v1 = 0;
+    bool fetched = false;
+  } texelCache;
+  //The texels a primitive may read, at the texture's first level: u0 to u1 across, v0 to v1 down (u1 below u0: not
+  //known, so the whole texture).
+  struct TexelsRead { f64 u0 = 0, v0 = 0, u1 = -1, v1 = -1; };
+  //A primitive met: its pixels, rows and widest row in pixels, its texels a pixel and those it may read, its entries in
+  //the queue between the GE's two ends (Cost::Queue), and whether it's a sprite.
+  auto owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 texels, const TexelsRead& box,
+                    f64 entries, bool sprite = false) -> void;
+  auto texelClocks(const Look& look, u64 pixels, f64 texels, const TexelsRead& box, bool sprite) -> f64;
   auto pipeDrain() -> void;  //draw.cpp
   //The GE's reciprocal (draw.cpp's geReciprocal()), and one of its chords' start and slope, for the tests.
   static auto reciprocal(float x) -> float;

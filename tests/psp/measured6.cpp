@@ -228,26 +228,25 @@ auto timed(const std::vector<u32>& w) -> std::vector<Timed> {
   return records;
 }
 
-//The GE's time (GE::Cost, fitted to rounds 6 and 8 together: docs/psp-core.md, part 106) against every record of the
-//seven timing tests: each list's middle finish time here and on the PSP, 906 of them (both clock settings). Half
-//within 5%, nearly three quarters within 10%, close on nine in ten within 25%, none off by as much again as it is;
-//and the lists the model's terms rest on: JUMPs, indexed vertices, flat fills into 32- and 16-bit frame buffers, a
-//256x256 copy and the SIGNAL's list within 5%, small triangles within 8%, a fill with the depth test within 10%,
-//65536 NOPs within 21% (the PSP's NOP comes cheaper than the other words the command's time rests on), a strip
-//within 30% (its triangles, sharing corners, set up quicker than lone ones); and two that round 8 took the fit away
-//from, four point lights fading with their shine within 26% and a new 4 KiB texture for each sprite within 61%
-//(round 8 had a light's shine and a small texture's load cheaper: a 1 KiB texture reloaded in 374 clocks; a
-//texture's load isn't so much a byte, part 106). An empty list is done inside sceGeListEnQueue: the PSP's callback came
+//The GE's time (GE::Cost, fitted to rounds 6, 8 and 9 together: docs/psp-core.md, part 106) against every record of
+//the seven timing tests: each list's middle finish time here and on the PSP, 906 of them (both clock settings). Half
+//within 5%, three quarters within 10%, nine in ten within 25%, none off by as much again as it is; and the lists the
+//model's terms rest on: JUMPs, indexed vertices, flat fills into 32- and 16-bit frame buffers, a 256x256 copy and the
+//SIGNAL's list within 5%, small triangles within 8%, a fill with the depth test within 10%, a new 4 KiB texture for
+//each sprite within 12% (the texels fetched after each TEX_FLUSH, round 9's rate), 65536 NOPs within 22% (the PSP's
+//NOP comes cheaper than the other words the command's time rests on), a strip within 30% (its triangles, sharing
+//corners, set up quicker than lone ones); and one that round 8 took the fit away from, four point lights fading with
+//their shine, within 26% (round 8 had a light's shine cheaper). An empty list is done inside sceGeListEnQueue: the PSP's callback came
 //inside the call (18 microseconds in at 222 MHz, the call returning at 33), here as the call returns (23 in, its
 //reading at most a microsecond before the program's), interrupts being taken once a system function is done.
 auto measuredTime() -> void {
   struct Key { const char* test; u32 which, size, bus; f64 within; };
   const Key keys[] = {
-    {"time-commands", 1, 65536, 111, 0.21}, {"time-commands", 5, 16384, 111, 0.05},
+    {"time-commands", 1, 65536, 111, 0.22}, {"time-commands", 5, 16384, 111, 0.05},
     {"time-primitives", 0, 4096, 111, 0.08}, {"time-primitives", 2, 4096, 166, 0.3},
-    {"time-primitives", 9, 4096, 111, 0.04}, {"time-primitives", 13, 4096, 111, 0.26},
-    {"time-fill", 0, 4, 111, 0.02}, {"time-fill", 1, 4, 166, 0.04}, {"time-fill", 27, 4, 111, 0.1},
-    {"time-transfers", 0, 256, 111, 0.04}, {"time-texcache", 50, 64, 111, 0.61}, {"time-signals", 0, 16, 166, 0.05},
+    {"time-primitives", 9, 4096, 111, 0.05}, {"time-primitives", 13, 4096, 111, 0.26},
+    {"time-fill", 0, 4, 111, 0.03}, {"time-fill", 1, 4, 166, 0.04}, {"time-fill", 27, 4, 111, 0.1},
+    {"time-transfers", 0, 256, 111, 0.04}, {"time-texcache", 50, 64, 111, 0.12}, {"time-signals", 0, 16, 166, 0.05},
   };
   std::vector<f64> errors;
   f64 worst = 0;
