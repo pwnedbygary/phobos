@@ -16497,8 +16497,9 @@ the RP6.
 On branch `cursor/psp-display-latch-2b67` (draft PR #271), from master `5442acb8b` (part 102, #265; #264, no part),
 masters `03eca2a69` (#274, no part), `dd63f4ffb` (parts 103 and 104, #266 and #267), `230c0a731` (part 105, #268)
 and `92eddbfea` (part 109, #272; #273, no part) merged in. Sources: pspautotests' display/setframebuf and
-display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP. Save states: layout 33 (its own:
-#269's GE timing takes 33 too, and whichever lands second renumbers its layout to 34).
+display/isstate (their recordings), round 8's display-start (part 107, #270: `tools/psp-measure/cpu.c`), pspsdk's
+`pspdisplay.h`. No PPSSPP or JPCSP. Save states: layout 33 (its own: #269's GE timing takes 33 too, and whichever
+lands second renumbers its layout to 34).
 
 ### Why
 
@@ -16515,25 +16516,34 @@ display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP.
   (`sceDisplayGetFrameBuf`'s 1) and as the one shown (0) only from the next blank (read after
   `sceDisplayWaitVblankStart`); its width and format read at once from both. display/isstate: a frame buffer of 0 so
   set leaves the display in the foreground till then, and the vertical sync comes 631.5 microseconds into the blank.
+  Round 8's display-start, from a program's start: one set for the next vblank (512 wide, 8888) is taken and reads
+  back at once as address 0 (the start's), width 512 and format 3, the address the new one only from the blank.
 - Five of the scenes below set theirs with sync 1 just as a blank starts (from a vertical blank handler, or a thread
   that waited for the blank): if the frame buffer were taken at the blank's start, each of their frames would show a
   blank late. Set in a blank before its sync, here they're taken at that sync, for the frame after the blank; set
   anywhere else, at the next blank's start, as setframebuf read it.
-- (Also recorded, left out here: refusals of a sync other than 0 and 1, of a width or format set at once that isn't
-  the one shown (0x80000107), of widths not a multiple of 64 (0x80000104), formats past 3 (0x80000108) and addresses
-  misaligned or outside VRAM and RAM (0x80000103). What a PSP's display holds as a game starts isn't known here, and
-  a game's first frame buffer, set at once, mustn't be refused for not matching it: round 8's display-start, part
-  107, records it.)
+- (Also recorded, left out here for scope: refusals of a sync other than 0 and 1, of a width or format set at once
+  that isn't the one shown (0x80000107), of widths not a multiple of 64 (0x80000104), formats past 3 (0x80000108) and
+  addresses misaligned or outside VRAM and RAM (0x80000103). Round 8's display-start has what a program meets as it
+  starts: address 0, width 0 and format 3 (8888) for the next vblank and at once alike, `sceDisplayIsForeground` 0,
+  and every frame buffer set at once refused from there, the display left as it was (512 wide in 8888 or in 5650,
+  and 0, 0, 0: 0x80000107; the start's width of 0 with VRAM's address: 0x80000104). Phobos starts at format 0 and
+  takes every one. The refusals, and the start's format, change what every game meets as it starts: a change of
+  their own, with a library check of its own (below, "Not yet").)
 
 ### What changed
 
 - display.cpp: `sceDisplaySetFrameBuf`'s sync 1 sets the address shown from the next blank's start, or, set in a
   blank before its sync, from that sync (`Display::nextFrameBuffer`, `nextAt`; `Kernel::VsyncCycles`), the width and
   format at once; sync 0 (anything else) as before, replacing one waiting. `latchFrameBuffer()` makes it the one
-  shown once its sync has come, as `sceDisplayGetFrameBuf` and `sceDisplayIsForeground` read and each blank goes by;
-  `sceDisplayGetFrameBuf`'s which 1 reads the one coming. The screen (`presentedFrameBuffer()`: `Kernel::picture()`,
-  system.cpp) shows in the frame after a blank the frame buffer its sync takes: the last one set, as before.
-- Save states: layout 33 keeps one waiting and its sync (13 bytes); older layouts load with none.
+  shown once its sync has come, as `sceDisplayGetFrameBuf` and `sceDisplayIsForeground` read, as another is set for
+  the sync, and as each blank goes by (so a state saved as a frame starts is the same whether the game read it or
+  not); `sceDisplayGetFrameBuf`'s which 1 reads the one coming. The screen (`presentedFrameBuffer()`:
+  `Kernel::picture()`, system.cpp) shows in the frame after a blank the frame buffer its sync takes: the last one set,
+  as before. Its picture is taken as the blank starts (`System::run()`), so one set in the blank before its sync,
+  after that, shows a frame later than on a PSP, as on master.
+- Save states: layout 33 keeps one waiting and its sync (13 bytes); older layouts load with none; a state with one
+  due past the next blank's start is refused.
 
 ### What it does
 
@@ -16567,11 +16577,13 @@ display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP.
   frames a second; four frames whose flip came just before the sync found it shown and went on), its menu 201, 20 a
   second, every wait three blanks apart: the owner's PSP's pattern (two flips and a wait a frame, 30 frames a second
   while the GE's frame fits two blanks, 20 above).
-- Nothing missed or waited for without end: in the seven scenes that changed under any of the three tries, in all
-  three renderers, no picture repeats the frame before where master's doesn't (Army of Two 100 different pictures
-  in 100 frames on both; the others, at 30 frames a second or less, repeat exactly where master's do); a frame
-  buffer set for the sync is the one shown by the next blank's start at the latest, read or not, and in the traces
-  every scene flips as often as on master but Army of Two, which now waits once a blank.
+- Nothing missed or waited for without end, in these 34 scenes: in the seven that changed under any of the three
+  tries, in all three renderers, no picture repeats the frame before where master's doesn't (Army of Two 100
+  different pictures in 100 frames on both; the others, at 30 frames a second or less, repeat exactly where master's
+  do; elsewhere one can: Army of Two's intro, below, holds each of its video's pictures two frames, where master
+  holds them one to three); a frame buffer set for the sync is the one shown by the next blank's start at the
+  latest, read or not, and in the traces every scene flips as often as on master but Army of Two, which now waits
+  once a blank.
 - Which games read the display back: `sceDisplayGetFrameBuf`'s 0, after flipping for the next sync: Army of Two (after
   its draw sync), Death Jr. II and Sonic Rivals (their main threads, after their vertical blank handlers' flips): the
   ones whose behaviour can change. Activision Hits Remixed reads 0 and Twisted Metal Head On's game 1, but set theirs
@@ -16579,16 +16591,37 @@ display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP.
   Wheels Ultimate Racing (half its flips), Killzone Liberation, Twisted Metal's logos: their pictures as master's,
   Twisted Metal's, Death Jr. II's and Sonic Rivals' set as the blank starts, for the frame after it. No game here
   asks `sceDisplayIsForeground`.
+- The coordinator's library check (all 266 games, each from its start with the library's presses, four pictures in
+  3,600 frames, Software and Vulkan-fast, the clock started at a fixed time in every run, against master
+  `230c0a731`): 0 newly failing, 266 folders in each pass. In Software 8 games' pictures differed on the first pass,
+  6 of them master's on a rerun; in Vulkan-fast 6 and 4. The two left, in both renderers, are this part's doing and
+  not faults (the review's runs): Army of Two (frame 300) shows master's very pictures 4 frames later: its loading
+  frames now wait for the blank, so EALogo.bik opens 58,550 microseconds later (frame 91, not 87), and each of the
+  video's pictures is then held exactly two frames, where master holds them one to three. Sonic Rivals 2 (frame
+  3,600) presents the same frame buffer as master at every one of its 3,600 frames: its flip, made in a GE FINISH
+  callback, now reads back as not shown yet, as on a PSP, so its second list is queued by the vertical blank handler
+  at the next blank rather than at once, and the game's animation is sampled at other moments (1,739 of the 3,600
+  pictures byte for byte master's, the rest sub-pixel motion).
 
 ### Tests
 
-- "display frame buffer set for the next vsync" (callbacks.cpp): setframebuf's and isstate's recordings (on master
-  the address reads as shown at once and the display leaves the foreground at once: the test fails there); set
-  mid-frame, shown from the next blank's start; set as a blank starts, from that blank's sync; set after the sync,
-  from the next blank's start; the frame after the blank showing it either way; one set at once replacing one
-  waiting; two for one sync, the last; a state keeping one.
-- The layout tests (states.cpp, font.cpp, atrac.cpp, ares/system.cpp) for layout 33; the tests that read the screen's
-  frame buffer (draw.cpp's and ge.cpp's samples, kernel.cpp's hello program) read the one presented.
+- "display frame buffer set for the next vsync" (callbacks.cpp): setframebuf's and isstate's recordings (with sync 1
+  taken at once, as master takes it, the address reads as shown at once and the display leaves the foreground at
+  once: the test fails); set mid-frame, shown from the next blank's start; set as a blank starts, from that blank's
+  sync; set after the sync, from the next blank's start; the frame after the blank showing it either way; one set at
+  once replacing one waiting; two for one sync, the last; a state keeping one.
+- "display frame buffer set for the next vsync, taken by whatever looks first" (callbacks.cpp; the review's four
+  surviving mutants): read a cycle before its sync, the one before still; a frame buffer of 0 set as a blank starts
+  out of the foreground at that sync, asked with nothing else read; one set as a blank starts and one after its sync,
+  nothing read between: the first shown from that sync, the second from the next blank's start; one set mid-frame and
+  not read: as the next frame starts nothing is left for a read to take (the state the same).
+- "the frame shown" (ares/system.cpp, the whole system): a pretend GPU holds two frame buffers, each drawn whole; the
+  frame is read back (`System::run()`) and presented, as Android's GPU presents it (`present()`), from the one set
+  for the coming sync while the other is shown, from the one shown with none set.
+- "state fields" (states.cpp): the three new fields each reach the state and come back, and one due past the next
+  blank's start is refused. The layout tests (states.cpp, font.cpp, atrac.cpp, ares/system.cpp) for layout 33; the
+  tests that read the screen's frame buffer (draw.cpp's and ge.cpp's samples, kernel.cpp's hello program) read the
+  one presented.
 
 ### Checks
 
@@ -16605,14 +16638,29 @@ display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP.
 - With master `230c0a731` merged in (part 105): 583 groups, 0 failures. A spin's turns call no display function but
   `sceDisplayGetVcount`, and a blank ends any skip, so a frame buffer set for the next sync is latched at the same
   moment with the skip on or off.
+- With master `92eddbfea` merged in (part 109, #272; #273) and the review's fixes (its review of `96383388d`: approve
+  with should-fixes): 610 groups, 0 failures (the merge alone: 609). The merge's two conflicts, both in
+  system.cpp, keep both sides: the frame from `presentedFrameBuffer()` under #272's renderer checks
+  (`drawing.renderer` in `System::run()`, `ge.drawer().renderer` in `present()`, the GE thread done with the GPU
+  first). Every picture of Army of Two's first 400 frames (Software and Vulkan-fast) and of Sonic Rivals 2's first
+  600 (both renderers; Vulkan-fast's differing from Software's in 505 of them) is byte for byte #271's, with the GE
+  thread off and on. Mutants, each made, run and taken out: the review's four survivors (the latch dropped from
+  `sceDisplaySetFrameBuf`, from `sceDisplayIsForeground` or from `events()`, or made 0.3 ms before the sync) each fail
+  the new group and nothing else; system.cpp's two uses of `presentedFrameBuffer()`, each put back to the frame
+  buffer shown, fail "the frame shown" (read back, presented); `nextAt` left out of the state, and the loader's
+  refusal taken out, each fail "state fields".
 
 ### Not yet
 
-- The refusals above, once round 8's display-start says what a game's first frame buffer meets.
-- Whether a PSP's display takes a frame buffer set as a blank starts, before the sync, at that sync: taken so here
-  (the sync is 631.5 microseconds in, the handlers run as the blank starts), unrecorded. Taken at the next blank's
-  start instead, five of the library's games would show each frame a blank late (the first try). A round could
-  record it: a flip at a blank's start read back before the sync, after it and mid-frame.
+- The refusals above and the start's format (a PSP's 3, Phobos's 0), now that round 8's display-start has what a
+  program meets as it starts: a change of their own, with a library check of their own.
+- When a PSP's display takes a frame buffer set as a blank starts, before the sync: taken at that sync here (the sync
+  is 631.5 microseconds in, the handlers run as the blank starts), unrecorded (display-start reads once, just after
+  the set). Taken at the next blank's start instead, five of the library's games would show each frame a blank late
+  (the first try). A round could record it: a flip at a blank's start read back before the sync, after it and
+  mid-frame.
+- Perhaps the picture taken at the sync rather than as the blank starts, so that one set in the blank before its
+  sync shows in the frame after that blank, as on a PSP (master shows it a frame later too).
 
 ### Scratch
 
