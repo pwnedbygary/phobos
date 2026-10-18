@@ -16581,7 +16581,11 @@ a list's GE time from when the GE could start it to its FINISH.
 
 - `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
   577 groups, 0 failures; with #266's review rounds and master `dd63f4ffb` (parts 103 and 104) merged in, 582 groups,
-  0 failures.
+  0 failures; with master `230c0a731` (part 105) merged in, 585 groups, 0 failures.
+- Part 105's spin groups pass with "PSP" as well as with "Fast" (set in a scratch build of their machine, never
+  committed): the GE's looks polled, skipped as run; behind a list, past a SIGNAL, with interrupts held off; under a GE
+  profile. Every step's state is the same with the skip on and off, on both engines; the polls last longer, so about
+  twice the turns are skipped (sceGeDrawSync's look: 1,256,820 against 587,460).
 - "Fast" against master at #269's base (`a8d5640f5`): the bench runners on 27 scenes, Software and Vulkan-fast, 100
   frames from each scene's state: all 54 the same, every frame's VRAM and picture and the RAM after; each state 22
   bytes longer (layout 33's).
@@ -16596,6 +16600,7 @@ a list's GE time from when the GE could start it to its FINISH.
 ### Scratch
 
 `~/phobos-work/scratch/psp-ge-profile/phase3/`: `run_p76.sh` and `out/`, the profiles; `comparison.md`; `terms.patch`
-and `out/terms-*.log`, each scene's terms; `offcheck.sh` and `offcheck/`, "Fast" against master; `statecheck.sh`;
-`sigtest.sh`, `signal-patch.py`, `calltrace-patch.py`, `latch-patch.py` and `a2trace.sh`, Army of Two's SIGNAL and
-frame buffer. Nothing was run on the RP6.
+and `out/terms-*.log`, each scene's terms; `offcheck.sh` and `offcheck/`, "Fast" against master, and `offcheck2.sh` and
+`offcheck2/`, again with the SIGNAL's time; `statecheck.sh`; `sigtest.sh`, `signal-patch.py`, `calltrace-patch.py`,
+`latch-patch.py` and `a2trace.sh`, Army of Two's SIGNAL and frame buffer. `../merge230/269-spins-*.log`: part 105's spin
+groups with each timing. Nothing was run on the RP6.

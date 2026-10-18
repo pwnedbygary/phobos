@@ -51,8 +51,9 @@ Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a0147
 - **First comparison**: within 15% Chains of Olympus (+11%), Ghost of Sparta (+3%), Activision Hits' copyright screen
   (−9%); Super Monkey Ball −59%; Killzone +77 to +98% (its PSP lists as #266's reviewed decoder ends them);
   Activision Hits' menu +138% (part 107: VRAM textures).
-- **Checks**: suite 577 groups, 0 failures (582 with master `dd63f4ffb` merged in); "Fast" against master the same
-  on 27 scenes, Software and Vulkan-fast, every frame; older layouts load, master refuses layout 33.
+- **Checks**: suite 577 groups, 0 failures (582 with master `dd63f4ffb` merged in, 585 with `230c0a731`; part 105's
+  spin groups pass with "PSP" too); "Fast" against master at #269's base (`a8d5640f5`) the same on 27 scenes,
+  Software and Vulkan-fast, every frame; older layouts load, master refuses layout 33.
 - **Not yet**: fixed-point charges before any default change; round 8's fit; the 15% gate.
 
 ## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
