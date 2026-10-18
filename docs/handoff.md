@@ -65,8 +65,8 @@ or JPCSP. Save states: layout 33 (#269 takes 33 too: the second to land renumber
   master's very pictures 4 frames later (its loading frames now wait for the blank, so EALogo.bik opens 58,550 us
   later; each video picture then held two frames); Sonic Rivals 2 presents master's frame buffer at all 3,600 frames,
   but its flip from a GE FINISH callback reads back as not shown yet, as on a PSP, so its second list is queued at
-  the next blank and its animation sampled at other moments (1,739 pictures byte for byte master's, the rest
-  sub-pixel motion).
+  the next blank and its animation sampled at other moments (1,739 pictures byte for byte master's; the boot
+  notice's fade, frames 190-201, a frame ahead of master's; the rest the title screen's sub-pixel motion).
 - **Checks**: tests/psp/run-tests.sh (sanitized): 577 groups, 0 failures; the new test fails with sync 1 taken at
   once. With master `dd63f4ffb` merged in: 580 groups, 0 failures (583 with `230c0a731`; 610 with `92eddbfea`
   and the review's fixes); the GE profile records each frame buffer call with the latch (Army of Two's two a frame,

@@ -16601,7 +16601,8 @@ lands second renumbers its layout to 34).
   3,600) presents the same frame buffer as master at every one of its 3,600 frames: its flip, made in a GE FINISH
   callback, now reads back as not shown yet, as on a PSP, so its second list is queued by the vertical blank handler
   at the next blank rather than at once, and the game's animation is sampled at other moments (1,739 of the 3,600
-  pictures byte for byte master's, the rest sub-pixel motion).
+  pictures byte for byte master's; the boot notice's fade, frames 190-201, a frame ahead of master's; the rest the
+  title screen's sub-pixel motion).
 
 ### Tests
 
