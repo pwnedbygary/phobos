@@ -5020,17 +5020,17 @@ static const struct { void (*build)(int c, int size); int c; } anchors[] = {
 static void buildAnchors(int c, int size) { anchors[c].build(anchors[c].c, size); }
 
 //-- triangles reading narrow textures (time-tristrips): round 8's time-strips drew textures 512 texels wide texel for
-//pixel over the target's 512x256 in sprites 8 to 512 wide, and a sprite took 5 to 7.6 times as long a pixel once its
-//rows spanned 256 distinct texels (512 indices). Triangles took a 256x256 swizzled texture over 256x256 pixels at 3.9
-//clocks a pixel where a 256-wide sprite of it took 13.3 (time-textures 13, time-pixels 0), and #269's model takes
-//triangles reading narrow textures at a sprite's rates, unmeasured: what games mostly draw. Cases 0-48: the strips as
-//triangles, two to a strip (rectangle9), in through mode, from seven textures (stripTextures9); 49-62: sprites over
-//the two swizzled VRAM textures, which round 8 didn't have; 63-74: squares 8 to 64 pixels across, two triangles each,
-//tiling the target as a mesh draws a big texture; 75-78: strips in 3D (identity matrices, w 1) beside through mode's;
-//79-83: strips 32 wide, bilinear (each pixel's middle on a texel's, as the nearest cases), triangles and sprites;
-//84-87: strips 32 pixels (64 texels) wide over the target's left 256x256, the texture shrunk 2:1 (#269's model takes
-//the square root of the texels a pixel), triangles and sprites. A VRAM texture is VRAM's first megabyte (the text on
-//the screen), a RAM one big, as in time-strips.
+//pixel over the target's 512x256 in sprites 8 to 512 wide, and a sprite took about 4 to 7.5 times as long a pixel once
+//its rows spanned 256 distinct texels (512 indices). Triangles took a 256x256 swizzled texture over 256x256 pixels in
+//perspective (w 1 to 2) at 3.9 clocks a pixel where a 256-wide sprite of it took 13.3 (time-textures 13, time-pixels
+//0), and #269's model takes triangles reading narrow textures at a sprite's rates, unmeasured: what games mostly draw.
+//Cases 0-48: the strips as triangles, two to a strip (rectangle9), in through mode, from seven textures
+//(stripTextures9); 49-62: sprites over the two swizzled VRAM textures, which round 8 didn't have; 63-74: squares 8 to
+//64 pixels across, two triangles each, tiling the target as a mesh draws a big texture; 75-78: strips in 3D (identity
+//matrices, w 1) beside through mode's; 79-83: strips 32 wide, bilinear (each pixel's middle on a texel's, as the
+//nearest cases), triangles and sprites; 84-87: strips 32 pixels (64 texels) wide over the target's left 256x256, the
+//texture shrunk 2:1 (#269's model takes the square root of the texels a pixel), triangles and sprites. A VRAM texture
+//is VRAM's first megabyte (the text on the screen), a RAM one big, as in time-strips.
 static const BigTexture stripTextures9[7] = {
   {GU_PSM_8888, 1, 0, 512}, {GU_PSM_8888, 0, 0, 512}, {GU_PSM_8888, 1, 1, 512}, {GU_PSM_8888, 0, 1, 512},
   {GU_PSM_T8, 1, 0, 256}, {GU_PSM_T8, 1, 1, 512}, {GU_PSM_5650, 1, 0, 512},

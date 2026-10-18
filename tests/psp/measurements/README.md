@@ -48,9 +48,10 @@ describes (round 8's records): `time-anchors` (15 of round 8's cases again), `ti
 narrow textures, and sprites), `time-loads` (a texture's loads and the cache's reuse, palettes, mipmaps),
 `time-formats` (vertex formats) and `time-lists2` (round 8's `time-lists` with its stall addresses cached), at
 222/111 and 333/166 MHz, `time-lists2` at 333/222/166 and 266/133 too; nothing stalled. Part 110 says what each test
-is for and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 97 KB as 18 KB); `SHA256SUMS` holds the
-unpacked files' sums (and the manifest's). No test reads them yet, as round 8's: they're for the GE timing's fit
-(#269).
+is for and what the PSP showed. He ran `7445a290a`'s `pspmeasure.elf` (its EBOOT `f554782c…`); the one in
+`tests/psp/programs` is the later fix round's, which draws round 9's lists the same way. Each `.bin` is packed with xz
+(`xz -9e`, 97 KB as 18 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). No test reads them yet,
+as round 8's: they're for the GE timing's fit (#269).
 
 ## Not here
 
