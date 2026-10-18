@@ -975,7 +975,13 @@ struct Kernel {
   auto sceDisplayAdjustAccumulatedHcount() -> void;
   auto sceDisplayGetFramePerSec() -> void;
   auto sceDisplayGetVcount() -> void;
+  //What the screen shows: a frame buffer, its row width and pixel format, and the size shown of it
+  struct Shown { u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0, width = 480, height = 272; };
+  auto showing() const -> Shown;
   auto picture(std::vector<u32>& pixels) -> void;
+  static auto picture(const Shown& shown, std::vector<u32>& pixels,
+                      const std::function<auto (u32 address, u32 size) -> const u8*>& row,
+                      const std::function<auto (u32 size, u32 address) -> u32>& read) -> void;
 
   //interrupts.cpp: calls into the program, as interrupt handlers
   struct Call {

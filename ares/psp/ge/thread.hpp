@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <bitset>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -62,6 +63,7 @@ struct GeThread : Memory::Writer {
     RunStart,    //a kick: the render GE defers its primitives into batches
     RunEnd,      //its end: what's batched drawn, a hardware renderer's work submitted (or finished, unguarded)
     State,       //the GE's state put back whole (sceGeRestoreContext's): commands, matrices and their indices (GE::State)
+    Frame,       //a frame's end (System::run()): what the screen shows then (Frame), its picture taken here (frameEnd)
   };
   struct Header { Kind kind; u32 size; u64 serial; };
   //A PRIM's or curved surface's copies: up to two ranges (its indices, its vertices), each its address and size, the
@@ -87,6 +89,21 @@ struct GeThread : Memory::Writer {
   auto runEnd() -> void;
   auto state(const GE& from) -> void;
   auto note(const std::string& text) -> void { notes.push_back(text); }  //(the render GE's, told as it drains)
+  //A frame's end: the frame buffer the screen shows then and how it's laid out, as the emulation thread has the
+  //display (Kernel::showing()), and the frame's number. The GE thread takes its picture as it comes to the record,
+  //everything handed over before it done (frameEnd: System's), so the picture is the frame's, as of its place, however
+  //far the emulation thread has run on; the emulation thread waits only where more than most frames handed over
+  //haven't ended.
+  struct Frame { u64 number; u32 frameBuffer, bufferWidth, pixelFormat, width, height; };
+  auto frame(const Frame& frame) -> void;
+  std::function<auto (const Frame& frame) -> void> frameEnd;
+  auto framesBehind() const -> u64 { return framesHanded - framesEnded.load(std::memory_order_acquire); }
+  auto waitFrames(u64 most) -> void;
+  //(the GE thread's, at a frame's record, its frame buffer wholly inside a copy of VRAM that keeps its bytes in order)
+  //The frame buffer's rows reached first as a picture's reads reach them with the GE on the emulation thread
+  //(pointer(): the drawing over them finished or drawn first), then use(vram) given VRAM as it was at the record (the
+  //emulation thread may have written it since: versions.hpp), the frame buffer's bytes at their offsets in it.
+  auto frameBytes(const Frame& frame, const std::function<auto (const u8* vram) -> void>& use) -> void;
   //What each run's primitives owe a PSP's GE (GE::owedPixels, owedPrimitives, which Kernel::geTime() folds), runs
   //numbered from 1 as they're handed over (runStart()): published by the GE thread as each ends, and the one under
   //way's counts so far after each of its PRIMs, for the emulation thread's clock (kernel/ge.cpp).
@@ -98,9 +115,16 @@ struct GeThread : Memory::Writer {
   auto owedOf(u64 run, bool wait, Owed& owed) -> bool;  //(once it has ended; with wait, waiting for that)
   auto owedSoFar(u64 run, Owed& owed) const -> bool;    //(while it's under way)
   //Every record so far taken and done by the render GE, which then waits for the next: until the emulation thread
-  //appends one, it may reach the render GE and its memory itself.
+  //appends one, it may reach the render GE and its memory itself. drain() waits as long as that takes; drainBy()
+  //gives up at the deadline, false where the thread hasn't done them all by then (it may be stuck in one: a driver call
+  //that never returns, System::unload()).
   auto drain() -> void;
+  auto drainBy(std::chrono::steady_clock::time_point deadline) -> bool;
   auto drained() const -> bool { return done.load(std::memory_order_acquire) == serial; }
+  //(a thread drainBy() gave up on) Told to take no record after the one it's in: left be, never waited for again,
+  //and joined once it has come back from that one (exited()), its object kept till then (it may still use it).
+  auto abandon() -> void;
+  auto exited() const -> bool { return left.load(std::memory_order_acquire); }
 
   //(the emulation thread's) The value rule (model.hpp). model: what the PRIMs handed over may change; hardware:
   //whether the render GE draws with a hardware renderer (its begin() taking PRIMs), as far as the emulation thread
@@ -195,6 +219,8 @@ private:
   std::vector<std::string> notes;
   u64 serial = 0;                     //(the emulation thread's) records appended
   alignas(64) std::atomic<u64> done{0};  //(the GE thread's) records taken and done
+  std::atomic<bool> abandoned{false}, left{false};  //(abandon(); the GE thread's loop ended)
+  auto afterDrain() -> void;  //(drain()'s and drainBy()'s once it has done them all)
   std::thread thread;
   //(runs: those handed over, the emulation thread's; ended, the GE thread's count of those done, each run's counts kept
   //at its number's place in owedRuns from then on; the run under way's counts so far, its number and a version that's
@@ -202,6 +228,8 @@ private:
   u64 runs = 0, takenRuns = 0;
   Owed owedRuns[RunsKept];
   alignas(64) std::atomic<u64> runsEnded{0};
+  u64 framesHanded = 0;                     //(the emulation thread's)
+  alignas(64) std::atomic<u64> framesEnded{0};  //(the GE thread's)
   alignas(64) std::atomic<u64> soFarVersion{0};
   std::atomic<u64> soFarRun{0}, soFarPixels{0}, soFarPrimitives{0};
   auto publishSoFar() -> void;

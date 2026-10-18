@@ -768,6 +768,8 @@ auto main(int argc, char** argv) -> int {
     }
     if(saveStateAt == frame) captured += std::chrono::steady_clock::now() - stateStarted;
     if(!geProfileFile.empty() && frame == geProfileFrom) psp.kernel.geProfileStart(geProfile);
+    //(a frame written as a PNG gets its own picture on the screen, the GE thread waited for where it takes them)
+    psp.exactFrame = host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame) > 0;
     root->run();
     if(!geProfileFile.empty() && frame >= geProfileFrom && geProfileTo == frames && !psp.kernel.geProfile) {
       geProfileTo = frame;  //the program started again (Kernel::loadExec()), ending the profile
@@ -815,6 +817,8 @@ auto main(int argc, char** argv) -> int {
   auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
   psp.kernel.geProfileStop();
+  //(with the GE on its thread, that thread done with its last frame first: the renderer is its till then)
+  auto& drawing = psp.ge.drawer();
   //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
   std::optional<PlayStationPortable::GPU::Statistics> gpu;
   if(psp.gpu) gpu = psp.gpu->statistics;
@@ -824,7 +828,7 @@ auto main(int argc, char** argv) -> int {
   std::string ranRenderer = psp.gpu ? (psp.gpu->fast ? "Vulkan (fast)" : "Vulkan") : "Software";
   std::string ranDevice = psp.gpu ? psp.gpu->backend->name() : "";
   bool gpuLost = psp.gpu && !psp.gpu->ready();  //(it stopped answering: the software renderer drew from then on)
-  u32 ranResolution = psp.gpu ? psp.gpu->resolution() : 1, ranThreads = psp.ge.drawing.threads;
+  u32 ranResolution = psp.gpu ? psp.gpu->resolution() : 1, ranThreads = drawing.drawing.threads;
   root->unload();
 
   //The sound, as a WAV (a WAV that can't be written fails the run, once the GE profile is written too).

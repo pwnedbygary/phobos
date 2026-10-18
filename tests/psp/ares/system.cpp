@@ -906,6 +906,103 @@ auto presentedFrame() -> void {
   root->unload();
 }
 
+//The frames a program shows reach the front end, with the GE on its thread (option "GE Thread": that thread takes
+//each frame's picture as it comes to the frame's end), as without it: each frame's own where the front end asks for it
+//(exactFrame, as the runner asks for its PNGs' frames), else the newest the thread has taken, which is that frame's or
+//the one before. pspsdk's cube sample, a new picture every frame, 90 frames from its start, a picture each.
+auto geThreadFrames(const fs::path& programs) -> void {
+  std::printf("the frames shown with the GE on its thread: the same, a frame behind at most\n");
+  PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+  host.game = programPak(programs / "cube.elf", "program.elf");
+  constexpr u32 Frames = 90;
+  //(each frame run, then the picture the screen hands the front end for it, waited for: none is dropped)
+  auto frames = [&](const char* mode, bool exact) {
+    PlayStationPortable::option("GE Thread", mode);
+    std::vector<std::vector<u32>> shown;
+    Node::System root;
+    if(!CHECK(start(root), std::string{"the PSP starts with cube.elf, GE Thread "} + mode)) return shown;
+    CHECK((bool)psp.geThreading == (std::string{mode} == "On"), std::string{"the GE on its thread: "} + mode);
+    for(u32 frame = 0; frame < Frames; frame++) {
+      u32 before;
+      {
+        std::lock_guard lock{host.mutex};
+        before = host.frames;
+      }
+      psp.exactFrame = exact;
+      root->run();
+      for(u32 tries = 0; tries < 400; tries++) {
+        {
+          std::lock_guard lock{host.mutex};
+          if(host.frames > before) break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      std::lock_guard lock{host.mutex};
+      shown.push_back(host.frame);
+    }
+    psp.exactFrame = false;
+    root->unload();
+    return shown;
+  };
+  auto off = frames("Off", true), on = frames("On", true), behind = frames("On", false);
+  PlayStationPortable::option("GE Thread", "Off");
+  if(!CHECK(off.size() == Frames && on.size() == Frames && behind.size() == Frames, "every frame shown")) return;
+  u32 apart = 0, late = 0, wrong = 0, moving = 0;
+  for(u32 frame = 0; frame < Frames; frame++) {
+    apart += on[frame] != off[frame];
+    if(frame && off[frame] != off[frame - 1]) moving++;
+    if(behind[frame] == off[frame]) continue;
+    if(frame && behind[frame] == off[frame - 1]) late++;
+    else wrong++;
+  }
+  CHECK(moving > Frames / 2, "the cube moves (" + std::to_string(moving) + " new pictures)");
+  CHECK(apart == 0, "each frame's own picture with the GE on its thread (" + std::to_string(apart) + " apart)");
+  CHECK(wrong == 0, "without waiting, each frame's or the one before's (" + std::to_string(wrong) + " neither, " +
+                    std::to_string(late) + " a frame behind)");
+}
+
+//The GE on its thread stuck (a driver call that never returns, which a test hook stands for: the thread held at its
+//gate): saving a state gives up after two seconds, with no state; so does unloading, which leaves the thread be with
+//the machine under it (PlayStationPortable::wedged()); a load is refused while it's stuck; let go, it's joined
+//(unwedge()) and a game loads and runs again.
+auto geThreadStuck(const fs::path& programs) -> void {
+  std::printf("the GE on its thread stuck: saving and unloading give up, loads wait for it\n");
+  PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+  PlayStationPortable::option("GE Thread", "On");
+  host.game = programPak(programs / "cube.elf", "program.elf");
+  Node::System root;
+  if(!CHECK(start(root), "the PSP starts with the GE on its thread")) return;
+  for(u32 frame = 0; frame < 10; frame++) root->run();
+  std::atomic<bool> held{true};
+  psp.geThreading->drain();  //(the thread reads its gate as it takes each record)
+  psp.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  auto shown = psp.kernel.showing();
+  psp.geThreading->frame({psp.frames + 1, shown.frameBuffer, shown.bufferWidth, shown.pixelFormat, shown.width,
+                          shown.height});
+  auto timed = [](const std::function<void()>& what) {
+    auto started = std::chrono::steady_clock::now();
+    what();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  };
+  serializer state;
+  double took = timed([&] { state = root->serialize(true); });
+  CHECK(state.size() == 0 && took >= 1.9 && took < 4, "no state saved, after " + std::to_string(took) + " s");
+  took = timed([&] { root->unload(); });
+  CHECK(took >= 1.9 && took < 4, "the unload gives up after " + std::to_string(took) + " s");
+  CHECK(PlayStationPortable::wedged(), "the thread left be, stuck");
+  Node::System again;
+  CHECK(!PlayStationPortable::load(again, "[Sony] PlayStation Portable"), "a load refused while it's stuck");
+  CHECK(!PlayStationPortable::unwedge(50), "still stuck after 50 ms more");
+  held = false;
+  CHECK(PlayStationPortable::unwedge(2000) && !PlayStationPortable::wedged(), "let go, it's joined");
+  if(CHECK(start(again), "a game loads again")) {
+    for(u32 frame = 0; frame < 10; frame++) again->run();
+    CHECK(psp.geThreading && !psp.kernel.exited, "and runs on its thread");
+    again->unload();
+  }
+  PlayStationPortable::option("GE Thread", "Off");
+}
+
 //Where the host gives no memory that code may run from, the recompiler turns itself off, and the interpreter runs
 //the program instead. (Asking for no code memory at all stands for that: the host refuses the mapping.)
 auto noCodeMemory(const fs::path& programs) -> void {
@@ -1035,6 +1132,8 @@ auto main() -> int {
     sound(fs::path{programs});
     systemFonts(fs::path{programs});
     frontDialogs(fs::path{programs});
+    geThreadFrames(fs::path{programs});
+    geThreadStuck(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
     //(a failure where the run must have them: PHOBOS_TESTS_REQUIRE naming "programs", as CI's does)

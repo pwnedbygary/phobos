@@ -35,7 +35,7 @@ GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
 }
 
 GeThread::~GeThread() {
-  drain();
+  if(!abandoned.load(std::memory_order_acquire)) drain();  //(abandoned: let go of only once it has come back)
   ring.stop();
   thread.join();
   render.memory.watching = nullptr;
@@ -331,6 +331,31 @@ auto GeThread::state(const GE& from) -> void {
   publish();
 }
 
+auto GeThread::frame(const Frame& frame) -> void {
+  flushWords();
+  u8* at = append(Kind::Frame, sizeof(Frame));
+  std::memcpy(at, &frame, sizeof(Frame));
+  publish();
+  framesHanded++;
+}
+
+auto GeThread::waitFrames(u64 most) -> void {
+  Blocked holding{blocked};
+  for(u64 ended; framesHanded - (ended = framesEnded.load(std::memory_order_acquire)) > most;) {
+    framesEnded.wait(ended, std::memory_order_acquire);
+  }
+}
+
+auto GeThread::frameBytes(const Frame& frame, const std::function<auto (const u8* vram) -> void>& use) -> void {
+  u32 bytes = (frame.pixelFormat & 3) == 3 ? 4 : 2;
+  for(u32 y = 0; y < frame.height; y++) {
+    render.memory.pointer(frame.frameBuffer + y * frame.bufferWidth * bytes, frame.width * bytes);
+  }
+  u32 low = ((frame.frameBuffer & 0x1fff'ffff) - Memory::VRAMBase) % Memory::VRAMSize;
+  u32 high = low + ((frame.height - 1) * frame.bufferWidth + frame.width) * bytes - 1;
+  render.readingVRAM(low, high, use);
+}
+
 auto GeThread::owedOf(u64 run, bool wait, Owed& owed) -> bool {
   u64 ended = runsEnded.load(std::memory_order_acquire);
   if(ended < run && !wait) return false;
@@ -527,10 +552,32 @@ auto GeThread::drain() -> void {
     Blocked holding{blocked};
     for(u64 at; (at = done.load(std::memory_order_acquire)) != serial;) done.wait(at, std::memory_order_acquire);
   }
+  afterDrain();
+}
+
+auto GeThread::drainBy(std::chrono::steady_clock::time_point deadline) -> bool {
+  flushWords();
+  {
+    Blocked holding{blocked};
+    while(done.load(std::memory_order_acquire) != serial) {
+      if(std::chrono::steady_clock::now() >= deadline) return false;
+      std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+  }
+  afterDrain();
+  return true;
+}
+
+auto GeThread::afterDrain() -> void {
   for(auto& text : notes) control.note(text);  //(each once, whichever GE noted it)
   notes.clear();
   rendererChanged();  //(its resolution, or the GPU lost, as the render GE has it now)
   if(versions->versions()) versions->free(2 * serial);  //(it has passed them all)
+}
+
+auto GeThread::abandon() -> void {
+  abandoned.store(true, std::memory_order_release);
+  ring.stop();
 }
 
 auto GeThread::take() -> void {
@@ -542,6 +589,7 @@ auto GeThread::take() -> void {
     if(checking) replica.passed = header.serial - 1;
     if(gate) gate(header.serial);
     if(fuzz != Fuzz::None) fuzzBefore(header.serial);
+    if(abandoned.load(std::memory_order_acquire)) break;
     replay(header, at + sizeof(header));
     ring.release();
     //(every software pixel of the records so far in memory: none waits to be drawn)
@@ -552,6 +600,7 @@ auto GeThread::take() -> void {
     done.store(header.serial, std::memory_order_release);
     done.notify_all();
   }
+  left.store(true, std::memory_order_release);
 }
 
 //(the GE thread's, fuzzing, before it does the record at place: thread.hpp)
@@ -697,6 +746,14 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     GE::State state;
     std::memcpy(&state, data, sizeof(state));
     render.takeState(state);
+    break;
+  }
+  case Kind::Frame: {
+    Frame frame;
+    std::memcpy(&frame, data, sizeof(frame));
+    if(frameEnd) frameEnd(frame);
+    framesEnded.fetch_add(1, std::memory_order_release);
+    framesEnded.notify_all();
     break;
   }
   }

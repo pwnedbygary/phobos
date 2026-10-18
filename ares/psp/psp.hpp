@@ -35,6 +35,12 @@ namespace ares::PlayStationPortable {
   auto window(void* window) -> void;
   auto presenting() -> bool;
   auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool;
+  //The GE on a thread of its own (option "GE Thread"), stuck: an unload found it still busy after two seconds (a
+  //driver call that never returned), and left it be with the machine under it. wedged(): whether one is; unwedge():
+  //waits up to milliseconds for it to come back, then finishes the unload (true: none left). Loads are refused while
+  //one is (load() is false): a front end with threads of its own stuck the same way asks for a restart.
+  auto wedged() -> bool;
+  auto unwedge(u32 milliseconds) -> bool;
 }
 
 #include <psp/cpu/allegrex.hpp>
