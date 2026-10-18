@@ -120,6 +120,7 @@ import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.PspDialogAnswer
 import com.phobos.emulator.util.PspDialogRequest
 import com.phobos.emulator.util.PspDrawingThreads
+import com.phobos.emulator.util.PspGraphicsOverlap
 import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspResolution
 import com.phobos.emulator.util.PspStartSettings
@@ -579,6 +580,11 @@ class MainViewModel(
     fun setPspResolution(scale: Int) = viewModelScope.launch {
         settingsStore.setPspResolution(scale)
         PhobosCore.setPspResolution(PspResolution.forCore(scale))
+    }
+    /** Whether a PSP game's pictures are drawn alongside its own work: [PspGraphicsOverlap], taken as a game starts. */
+    fun setPspGraphicsOverlap(mode: Int) = viewModelScope.launch {
+        settingsStore.setPspGraphicsOverlap(mode)
+        PhobosCore.setPspGraphicsOverlap(PspGraphicsOverlap.forCore(mode))
     }
     /** What a controller's right stick does in a PSP game: [PspRightStick], read by every stick move. */
     fun setPspRightStick(choice: PspRightStick) = viewModelScope.launch { settingsStore.setPspRightStick(choice) }
@@ -1959,6 +1965,7 @@ class MainViewModel(
             PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(settings.value.pspDrawingThreads))
             PhobosCore.setPspRenderer(PspRenderer.forCore(settings.value.pspRenderer))
             PhobosCore.setPspResolution(PspResolution.forCore(settings.value.pspResolution))
+            PhobosCore.setPspGraphicsOverlap(PspGraphicsOverlap.forCore(settings.value.pspGraphicsOverlap))
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -3031,7 +3038,8 @@ class MainViewModel(
             Log.i("Phobos", "Saves path resolved: $savesDir")
             // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
-            val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution, currentSettings.pspDrawingThreads)
+            val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution,
+                currentSettings.pspDrawingThreads, currentSettings.pspGraphicsOverlap)
             _pspStartSettings.value = pspStart.takeIf { effectiveSystem == LaunchSystems.PSP }
             // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
             PhobosCore.setPspDrawingThreads(pspStart.drawingThreads)
@@ -3039,6 +3047,8 @@ class MainViewModel(
             PhobosCore.setPspRenderer(pspStart.renderer)
             // How many times over it draws each pixel (Vulkan's alone): Native, or 2x to 10x.
             PhobosCore.setPspResolution(pspStart.resolution)
+            // Whether its pictures are drawn alongside its own work, the core's "GE Thread" as the game starts.
+            PhobosCore.setPspGraphicsOverlap(pspStart.graphicsOverlap)
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.
             val pspFonts = PspFonts.folder(context.filesDir)

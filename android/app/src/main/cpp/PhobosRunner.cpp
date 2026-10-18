@@ -997,6 +997,8 @@ namespace ares {
   static std::atomic<s32> pspRenderer{0};
   // How many times over Vulkan's draws each of the PSP's pixels (Settings' "PSP Resolution"): 1, Native, to 10.
   static std::atomic<s32> pspResolution{1};
+  // Whether the PSP's pictures are drawn on a thread of their own (Settings' "PSP Graphics Overlap"): 0 Off, 1 On.
+  static std::atomic<s32> pspGraphicsOverlap{0};
   // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
   static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;
@@ -3598,6 +3600,22 @@ else if (port->type() == "Keyboard") {
     } else if (identifiedSystem == "PlayStation") {
       success = ::ares::PlayStation::load(root, getRegion("[Sony] PlayStation (NTSC-U)", "[Sony] PlayStation (NTSC-J)", "[Sony] PlayStation (PAL)"));
     } else if (identifiedSystem == "PlayStation Portable") {
+      // A PSP emulation thread an unload left stuck inside root->run() (in a GPU driver call) is joined first, as an
+      // N64 one is; and the core's own GE thread, if an unload left it stuck the same way (its unwedge()). While either
+      // remains, the core's one machine is still theirs: no game is loaded, and the user is asked to restart the app.
+      joinAbandonedThreads(2000);
+      bool zombies = false;
+      {
+        std::lock_guard<std::mutex> lock(zombieThreadsMutex);
+        zombies = !zombieThreads.empty();
+      }
+      if (zombies || !::ares::PlayStationPortable::unwedge(2000)) {
+        LOGE("PSP: a thread of the last game is still stuck (in the GPU's driver?): restart the app to play again");
+        loadProblem = "A thread of the last PSP game is still stuck in the GPU's driver: restart the app to play "
+                      "again.";
+        currentMedium.reset();
+        return false;
+      }
       // Every game shares one memory stick (saves in PSP/SAVEDATA, as on a PSP) unless the user picked a folder.
       string memoryStick = pspMemoryStickPath;
       if (!memoryStick && savesPath) memoryStick = {savesPath, "/PlayStation Portable/Memory Stick"};
@@ -3619,6 +3637,9 @@ else if (port->type() == "Keyboard") {
       ::ares::PlayStationPortable::option("Renderer", rendererName);
       LOGI("PSP: resolution %dx", pspResolution.load());
       ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      // The GE on a thread of its own: its pictures drawn while the game goes on (the same pictures either way).
+      LOGI("PSP: graphics overlap %s", pspGraphicsOverlap.load() == 1 ? "on" : "off");
+      ::ares::PlayStationPortable::option("GE Thread", pspGraphicsOverlap.load() == 1 ? "On" : "Off");
       // The Vulkan renderer's pipelines kept between sessions, beside the N64's (the Vulkan cache folder, or saves').
       string pspCacheDir = vulkanCachePath;
       if (!pspCacheDir) pspCacheDir = savesPath;
@@ -4732,6 +4753,7 @@ else if (port->type() == "Keyboard") {
   auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
   auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 || renderer == 2 ? renderer : 0; }
   auto setPspResolution(s32 scale) -> void { pspResolution = std::clamp(scale, 1, 10); }
+  auto setPspGraphicsOverlap(s32 mode) -> void { pspGraphicsOverlap = mode == 1 ? 1 : 0; }
   auto takePspNotice() -> std::string {
     std::string text = (const char*)::ares::PlayStationPortable::notice();
     if (!text.empty()) addLog(LogLevel::Warn, {"PSP: ", text.c_str()});

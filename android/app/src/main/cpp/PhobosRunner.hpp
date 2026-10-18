@@ -134,6 +134,9 @@ namespace ares {
   auto setPspRenderer(s32 renderer) -> void;
   // The Vulkan renderer's internal resolution (its core's "Resolution", as a game starts): 1, the PSP's, to 10 times.
   auto setPspResolution(s32 scale) -> void;
+  // Whether the PSP's pictures are drawn on a thread of their own, alongside the game's work (its core's "GE Thread",
+  // as a game starts): 0 Off, 1 On.
+  auto setPspGraphicsOverlap(s32 mode) -> void;
   // What the PSP's core has to tell the user, once (its Vulkan renderer couldn't start, or stopped): taken, and put
   // in the log; empty if nothing.
   auto takePspNotice() -> std::string;

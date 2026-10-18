@@ -269,6 +269,8 @@ data class EmulatorSettings(
     val pspRenderer: Int = 0,
     /** The Vulkan renderer's internal resolution (util/PspVideo.kt): 1, Native, to 10 times the PSP's. */
     val pspResolution: Int = 1,
+    /** Whether a PSP game's pictures are drawn alongside its own work (util/PspVideo.kt's PspGraphicsOverlap): 0 Off, 1 On. */
+    val pspGraphicsOverlap: Int = 0,
     /** What a controller's right stick does in a PSP game. */
     val pspRightStick: PspRightStick = PspRightStick.OFF,
     val arcadeRomsPath: String = "",
@@ -400,6 +402,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val PSP_DRAWING_THREADS = intPreferencesKey("psp_drawing_threads")
         val PSP_RENDERER = intPreferencesKey("psp_renderer")
         val PSP_RESOLUTION = intPreferencesKey("psp_resolution")
+        val PSP_GRAPHICS_OVERLAP = intPreferencesKey("psp_graphics_overlap")
         val PSP_RIGHT_STICK = stringPreferencesKey("psp_right_stick")
         val ZX_TAPE_AUTO = booleanPreferencesKey("zx_tape_auto")
         val BUSY_WAIT_PACING = booleanPreferencesKey("busy_wait_pacing")
@@ -647,6 +650,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             pspDrawingThreads = safeGet(PSP_DRAWING_THREADS, 0),
             pspRenderer = safeGet(PSP_RENDERER, 0),
             pspResolution = safeGet(PSP_RESOLUTION, 1),
+            pspGraphicsOverlap = safeGet(PSP_GRAPHICS_OVERLAP, 0),
             pspRightStick = enumOrDefault(safeGetString(PSP_RIGHT_STICK, ""), PspRightStick.OFF),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
@@ -886,6 +890,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setPspDrawingThreads(threads: Int) = dataStore.edit { it[PSP_DRAWING_THREADS] = threads }
     suspend fun setPspRenderer(renderer: Int) = dataStore.edit { it[PSP_RENDERER] = renderer }
     suspend fun setPspResolution(scale: Int) = dataStore.edit { it[PSP_RESOLUTION] = scale }
+    suspend fun setPspGraphicsOverlap(mode: Int) = dataStore.edit { it[PSP_GRAPHICS_OVERLAP] = mode }
     suspend fun setPspRightStick(choice: PspRightStick) = dataStore.edit { it[PSP_RIGHT_STICK] = choice.name }
     suspend fun setZxTapeAuto(enabled: Boolean) = dataStore.edit { it[ZX_TAPE_AUTO] = enabled }
     suspend fun setBusyWaitPacing(enabled: Boolean) = dataStore.edit { it[BUSY_WAIT_PACING] = enabled }
