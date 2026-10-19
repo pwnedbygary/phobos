@@ -108,14 +108,15 @@ auto Kernel::geRun() -> void {
 //takes a PSP's GE at least this long, in clocks of the bus, which is the GE's (half the PLL's: 95, 111, 133 or 166
 //MHz, power.cpp). The GE takes it up once it's done with what came before, or now. Two ways, by the option "GE
 //Timing" (gePspTiming):
-//- "Fast", the default: Sony's figures for it (its Hot Chips 2004 paper), at 166 MHz 664 million pixels a second
+//- "Fast", the opt-in: Sony's figures for it (its Hot Chips 2004 paper), at 166 MHz 664 million pixels a second
 //  (four a clock) and 35 million polygons a second through its geometry and its setup. Those are its peaks: a clock
 //  for every four pixels, or 166/35 clocks for every primitive, whichever is longer (the two may go on at once), and
 //  nothing for what no figure gives (the commands, primitives dropped before they're set up, block transfers). A
 //  PSP's GE takes 4 to 12 times this over games' lists (docs/psp-core.md, part 103).
-//- "PSP": as the owner's PSP took it (GE::Cost: rounds 6 and 8's timed lists, docs/psp-core.md parts 76 and 106),
-//  its two ends going on at once as far as the queue between them lets them (GE::Pipe), from one run of a list to
-//  the next (geResume()); a list's own time as it starts and the driver's CPU time besides (geOwe(), geDriven()).
+//- "PSP" (the default): as the owner's PSP took it (GE::Cost: rounds 6, 8, 9 and 10's timed lists, docs/psp-core.md
+//  part 106), its two ends going on at once as far as the queue between them lets them (GE::Pipe), from one run of a
+//  list to the next (geResume()); a list's own time as it starts and the driver's CPU time besides (geOwe(),
+//  geDriven()).
 //  Its front end has got through it (geReachAt, a SIGNAL's time) with its own work done: no further ahead of the
 //  drawing than the queue holds.
 auto Kernel::geTime(u64 commands) -> void {

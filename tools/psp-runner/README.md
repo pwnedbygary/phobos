@@ -77,10 +77,11 @@ the runner refuses anything else):
   its run is done, so nothing waits for the GPU at a frame's end, as when the app presents on its
   window. For timing the GPU as the app runs it; the PNGs then show a frame or two before the one
   they're named by.
-- `--ge-timing psp|fast` — the GE's time (the core's option "GE Timing"): `psp` as the owner's PSP
-  took it over the same work (round 6's model, docs/psp-core.md part 76), `fast` (the default) by
-  Sony's peak rates, which games' lists take a PSP 4 to 12 times longer than (part 103). The report
-  names it; a `--ge-profile` file made with `psp` carries its flag, and geprof.py says so.
+- `--ge-timing psp|fast` — the GE's time (the core's option "GE Timing"): `psp` (the default) as the
+  owner's PSP took it over the same work (docs/psp-core.md part 106), `fast` by Sony's peak rates,
+  which games' lists take a PSP 4 to 12 times longer than (part 103). The report names it; a
+  `--ge-profile` file made with `psp` carries its flag, and geprof.py says so. `--ge-thread on` takes
+  `--ge-timing fast` (the PSP's timing keeps the GE on the emulation thread, and the runner says so).
 - `--pipeline-cache FILE` — the Vulkan renderer's pipelines kept in `FILE` between runs (the core's
   option "Pipeline Cache"), as the app keeps them: a second run starts with the first's, made at once.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and

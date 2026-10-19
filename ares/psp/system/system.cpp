@@ -33,10 +33,10 @@ auto load(Node::System& node, string name) -> bool {
 //game, a stutter the first time each is met). "Dialogs", "true" for a host that shows the system's dialogs itself
 //(dialogID(), dialog(), answer(); taken at the next power on): a message, the keyboard and the save dialogs that ask
 //the player wait for its answer; without it (the default) they're answered at once, as they always were. "GE
-//Timing", "PSP" for the GE to take the time the owner's PSP took over the same work (docs/psp-core.md, part 76), or
-//"Fast" (the default) for Sony's peak rates, which games' lists take a PSP 4 to 12 times longer than (part 103);
-//taken at the next power on (Kernel::geTime()). With "PSP" the GE stays on the emulation thread whatever "GE Thread"
-//says (threadGE()).
+//Timing", "PSP" (the default, the owner's choice) for the GE to take the time the owner's PSP took over the same work
+//(docs/psp-core.md, part 106), or "Fast" for Sony's peak rates, which games' lists take a PSP 4 to 12 times longer
+//than (part 103); taken at the next power on (Kernel::geTime()). With "PSP" the GE stays on the emulation thread
+//whatever "GE Thread" says (threadGE()).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -52,7 +52,7 @@ auto option(string name, string value) -> bool {
   if(name == "Late Frames") system.lateFrames = value.boolean();
   if(name == "Pipeline Cache") system.pipelineCache = value;
   if(name == "Dialogs") system.dialogs = value.boolean();
-  if(name == "GE Timing") system.gePspTiming = value == "PSP";
+  if(name == "GE Timing") system.gePspTiming = value != "Fast";
   return true;
 }
 

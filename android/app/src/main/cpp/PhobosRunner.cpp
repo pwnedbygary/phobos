@@ -997,8 +997,8 @@ namespace ares {
   static std::atomic<s32> pspRenderer{0};
   // How many times over Vulkan's draws each of the PSP's pixels (Settings' "PSP Resolution"): 1, Native, to 10.
   static std::atomic<s32> pspResolution{1};
-  // The GE timed as a real PSP's, not by Sony's peak rates (Settings' "PSP GE Timing").
-  static std::atomic<bool> pspGeTiming{false};
+  // The GE timed as a real PSP's, not by Sony's peak rates (Settings' "PSP GE Timing", on by default).
+  static std::atomic<bool> pspGeTiming{true};
   // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
   static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;

@@ -59,6 +59,7 @@ asked, ran = r["asked"], r["ran"]
 assert asked["renderer"] is None and asked["engine"] is None and asked["resolution"] is None, asked
 assert asked["frames"] == 60 and asked["start time"] is None and asked["png every"] == 30, asked
 assert asked["png at"] is None and asked["presses"] == 0 and asked["memory stick"] is None, asked
+assert asked["ge timing"] == "psp", asked  # (the PSP's GE timing unless --ge-timing fast)
 assert ran["renderer"] == "Software" and ran["device"] is None and ran["gpu lost"] is False, ran
 assert ran["engine"] == "recompiler" and ran["resolution"] == 1 and ran["utc offset"], ran
 assert r["game"]["kind"] == "program.elf" and r["game"]["bytes"] > 0

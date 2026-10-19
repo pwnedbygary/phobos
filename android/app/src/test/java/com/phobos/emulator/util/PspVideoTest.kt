@@ -49,6 +49,9 @@ class PspVideoTest {
         assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 2, 0)))
         // As the core is told them: a value from elsewhere is its default.
         assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO), PspStartSettings.of(7, 0, 3))
+        // The GE timed as a PSP's unless Fast is chosen, and a game started with the other timing runs differently.
+        assertTrue(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0).geTiming)
+        assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0, geTiming = false)))
         assertTrue(software.runsAs(PspStartSettings.of(9, 1, 5)))
     }
 

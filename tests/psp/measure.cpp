@@ -332,8 +332,8 @@ static auto waitFor(KernelMachine& m, u32 frames, const std::function<bool()>& d
 
 //Round 6's files as this core writes them, for measured6.cpp's comparisons with the owner's PSP: the program's round 6
 //alone (its menu's second line) runs once, in a machine of its own with the GE timed as the PSP's (the option "GE
-//Timing"), the first time they're asked for (the measure test's run, with the default timing, keeps none). None
-//without the program.
+//Timing"), the first time they're asked for (the measure test's run, with "Fast", the test machine's, keeps none).
+//None without the program.
 static std::unique_ptr<HostFolder> round6Kept;
 static auto keepRound6(const std::filesystem::path& results) -> void {
   round6Kept = std::make_unique<HostFolder>();

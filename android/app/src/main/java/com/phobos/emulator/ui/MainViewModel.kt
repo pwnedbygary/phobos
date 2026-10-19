@@ -3046,7 +3046,7 @@ class MainViewModel(
             PhobosCore.setPspRenderer(pspStart.renderer)
             // How many times over it draws each pixel (Vulkan's alone): Native, or 2x to 10x.
             PhobosCore.setPspResolution(pspStart.resolution)
-            // How long the GE takes over its work: as a real PSP's GE, or by Sony's peak rates (the default).
+            // How long the GE takes over its work: as a real PSP's GE (the default), or by Sony's peak rates.
             PhobosCore.setPspGeTiming(pspStart.geTiming)
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.

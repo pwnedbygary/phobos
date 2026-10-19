@@ -28,8 +28,8 @@
 //                                them gives: on by default, off with --ge-profile unless given (so a profile counts
 //                                every poll, as the PSP's plugin records them)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
-//    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on (not
-//                                with --ge-timing psp, whose GE stays on the emulation thread)
+//    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on (with
+//                                --ge-timing fast: the PSP's timing keeps the GE on the emulation thread)
 //    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
 //                                system's Vulkan loader; the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
@@ -37,8 +37,8 @@
 //    --late-frames              the GPU's frames taken a frame or two late, nothing waited for each frame, as
 //                                when the app presents them (for timing, at 1x; PNGs then show an earlier frame)
 //    --pipeline-cache FILE      the Vulkan renderer's pipelines kept in FILE between runs, as the app keeps them
-//    --ge-timing psp|fast       the GE's time: as the owner's PSP took it (psp), or Sony's peak rates (fast, the
-//                                default) (the core's option "GE Timing")
+//    --ge-timing psp|fast       the GE's time: as the owner's PSP took it (psp, the default), or Sony's peak rates
+//                                (fast) (the core's option "GE Timing")
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //    --trace-savedata           each savedata request and its answer, a line with its frame: the mode, the game's
@@ -468,7 +468,7 @@ auto main(int argc, char** argv) -> int {
   std::string geThread;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
-  bool lateFrames = false, gePspTiming = false;
+  bool lateFrames = false, gePspTiming = true;
   std::string pipelineCache;
   fs::path reportFile;
   u32 startTime = 0, screenStopsAt = 0;
@@ -649,6 +649,10 @@ auto main(int argc, char** argv) -> int {
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
   if(!geThread.empty()) PlayStationPortable::option("GE Thread", geThread == "on" || geThread == "On" ? "On" : "Off");
+  if(gePspTiming && (geThread == "on" || geThread == "On")) {
+    std::fprintf(stderr, "--ge-thread on: the PSP's GE timing keeps the GE on the emulation thread (--ge-timing fast "
+                         "for the thread)\n");
+  }
   //(the core's names, "Vulkan (accurate)" and "Vulkan (fast)", as one word each for a shell)
   if(renderer == "Vulkan-accurate") renderer = "Vulkan";
   if(renderer == "Vulkan-fast") renderer = "Vulkan (fast)";

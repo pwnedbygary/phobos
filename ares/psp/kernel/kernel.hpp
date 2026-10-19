@@ -1114,8 +1114,8 @@ struct Kernel {
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
   mutable u64 geDoneAt = 0; //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
-  bool gePspTiming = false; //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", geTime());
-                            //power() leaves it
+  bool gePspTiming = true;  //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", its default,
+                            //geTime()); power() leaves it
   u64 geReachAt = 0;        //when (cycles) a PSP's GE's front end would have got through what it was last given
   bool geSignalDue = false; //with the PSP's timing, the list met a SIGNAL, its interrupt taken from geReachAt on, the
                             //GE waiting there (geRun())

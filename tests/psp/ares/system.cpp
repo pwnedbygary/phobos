@@ -1039,6 +1039,11 @@ auto main() -> int {
   fs::remove_all(scratch);
   fs::create_directories(scratch);
 
+  //"GE Timing" is "PSP" till a front end says otherwise (the owner's choice); the checks after this one choose "Fast",
+  //master's timing, but for the one that tries both (geThreadAndPspTiming())
+  std::printf("the GE timed as the PSP's by default\n");
+  CHECK(psp.gePspTiming, "GE Timing PSP by default");
+  PlayStationPortable::option("GE Timing", "Fast");
   names();
   nodeTree();
   drawingThreads();

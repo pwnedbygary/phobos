@@ -764,7 +764,7 @@ struct GE {
   //333/166 MHz (and some at 333/222/166 and 266/133 too: the GE's time follows the bus's clock alone). The GE reads its
   //list and fetches, transforms and lights vertices (its front end), and hands each primitive on to be set up and drawn
   //(its back end): the two go on at once as far as the queue between them lets them (Pipe).
-  //A list also takes some time of its own as it starts. Used with the option "GE Timing" "PSP"; "Fast", the default,
+  //A list also takes some time of its own as it starts. Used with the option "GE Timing" "PSP", the default; "Fast"
   //charges Sony's peak rates instead (owedPixels, owedPrimitives). The clocks are tools/psp-measure/ge-fit.py's fit of
   //rounds 6, 8, 9 and 10 (to three figures; part 106 has the command, and the lists it holds out), but where a comment
   //says otherwise.
@@ -916,7 +916,7 @@ struct GE {
     }
     for(u32 n = 0; n < pipe.count; n++) pipe.items[(pipe.first + n) % Pipe::Room].done -= clocks;
   }
-  //And what Sony's peak rates count of the same (the GE timing "Fast", the default): the primitives set up (a
+  //And what Sony's peak rates count of the same (the GE timing "Fast", the opt-in): the primitives set up (a
   //triangle cut at the near plane, its pieces) and their pixels inside the scissor rectangle.
   u64 owedPixels = 0, owedPrimitives = 0;
   auto owe(u64 pixels) -> void { owedPixels += pixels, owedPrimitives++; }  //(those alone: owePrimitive() does both)

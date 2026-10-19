@@ -269,8 +269,9 @@ data class EmulatorSettings(
     val pspRenderer: Int = 0,
     /** The Vulkan renderer's internal resolution (util/PspVideo.kt): 1, Native, to 10 times the PSP's. */
     val pspResolution: Int = 1,
-    /** The GE takes the time a real PSP's took over the same work, not Sony's peak rates (the core's "GE Timing"). */
-    val pspGeTiming: Boolean = false,
+    /** The GE takes the time a real PSP's took over the same work (the core's "GE Timing" "PSP", the default), not
+     *  Sony's peak rates ("Fast"). */
+    val pspGeTiming: Boolean = true,
     /** What a controller's right stick does in a PSP game. */
     val pspRightStick: PspRightStick = PspRightStick.OFF,
     val arcadeRomsPath: String = "",
@@ -650,7 +651,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             pspDrawingThreads = safeGet(PSP_DRAWING_THREADS, 0),
             pspRenderer = safeGet(PSP_RENDERER, 0),
             pspResolution = safeGet(PSP_RESOLUTION, 1),
-            pspGeTiming = safeGet(PSP_GE_TIMING, false),
+            pspGeTiming = safeGet(PSP_GE_TIMING, true),
             pspRightStick = enumOrDefault(safeGetString(PSP_RIGHT_STICK, ""), PspRightStick.OFF),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),

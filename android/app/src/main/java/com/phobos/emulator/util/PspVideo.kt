@@ -87,7 +87,7 @@ data class PspStartSettings(
     val renderer: Int,
     val resolution: Int,
     val drawingThreads: Int,
-    val geTiming: Boolean = false,
+    val geTiming: Boolean = true,
 ) {
     /** Whether a game started with these runs as one started with [other] would: Resolution is the Vulkan renderer's alone. */
     fun runsAs(other: PspStartSettings): Boolean =
@@ -95,7 +95,7 @@ data class PspStartSettings(
             (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
 
     companion object {
-        fun of(renderer: Int, resolution: Int, drawingThreads: Int, geTiming: Boolean = false) = PspStartSettings(
+        fun of(renderer: Int, resolution: Int, drawingThreads: Int, geTiming: Boolean = true) = PspStartSettings(
             PspRenderer.forCore(renderer), PspResolution.forCore(resolution), PspDrawingThreads.forCore(drawingThreads),
             geTiming,
         )
