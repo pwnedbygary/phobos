@@ -10,6 +10,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#if defined(__APPLE__) || defined(__linux__)
+#include <pthread.h>
+#endif
 
 #include "ring.hpp"
 #include "model.hpp"

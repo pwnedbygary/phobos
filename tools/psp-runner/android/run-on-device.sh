@@ -23,6 +23,8 @@
 #  --cooldown SECONDS    a pause before each run after the first (0)
 #  --pin MODE            the emulation thread's pinning (PHOBOS_PIN: app, the default, as the app pins it; fastest;
 #                        none; or CPUs, "7"); --nice N its nice value (-10); --no-perf no hardware counters
+#  --ge-pin CPUS         the GE's own thread's CPUs ("GE Thread" On; PHOBOS_GE_PIN, "7", "4-6"), every frame; unset,
+#                        it's left as it is (the CPU it was on is kept either way)
 #  --perf-harden-off     hardware counters allowed for the runs: security.perf_harden set to 0, and back to what it
 #                        was after (it changes a system property; without it the counters are tried as the device is)
 #  --no-fonts            no system fonts
@@ -46,7 +48,7 @@ BUILDS=${PHOBOS_ANDROID_OUT:-${PHOBOS_ANDROID_WORK:-${TMPDIR:-/tmp}/phobos-psp-r
 FLAVOR=${PHOBOS_FLAVOR:-modern}
 NAME= TIMEOUT=600 REPEAT=1 COOLDOWN=0 DRY=0 HARDEN=0 USE_FONTS=1 ACTION=run
 ENVIRONMENT=()
-for variable in PHOBOS_PIN PHOBOS_NICE PHOBOS_PERF PHOBOS_FREQ_EVERY PHOBOS_MEASURE PSP_GPU_ON_CPU; do
+for variable in PHOBOS_PIN PHOBOS_GE_PIN PHOBOS_NICE PHOBOS_PERF PHOBOS_FREQ_EVERY PHOBOS_MEASURE PSP_GPU_ON_CPU; do
   [[ -z ${!variable:-} ]] || ENVIRONMENT+=("$variable=${!variable}")
 done
 
@@ -59,6 +61,7 @@ while (($#)); do
     --repeat) REPEAT=$2; shift 2 ;;
     --cooldown) COOLDOWN=$2; shift 2 ;;
     --pin) ENVIRONMENT+=("PHOBOS_PIN=$2"); shift 2 ;;
+    --ge-pin) ENVIRONMENT+=("PHOBOS_GE_PIN=$2"); shift 2 ;;
     --nice) ENVIRONMENT+=("PHOBOS_NICE=$2"); shift 2 ;;
     --no-perf) ENVIRONMENT+=("PHOBOS_PERF=0"); shift ;;
     --perf-harden-off) HARDEN=1; shift ;;

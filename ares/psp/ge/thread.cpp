@@ -31,7 +31,15 @@ GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
   //(its reads of nothing, the software renderer's texels among them, reported as the kernel's GE's memory reports
   //them: the count a state keeps saturates, so the two threads' order doesn't change it)
   render.memory.unmapped = control.memory.unmapped;
-  thread = std::thread([this] { take(); });
+  thread = std::thread([this] {
+    //(named for profilers and the runner's measurements, which find it by its name: tools/psp-runner/android)
+    #if defined(__APPLE__)
+    pthread_setname_np("psp-ge-thread");
+    #elif defined(__linux__)
+    pthread_setname_np(pthread_self(), "psp-ge-thread");
+    #endif
+    take();
+  });
 }
 
 GeThread::~GeThread() {
