@@ -14,6 +14,7 @@ namespace ares::PlayStationPortable {
 #include "recompiler-vfpu.cpp"
 #include "recompiler-memory.cpp"
 #include "serialization.cpp"
+#include "cache.cpp"
 
 //Clears every register and starts the program at entry (the game's entry point, as the loader finds it).
 auto Allegrex::power(u32 entry) -> void {
@@ -27,6 +28,7 @@ auto Allegrex::power(u32 entry) -> void {
   pipeline = {};
   ipu.pc = entry;
   ipu.pd = entry + 4;
+  dataCache.reset(), instructionCache.reset();
   recompiler.reset();
 }
 

@@ -29,6 +29,7 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
     test32(base, imm(alignment - 1), set_z);
     misaligned = jump(flag_nz);
   }
+  if(self.dataCache.enabled) emitDataCache(base, store);  //(with the PSP's GE timing alone)
   //the physical page, address bits 12-28, into reg(1)
   #if defined(ARCHITECTURE_ARM64)
   u32 ubfx = 0xd340'0000 | 12 << 16 | 28 << 10 | sljit_get_register_index(SLJIT_GP_REGISTER, base.fst) << 5
@@ -44,6 +45,35 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
   if(alignment == 16) add64(reg(1), reg(1), reg(0));  //(a quad's four words: reg(1) the host address)
   access();
   emitColdFallback({misaligned, missing}, address, instruction, count, delaySlot);  //(a load's result read back)
+}
+
+//With the PSP's GE timing, the access's line in its set's most recently used way of the data cache's tags
+//(Allegrex::Cache): there (dirty already, for a store), nothing more; else, cold, dataCacheMiss() does the rest and
+//returns the address, back where base had it (reg(0), or a saved register the call keeps). Before the page is looked
+//up, so reg(1) to reg(3) are free; a misaligned access has gone to the interpreter already.
+auto Allegrex::Recompiler::emitDataCache(op_base base, bool store) -> void {
+  lshr32(reg(1), base, imm(6));                           //the line's key
+  and32(reg(2), reg(1), imm(Cache::Sets - 1));            //its set
+  add64(reg(3), sreg(0), imm((const u8*)self.dataCache.recent - (const u8*)&self));
+  mov32(reg(2), mem(SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 2));  //the set's most recently used way
+  if(store) or32(reg(1), reg(1), imm(Cache::Dirty));
+  else and32(reg(2), reg(2), imm(~Cache::Dirty));
+  auto missed = sljit_emit_cmp(compiler, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_R2, 0);
+  emitCold({missed}, [=, this] {
+    mov32(reg(1), base);
+    callf(&Allegrex::dataCacheMiss, reg(1), imm(store ? 1 : 0));
+  });
+}
+
+//With the PSP's GE timing, the line of the instruction at address (as a block starts, or its code reaches a line's
+//first word) in its set's most recently used way of the instruction cache's tags (Allegrex::Cache): there, nothing
+//more; else, cold, instructionCacheMiss() does the rest. Between instructions, where no scratch register holds
+//anything; code an uncached mirror runs holds no line.
+auto Allegrex::Recompiler::emitInstructionCache(u32 address) -> void {
+  if(u32 top = address >> 29; top != 0 && top != 4) return;
+  mov32(reg(0), field(&self.instructionCache.recent[(address >> 6) & (Cache::Sets - 1)]));
+  auto missed = cmp32_jump(reg(0), imm(Cache::codeKey(address)), flag_ne);
+  emitCold({missed}, [=, this] { callf(&Allegrex::instructionCacheMiss, imm(address)); });
 }
 
 #define RTn (instruction >> 16 & 31)

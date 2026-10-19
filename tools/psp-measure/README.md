@@ -88,7 +88,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
 | `fit.py` | Fits the model behind the maths functions (128 segments of integer coefficients per function) from the results alone, and checks it reproduces every recorded value. It gave the core's `vfpu-segments.hpp`. Needs numpy. |
-| `ge-terms.py`, `ge-fit.py`, `contention10.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md part 106): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6, 8, 9 and 10's timed lists; `contention10.py` fits the CPU beside the GE to round 10's time-contention. Python alone. |
+| `ge-terms.py`, `ge-fit.py`, `contention10.py`, `contention11.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md parts 106 and 113): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6, 8, 9 and 10's timed lists; `contention10.py` fits the CPU beside the GE to round 10's time-contention, `contention11.py` again with the traffic as the CPU's caches count it (and with `--core`, the core's own run of rounds 10 and 10b beside the PSP's). Python alone. |
 
 ## The VFPU and the FPU
 
@@ -477,4 +477,8 @@ term's clocks under `GE::Cost`'s names, then how far the fitted model misses eac
 `time-anchors` and `time-anchors2`, round 8's cases again, the cases outside the model, the lists held out); part 106
 has the command that gave the clocks in `ge.hpp`. `contention10.py PSP_RESULTS r10.txt ours10` reads round 10's
 time-contention: each list's slowdown beside each CPU pattern, each pattern's RAM traffic, and the GE's contention by
-kind of read fitted to them (`GE::Cost::Contention`).
+kind of read fitted to them. `contention11.py PSP_RESULTS r10.txt ours10` fits the same with each pattern's traffic as
+the CPU's caches count it, and the PSP CPU's pace from the patterns' turns: the lines `GE::Cost::Contention`,
+`StreamLines`, `WritebackLine`, `UncachedLine`, `InstructionCycles` and the stalls' cycles in `ge.hpp` (part 113).
+`contention11.py --core CORE_R10 PSP_R10 CORE_R10B PSP_R10B` sets the core's own run of rounds 10 and 10b (the runner's
+`results/ge` after each round's line) beside the PSP's files: each list's slowdown beside each pattern, both ways.

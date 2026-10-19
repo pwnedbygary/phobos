@@ -1004,6 +1004,8 @@ auto Kernel::power() -> void {
   geDoneAt = geReachAt = gePipeAt = 0;
   geFinishDue = false;
   geSignalDue = false;
+  geWindow = {}, geBusyCycles = geBusyLines = 0;
+  for(auto& seen : geCacheSeen) seen = 0;  //(the CPU's caches start afresh with the program: Allegrex::power())
   startTime = u64(std::time(nullptr)) * 1'000'000;
   trampoline();
 }
@@ -1162,7 +1164,7 @@ auto Kernel::run(u64 budget) -> u64 {
       going = false;
       u64 tail = ran - counted;
       cycles += tail;
-      if constexpr(GE::Cost::Contended) if(gePspTiming) geStretchEnded(tail, tail >= GE::Cost::PollInstructions);
+      if(gePspTiming) geContend(cycles - tail, cycles, tail);
       counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
     } else {
       goThreaded(end);
@@ -1203,9 +1205,11 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 //loop of such calls that can be skipped to just before the go's end (spinTurn(): spins.cpp).
 auto Kernel::syscall(u32 code) -> bool {
   u64 before = cpu.instructionsBefore();
-  if(before > counted) cycles += before - counted;
-  if constexpr(GE::Cost::Contended) if(gePspTiming) geStretchEnded(before > counted ? before - counted : 0, true);
+  u64 stretch = before > counted ? before - counted : 0;
+  cycles += stretch;
+  if(gePspTiming) geContend(cycles - stretch, cycles, stretch);
   counted = before;
+  syscalls++;
   bool quiet = false;
   bool handled = dispatch(code, quiet);
   if(!quiet) {
