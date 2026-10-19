@@ -18986,6 +18986,8 @@ put in.
 - "Fast" against master (`--ge-timing fast` both sides, six gate scenes, 300 frames; Vulkan fast and Software before the
   cheap cuts, Vulkan fast after): every frame's picture and VRAM and the RAM after, the same; each state master's with
   layout 35's 2,168 bytes put in, at one place.
+- "Fast"'s cost: none to measure (its instructions a frame, master's against this branch's, 600 frames twice each:
+  Chains of Olympus −0.01%, Super Monkey Ball +0.02%, Activision Hits' menu −0.64%, its runs 0.28% apart on master).
 - The cheap cuts change nothing the games see: the PSP's timing before and after them (three scenes, 300 frames), every
   frame's hashes the same; the states differ only in the instruction cache's tags, kept in their new keys.
 - GitHub's checks: the first push failed GCC's `-Wparentheses` (a set's index, clang silent) and two state tests that
