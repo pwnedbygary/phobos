@@ -283,7 +283,8 @@ auto GeThread::save(u32 address, u32 size, u64 at) -> void {
     }
   };
   if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMWindow) {
-    u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize, seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+    u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize;
+    u32 seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
     u32 end = std::min<u32>(seen + size, Memory::VRAMSize);
     for(u32 offset = seen; offset < end;) {
       u32 run = copy & 1 ? std::min(end - offset, 32 - offset % 32) : end - offset;
@@ -959,7 +960,8 @@ static auto byteAt(Memory& memory, u32 address) -> u8 {
   u32 physical = address & 0x1fff'ffff;
   if(physical >= Memory::RAMBase && physical - Memory::RAMBase < memory.ram.size()) return memory.ram[physical - Memory::RAMBase];
   if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMWindow) {
-    u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize, seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+    u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize;
+    u32 seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
     return memory.vram[Memory::vramOffset(copy, seen)];
   }
   if(physical >= Memory::ScratchpadBase && physical - Memory::ScratchpadBase < Memory::ScratchpadSize) {
@@ -997,12 +999,22 @@ auto GE::copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& c
       least = std::min(least, index), most = std::max(most, index);
     }
   }
+  //(RAM's bytes and those of a copy of VRAM that keeps them in order taken whole: Chains of Olympus's vertices, in
+  //VRAM, cost the emulation thread an eighth of its time taken a byte at a time)
   auto take = [&](u32 address, u32 size) {
-    u32 at = bytes.size(), physical = address & 0x1fff'ffff;
-    bytes.resize(at + size);
+    u32 physical = address & 0x1fff'ffff;
+    u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize;
+    u32 seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
     if(physical >= Memory::RAMBase && u64(physical - Memory::RAMBase) + size <= memory.ram.size()) {
-      std::memcpy(&bytes[at], &memory.ram[physical - Memory::RAMBase], size);
+      const u8* from = memory.ram.data() + (physical - Memory::RAMBase);
+      bytes.insert(bytes.end(), from, from + size);
+    } else if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMWindow && !(copy & 1) &&
+              u64(seen) + size <= Memory::VRAMSize) {
+      const u8* from = memory.vram.data() + seen;
+      bytes.insert(bytes.end(), from, from + size);
     } else {
+      u32 at = bytes.size();
+      bytes.resize(at + size);
       for(u32 n = 0; n < size; n++) bytes[at + n] = byteAt(memory, address + n);
     }
     copies.address[copies.ranges] = address, copies.size[copies.ranges] = size, copies.ranges++;
