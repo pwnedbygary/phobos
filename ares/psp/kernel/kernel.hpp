@@ -367,12 +367,14 @@ struct Kernel {
     u64 period = 0;          //the time between the last two
     u32 turns = 0;           //turns of that time in a row since
     u32 wait = 0;            //more to wait for after a proof that failed
-    //with the PSP's GE timing, the CPU's caches' counts (Allegrex::Cache: data lines read in, written back, uncached
-    //accesses, instruction lines read in) when the program was last there, and what the turn before moved; and the
-    //syscalls made by then (syscalls), and in the turn before
+    //with the PSP's GE timing, over the last two turns before a skip is tried (spinTurn()): the CPU's caches' counts
+    //(Allegrex::Cache: data lines read in, written back, uncached accesses, instruction lines read in) when the
+    //program was last there, and what the turn before moved; the syscalls made by then (syscalls), and in the turn
+    //before; and whether the last two turns moved the same, with as many calls
     u64 counts[4] = {}, moved[4] = {};
     u64 called = 0;
     u32 calls = 0;
+    bool steady = false;
   } spin;
   u64 syscalls = 0;  //made since power on (spins.cpp's turns count theirs; not saved)
   auto spinCounts(u64 (&counts)[4]) const -> void;
