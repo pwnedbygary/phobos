@@ -1,0 +1,9 @@
+psp-measure's GE tests, round 2 (tools/psp-measure/ge.c in Phobos says what each test draws): each .bin but
+controller-timing.bin is the target's pixels after one test, a little-endian 32-bit word each, row by row
+(256x256 but filter-* 64x64, sprite-corners 32x8, 3d-rules 256x32 and 3d-cull 64x64; the stencil-*, narrow-*
+and dither-5650 frame buffers are 16-bit, in the low half, and 3d-floor-depth is the 16-bit depth buffer).
+spread(x) = x | (255 - x) << 8 | (x * 7 & 0xff) << 16. Textures are 8888 (texture-*: 16-bit, texel y * 256 + x),
+nearest, clamped; blends draw the texture with replace and its alpha. 3d-*: drawn through the matrices.
+light-*: 256 cells of 16x16 pixels, each a lit 3D sprite showing one lit color (the cases are in ge.c).
+controller-timing.bin: 48 times in microseconds: 16 second sceCtrlReadLatch calls, 16 sceCtrlReadBufferPositive
+calls just after a vertical blank, 16 second sceCtrlReadBufferPositive calls.

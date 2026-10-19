@@ -17426,3 +17426,397 @@ PSP from round 8's medians, `scenes/` the two states' frames for the plugin's ca
 above, `build-fix/` the fix round's program, `EBOOT-run-2026-10-18.PBP` the one the owner ran); `results-r9/` (the
 owner's run as the coordinator pulled it, with the device's sums, his first look and the captures). Nothing was run on
 the RP6.
+
+## Part 112: psp-measure round 10 — lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective and turned, mipmaps, narrow strips, the CPU beside the GE
+
+On branch `cursor/psp-measure-round10-2b67` (PR #278), from master `d428d91f9` (#276, part 110: round 9 and its
+results). Round 10 of `tools/psp-measure`, for the owner's PSP: the cases #269's refit with round 9 (`c0d9c14a2`, part
+106) still misses, as its agent (1fd9133c) specified them from each failing scene's terms and a log of the PRIMs' state
+as the games set it. The cases are synthetic: no game's lists, textures or vertices are in the program (`pspmeasure.elf`
+is public), only the parameters the log shows (sizes, formats, filters, palette loads, light kinds and factors). Nothing
+in the core changes: the program, its test, the test programs' copy of it. Clean room as part 107: our own code;
+pspsdk's headers and uOFW's reading of the driver; no PPSSPP or JPCSP.
+
+### Where the refit misses
+
+- **Super Monkey Ball Adventure's story, −30%**: mostly the PSP's CPU competing with the GE for RAM: round 8's copy of
+  its lists (time-scenes 5) is 9 to 13% short with the CPU idle. Killzone's courtyard (−12 to −14%, its copy within 0 to
+  3%) and later moments (−14 to −34%), and the rest of Ghost of Sparta's menu's miss (−10.8%) and its later scenes
+  (−17%, −20%), point the same way. Round 8's cpu-contention had one pattern (a thread reading RAM: the GE's
+  RAM-textured layers 2.12 times as long, its VRAM-textured ones about the same).
+- **Activision Hits Remixed's 3D menu, its first list −19%** (2.35 million bus clocks a list on the PSP, the refit's
+  pipeline 1.90): bound by its front end in the model, its lights spotlights with their shine (specular), two a PRIM, on
+  some PRIMs a directional light with its shine too. Round 8's time-vertices had one directional light with its shine
+  cost 20.7 clocks a vertex (the model 1.49) but four 1.2 each, and no spot or point light with shine; round 6's four
+  fading point lights with their shine (time-primitives 13) are 25.5% short.
+- **Its second list, +56%** (3.48 ms on the PSP): 720 triangles reading a CLUT32 texture (512x512 in VRAM, the 8888
+  buffer the first list drew) in tiles of 32x34 pixels, each drawn three times with the palette shifted and loaded
+  again, into 5650. On the PSP the tiles' texels cost next to nothing, where the refit fetches each tile's 4,352 bytes;
+  no round had timed CLUT32 in triangles.
+- **Its copyright screen, its second list −24%**: its picture (CLUT8 512x256, RAM, swizzled) drawn twice as two 3D
+  triangles over 480x272, bilinear and blended, into 5650, in about what one sprite of it takes (round 8's time-scenes
+  2), where the refit, by round 9's rows, reads only 72% of a triangle's pixels wide. Round 9's two triangles drew into
+  8888 (and fit that rule within 1%).
+- **What the refit leaves out**: triangles in perspective (round 8's time-textures 13 to 15, round 6's time-fill 39:
+  about half the time the refit gives the same at w 1), turned a quarter (time-textures 16 to 18: 39 to 53% over), a big
+  texture's mipmaps (time-textures 10 to 12: 75 to 80% short), and 8-texel CLUT8 strips from VRAM (round 8's time-strips
+  21, round 9's time-tristrips 35: −50%).
+
+### What round 10 measures
+
+Every test is round 8's kind (`timeCases8`: each list queued alone, timed to its finish callback, every run kept), at
+222/111 and 333/166 MHz, 8 runs a size (16 for the lights) unless said; `manifest10.txt` lists every case.
+
+- **`time-anchors2`** (first, 10 cases): six of round 9's anchors (round 8's time-strips 2 and 37, time-textures 13 and
+  19, time-vertices 0, time-scenes 0), built by round 8's code at its sizes; then time-strips 37's strips (RAM 8888
+  512x512 swizzled, 32 wide) with the texture 0, 256, 512 and 768 bytes past a 1 KiB boundary: round 9 drew it 2% faster
+  than round 8, its texture on a boundary where round 8's was 256 bytes past one (part 110's guess, tested within one
+  session here).
+- **`time-lights`** (39): round 8's strips of culled triangles (float normals and positions) lit by 1, 2, 3 or 4
+  directional lights, point lights or spotlights, diffuse alone and with their shine (round 8's cases 15 to 23 among
+  them), the lights as round 8's `lightsOn` has them (falling off (1, 0.5, 0.25); spots toward −z, exponent 4, cutoff
+  0.5; the shine's power 8); one and four directional lights shining at powers 1 and 64; four directional lights, only
+  light 0 shining, only light 3, lights 0 and 1; one point light shining, not falling off and falling off as the game's
+  (0.145, 0, 0.145); the game's mixes (spotlights of exponent 21.1 and cutoff 0.925, falling off as the game's): the two
+  spots shining, the two and a directional light all shining, the three none; the first mix skinned (2 weights, 8-bit);
+  then strips drawn as the game draws them (9 vertices of 12 bytes: 8-bit texture coordinates and normals, 16-bit
+  positions; triangles 16x20 pixels; a CLUT4 64x64 RAM texture, swizzled, bilinear, modulated; the depth test passing
+  and writing; the alpha test; into 8888) with the second mix, and unlit: 1,024 and 4,096 strips; 1,024, 4,096 and
+  16,384 triangles otherwise.
+- **`time-clut32`** (22): the menu's tiles as the log shows them: 15 x 8 tiles of 32x34 pixels over 480x272, each a 3D
+  strip of two triangles (20-byte vertices: float texture coordinates and position) reading its own texels 1:1 from a
+  CLUT32 512x512 texture in VRAM's first megabyte (not swizzled, nearest), three passes (palette shifts 0, 8 and 16; the
+  second and third blended with fixed factors, added), a 1 KiB palette load before each pass but the first of each tile
+  after the first (241 a list, as the log has it), into 5650. Then one thing at a time: one pass, no palette load after
+  the first (the texels alone); the same bytes as 8888; a CLUT8 texture; three passes without the loads; three passes
+  and the loads without a texture; one pass as sprites in through mode; into 8888; swizzled; from RAM; tiles 16x17 and
+  64x68; an 8888 buffer filled (480x272, no texture) just before in the list and read by the tiles, against the same
+  fill before tiles reading VRAM's first megabyte (whether a buffer just drawn reads cheaper); bilinear. A layer is all
+  120 tiles (1 and 2). Then round 9's strips 8 to 512 wide as triangles from the CLUT32 texture over 512x256 into 8888
+  (round 8's time-strips has its sprites).
+- **`time-widetri`** (18): the copyright screen's pass as the log shows it: a palette load (256 colors, 8888), a
+  TEX_FLUSH and one 3D strip of two triangles (24-byte vertices) over 480x272 reading the CLUT8 512x256 texture (RAM,
+  swizzled), bilinear, modulated, blended (source alpha, 1 − source alpha), the alpha test on and the depth test off,
+  into 5650. Then into 8888; nearest; not blended, no alpha test; as two triangles in through mode; as one sprite; round
+  8's time-scenes 2 as it was (an anchor); 480 texels across (1:1, not 512 over 480 pixels); an 8888 512x256 texture;
+  round 9's time-tristrips 34 (two triangles 512 wide over 512x256, through mode, nearest) into 5650, and as it was (an
+  anchor); the triangles split from top left to bottom right (the game's strip splits from bottom left to top right);
+  round 9's case 34 into 5551 and 4444, and one sprite 512 wide into each of the four formats. A layer is one pass (1
+  and 2).
+- **`time-perspective`** (48): two triangles over the target's top-left 256x256 under the lens, each corner at the
+  distance (w) said, 256x256 texels of a texture (RAM 8888 256x256 swizzled; VRAM 8888 512x512 as round 8's case 15; RAM
+  CLUT8 256x256 swizzled): w 1 at the left to 1, 1.25, 1.5, 2 and 4 at the right, and 1 at the top to 2 at the bottom
+  (each row at one w); squares 64 and 128 pixels wide (narrow rows and wide) at w 1 and 1 to 2; w 2 everywhere (flat,
+  but not at w 1), and 2 to 1 (the far side at the left). Then in through mode, texel for pixel, squares 32, 64, 128 and
+  256 wide of two triangles over the 256x256, as they are and each turned a quarter (u down the screen), from RAM 8888
+  swizzled and not, and VRAM 8888.
+- **`time-mipmaps`** (22): round 8's time-textures 9 to 12 as they were (anchors: RAM 8888 256x256 swizzled shrunk 2:1
+  onto 128x128 in 3D, without and with its levels 128 and 64: the level chosen, level 1 set, linear between levels);
+  level 1 alone (a texture of its own at its place, 128x128, 1:1); the level chosen, bilinear within it; nearest, the
+  two nearest levels blended; the same seven in CLUT8. Then Super Monkey Ball's small textures: CLUT4 64x64 with 7
+  levels and 64x32 with 6 (RAM, swizzled), in 3D strips of 6 vertices (four triangles of 15 pixels, 20-byte vertices)
+  each over the whole texture, tiling 512x256, depth tested, into 8888: trilinear (TEX_FILTER 7, 1) with the level
+  chosen less 2.625 (TEX_LEVEL 0xd6, the game's); nearest within the level chosen; bilinear and nearest without levels;
+  4,096 and 16,384 triangles.
+- **`time-vram8`** (60): strips 4, 8, 12, 16 and 24 texels wide over 512x256, 1:1, as sprites and as triangles, CLUT8
+  and CLUT4 512x512, from VRAM's first megabyte not swizzled and swizzled, and from RAM swizzled.
+- **`time-contention`** (197): the CPU beside the GE. Ten lists, each at two sizes: A an 8888 512x512 texture (RAM,
+  swizzled) in one sprite 512 wide over 512x128 a layer (wide reads: round 8's time-strips 41, half a layer); B the same
+  in VRAM; C 512x256 without a texture; D a strip of culled triangles, 24-byte vertices (16-bit texture coordinates and
+  normals, float positions) from RAM; E1 NOPs; E2 Super Monkey Ball's CALLed lists (round 8's time-scenes 5); F 480x272
+  32-bit copied from RAM to VRAM; G a new CLUT8 32x32 texture before each sprite (round 9's time-loads 3); H the game's
+  small trilinear strips (time-mipmaps 14); I Ghost of Sparta's kind (strips of 10 vertices of 36 bytes, 3 float
+  weights, skinned by 3 bones, lit by 3 directional lights; CLUT4 and CLUT8 textures of 64x64 and 128x128 in RAM in
+  turn, a new one with its palette every 45 strips; bilinear; depth tested). Each alone, and while a thread runs one of
+  17 patterns: arithmetic alone (64 additions a turn); a line's 16 words read within 8 KiB (the data cache's hits); a
+  line read streaming over 1 MiB (a miss each), flat out and slowed by an empty loop between lines to a half, a quarter
+  and an eighth of that (the loop's turns measured as each clock setting begins); a line written streaming over 1 MiB
+  (write-backs), flat out and a quarter; 64 KiB copied a turn (memcpy); a step of a chain of pointers 64 bytes apart
+  over 1 MiB (one miss at a time); 16 words read through the uncached mirror; a line read, and one written, in VRAM's
+  last 256 KiB through the cache; a game's mix (12 additions, 2 reads and 2 writes a turn at random words) over 16, 64
+  and 256 KiB and 1 MiB. Each pattern alone for 10 ms too. A run's four words: the list's time to its finish callback
+  and `sceGeListEnQueue`'s return (alone: the thread's 10 ms, 0), the thread's turns, and their time.
+- **`time-contention2`** (54): the streaming reads, flat out and slowed, with each list and alone, at 333/222/166 (the
+  CPU at 222 MHz with the bus at 166): the bus apart from the CPU's clock.
+
+### How it runs
+
+- About two minutes on the PSP, three at most: its lists are about 70 seconds of the GE's time by rounds 8 and 9's
+  rates, with some 12,900 runs' own overhead and the lists' building; about 0.2 MB. It changes the clocks as round 8
+  does and puts them back after each test.
+- Its files are new names in `results/ge` beside rounds 2 to 9's, none overwritten (a test whose file is there is
+  skipped, as ever).
+- Every wait for the GE keeps to 5 seconds: a list not finished by then is a stall (recorded, the GE reset, the test
+  goes on). The contention thread runs at a priority above the program's own (nothing of the program's runs between a
+  list's start and its finish), started before the list is queued but waiting on a semaphore until it is, and stops
+  itself at the finish callback's flag, at its 10 ms alone, or at 5 seconds whatever happens: it can't hold the PSP. Its
+  memory is a 1 MiB array of its own and VRAM's last 256 KiB (which time-clut32's filled buffer runs 96 KiB into, at
+  another time); what it wrote through the cache is written back and invalidated after each run, so no line of it lands
+  later on anything else.
+- The owner: copy `EBOOT.PBP` over the old one in `PSP/GAME/PSPMEASURE`, keeping `results/`; ARK's clock settings at
+  Auto; the charger in; the GE profiler plugin off (it times the same lists); run "Round 10" (the menu's first line);
+  send `results/ge` back.
+
+### The test
+
+"psp measure" (tests/psp/measure.cpp) runs round 10 after round 9, through the menu (every line one further down), and
+checks its nine files as round 9's: whole records, as many as the tables give (time-anchors2 42, time-lights 230,
+time-clut32 88, time-widetri 72, time-perspective 192, time-mipmaps 88, time-vram8 240, time-contention 754,
+time-contention2 104 at 333/222/166 alone), each test's settings in turn with the clocks the core grants, every run
+finished; the contention thread's turns and their time wherever it ran, and nothing where it didn't; and
+`manifest10.txt`. The core's times are this branch's GE timing, so they say nothing of the PSP's.
+
+### What the PSP showed (the owner's run, 2026-10-18 evening)
+
+The owner ran round 10 (EBOOT `31364afe…`) and then, to be thorough, every earlier round again in the same session; the
+coordinator pulled the folder from the RP6 (`~/phobos-work/scratch/psp-ge-profile/results-r10`: 227 files, each one's
+sha256 the device's). Round 10's nine files hold the records the tables give (time-anchors2 42, time-lights 230,
+time-clut32 88, time-widetri 72, time-perspective 192, time-mipmaps 88, time-vram8 240, time-contention 754,
+time-contention2 104), every run finished, no `.stalled` of round 10's (the five there are rounds 4 and 5's known
+stalls). Decoded here independently (`r10.py` in the scratch folder). Times are in the GE's bus clocks (microseconds
+times the bus's MHz) at 222/111 unless said; 333/166 agrees within a few percent unless said.
+
+- **Placement first: the alignment check, and round 9's shift.** time-anchors2 drew round 8's time-strips 37 (RAM 8888
+  512x512 swizzled, strips 32 wide) with its texture on a 1 KiB boundary at 2,154.5 µs a layer (this morning's round 9:
+  2,147.5, +0.3%), 256, 512 and 768 bytes past one at 2,176.5, 2,189 and 2,187 (+1.0 to +1.6%; round 8's run had it 256
+  past: 2,198), and at `big` itself, which this build put 64 bytes past a 1 KiB boundary (`0x08da6840`), at 2,307.5:
+  7.1% dearer (7.3% at 333/166). So part 110's 2% was mostly round 8's +256 (1.0% here) and the rest the session; and a
+  swizzled texture 64 bytes off a 128-byte boundary (a swizzled block's size, 16 bytes by 8 rows) costs about 7% more.
+  - This build put `big`, `bytes8`, `palette` and `timed` 64 bytes past 1 KiB boundaries (round 9's run had them on 4
+    KiB boundaries, round 8's 256 bytes past 1 KiB), and `texture` 96 bytes past a 128-byte boundary (32 in both earlier
+    builds). Tonight's round 9 against this morning's: every swizzled RAM texture case 3 to 11% dearer, mostly 6 to 9%
+    (time-tristrips' 8888, CLUT8 and 5650 strips, squares, 3D, bilinear and shrunk), the unswizzled RAM texture in the
+    same array within 0.4%, every VRAM case within 0.6%; time-loads' cases reading swizzled RAM texels 3.4 to 10.4%
+    dearer, a 1 KiB palette from RAM 5.6% behind a sprite and 20% alone (207 to 250 clocks), smaller palettes, the 5650
+    one and VRAM's within 0.3%; time-formats within 2% (median 0.23%). Those are the coordinator's 95th percentiles of
+    8.3% (time-tristrips) and 10.2% (time-loads); time-loads' 38.5% is a case timing a few microseconds of TEX_FLUSHes,
+    whose runs spread from 29 to 66 µs in both sessions.
+  - Other placements moved other cases, both ways: the unswizzled `texture` array's (round 8's time-state reload −9%;
+    cpu-contention's GE layers beside a reading thread −14%, its CPU loop beside them −11%), round 6's RAM-to-RAM
+    transfers (−26%, where its two earlier sessions agree within 0.2%) and DXT1 fill (−3 to −9%). Where data sit in RAM
+    changes what reading them costs by up to a quarter, and two streams' contention depends on both places.
+  - Round 10's own swizzled RAM textures (in `big` or `bytes8`) carry the 7%, and its palette loads (from `palette`) the
+    5.6 or 20%: ratios within round 10 stand, absolute costs of swizzled RAM texels are about 7% above an aligned
+    place's.
+- **Repeatability (the re-runs).** Every picture the same bit for bit: rounds 2 and 3's 87 against `ge-round3`
+  (2026-10-04), round 6's 28 against `ge-round6` (10-11), rounds 6 and 7's 34 against round 8's session (10-18 morning);
+  rounds 4 and 5 have no earlier PSP run here. Round 6's timing tests within 0.01 to 2.1% at the median of its two
+  sessions (95th percentile 0.1 to 4.4%) but for the placements above; round 8's within 0.0 to 1.1% (the CPU's own loops
+  within 0.6% for cpu-alu, 0.5% cpu-latency, 2.4% cpu-memory), its tails the placements (RAM swizzled strips and
+  textures +7 to +10%, Activision Hits' copyright copy +6%) and cpu-syscalls' DelayThread(0) and thread switch +11 to
+  +19% (the program's code moved too); round 9's above. Within tonight's session round 10's anchors and round 9's re-run
+  of the same cases agree within 0.3% (one 1.8%).
+- **Lights** (`time-lights`), clocks a vertex:
+  - The unlit strip costs 11.4 (its 24-byte vertices at round 9's 0.48 a byte), and lighting under that is hidden: 1 to
+    3 directional lights, diffuse, add nothing, 4 add 1.1.
+  - Point lights and spotlights cost the same: 10.8 to 11.0 a light-vertex diffuse, at any count; with their shine 21.9
+    for one light and 19.0 each for 2 to 4. Fall-off ((1, 0, 0), (1, 0.5, 0.25), (0.145, 0, 0.145)) and a spot's
+    exponent and cutoff (4 and 0.5, the game's 21.1 and 0.925) change nothing (within 0.1%).
+  - Directional lights' shine: with every light register directional, a shining light adds 0.8 to 0.95 among four (4
+    shining 16.2), two lights both shining 1.1 together, at powers 1, 8 and 64 alike, whichever lights shine (only 0,
+    only 3, 0 and 1). But a lone directional light whose disabled lights 1 to 3 the previous list left as spotlights
+    costs 20.8 more with its shine (at powers 1 and 64, and round 8's case 22 again: 32.2), and 5.0 more without it
+    (this test's first case at 333/166, after the drawn cases' spotlights): round 8's "20.7 for one directional light
+    with its shine" was that state, not the shine or its power.
+  - The game's mixes: its two spots shining 49.4 (as lightsOn's spots), with a directional light shining too 51.4
+    (+2.0), the three not shining 34.2; skinned (2 weights, 8-bit) the same as not (49.4). Drawn as the game draws them
+    (strips of 9 vertices, 16x20-pixel triangles, CLUT4 bilinear, the depth and alpha tests): 2,538 bus clocks a strip
+    lit and unlit alike (2.27 a pixel), the back end's, the lights hidden.
+- **CLUT32** (`time-clut32`):
+  - CLUT32 costs what 8888 does: the tiles in one pass 1.744 bus clocks a pixel, the same bytes as 8888 1.751; as
+    triangles 8 to 512 wide over 512x256 within 0.3% of round 9's VRAM 8888 triangles at every width (2.77 at 8 wide to
+    7.94 at 512); CLUT8 tiles 1.155.
+  - The game's pattern (three passes, 240 palette loads a layer, into 5650): 3,234.5 µs a layer (359,000 bus clocks);
+    without the loads 2,827.5 (a load 188 clocks); one pass 2,051.5, the second and third 388 µs each (their texels the
+    cache's); untextured 1,127.5. A buffer filled just before in the list reads no cheaper (2,687 µs, against 2,683.5
+    for the same fill before tiles reading VRAM's first megabyte). One thing at a time: sprites in through mode −12%,
+    into 8888 +4.5%, swizzled +3%, from RAM 5.1 times, bilinear +12%, tiles 16x17 +24% and 64x68 −9% a pixel (a tile's
+    own cost).
+  - Against the game: its whole second list is 3.48 ms on the PSP, and its tiles as logged take 3.23 ms here, leaving
+    0.25 ms for its 66 downsample sprites, whose texels alone the refit puts at 184,000 bus clocks (1.7 ms): the game's
+    tiles must differ from the log somewhere (fewer drawn, a smaller area, texels cached across tiles?). In the logged
+    pattern the texels cost what 8888's do, not next to nothing.
+- **Wide triangles into 16-bit** (`time-widetri`):
+  - The game's pass, as logged: 4,167 µs (462,500 bus clocks), the PSP's own about 450,000 a pass in the game (within
+    3%, this build's misaligned texture and all).
+  - The 16-bit target isn't it: into 8888 the same (+0.1%); round 9's two wide triangles into 5650, 5551, 4444 and 8888
+    within 1.6% of each other, one sprite within 2.6%; the triangles 79 to 80% of the sprite in every format (nearest),
+    the game's bilinear pass 77% of the same as one sprite (5,404.5 µs).
+  - What the refit misses is bilinear reading wide: nearest 16.7% cheaper (3,469.5 µs), so bilinear costs 20% more here;
+    round 8's copy (one sprite, nearest, unblended, over 480x256) 4,323. Blending and the alpha test cost nothing
+    (−1.3%), through mode the same (−1.4%), the other diagonal the same (−1.3%); 480 texels across, 1:1, −5.1%; an 8888
+    texture 4.6 times.
+- **Perspective and turned** (`time-perspective`), clocks a pixel:
+  - The halving is w changing along a row: two triangles over 256x256 from RAM 8888 (swizzled) 10.0 at w 1, 6.2 at w 1
+    to 1.25 across, 4.7 to 1.5, 4.2 to 2, 5.4 to 4, 3.8 from 2 to 1; w 2 throughout 10.1; w 1 to 2 down the screen, each
+    row at one w, 10.2. VRAM 6.4 to 3.2 (×0.50 at 1 to 2). Only wide rows gain: CLUT8, whose 256-texel rows read narrow,
+    0.94 to 0.90; squares of 64 and 128 about the same (2.45 to 2.44, 2.30 to 2.22).
+  - Turned a quarter (through mode): squares 32 and 64 cost what they do as they are (×0.99 to 1.12), squares 128 2.3 to
+    2.9 times, the whole 256x256 0.66 to 0.75 times (its unturned rows read wide): a column's span past 64 texels reads
+    wide, past 128 surely.
+- **Mipmaps** (`time-mipmaps`):
+  - Round 8's cases 9 to 12 repeat within 1.5% tonight (7 to 9% over round 8's session: the placement).
+  - A mipmapped 8888 256x256 texture shrunk 2:1 costs 10.3 to 10.4 clocks a pixel (the level chosen or set), level 1
+    drawn 1:1 as a texture of its own 2.2: level 1's reads at level 0's wide cost (its 256-texel rows: 10.0 in
+    time-perspective). CLUT8, under its threshold, 0.95 either way. Blending two levels costs nothing (nearest within
+    each: 10.30); bilinear within the level 20% (12.3 to 12.4: round 8's "linear between levels" is that).
+  - Super Monkey Ball's small strips: 29.8 bus clocks a triangle whatever the filter (trilinear with the game's bias,
+    nearest-mipmap, bilinear, nearest: within 0.5%) and texture (64x64, 64x32): their vertices' time (30 bytes a
+    triangle at 0.48) and PRIMs' (60 a strip of four triangles).
+- **Narrow strips** (`time-vram8`): a strip's row costs by the 16-byte units it touches. VRAM CLUT8 not swizzled,
+  sprites: 2.67, 1.54, 1.47, 0.91 and 1.06 clocks a pixel at 4, 8, 12, 16 and 24 texels (a row 10.7, 12.3, 17.7, 14.5,
+  25.4: 16 wide the cheapest); CLUT4 0.80 down to 0.60 (32 texels a unit); swizzled VRAM 28 to 37% cheaper (CLUT4 15 to
+  19%); triangles 1.5 to 1.8 times the sprites at these widths in VRAM CLUT8 (VRAM CLUT4 1.3 to 1.7, RAM CLUT8 1.1 to
+  1.3). Round 8's case 21 again 1.54. The −50% case (8 wide) pays a whole unit's row for half its texels.
+- **The CPU beside the GE** (`time-contention`, `time-contention2`), the GE's time beside each pattern against alone
+  (the larger size):
+  - CPU work without RAM traffic (arithmetic, the data cache's hits) doesn't slow the GE (×0.97 to 1.01). RAM traffic
+    slows every list that reads RAM; VRAM-only lists (VRAM-textured, untextured) not at all (×1.00 to 1.01), but by the
+    CPU's own VRAM reads and writes (×1.5 to 2.5).
+  - By what the GE reads (beside streaming reads / writes / a chain of pointers / a game's mix over 64 KiB or more):
+    wide RAM texels ×1.85 / 2.74 / 3.21 / 2.95; Super Monkey Ball's CALLed lists ×1.38 / 1.52 / 1.71 / 1.54; its small
+    trilinear strips ×1.31 / 1.44 / 1.55 / 1.47; a new texture each sprite ×1.45 / 1.61 / 1.84 / 1.66; RAM-to-VRAM
+    copies ×1.48 / 1.60 / 1.96 / 1.67; vertices and list words (NOPs) ×1.38 to 1.40 / 1.30 to 1.32 / 1.38 to 1.42 / 1.30
+    to 1.32; Ghost of Sparta's kind (skinned, lit: its front end's) ×1.10 / 1.11 / 1.15 / 1.12. Copies and uncached
+    reads as writes and chains; the mix over 16 KiB (mostly hits) ×1.03 to 1.25.
+  - In proportion to the CPU's traffic, a little above: streaming reads at a half, a quarter and an eighth of flat out
+    make wide RAM texels ×1.65, 1.30, 1.16 and Super Monkey Ball's lists ×1.26, 1.14, 1.07.
+  - The CPU slowed in turn: streaming reads keep 0.42 to 0.78 of their rate alone (least beside vertices and list
+    words), uncached reads 0.14 to 0.32, a chain 0.28 to 0.69, the mix 0.19 to 0.54.
+  - At 333/166 the same ratios within a few percent; at 333/222/166 every list alone takes what it does at 333/166
+    (within 1%: the bus's clock), and streaming reads flat out slow them as much (wide RAM texels ×1.91, the lists
+    ×1.39), while the CPU's own streaming rate sits between (1.52 turns a microsecond, 1.34 at 222/111, 2.02 at
+    333/166).
+
+### What round 10 answers for the refit, and what it doesn't
+
+For #269's agent (1fd9133c) to fit; no model change here.
+
+- **Activision Hits' menu, its first list (−19%)**: a light's shine costs about 8 clocks a light-vertex on spot and
+  point lights (19.0 against 11.0; 11 for a lone one), as the spec's 7 guessed, and about 2 on a directional light
+  beside them; directional lights alone shine for about 1. The refit's one SpecularLight term wants splitting by kind,
+  with point and spot lights' cost the same and their parameters free. Round 8's case 22 (20.7) is out of the fit as a
+  state artifact.
+- **Its second list (+56%)**: CLUT32 fetches as 8888 does, and a buffer just drawn reads no cheaper; the logged tiles
+  alone take 3.23 of the game's whole list's 3.48 ms on the PSP, leaving almost nothing for its sprites, so the miss is
+  in what the log says the list draws, for the log to settle.
+- **Its copyright screen (−24%)**: bilinear reading wide costs 20% more, which the refit doesn't charge; the 16-bit
+  target changes nothing, and the triangles' share of a sprite holds (77% bilinear, 79 to 80% nearest).
+- **Perspective**: a row reads wide by how its texture coordinates step, not by the triangle's extent: w changing along
+  a row takes a wide row from 10.0 clocks a pixel to 4.2 to 6.2 (narrow rows don't change); w constant, or changing down
+  the screen, keeps it wide. Turned rows read wide past 64 to 128 texels down a column.
+- **Mipmaps**: the wide rule goes by level 0's span; the filter's cost is bilinear's 20%, a blend of levels nothing;
+  Super Monkey Ball's small strips are their vertices' and PRIMs'.
+- **Narrow strips**: a row costs by its 16-byte units touched, about 11 to 15 clocks one, 18 to 25 two (VRAM CLUT8), not
+  by its bytes.
+- **The CPU beside the GE**: the slowdown is by the kind of GE read, 1 + K at a streaming reader (u = 1): K about 0.85
+  for wide RAM texels, 0.4 for list words and vertices, 0.3 to 0.5 for small textured strips, texture loads and copies,
+  0.1 for Ghost of Sparta's front-end-bound strips, 0 for VRAM-only work; roughly linear in the CPU's traffic; a game's
+  mix over 64 KiB or more as a streaming reader or more (×1.3 to 1.7, wide texels ×3). The spec's prototype K of 0.56
+  and round 8's 1.12 bracket these by kind. The CPU's own rate falls to a fifth to three quarters beside the GE.
+- **Placement**: a swizzled RAM texture 64 bytes off a 128-byte boundary costs 7% more, a 1 KiB palette 6 to 20%; other
+  placements move RAM reads by up to 26% either way. A fit across rounds should take each run's places into account, or
+  weight the cases that don't read RAM.
+
+### Round 10b: polling, before and beside, and placement
+
+A top-up the owner runs the same night, as #269's agent specified it for the refit
+(`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-10b-1fd9133c.md`): the two CPU patterns that came after round 10
+was built, and placement as a case of its own. Its own menu line (the first: "Round 10b: the CPU polling, before and
+beside; placement"), its own files and `manifest10b.txt` (nothing of round 10's touched), round 10's framework and
+safety. From this build on the arrays the GE reads (`big`, `bytes8`, `palette`, `timed`, `texture`, `texture16`,
+`contendRegion`) are on 1 KiB boundaries, so its swizzled RAM textures don't carry round 10's 7%.
+
+- **`time-contention3`** (48 cases): round 10's time-contention (`runContention10`, its thread above the program's
+  priority released after the enqueue) with six of its lists (A wide RAM texels, C untextured, D vertices, E2 Super
+  Monkey Ball's lists, H its small trilinear strips, I Ghost of Sparta's kind) at the same sizes, against six patterns:
+  polling, a turn being `sceKernelPollSema` on a semaphore nothing signals, `sceGeListSync(the list, 1)` or
+  `sceGeDrawSync(1)`, each with `sceKernelGetSystemTimeLow` (busy, but in the cache's or the kernel's; the deadline
+  looked at every turn); 1 MiB written (16384 lines) by the program before it queues the list at once, the same with
+  `sceKernelDcacheWritebackAll` between (the dirty lines landed before the GE starts), and by the thread once beside the
+  list, then stopping. Each pattern alone first (the polls for 10 ms, the writes once), then each list alone and beside
+  each, as time-contention's layout (the first list's case 6, rows of 7). The writes before a list give 16384 and their
+  microseconds in the thread's words' place.
+- **`time-placement`** (14): round 8's time-strips 37 strips (RAM 8888 512x512 swizzled, 32 wide) with the texture 0,
+  16, 32, 64, 96, 128 and 512 bytes past a 1 KiB boundary; not swizzled at 0 and 64; RAM CLUT8 512x256 swizzled at 0 and
+  64; a 1 KiB palette loaded before each 32x32 sprite (round 9's time-loads 45) at 0 and 64; and time-clut32's tiles
+  once over from a CLUT32 texture swizzled in RAM (the spec's optional line: no round had it).
+- About half a minute of the GE's time at 222/111 and 333/166, 9,000 or so runs; about 30 KB. The same safety as round
+  10's: new names, the clocks put back after each test, every GE wait 5 s with the reset, the thread's own 5 s deadline
+  (and the writer's 16384 lines), its writes written back and invalidated after each run.
+- "psp measure" runs round 10b after round 10 (every menu line one further down) and checks its two files
+  (time-contention3 180 records, time-placement 56) and `manifest10b.txt`, the thread's turns where it ran and none
+  where it didn't, and the writes before a list their 16384.
+
+
+### Round 10b's results (the owner's run, 2026-10-18 night)
+
+The owner ran round 10b (EBOOT `6fa4ca80…`, `2578e331a`'s program) the same night; the coordinator pulled it at 20:23
+(`~/phobos-work/scratch/psp-ge-profile/results-r10b`: `time-contention3.bin`, `time-placement.bin`, `manifest10b.txt`,
+each one's sha256 the device's), nothing stalled, every run finished, 180 and 56 records as the tables give. Decoded
+here (`r10.py`); #278's review decoded it too and agrees with every figure below.
+
+- **Polling doesn't slow the GE.** Beside each of the six lists, at both sizes and clocks, a CPU polling through
+  `sceKernelPollSema`, `sceGeListSync(the list, 1)` or `sceGeDrawSync(1)` (each turn with `sceKernelGetSystemTimeLow`
+  and the deadline's look: 2.6 to 3.5 µs a turn at 222/111) leaves the list ×0.97 to 1.03 of its time alone: a polling
+  CPU's busy time isn't RAM traffic.
+- **Nor does work before the list.** 1 MiB written by the program (9.1 ms at 222/111, 6.0 at 333/166) just before it
+  queues the list leaves the list ×0.99 to 1.05 (the 1.05 the small strips' smaller size), with the cache written back
+  first ×1.00 to 1.03: the dirty lines landing late cost little, and only the work beside the GE counts.
+- **Beside it, once: the writer outran every list.** The thread looked at the clock each turn (a system call), so it
+  wrote 0.64 lines a microsecond at 222/111 and 0.94 at 333/166 (alone it reached its 10 ms at 6,376 and 9,347 lines);
+  its megabyte would take about 26 and 17 ms, longer than every list, so it overlapped each one whole: a writer at about
+  half round 10's flat-out writes' rate (1.21 and 1.80 lines a microsecond). Beside it wide RAM texels took ×2.00 to
+  2.14 (round 10: ×2.74 flat out, ×1.48 at a quarter), Super Monkey Ball's lists ×1.36 to 1.37, vertices ×1.30 to 1.33,
+  its small strips ×1.27 to 1.28, Ghost of Sparta's kind ×1.07, untextured ×1.00: the slowdown by the writer's rate, as
+  round 10 found. A burst over part of a list, the spec's f, is still to be measured.
+- **Placement** (one layer of round 8's time-strips 37 strips, against the texture on a 1 KiB boundary: 2,163.5 µs,
+  within 0.4% of round 10's own case on one): 16, 32, 64 and 96 bytes past cost 6.7, 6.4, 5.6 and 7.3% more at 222/111
+  (7.4 to 7.7% at 333/166), 128 and 512 past 2.1 and 1.5% (1.75 and 1.4%): an offset that isn't a multiple of 128 bytes
+  costs 6 to 8%, a multiple of 128 off a 1 KiB boundary 1.5 to 2%. Not swizzled, 64 past costs nothing (−0.03%, −0.18%);
+  swizzled CLUT8 64 past 5.1% (5.9%); a 1 KiB palette 64 past 5.7% (5.3%: 526 against 498 clocks a sprite). CLUT32
+  swizzled in RAM, the tiles once over: 2,841 µs, 2.42 clocks a pixel (VRAM not swizzled 1.74, RAM not swizzled 8.91).
+- **For the refit**: polling costs the GE nothing (`PollInstructions` as assumed); no term for work before the enqueue;
+  the slowdown goes by the CPU's traffic beside the GE (round 10b's writer agrees with round 10's slowed writes); and a
+  placement term for swizzled textures and palettes, by their base's offset (off 128 bytes 6 to 8% for texels, 5 to 6%
+  for palettes; a multiple of 128 off 1 KiB 1.5 to 2%), which games' allocations decide.
+
+### Not yet
+
+- A burst of CPU work over part of a list (the spec's f): round 10b's writer outran every list, its clock looked at each
+  turn; a burst shorter than the list (the clock looked at every 64 lines) would measure it.
+- Placement of what else the GE and the CPU read: vertices, lists, and the two streams at chosen relative places (round
+  10's re-runs moved RAM-to-RAM transfers 26% and the unswizzled `texture`'s cases 9 to 14% by where the arrays sat).
+- The light registers' left-over kinds as a case of their own (a lone directional light shining after spotlights costs
+  20.8 more a vertex).
+
+
+### Checks
+
+- The program builds without a warning (`-Wall`) with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0) and
+  round 9's flags; a build from the committed source (its `git archive`) gives the committed `pspmeasure.elf` and the
+  owner's EBOOT byte for byte.
+- "psp measure" alone (the sanitized test program, `PHOBOS_TESTS_ONLY`), rounds 2 to 10 through the menu: 1 group, 0
+  failures. Its first run found three things, put right: the contention test's runs of a list alone gave the thread's
+  turns as 0xffffffff (`runTimed`'s, set after the program's 0); the test waited for `time-contention`'s file while
+  `time-contention2` still ran; and the core finishes culled triangles, NOPs and copies before the thread's first turn
+  (the check lets those be). In the core every case draws the pixels it says: a 512x256 layer 131,072 pixels' time,
+  256x256 65,536, the tiles 130,560 a pass (the three-pass cases three times one, the filled buffer twice), the culled
+  light strips none and the drawn ones theirs.
+- GitHub's checks on `a45449713`: all 13 jobs passed (the 3 release jobs skipped); the PSP system tests 610 groups, 0
+  failures, 1 skipped, "pass psp measure".
+- GitHub's checks on `2578e331a` (round 10b's program, with round 10's measurements committed before it): all 13 jobs
+  passed (the 3 release jobs skipped); the PSP system tests 610 groups, 0 failures, 1 skipped, "pass psp measure".
+- Round 10b's results: the owner's three files match the device's sums; `ge-round10b` packs them (19 KB of records as
+  4.5 KB), each unpacking to the device's bytes.
+- The results: the owner's 227 files match the device's sums; round 10's nine and the re-runs of rounds 2 to 9 are
+  packed for `tests/psp/measurements` (`ge-round10`: 160 KB of records as 36 KB; `ge-reruns-round10`: 44 MB as 3.6 MB),
+  each file unpacking to the device's bytes; committed with the owner's go-ahead of 2026-10-18 (19:21: "I dont mind the
+  measurements going on the repo"; `development-process.md` records it).
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/round10/`: `SPECS-1fd9133c.md` (the cases as #269's agent specified them),
+`build/` (the program as tested), `EBOOT.PBP` and its sha256, `measure-r10.log` (the local test), `r10.py` (the decoder
+the results above came from); `results-r10/` and `results-r10b/` (the owner's runs as the coordinator pulled them, with
+the device's sums). Nothing was run on the RP6.

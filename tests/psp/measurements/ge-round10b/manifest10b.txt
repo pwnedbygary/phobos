@@ -1,0 +1,72 @@
+psp-measure's GE tests, round 10b (tools/psp-measure/ge.c in Phobos says what each test draws and runs;
+docs/psp-core.md, part 112, what each is for). Records of words as round 8's (manifest8.txt): case, size, CPU
+MHz << 16 | bus MHz (as scePower gave them back), repeats | values << 16, then per run `values` words: times in
+microseconds from just before sceGeListEnQueue to the finish callback and to sceGeListEnQueue's return;
+time-contention3 two more as round 10's time-contention, a thread's turns of its pattern and their time (the
+writes before the list: 16384 and their microseconds; the GE idle: the first time is the pattern's own); 0xffffffff
+for a run not finished (see <name>.stalled). All run at 222/111 and 333/166 MHz; the clocks as found are put back
+after each. The arrays the GE reads are on 1 KiB boundaries. The cases (test case: what; size):
+time-contention3 0: the GE idle; the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn; -
+time-contention3 1: the GE idle; the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn; -
+time-contention3 2: the GE idle; the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn; -
+time-contention3 3: the GE idle; the CPU writing 1 MiB (16384 lines) before the list is queued; -
+time-contention3 4: the GE idle; the same, then sceKernelDcacheWritebackAll, before the list is queued; -
+time-contention3 5: the GE idle; a thread writing 1 MiB once beside the list, then stopping; -
+time-contention3 6: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU idle; layers
+time-contention3 7: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn; layers
+time-contention3 8: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn; layers
+time-contention3 9: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn; layers
+time-contention3 10: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU writing 1 MiB (16384 lines) before the list is queued; layers
+time-contention3 11: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the same, then sceKernelDcacheWritebackAll, before the list is queued; layers
+time-contention3 12: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; a thread writing 1 MiB once beside the list, then stopping; layers
+time-contention3 13: C: 512x256 without a texture; the CPU idle; layers
+time-contention3 14: C: 512x256 without a texture; the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn; layers
+time-contention3 15: C: 512x256 without a texture; the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn; layers
+time-contention3 16: C: 512x256 without a texture; the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn; layers
+time-contention3 17: C: 512x256 without a texture; the CPU writing 1 MiB (16384 lines) before the list is queued; layers
+time-contention3 18: C: 512x256 without a texture; the same, then sceKernelDcacheWritebackAll, before the list is queued; layers
+time-contention3 19: C: 512x256 without a texture; a thread writing 1 MiB once beside the list, then stopping; layers
+time-contention3 20: D: culled triangles, 24-byte vertices from RAM; the CPU idle; triangles
+time-contention3 21: D: culled triangles, 24-byte vertices from RAM; the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn; triangles
+time-contention3 22: D: culled triangles, 24-byte vertices from RAM; the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn; triangles
+time-contention3 23: D: culled triangles, 24-byte vertices from RAM; the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn; triangles
+time-contention3 24: D: culled triangles, 24-byte vertices from RAM; the CPU writing 1 MiB (16384 lines) before the list is queued; triangles
+time-contention3 25: D: culled triangles, 24-byte vertices from RAM; the same, then sceKernelDcacheWritebackAll, before the list is queued; triangles
+time-contention3 26: D: culled triangles, 24-byte vertices from RAM; a thread writing 1 MiB once beside the list, then stopping; triangles
+time-contention3 27: E2: Super Monkey Ball's lists; the CPU idle; passes
+time-contention3 28: E2: Super Monkey Ball's lists; the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn; passes
+time-contention3 29: E2: Super Monkey Ball's lists; the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn; passes
+time-contention3 30: E2: Super Monkey Ball's lists; the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn; passes
+time-contention3 31: E2: Super Monkey Ball's lists; the CPU writing 1 MiB (16384 lines) before the list is queued; passes
+time-contention3 32: E2: Super Monkey Ball's lists; the same, then sceKernelDcacheWritebackAll, before the list is queued; passes
+time-contention3 33: E2: Super Monkey Ball's lists; a thread writing 1 MiB once beside the list, then stopping; passes
+time-contention3 34: H: the game's small strips (CLUT4 64x64, trilinear); the CPU idle; triangles
+time-contention3 35: H: the game's small strips (CLUT4 64x64, trilinear); the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn; triangles
+time-contention3 36: H: the game's small strips (CLUT4 64x64, trilinear); the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn; triangles
+time-contention3 37: H: the game's small strips (CLUT4 64x64, trilinear); the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn; triangles
+time-contention3 38: H: the game's small strips (CLUT4 64x64, trilinear); the CPU writing 1 MiB (16384 lines) before the list is queued; triangles
+time-contention3 39: H: the game's small strips (CLUT4 64x64, trilinear); the same, then sceKernelDcacheWritebackAll, before the list is queued; triangles
+time-contention3 40: H: the game's small strips (CLUT4 64x64, trilinear); a thread writing 1 MiB once beside the list, then stopping; triangles
+time-contention3 41: I: Ghost of Sparta's kind (skinned, lit strips); the CPU idle; strips
+time-contention3 42: I: Ghost of Sparta's kind (skinned, lit strips); the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn; strips
+time-contention3 43: I: Ghost of Sparta's kind (skinned, lit strips); the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn; strips
+time-contention3 44: I: Ghost of Sparta's kind (skinned, lit strips); the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn; strips
+time-contention3 45: I: Ghost of Sparta's kind (skinned, lit strips); the CPU writing 1 MiB (16384 lines) before the list is queued; strips
+time-contention3 46: I: Ghost of Sparta's kind (skinned, lit strips); the same, then sceKernelDcacheWritebackAll, before the list is queued; strips
+time-contention3 47: I: Ghost of Sparta's kind (skinned, lit strips); a thread writing 1 MiB once beside the list, then stopping; strips
+time-placement 0: RAM, 8888 512x512 swizzled, strips 32 wide (round 8's time-strips 37), the texture on a 1 KiB boundary; layers
+time-placement 1: the same, 16 bytes past it; layers
+time-placement 2: the same, 32 bytes past; layers
+time-placement 3: the same, 64 bytes past (round 10's place); layers
+time-placement 4: the same, 96 bytes past; layers
+time-placement 5: the same, 128 bytes past; layers
+time-placement 6: the same, 512 bytes past; layers
+time-placement 7: RAM, 8888 512x512 not swizzled, strips 32 wide, on the boundary; layers
+time-placement 8: the same, 64 bytes past; layers
+time-placement 9: RAM, CLUT8 512x256 swizzled, strips 32 wide, on the boundary; layers
+time-placement 10: the same, 64 bytes past; layers
+time-placement 11: CLUT8 32x32 set once, a palette of 256 colors (8888, 1 KiB) loaded before each sprite, the palette on the boundary; sprites
+time-placement 12: the same, the palette 64 bytes past; sprites
+time-placement 13: time-clut32's tiles once over (32x34, 3D, nearest, into 5650) from a CLUT32 512x512 texture swizzled in RAM; layers
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.
