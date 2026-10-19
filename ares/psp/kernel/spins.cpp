@@ -134,22 +134,28 @@ auto Kernel::spinTurn() -> void {
   if(site != spin.site || back != spin.back) {
     if(spin.site && cycles - spin.last <= SpinLongest) return;
     spin = {site, back, cycles};
-    spinCounts(spin.counts);
-    spin.called = syscalls;
     return;
   }
   u64 period = cycles - spin.last;
   spin.last = cycles;
-  u64 counts[4];
-  spinCounts(counts);
-  for(u32 n : range(4)) spin.moved[n] = counts[n] - spin.counts[n], spin.counts[n] = counts[n];
-  spin.calls = u32(std::min<u64>(syscalls - spin.called, ~0u)), spin.called = syscalls;
   if(period != spin.period || !period) {  //(none: called from outside the CPU's go, as tests call functions)
     spin.period = period;
     spin.turns = 0;
     return;
   }
-  if(++spin.turns < SpinTurns + spin.wait) return;
+  u32 due = SpinTurns + spin.wait;  //(the turn whose end tries a skip)
+  if(++spin.turns + 2 >= due && gePspTiming) {  //(what it and the turn before it move in the CPU's caches)
+    u64 counts[4];
+    spinCounts(counts);
+    u32 calls = u32(std::min<u64>(syscalls - spin.called, ~0u));
+    if(spin.turns == due) {
+      spin.steady = calls == spin.calls;
+      for(u32 n : range(4)) spin.steady &= counts[n] - spin.counts[n] == spin.moved[n];
+    }
+    for(u32 n : range(4)) spin.moved[n] = counts[n] - spin.counts[n], spin.counts[n] = counts[n];
+    spin.calls = calls, spin.called = syscalls;
+  }
+  if(spin.turns < due) return;
   spin.turns = 0;
   spinSkip();
 }
@@ -190,7 +196,9 @@ auto Kernel::spinSkip() -> void {
   //more than before the first turn: so it is where that push falls and then rises at most along the turns, which it
   //does with each turn one stretch (one system call), or with the turns moving no lines (then any number: a spin's
   //turn makes no waits, so its stretches are all instructions), the window's time the same kind throughout
-  //(geContendBound()). With no lines in the window nor the turns' the window owes nothing.
+  //(geContendBound()). With no lines in the window nor the turns' the window owes nothing. And the last two turns run
+  //moved the same lines with as many system calls (spinTurn()): each turn skipped moves what they did (below).
+  if(gePspTiming && !spin.steady) return;
   if(gePspTiming && ge.thread) geFold(true);  //(the window and the GE's time as the synchronous GE has them)
   if(gePspTiming && geDoneAt > cycles) {
     if(geDoneAt <= cycles + skipped) return;
@@ -221,14 +229,14 @@ auto Kernel::spinSkip() -> void {
   cpu.instructionsRun += skipped;
   spun += turns;
   if(gePspTiming) {
-    //Each turn skipped moves the lines in the CPU's caches the one before did: the turns are alike, the same accesses
-    //in the same order, and after one such turn (the last of the SpinTurns in a row before a skip) the caches hold
-    //what any later one leaves them holding, each set its turn's last two lines (or, touched by one line or none, as
-    //it was), so every turn from there counts the same and changes nothing.
+    //Each turn skipped moves the lines in the CPU's caches the last one run did: the turns are alike, the same
+    //accesses in the same order, and after one such turn the caches hold what any later one leaves them holding, each
+    //set its turn's last two lines (or, touched by one line or none, as it was), so every turn from there counts the
+    //same and changes nothing. (The last two turns run moving the same lines, the one before the last was such a
+    //turn, and the last counted what each turn from there does.)
     auto& data = cpu.dataCache;
     data.fills += turns * spin.moved[0], data.writebacks += turns * spin.moved[1];
     data.uncached += turns * spin.moved[2], cpu.instructionCache.fills += turns * spin.moved[3];
-    for(u32 n : range(4)) spin.counts[n] += turns * spin.moved[n];
     geContend(cycles - skipped, cycles, skipped);
   }
 }

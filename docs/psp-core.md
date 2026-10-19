@@ -19201,20 +19201,25 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
 - **What doesn't slow it**: polling through syscalls (a loop waiting on a cached word moves no lines), arithmetic, the
   cache's own hits, the CPU's work before a list. As round 10b's PSP has it.
 - **Spins skipped** (`spins.cpp`, parts 91 and 105). A turn may move lines (an uncached word read each turn, or lines
-  one set can't hold): each turn skipped is counted as moving what the turn before it moved. The turns are alike, the
+  one set can't hold): each turn skipped is counted as moving what the last turn run moved. The turns are alike, the
   same accesses in the same order, and after one of them the caches hold what any later one leaves them holding (each
-  set its turn's last two lines, or as it was if one line or none touched it), so every turn from there counts the
-  same and changes nothing; a skip comes after `SpinTurns` such turns in a row. Their one stretch then adds to the
-  window what theirs would if the GE is busy for all of them or idle for all (no turns are skipped with it done part
-  way), and pushes the GE back as far as theirs would by the last one's end if what the window owes is at its most
-  there, or no more than before the first: so it is where it falls and then rises at most along the turns (each of
-  them all instructions: a spin turn makes no waits). It does so for turns of one stretch each (one syscall), and for
-  turns of any number moving no lines, with the window's time the same kind throughout (its cycles passed or the
-  CPU's time, `geContendBound()`); with lines in the window or the turns' other turns aren't skipped, and with none
-  the window owes nothing. The review found the first version counting no skipped turn's lines, exact only while
-  turns moved none; the test it asked for (the GE's looks polled, each turn reading an uncached word or three lines one
-  set can't hold, `tests/psp/spins.cpp`) then found the window's sums, floats, differing in their last bits from the
-  turns': hence the whole counts.
+  set its turn's last two lines, or as it was if one line or none touched it), so every turn from there counts the same
+  and changes nothing. A skip comes after `SpinTurns` turns in a row, and only if the last two moved the same lines with
+  as many syscalls: the one before the last brought the caches to where every such turn leaves them, the last counted
+  what each turn from there does. The kernel takes the caches' counts over those two turns alone (taken at every turn,
+  they cost the polling games up to 0.9% more host instructions, the emulation the same: Dante's Inferno 0.9%, Burnout
+  Dominator and Need for Speed: Shift 0.5%, whose loop is never skipped and paid them at every call). The skipped turns'
+  one stretch adds to the window what theirs would if the GE is busy for all of them or idle for all (no turns are
+  skipped with it done part way), and pushes the GE back as far as theirs would by the last one's end if what the window
+  owes is at its most there, or no more than before the first: so it is where it falls and then rises at most along the
+  turns (each of them all instructions: a spin turn makes no waits). It does so for turns of one stretch each (one
+  syscall), and for turns of any number moving no lines, with the window's time the same kind throughout (its cycles
+  passed or the CPU's time, `geContendBound()`). So with lines in the window or the turns, no other turns are skipped:
+  none that make more than one syscall each and move lines, none over which the window's time would change kind. With no
+  lines in either, the window owes nothing, and neither refusal applies. The review found the first version counting no
+  skipped turn's lines, exact only while turns moved none; the test it asked for (the GE's looks polled, each turn
+  reading an uncached word or three lines one set can't hold, `tests/psp/spins.cpp`) then found the window's sums,
+  floats, differing in their last bits from the turns': hence the whole counts.
 
 ### The fit (`tools/psp-measure/contention11.py`)
 
@@ -19232,8 +19237,8 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
   its traffic): `InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40; the arithmetic and
   cached reads 14 to 23% over, the slowed streaming 12 to 47% under.
 - **In the core** (`contention11.py --core`: the core's own run of rounds 10 and 10b against the PSP's): round 10's 680
-  pairs, the core's slowdowns within 5.7% of the PSP's at the median (15.5% with the term held at none), 93% within 25%
-  (list E1, all NOPs, slowed only once a run's last words counted as reads of RAM: x1.24 beside streaming, the PSP's
+  pairs, the core's slowdowns within 5.7% of the PSP's at the median (15.5% with the term held at none), 94.0% within
+  25% (list E1, all NOPs, slowed only once a run's last words counted as reads of RAM: x1.24 beside streaming, the PSP's
   x1.28); round 10b's 144, 1.0%. Polling (three ways) x1.00 (the PSP 0.96 to 1.06); writing before the list x1.00 (1.00
   to 1.07); a writer beside it once: list A x1.91 (2.02), C x1.00 (1.00), D x1.33 (1.28), E2 x1.69 (1.36), H x1.17
   (1.28), I x1.13 (1.07).
