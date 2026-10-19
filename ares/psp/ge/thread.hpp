@@ -220,6 +220,15 @@ struct GeThread : Memory::Writer {
   //so that later stores go on being heard of, their old bytes kept: protect(). The latest texture's pages are kept
   //apart, a range and its newest PRIM, put into each page's as another texture comes: Super Monkey Ball's PRIMs, one
   //texture after another, each went through all its texture's pages)
+  //(the texture the last PRIM handed over read, as the words it's from have it: format, address, row width, size,
+  //mode; its bytes and their pages, worked out again only where those words have changed. The thread's, so that each
+  //machine's thread starts with none)
+  struct HandTexture {
+    u32 words[5] = {};
+    u32 low = 0, high = 0, first = 1, last = 0;
+    bool known = false, paged = false;
+  };
+  HandTexture handTexture;
   std::vector<u64> textureUntil = std::vector<u64>(512_MiB / Memory::PageSize, 0);
   u32 textureFirst = 1, textureLast = 0;
   u64 textureAt = 0;

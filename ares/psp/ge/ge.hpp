@@ -810,14 +810,6 @@ struct GE {
   auto handState() -> void;
   auto handSwitches() -> void;
   std::vector<u8> handCopies;  //(the kernel's GE) a PRIM's copies where its record is too big for the ring
-  //(the kernel's GE) the texture the last PRIM handed over read, as the words it's from have it (format, address, row
-  //width, size, mode): its bytes and their pages, worked out again only where those words have changed
-  struct HandTexture {
-    u32 words[5] = {};
-    u32 low = 0, high = 0, first = 1, last = 0;
-    bool known = false, paged = false;
-  };
-  HandTexture handTexture;
   //(the kernel's GE) its state as the render GE has it once it has taken everything handed over: the words it ran are
   //handed over as they run, but its state set from outside (a context restored, a test's) goes as a whole (handState())
   State handedState{};

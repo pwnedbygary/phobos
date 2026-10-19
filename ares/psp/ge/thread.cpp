@@ -5,7 +5,6 @@
 thread_local bool GE::onGeThread = false;
 
 GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
-  control.handTexture.known = false;  //(its pages are this machine's memory's)
   versions = std::make_unique<GeVersions>(&GE::hostPage, &control.memory);
   render.versions = versions.get();
   render.reporting = this;
@@ -556,7 +555,9 @@ auto GeThread::readClean(u32 address, u32 size) -> void {
 //The control pass's own drawnFirst() (a bounding box's vertices: no record of its own), of VRAM's bytes first to last:
 //handed over where the render GE's drawing may reach them (pages busy there), waited for where it may still change
 //them.
-auto GeThread::controlRead(u32 address, u32 size, u32 first, u32 last) -> void {
+//(out of line: inlined in GE::drawnFirst(), the model's checks made it cost the GE's work with the thread off 0.1 to
+//0.3% more instructions)
+NALL_NOINLINE auto GeThread::controlRead(u32 address, u32 size, u32 first, u32 last) -> void {
   takeReports();
   bool busy = false;
   for(u32 page = first >> 12; page <= last >> 12; page++) busy = busy || model.busy(page);
@@ -1127,7 +1128,7 @@ auto GE::handPrimitive(u32 word, u32 count, bool patching) -> void {
   GeThread::Copies copies;
   copyVertices(count, format, copies);
   bool textured = commands[TextureMappingEnable] & 1;
-  auto& texture = handTexture;
+  auto& texture = thread->handTexture;
   if(textured) {
     u32 words[5] = {commands[TextureFormat], commands[TextureAddress0], commands[TextureBufferWidth0],
                     commands[TextureSize0], commands[TextureMode]};
