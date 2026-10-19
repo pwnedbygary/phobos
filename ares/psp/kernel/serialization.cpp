@@ -1141,6 +1141,8 @@ auto Kernel::serialize(serializer& s) -> bool {
     u32 count = pipe.count;
     s(gePipeAt), s(pipe.front), s(pipe.back), s(count);
     if(s.reading()) {
+      //(more items than the rest of the state holds: a state cut short, or read out of step, refused unread)
+      if(u64(count) * 2 * sizeof(f64) > s.capacity() - s.size()) check(false), count = 0;
       pipe.first = 0, pipe.count = 0, pipe.entries = 0;
       pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
     }
