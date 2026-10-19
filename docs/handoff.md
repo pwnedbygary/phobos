@@ -38,9 +38,10 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP GE thread, its second part: the frame shown from the GE thread, the emulation thread's work for it cut, its two threads placed, and the PSP's GE timing with it, exact — 2026-10-19
 
 Branch `cursor/psp-ge-thread2-2b67` (GE round 4, part B, second PR; draft PR #277), from master `d428d91f9` (#276) with
-`08801ab60` (#269, the PSP's GE timing the default, and #278 with it) merged in; docs/psp-core.md, part 111, has the
-evidence. Clean room: our code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 34, as #269
-left it (with the thread On, the GE's timing state is the render GE's, drained first: the same file on or off).
+`08801ab60` (#269, the PSP's GE timing the default, and #278 with it) and #279 (`0c4baeb4f`, part 113: the CPU's caches
+and the CPU beside the GE) merged in; docs/psp-core.md, part 111, has the evidence. Clean room: our code, uOFW for the
+GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 35, as #279 left it (with the thread On, the GE's timing
+state is the render GE's, drained first: the same file on or off).
 - **What**: with "GE Thread" On the frame is shown from the GE thread, which takes each frame's picture at the frame's
   record, at most two frames in flight (the screen a frame behind: about 17 ms more between a press and its picture at
   60 frames a second); the window is handed over through it; saving and loading wait for it at most 2 s, and an unload
@@ -62,17 +63,26 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   thread keeps the times in cycles and folds each run's as the synchronous GE ends it. Where a time decides something
   (a FINISH, a SIGNAL, the go's limits, `sceGeSaveContext`, a spin's skip), the last run's bound answers first (its
   pipeline's two ends so far, or half its words' work), and the emulation thread waits for the GE thread only where it
-  doesn't. The CPU-beside-the-GE term (held at none) is carried exactly: stretches kept and taken as the fold reaches
-  them, a cut go's stretch ended once, spin skips as long as the synchronous go's.
-- **Speed with the PSP's timing** (the M1, Vulkan fast, 600 frames, medians): On/Off Ghost of Sparta 1.15x, Chains of
-  Olympus 0.99x, Super Monkey Ball 1.08x, Army of Two 1.10x, Killzone 1.01x, Disaster Report 3 1.38x, Hot Wheels 1.09x
-  (0.78x with "Fast": with the PSP's timing the emulation thread reaches a FINISH's time after the GE thread has
-  counted its runs). The RP6 with the PSP's timing, placed (the GE thread on core 7, the emulation thread on 3):
+  doesn't. #279's CPU-beside-the-GE term is carried exactly: each stretch kept with its instructions and the caches'
+  counts as it ended and taken as the fold reaches it, a run's start folding first while stretches wait (the term's
+  push moves the pipeline's start), a cut go counted as one, spin skips as long as the synchronous go's.
+- **Speed with the PSP's timing and #279** (the M1, Vulkan fast, 600 frames, medians, `bee76daa1`): On/Off Ghost of
+  Sparta 1.25x, Chains of Olympus 0.96x, Super Monkey Ball 1.14x, Army of Two 1.20x, Killzone 1.05x, Disaster Report 3
+  1.43x, Hot Wheels 1.23x; before #279 1.15x, 0.99x, 1.08x, 1.10x, 1.01x, 1.38x, 1.09x (0.78x with "Fast": with the
+  PSP's timing the emulation thread reaches a FINISH's time after the GE thread has counted its runs). The runs'
+  starts that fold first while stretches wait: Super Monkey Ball 0.9 a frame, Army of Two 0.5, the others none. The
+  RP6 with the PSP's timing, before #279, placed (the GE thread on core 7, the emulation thread on 3):
   Ghost of Sparta 0.95x, Chains of Olympus 0.87x, Super Monkey Ball 0.91x, Army of Two 1.03x, Killzone 0.86x,
   Disaster Report 3 0.99x, Hot Wheels 0.82x (unplaced 0.28x to 0.94x): where the GE thread's time a frame is about
   the emulation thread's whole time Off there's little to overlap, and the emulation thread on the A715 saves little.
-- **Off costs nothing**: the emulation thread's instructions a frame with the thread Off against master `08801ab60`:
-  -0.04% to -0.15% with the PSP's timing, -0.15% to -0.26% with "Fast".
+- **Off costs nothing**: the emulation thread's instructions a frame with the thread Off against #279's head
+  `0c4baeb4f`, the PSP's timing: -0.12% to -0.54%, the settled hashes the same (the gate's scenes, both renderers, 12
+  of 12); before #279, against master `08801ab60`: -0.04% to -0.15%, and -0.15% to -0.26% with "Fast".
+- **Exact on #279** (`bee76daa1`, its term live in every run; the thread On with the checks against Off, the PSP's
+  timing): the gate's scenes (14 of 14), section 9's sets (240 of 240), "Fast" (3 of 3), the slow three from their
+  start (6 of 6); the suite Off, 632 groups, and the thread On lane, 52 (#279's tests and measured rounds 10 and 10b
+  threaded), 0 failures; the ares lane, 391 checks. A test of the CPU's stretches beside a list given in parts, On ==
+  Off, failing with each of six parts of the port taken out.
 - **Exact, the thread On with the checks against Off, with the PSP's timing** (the gate's scenes, section 9's sets, the
   contention term, "Fast" and the slow three run again after the review's fix, `df88b37ee`: all the same): the gate's
   scenes in Vulkan fast and Software (14 of 14); part 109's section 9 sets (240 of 240: the 26 scenes' end hashes with
@@ -104,13 +114,16 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   states check hashing VRAM while the drawing threads could still draw (it settles them first). The runner's sparse
   PNGs (the library check's) with the thread On showed the frame the screen showed a frame late: the frame before a
   PNG's gets its own picture now, so On's PNGs are Off's (the slow three, 24 of 24), and Off's are as they were.
-- **Where it meets part 113** (1fd9133c's cache models and traffic-driven contention term): `Kernel::GeStretch`,
-  `geContendNow()`, `geStretchEnded()` (from `syscall()`, `run()` and now `goThreaded()`), `GeThread::Owed`'s clocks
-  by kind, `geFolded`'s stretch entries with `GeLimit`'s count, `spinSkip()`. C needs no state layout of its own;
-  part 113 takes 35.
-- **Next**: the review's look at the fix, and the coordinator's library check (with the PSP's timing On against Off,
-  and Off against master); Auto with its handover both ways (design step 4), a stacked PR; the app's option once On
-  beats Off on the RP6; Hot Wheels' remaining store cost.
+- **On part 113** (#279 merged in, `8a0a04b7f`): #279's code as it is with the thread Off. With it On, a stretch the CPU
+  ends while runs are pending keeps its instructions and the caches' four counts (`Kernel::GeStretch`), each run the
+  counts as it ended (`GeRun::caches`); the list's clocks by kind come with each run (`GeThread::Owed`) into the
+  kernel's GE's own, which draws nothing meanwhile, and a state saves the render GE's; `goThreaded()` counts a cut
+  go's instructions across its parts (`Allegrex::run(limit, from)`) and ends its stretch once. #279's test machine
+  `pspTiming()` keeps the GE thread as the machine has it, and the CI thread On lane runs the CPU beside the GE's
+  groups. No layout of its own: 35.
+- **Next**: the coordinator's library check on the port (with the PSP's timing On against Off, and Off against
+  master); Auto with its handover both ways (design step 4), a stacked PR; the app's option once On beats Off on the
+  RP6; Hot Wheels' remaining store cost; the busy window kept on the GE thread, so that a run's start needn't wait.
 
 ## PSP GE: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%) — 2026-10-19
 
