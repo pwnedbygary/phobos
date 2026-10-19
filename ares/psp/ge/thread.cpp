@@ -68,11 +68,11 @@ auto GeThread::publish() -> void {
   for(u64 now; (now = done.load(std::memory_order_acquire)) < serial;) done.wait(now, std::memory_order_acquire);
 }
 
-//(the marks after the words: how many, then each one's word and clocks, 12 bytes)
+//(the marks after the words: how many, then each one's word count and clocks, 12 bytes)
 static constexpr u32 MarkBytes = sizeof(u32) + sizeof(f64);
 
 auto GeThread::wordsBytes() const -> u32 {
-  if(!wordCount) return 0;
+  if(!wordCount && marks.empty()) return 0;
   return sizeof(u32) + runCount * sizeof(WordRun) + wordCount * sizeof(u32) + sizeof(u32) + marks.size() * MarkBytes;
 }
 
@@ -95,7 +95,7 @@ auto GeThread::putWords(u8* at) -> void {
 }
 
 auto GeThread::flushWords() -> void {
-  if(!wordCount) return;
+  if(!wordCount && marks.empty()) return;
   putWords(append(Kind::Words, wordsBytes()));
   publish();
 }
@@ -732,8 +732,9 @@ auto GeThread::listWordDrawn(u32 address) -> void {
 }
 
 //(each word counted in the run's, as run() counts it, and taken; a TRANSFER_START's time put in the pipeline as
-//transfer() puts it, and the control pass's front-end work after the word it came with, with the PSP's timing)
-auto GeThread::replayWords(const u8* data) -> void {
+//transfer() puts it, and the control pass's front-end work once the words handed over before it are taken, before
+//the first where none were, with the PSP's timing)
+auto GeThread::replayWords(const u8* data, u64 serial) -> void {
   u32 runCount, count = 0;
   std::memcpy(&runCount, data, sizeof(u32));
   for(u32 n = 0; n < runCount; n++) {
@@ -746,11 +747,21 @@ auto GeThread::replayWords(const u8* data) -> void {
   u32 marksLeft;
   std::memcpy(&marksLeft, mark, sizeof(u32));
   mark += sizeof(u32);
-  u32 index = 0;
+  u32 taken = 0;
+  auto marksDue = [&] {
+    for(u32 at; marksLeft && (std::memcpy(&at, mark, sizeof(u32)), (at & ~VerticesMark) == taken);
+        marksLeft--, mark += MarkBytes) {
+      f64 clocks;
+      std::memcpy(&clocks, mark + sizeof(u32), sizeof(f64));
+      if(!(at & VerticesMark)) render.pipeFront(clocks);
+      else if(render.pspTiming) render.pipe.vertices += clocks, render.ramRead(0, clocks);  //(as oweVertices())
+    }
+  };
+  marksDue();
   for(u32 n = 0; n < runCount; n++) {
     u32 run[2];
     std::memcpy(run, data + sizeof(u32) + n * sizeof(run), sizeof(run));
-    for(u32 k = 0; k < run[1]; k++, word += sizeof(u32), index++) {
+    for(u32 k = 0; k < run[1]; k++, word += sizeof(u32)) {
       u32 value;
       std::memcpy(&value, word, sizeof(u32));
       if(run[0] != ~0u) listWordDrawn((run[0] + k * 4) & 0x0fff'ffff);
@@ -763,24 +774,24 @@ auto GeThread::replayWords(const u8* data) -> void {
           render.oweTransfer(t.width, t.height, t.bytes, t.source, t.destination);
         }
       }
-      for(u32 at; marksLeft && (std::memcpy(&at, mark, sizeof(u32)), (at & ~VerticesMark) == index);
-          marksLeft--, mark += MarkBytes) {
-        f64 clocks;
-        std::memcpy(&clocks, mark + sizeof(u32), sizeof(f64));
-        if(!(at & VerticesMark)) render.pipeFront(clocks);
-        else if(render.pspTiming) render.pipe.vertices += clocks, render.ramRead(0, clocks);  //(as oweVertices())
-      }
+      taken++;
+      marksDue();
     }
+  }
+  if(checking && marksLeft) {
+    std::fprintf(stderr, "PSP GE thread: %u of the control pass's front-end marks not taken, at record %llu\n",
+                 marksLeft, (unsigned long long)serial);
+    std::abort();
   }
 }
 
 auto GeThread::replay(const Header& header, const u8* data) -> void {
   switch(header.kind) {
-  case Kind::Words: replayWords(data); break;
+  case Kind::Words: replayWords(data, header.serial); break;
   case Kind::Primitive: case Kind::Patch: {
     u32 head[7];
     std::memcpy(head, data, sizeof(head));
-    if(head[6]) replayWords(data + sizeof(head));  //(the words before it, which came in its record)
+    if(head[6]) replayWords(data + sizeof(head), header.serial);  //(the words before it, which came in its record)
     runWords++;
     Copies copies;
     std::memcpy(&copies, data + sizeof(head) + head[6], sizeof(Copies));

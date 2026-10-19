@@ -3039,6 +3039,82 @@ static auto geTimePspOn(bool threaded) -> void {
 static auto geTimePsp() -> void { geTimePspOn(false); }
 static auto geTimePspThreaded() -> void { geTimePspOn(true); }
 
+//With the PSP's timing and the GE on its thread, held back while the control pass runs: a BOUNDING_BOX's vertices' work
+//and a JUMP's after it go to the render GE's pipeline as the synchronous GE takes them (GeThread::front()), the box's
+//vertices in RAM, or on a VRAM page sprite A is still to draw on, whose check goes to the render GE as a record of its
+//own that hands the words waiting over first (the box's word among them), so the box's work comes with no word after
+//it: then a JUMP and sprite B; or sprite B at once, its vertices after the box's on a page nothing draws on (its
+//record next, with no words before it); or the list's stall address, the run ending there (its record next), sprite B
+//once the stall address moves on. Sprite A's drawing ends after sprite B starts, so front-end work lost before sprite
+//B shows in the front end's time (geReachAt), not the drawing's (geDoneAt). (The review's case, and the same with no
+//word after the box.)
+static auto geTimeBoxMarksThreaded() -> void {
+  enum class Box { InRAM, OnBusyPageThenJump, OnBusyPageThenPrimitive, OnBusyPageThenStall };
+  for(Box box : {Box::InRAM, Box::OnBusyPageThenJump, Box::OnBusyPageThenPrimitive, Box::OnBusyPageThenStall}) {
+    u64 times[2][4] = {};  //(without the thread and with it: geDoneAt and geReachAt at the stall, then at the end)
+    for(bool threaded : {false, true}) {
+      KernelMachine m;
+      m.kernel.gePspTiming = true;
+      m.system.threadGE(threaded);
+      auto& memory = m.system.memory;
+      //(VRAM: row 12 of the 64-wide 8888 frame buffer, on page 0; or page 0's last 96 bytes, page 1 after them)
+      u32 boxAt = Vertices + 0x400, spriteB = Vertices + 24;
+      if(box == Box::OnBusyPageThenJump) boxAt = VRAM + 0xc00;
+      if(box >= Box::OnBusyPageThenPrimitive) boxAt = VRAM + 0xfa0, spriteB = boxAt + 8 * 12;
+      auto vertex = [&](u32 at, s32 x, s32 y) {
+        memory.write(4, at, 0xff00'00ff);
+        memory.write(2, at + 4, u32(x)), memory.write(2, at + 6, u32(y)), memory.write(2, at + 8, 0);
+      };
+      vertex(Vertices, 0, 0), vertex(Vertices + 12, 64, 8);  //(sprite A: rows 0-7, page 0)
+      vertex(spriteB, 0, 30), vertex(spriteB + 12, 32, 40);    //(sprite B: rows 30-39)
+      for(u32 n = 0; n < 8; n++) vertex(boxAt + n * 12, s32(n), s32(n));
+      ListWriter list{memory, ListA};
+      list.put(GE::FrameBufferPointer, 0);
+      list.put(GE::FrameBufferWidth, 64);
+      list.put(GE::FrameBufferPixelFormat, 3);
+      list.put(GE::Scissor1, 0);
+      list.put(GE::Scissor2, 63 << 10 | 63);
+      list.put(GE::Region2, 1023 << 10 | 1023);
+      list.put(GE::VertexType, 0x80'011c);  //(through: 8888 color, 16-bit x, y, z)
+      list.to(GE::VertexAddress, Vertices);
+      list.put(GE::Primitive, GE::Sprites << 16 | 2);
+      list.to(GE::VertexAddress, boxAt);
+      list.put(GE::BoundingBox, 8);
+      u32 stall = box == Box::OnBusyPageThenStall ? list.address : 0;
+      if(box <= Box::OnBusyPageThenJump) list.to(GE::Jump, list.address + 8), list.to(GE::VertexAddress, spriteB);
+      list.put(GE::Primitive, GE::Sprites << 16 | 2);
+      list.put(GE::Finish);
+      list.put(GE::End);
+      std::atomic<bool> held{threaded};
+      std::thread release;
+      if(threaded) {
+        m.system.geThreading->drain();
+        m.system.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+        //(let go anyway in a while, should the control pass wait for the thread)
+        release = std::thread([&] { std::this_thread::sleep_for(std::chrono::milliseconds(300)); held = false; });
+      }
+      u32 id = m.call("sceGeListEnQueue", {ListA, stall, 0xffff'ffff, 0});
+      held = false;
+      if(release.joinable()) release.join();
+      m.kernel.geFold(true);
+      times[threaded][0] = m.kernel.geDoneAt, times[threaded][1] = m.kernel.geReachAt;
+      if(stall) {
+        CHECK(m.call("sceGeListUpdateStallAddr", {id, list.address}), 0);
+        m.kernel.geFold(true);
+      }
+      times[threaded][2] = m.kernel.geDoneAt, times[threaded][3] = m.kernel.geReachAt;
+      if(threaded) m.system.geThreading->drain(), m.system.geThreading->gate = nullptr;
+    }
+    for(u32 n = 0; n < 4; n++) {
+      if(times[1][n] == times[0][n]) continue;
+      std::printf("  box %u: %s %s, %llu without the thread, %llu with\n", u32(box), n & 1 ? "geReachAt" : "geDoneAt",
+                  n < 2 ? "at the stall" : "at the end", (unsigned long long)times[0][n],
+                  (unsigned long long)times[1][n]);
+    }
+    for(u32 n = 0; n < 4; n++) CHECK(times[1][n], times[0][n]);
+  }
+}
+
 //The GE's FINISH comes to the program as an interrupt (kernel/ge.cpp's geInterrupt()), as pspautotests recorded: with
 //interrupts held off the list stays drawing past its time, its callback once they're back on (gpu/ge/intrsuspend);
 //a SIGNAL's callback that lets the GE go on finds its list drawing, though the GE has run its FINISH (
@@ -4942,6 +5018,7 @@ auto geTests() -> Tests {
     {"ge time, the PSP's, with the GE on its thread: the same times", geTimePspThreaded},
     {"ge time, the PSP's, with the GE on its thread: a SIGNAL's lead through stall updates",
      geTimeSignalAcrossRunsThreaded},
+    {"ge time, the PSP's, with the GE on its thread: a bounding box's work after a record", geTimeBoxMarksThreaded},
     {"ge time, the PSP's: a state from a bigger queue", geTimeStateFromBiggerQueue},
     {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions}, {"ge profile", geProfile},

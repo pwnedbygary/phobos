@@ -97,12 +97,13 @@ struct GeThread : Memory::Writer {
     words[wordCount++] = word;
   }
   //(with the PSP's timing, the control pass's own work for the GE's front end, which the render GE's pipeline takes
-  //after the word it came with, the last handed over: a JUMP taken, a CALL, a RET, GE::pipeFront(); vertices, a
-  //bounding box's, to be shared out among the next PRIM's primitives, GE::oweVertices())
+  //once it has taken the words handed over before it, as many as wait: a JUMP taken, a CALL, a RET, after their
+  //words, GE::pipeFront(); vertices, a bounding box's, to be shared out among the next PRIM's primitives,
+  //GE::oweVertices(), where the box's check may have handed its word over in a record of its own, none waiting)
   auto front(f64 clocks, bool vertices = false) -> void {
-    marks.push_back({(wordCount - 1) | (vertices ? VerticesMark : 0), clocks});
+    marks.push_back({wordCount | (vertices ? VerticesMark : 0), clocks});
   }
-  static constexpr u32 VerticesMark = 0x8000'0000;  //(a mark's word's top bit: vertices' work)
+  static constexpr u32 VerticesMark = 0x8000'0000;  //(a mark's word count's top bit: vertices' work)
   //(with the PSP's timing, the run about to start: the GE's pipeline moved on to it by clocks, Kernel::geResume())
   auto resume(f64 clocks) -> void { shifting = true, shift = clocks; }
   //(with the PSP's timing, a list starting: its own clocks, the pipeline begun afresh, Kernel::geOwe())
@@ -271,11 +272,13 @@ private:
   auto flushWords() -> void;
   auto flushStores() -> void;
   auto addStore(u32 address, u32 size) -> void;
-  auto wordsBytes() const -> u32;  //(the words waiting, as a record holds them: their runs, the words, the marks)
+  //(the words waiting, as a record holds them: their runs, the words, the marks; none where neither words nor marks
+  //wait)
+  auto wordsBytes() const -> u32;
   auto putWords(u8* at) -> void;   //(and put there, none left waiting)
   auto take() -> void;  //the thread's loop
   auto replay(const Header& header, const u8* data) -> void;
-  auto replayWords(const u8* data) -> void;
+  auto replayWords(const u8* data, u64 serial) -> void;
   auto listWordDrawn(u32 address) -> void;  //(the render GE: run()'s drawnFirst() for a list word, replayed)
   //(the PRIM record under way, between primitiveBegin() and primitiveEnd(): its data, or nullptr with what it says,
   //for the emulation thread to draw it)
@@ -289,8 +292,8 @@ private:
   std::array<u32, WordsMost> words;
   std::array<WordRun, WordsMost> wordRuns;
   u32 wordCount = 0, runCount = 0, nextWordAt = ~0u;
-  //(and the control pass's front-end work among them: after which word, and its clocks; the run about to start's
-  //shift, with the PSP's timing: front(), resume())
+  //(and the control pass's front-end work among them: after how many of the words, and its clocks; the run about to
+  //start's shift, with the PSP's timing: front(), resume())
   struct Mark { u32 word; f64 clocks; };
   std::vector<Mark> marks;
   bool shifting = false;
