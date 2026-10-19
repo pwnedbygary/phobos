@@ -35,6 +35,23 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: part 113 and the handoff after #279's second review — wording only — 2026-10-19
+
+Branch `cursor/psp-279-nits-2b67`, from master `f5cf0c6b5` (#279, merged at `9f4e7607a`). Docs only.
+- **The second review** (18de2dd5, `0c4baeb4f..9f4e7607a`: approve with nits): the spin skip exact for every case the
+  code allows (two equal turns settle both caches' tags and dirty bits; one syscall a turn keeps what the window owes
+  falling then rising at most; the window's time changes kind at most once); skip on and off the same in Resistance
+  (160.5 million turns skipped) and Burnout Dominator (none skipped: 1,239 refusals for unsteady turns, 86 for lines);
+  the gate and the measured rounds reproduced; "Fast" still master's.
+- **Its wording nits, put right here**: part 113's round 10 in the core, 94.0% of the pairs within 25% (not 93%); its
+  sentence on what's refused with lines in play now says what the code does; the #279 entry below: only turns of more
+  than one syscall that move lines are refused, not every turn of more than one syscall.
+- **Its other nits, for the spin skip's widening** (its own pull request, after #277's): tests that fail when each of
+  the four refusals is taken out (the GE done part way, turns of more than one syscall moving lines, the window's time
+  changing kind, unsteady turns; today's test fails only without the skipped turns' lines); a skip shortened to end
+  before `geDoneAt` instead of refused whole; `spin.wait` grown after unsteady refusals; the steady rule's theoretical
+  hole (a loop settling in the last turn run, its counts equal but its lines others).
+
 ## PSP GE: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%) — 2026-10-19
 
 Branch `cursor/psp-cpu-traffic-2b67`, from master `08801ab60` (#269, part 106); draft PR #279. docs/psp-core.md, part
@@ -65,14 +82,14 @@ place; older layouts load with the caches empty).
   small trilinear CLUT4 strips, predicted about 16% short beside the CPU's patterns) taken apart, its refit to follow.
 - **The review** (18de2dd5 at `0c4baeb4f`: approve with should-fixes): "Fast" exact and free, the caches deterministic,
   states mid-list carried on, fits and gate reproduced. Fixed: the spin skip counts each skipped turn's lines as the
-  turn before moved, and skips no turns the GE would finish part way through (test: the GE polled with a turn reading
-  an uncached word, or missing three lines; skip on and off the same); the window's sums are whole counts and its push
+  turn before moved, and skips no turns the GE would finish part way through (test: the GE polled with a turn reading an
+  uncached word, or missing three lines; skip on and off the same); the window's sums are whole counts and its push
   whole cycles, so a skip's one stretch adds up as its turns would (the floats' last bits differed), and with lines in
-  play no turns are skipped where the push could rise and fall within them (more than one syscall a turn, or the
-  window's time changing kind); a push moves `geReachAt` only with a SIGNAL due (as master did; `geTime()` works it
-  out otherwise). Documented: the interpreter isn't counted, so under the PSP's
-  timing `--interpreter` gives the GE other times than the recompiler (part 113, the runner's help). The cheap win
-  (the data look's add) doesn't apply: `Allegrex` starts with its vtable pointer.
+  play no turns are skipped where the push could rise and fall within them (a turn of more than one syscall that moves
+  lines, or the window's time changing kind); a push moves `geReachAt` only with a SIGNAL due (as master did; `geTime()`
+  works it out otherwise). Documented: the interpreter isn't counted, so under the PSP's timing `--interpreter` gives
+  the GE other times than the recompiler (part 113, the runner's help). The cheap win (the data look's add) doesn't
+  apply: `Allegrex` starts with its vtable pointer.
 - **#277 lands after this** (b331a6e1 ports its threaded GE onto it): each stretch must keep its instructions and the
   caches' four count deltas as it ends; the pushes must agree with the folds; states save the drawing GE's clocks by
   kind; the measured rounds keep `KernelMachine::pspTiming()` (part 113, "Not yet").
