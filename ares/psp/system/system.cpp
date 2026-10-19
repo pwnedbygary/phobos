@@ -32,7 +32,11 @@ auto load(Node::System& node, string name) -> bool {
 //"Pipeline Cache", a host file the Vulkan renderer keeps its pipelines in between sessions (none: made afresh each
 //game, a stutter the first time each is met). "Dialogs", "true" for a host that shows the system's dialogs itself
 //(dialogID(), dialog(), answer(); taken at the next power on): a message, the keyboard and the save dialogs that ask
-//the player wait for its answer; without it (the default) they're answered at once, as they always were.
+//the player wait for its answer; without it (the default) they're answered at once, as they always were. "GE
+//Timing", "PSP" (the default, the owner's choice) for the GE to take the time the owner's PSP took over the same work
+//(docs/psp-core.md, part 106), or "Fast" for Sony's peak rates, which games' lists take a PSP 4 to 12 times longer
+//than (part 103); taken at the next power on (Kernel::geTime()). With "PSP" the GE stays on the emulation thread
+//whatever "GE Thread" says (threadGE()).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -48,6 +52,7 @@ auto option(string name, string value) -> bool {
   if(name == "Late Frames") system.lateFrames = value.boolean();
   if(name == "Pipeline Cache") system.pipelineCache = value;
   if(name == "Dialogs") system.dialogs = value.boolean();
+  if(name == "GE Timing") system.gePspTiming = value != "Fast";
   return true;
 }
 
@@ -357,8 +362,11 @@ auto System::unload() -> void {
 //The GE on a thread of its own from now on, or not (option "GE Thread": ge/thread.hpp). On: the render GE takes the
 //kernel's GE's renderer, drawing threads and state, its memory sees memory's bytes, and VRAM's pages leave the CPU's
 //page table, so that every access to them goes through memory, whose drawer has the thread done first. Off: all of
-//that back, once the thread has drawn and put back everything handed to it.
+//that back, once the thread has drawn and put back everything handed to it. Never with the PSP's GE timing (option
+//"GE Timing" "PSP"): its pipeline takes each run's time as the run ends on the emulation thread (Kernel::geTime(),
+//geRun()'s SIGNAL), so the GE runs there, as with the thread off (docs/psp-core.md, part 106).
 auto System::threadGE(bool on) -> void {
+  if(kernel.gePspTiming) on = false;
   if(on == (bool)geThreading) return;
   auto vramPages = [&](bool out) {
     if(pageTable.empty()) return;
@@ -472,6 +480,7 @@ auto System::power(bool reset) -> void {
   kernel.log = [this](const std::string& text) { report(true, text); };
   kernel.power();
   kernel.frontDialogs = dialogs;
+  kernel.gePspTiming = gePspTiming;
   //The devices are the system's to give: the memory stick here, the disc in startProgram(); none left from the game
   //before.
   kernel.devices.clear();
@@ -613,12 +622,15 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
 //the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
-//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 33
-//since the display keeps a frame buffer set for the next vertical blank, shown from its start (part 108); 32
+//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 34
+//since the PSP's GE timing keeps its state (part 106): the texels the GE's texture cache holds since a TEX_FLUSH,
+//when the GE's front end reaches a SIGNAL and whether one is due, and the list's pipeline (when its times count from,
+//when its front end and back end are done, its queue's items); 33 since the display keeps a frame buffer set for the next vertical blank,
+//shown from its start (part 108); 32
 //since an open memory stick file emptied as it was opened keeps the PSP's length of it and its host file's length,
 //the host file keeping the bytes past them until it's cut (part 95); 31 since the kernel keeps sceVaudio's hold on the
 //SRC channel, its buffers' format, effect and level control (part 82; 29 and 30 are skipped, other branches' layouts,
-//refused here: a branch with one of them landing after this renumbers its layout past 32 and updates
+//refused here: a branch with one of them landing after this renumbers its layout past 34 and updates
 //tests/psp/ares/system.cpp's list of refused versions); 28 since each module keeps the variables it imports, and the
 //address each holds now (part 88); 27 since a font holds the glyph it last read, and a
 //call may be reading one (part 87); 26 since the dialog keeps an aborted message's error and whether a list delete has
@@ -658,10 +670,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //PGD decryption set up (each read as it is), 15 to 25 with no error for an aborted message and no save deleted from a
 //list, 15 to 26 with no glyph held by a font nor being read into one, 15 to 27 with no module's imported variables
 //known (none linked, as those builds left them), 15 to 28 with sceVaudio holding nothing, 15 to 31 with no file
-//emptied as it was opened keeping its host file's bytes, and 15 to 32 with no frame buffer waiting for a vertical
-//blank; 29 and 30 (other branches' layouts) and older layouts are refused.
+//emptied as it was opened keeping its host file's bytes, 15 to 32 with no frame buffer waiting for a vertical blank,
+//and 15 to 33 with the GE's texture cache empty, no SIGNAL due and the PSP's GE timing's pipeline empty; 29 and
+//30 (other branches' layouts) and older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 33;
+static constexpr u32 StateVersion = 34;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -671,14 +684,14 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28 and 31
-//(the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg
-//not started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
-//come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
-//up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read into one, no
-//module's imported variables, sceVaudio holding nothing, no emptied file keeping its host file's bytes, as each
-//layout lacks them): the owner's accuracy scenes were saved at 15 before part 42. Not 29 and 30, other branches'
-//layouts.
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28, 31 and
+//32 (the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent,
+//sceJpeg not started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes
+//still to come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD
+//decryption set up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read
+//into one, no module's imported variables, sceVaudio holding nothing, no emptied file keeping its host file's bytes,
+//no texture in the GE's cache, as each layout lacks them): the owner's accuracy scenes were saved at 15 before part
+//42. Not 29 and 30, other branches' layouts.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

@@ -330,9 +330,10 @@ static auto waitFor(KernelMachine& m, u32 frames, const std::function<bool()>& d
   return done();
 }
 
-//Round 6's files as this core writes them, for measured6.cpp's comparisons with the owner's PSP: the measure test's
-//run hands its over; otherwise the program's round 6 alone (its menu's second line) runs once, in
-//a machine of its own, the first time they're asked for. None without the program.
+//Round 6's files as this core writes them, for measured6.cpp's comparisons with the owner's PSP: the program's round 6
+//alone (its menu's second line) runs once, in a machine of its own with the GE timed as the PSP's (the option "GE
+//Timing"), the first time they're asked for (the measure test's run, with "Fast", the test machine's, keeps none).
+//None without the program.
 static std::unique_ptr<HostFolder> round6Kept;
 static auto keepRound6(const std::filesystem::path& results) -> void {
   round6Kept = std::make_unique<HostFolder>();
@@ -354,6 +355,8 @@ auto round6Files() -> std::filesystem::path {
   std::filesystem::create_directories(game);
   KernelMachine m;
   m.system.recompiler.enabled = true;
+  m.kernel.gePspTiming = true;  //(the GE timed as the PSP's: measured6.cpp's GE time and driver statuses)
+  m.system.threadGE(false);     //(and so on the emulation thread: System::threadGE())
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
   bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
@@ -365,6 +368,51 @@ auto round6Files() -> std::filesystem::path {
   CHECK(waitFor(m, 20000, [&] { return std::filesystem::exists(results / "curves-count-v-255.bin"); }), true);
   keepRound6(results);
   return round6Kept->path;
+}
+
+//Rounds 8's, 9's and 10's GE timing files as this core writes them, for measured8.cpp's comparisons with the owner's
+//PSP, the same way: the program's round alone (line, its last file last, within frames) once, with the GE timed as the
+//PSP's.
+template<size_t N>
+static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* last, const TimingFile8 (&files)[N],
+                       const char* manifest, u32 frames = 20000) -> std::filesystem::path {
+  if(kept) return kept->path;
+  auto program = testProgram("pspmeasure.elf");
+  if(program.empty()) return {};
+  HostFolder stick;
+  auto game = stick.path / "PSP/GAME/PSPMEASURE";
+  std::filesystem::create_directories(game);
+  KernelMachine m;
+  m.system.recompiler.enabled = true;
+  m.kernel.gePspTiming = true;
+  m.system.threadGE(false);
+  m.kernel.mount("ms0", stick.path.string());
+  std::string error;
+  bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
+  CHECK(loaded, true);
+  if(!loaded) return {};
+  auto results = game / "results" / "ge";
+  move(m, 0, line);
+  press(m, Cross);
+  CHECK(waitFor(m, frames, [&] { return std::filesystem::exists(results / last); }), true);
+  kept = std::make_unique<HostFolder>();
+  std::vector<std::string> names = {manifest};
+  for(auto& file : files) names.push_back(std::string(file.name) + ".bin");
+  for(auto& name : names) {
+    std::error_code error;
+    std::filesystem::copy_file(results / name, kept->path / name, error);
+  }
+  return kept->path;
+}
+static std::unique_ptr<HostFolder> round8Kept, round9Kept, round10Kept;
+auto round8Files() -> std::filesystem::path {
+  return timedRound(round8Kept, GeRound8Line, "cpu-clocks.bin", timingFiles8, "manifest8.txt");
+}
+auto round9Files() -> std::filesystem::path {
+  return timedRound(round9Kept, GeRound9Line, "time-formats.bin", timingFiles9, "manifest9.txt");
+}
+auto round10Files() -> std::filesystem::path {  //(its CPU contention last, as long as "psp measure" gives it)
+  return timedRound(round10Kept, GeRound10Line, "time-contention2.bin", timingFiles10, "manifest10.txt", 40000);
 }
 
 static auto pspMeasure() -> void {
@@ -491,7 +539,6 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 20000, exists(results / "curves-count-v-255.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
-  keepRound6(results);
   //the GE's round 7
   move(m, GeRound6Line, GeRound7Line);
   press(m, Cross);

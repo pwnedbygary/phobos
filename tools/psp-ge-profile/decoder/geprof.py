@@ -58,8 +58,8 @@ MODEL_CYCLES_PER_US = 333
 GE_IDLE, GE_NOT_SAMPLED, GE_DRAWING, GE_STALLED = 0, 1, 2, 3
 GE_STATES = {0: "idle", 1: "?", 2: "drawing", 3: "stalled"}
 
-# Header flags.
-FULL, MONITOR, TIMED, GE_SAMPLED = 1, 2, 4, 8
+# Header flags (PSP_TIMING: Phobos's alone, its model's charges the PSP's timing's, not Sony's peaks').
+FULL, MONITOR, TIMED, GE_SAMPLED, PSP_TIMING = 1, 2, 4, 8, 16
 
 HEADER_FIELDS = [
     ("magic", "8s"), ("format", "I"), ("headerSize", "I"), ("recordSize", "I"), ("recordCount", "I"), ("flags", "I"),
@@ -694,12 +694,14 @@ def print_report(capture, out=None, show_lists=False, show_events=False, show_vb
         out.write("note: %s\n" % warning)
     if model is not None:
         displayed = sum(r.new_frame for r in rows)
-        out.write("Phobos's GE model: %d charges, %.2f M pixels, %d primitives, %.2f ms of the GE's time (%s ms a "
-                  "displayed frame); %.0f%% of the charges set by their pixels (four a bus clock), the rest by their "
-                  "primitives\n"
-                  % (model.charges, model.pixels / 1e6, model.primitives, model.ms,
-                     "%.2f" % (model.ms / displayed) if displayed else "-",
-                     100 * model.pixel_bound / model.charges if model.charges else 0))
+        line = ("Phobos's GE model%s: %d charges, %.2f M pixels, %d primitives, %.2f ms of the GE's time (%s ms a "
+                "displayed frame)" % (" (the PSP's timing)" if capture.header["flags"] & PSP_TIMING else "",
+                                      model.charges, model.pixels / 1e6, model.primitives, model.ms,
+                                      "%.2f" % (model.ms / displayed) if displayed else "-"))
+        if not capture.header["flags"] & PSP_TIMING:
+            line += ("; %.0f%% of the charges set by their pixels (four a bus clock), the rest by their primitives"
+                     % (100 * model.pixel_bound / model.charges if model.charges else 0))
+        out.write(line + "\n")
     if show_counts:
         found = counts(capture, *window)
         length = (min(end_s * 1e6, capture.length_us) if end_s is not None else capture.length_us) \

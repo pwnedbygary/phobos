@@ -233,6 +233,19 @@ fun ValuePill(text: String, modifier: Modifier = Modifier, trailingIcon: ImageVe
     }
 }
 
+/**
+ * The PSP's GE timing: the GE takes as long as a real PSP's measured over its work (the default), or Sony's peak rates
+ * ("Fast"), faster than a PSP's.
+ */
+@Composable
+fun PspGeTimingItem(checked: Boolean, onCheckedChange: (Boolean) -> Unit) = SettingsSwitchItem(
+    "PSP GE Timing",
+    "Draw at the speed measured on a real PSP, so games pace close to a PSP's. " +
+        "Off (Fast): draw faster than a PSP, more frames drawn",
+    checked,
+    onCheckedChange,
+)
+
 @Composable
 fun SettingsSwitchItem(title: String, description: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     ListItem(

@@ -133,7 +133,10 @@ jobs:
   system:
     name: PSP system tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # 90: sanitized, the suite took 45 of 60 minutes once round 10 ran twice (the measure test's run of the program
+    # and measured8.cpp's with the GE timed as the PSP's); running it once for both is a follow-up (docs/psp-core.md,
+    # part 106)
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -160,14 +163,16 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
 
       # Required: a Vulkan GPU (lavapipe) with each capability of it the tests use that lavapipe has (not
-      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3 and 6)
+      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3, 6, 8, 9 and
+      # 10)
       - name: Run the tests
         shell: bash
         env:
           PSP_GPU_ON_CPU: 1
           PHOBOS_TESTS_REQUIRE: >-
             vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
-            vulkan-stencil-export, vulkan-depth-clamp, programs, ge-round3, ge-round6
+            vulkan-stencil-export, vulkan-depth-clamp, programs, ge-round3, ge-round6, ge-round8, ge-round9,
+            ge-round10
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
@@ -223,7 +228,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
 
       # Required: a Vulkan GPU (lavapipe) with each capability of it the tests use that lavapipe has (not
-      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3 and 6).
+      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3, 6, 8, 9 and
+      # 10).
       # Four compiles at once: then a failed one lets the others finish, so one run shows every file's errors.
       - name: Run the tests
         shell: bash
@@ -233,7 +239,8 @@ jobs:
           PSP_GPU_ON_CPU: 1
           PHOBOS_TESTS_REQUIRE: >-
             vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
-            vulkan-stencil-export, vulkan-depth-clamp, programs, ge-round3, ge-round6
+            vulkan-stencil-export, vulkan-depth-clamp, programs, ge-round3, ge-round6, ge-round8, ge-round9,
+            ge-round10
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report-release.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 

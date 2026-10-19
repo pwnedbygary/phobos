@@ -160,8 +160,9 @@ auto Kernel::spinSkip() -> void {
   u64 room = cpu.runLimit > counted + 1 ? cpu.runLimit - counted - 1 : 0;
   if(room / spin.period <= SpinMargin) return;
   u64 turns = room / spin.period - SpinMargin, skipped = turns * spin.period;
-  //a list's FINISH taken at the first system call once it's due: none comes by within the turns skipped
-  if(geFinishDue && geBound() <= cycles + skipped) return;
+  //a list's FINISH (or, with the PSP's GE timing, its SIGNAL) taken at the first system call once it's due: none comes
+  //by within the turns skipped
+  if((geFinishDue && geBound() <= cycles + skipped) || (geSignalDue && geReachAt <= cycles + skipped)) return;
   SpinShadow shadow{*this, memory};
   if(!spinProve(shadow) || shadow.period != spin.period) {
     spin.wait = std::min(spin.wait * 2 + SpinTurns, SpinWaitMost);
@@ -304,8 +305,9 @@ auto Kernel::spinGetVcount(SpinShadow& shadow, u64) -> bool {
 }
 
 //The GE's looks (a mode but 0, which waits): what the GE and its lists are doing changes only in a system call or
-//between the CPU's goes (a list's FINISH is taken at a call once it's due, and the go ends by then: spinSkip()), so
-//every turn of a go finds what this one finds.
+//between the CPU's goes (a list's FINISH is taken at a call once it's due, as is its SIGNAL with the PSP's GE timing
+//once the GE's front end reaches it, and the go ends by then: spinSkip()), so every turn of a go finds what this one
+//finds.
 auto Kernel::spinGeListSync(SpinShadow& shadow, u64) -> bool {
   s32 index = geIndex(shadow.arg(0));
   if(index < 0) return shadow.ipu.r[2] = ErrorInvalidID, true;

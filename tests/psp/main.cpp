@@ -48,6 +48,7 @@ int main() {
   for(auto& test : curvesTests()) tests.push_back(test);
   for(auto& test : measureTests()) tests.push_back(test);
   for(auto& test : measured6Tests()) tests.push_back(test);
+  for(auto& test : measured8Tests()) tests.push_back(test);
   for(auto& test : gpuTests()) tests.push_back(test);
   checkRequired();
   //(PHOBOS_TESTS_ONLY: only the tests whose names have it in them, for a quicker run while one is worked on)

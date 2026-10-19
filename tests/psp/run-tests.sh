@@ -6,7 +6,8 @@
 #usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off; PSP_TEST_PROGRAMS: see loader.cpp;
 #PSP_AUTOTESTS: a pspautotests checkout, whose sample files atrac.cpp and mp3.cpp decode with FFmpeg; PHOBOS_JOBS:
 #compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here,
-#a group that needs it failing rather than skipping, as vulkan,programs,ge-round3,ge-round6
+#a group that needs it failing rather than skipping, as vulkan,programs,ge-round3,ge-round6,ge-round8,ge-round9,
+#ge-round10
 #(tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities); PHOBOS_TESTS_REPORT: a file for each
 #group's result, pass, FAIL or skip with why, a tab between)
 set -euo pipefail
@@ -17,39 +18,45 @@ export PSP_TEST_PROGRAMS=${PSP_TEST_PROGRAMS-$ROOT/tests/psp/programs}
 export PSP_GE_RESULTS=${PSP_GE_RESULTS-$ROOT/tests/psp/measurements/ge-round3}
 OUT=${TMPDIR:-/tmp}/phobos-psp-tests
 source "$ROOT/tests/objects.sh"
-#round 6 of the PSP's GE measurements (packed with xz, as tests/allegrex/measured's are), unpacked once into this
-#checkout's folder, unless PSP_GE_ROUND6 names another folder (empty: none); each file through a temporary one, so one
-#cut short isn't kept, and all of them again if they don't match SHA256SUMS (another commit's, after a checkout, say)
-if [[ -z ${PSP_GE_ROUND6+set} ]]; then
-  export PSP_GE_ROUND6="$BUILD/ge-round6"
-  mkdir -p "$PSP_GE_ROUND6"
-  MEASURED6="$HERE/measurements/ge-round6"
-  unpack6() {
-    for packed in "$MEASURED6"/*.xz; do
-      unpacked="$PSP_GE_ROUND6/$(basename "$packed" .xz)"
-      if [[ ${1:-} == all || ! -f $unpacked || $packed -nt $unpacked ]]; then
-        if xz -dc "$packed" > "$unpacked.part-$$"; then mv -f "$unpacked.part-$$" "$unpacked"; else rm -f "$unpacked.part-$$"; fi
-      fi
-    done
-    cp "$MEASURED6/manifest6.txt" "$PSP_GE_ROUND6/manifest6.txt.part-$$"
-    mv -f "$PSP_GE_ROUND6/manifest6.txt.part-$$" "$PSP_GE_ROUND6/manifest6.txt"
-  }
-  sums6() {
-    local sum=(shasum -a 256)
-    if command -v sha256sum > /dev/null; then sum=(sha256sum); fi
-    (cd "$PSP_GE_ROUND6" && "${sum[@]}" -c "$MEASURED6/SHA256SUMS") > "$BUILD/ge-round6.sums" 2>&1
-  }
-  command -v xz > /dev/null || { echo "tests/psp/measurements/ge-round6 needs xz to unpack" >&2; exit 1; }
-  unpack6
-  if ! sums6; then
-    unpack6 all
-    if ! sums6; then
-      grep -v ': OK$' "$BUILD/ge-round6.sums" >&2
-      echo "tests/psp/measurements/ge-round6: unpacked, the files don't match SHA256SUMS" >&2
+#rounds 6, 8, 9 and 10 of the PSP's GE measurements (packed with xz, as tests/allegrex/measured's are), each unpacked
+#once into this checkout's folder, unless PSP_GE_ROUND6 (8, 9, 10) names another folder (empty: none); each file through
+#a temporary one, so one cut short isn't kept, and all of them again if they don't match SHA256SUMS (another commit's,
+#after a checkout, say)
+unpackRound() {  #round [all]
+  local folder="$BUILD/ge-round$1" measured="$HERE/measurements/ge-round$1" packed unpacked kept
+  for packed in "$measured"/*.xz; do
+    unpacked="$folder/$(basename "$packed" .xz)"
+    if [[ ${2:-} == all || ! -f $unpacked || $packed -nt $unpacked ]]; then
+      if xz -dc "$packed" > "$unpacked.part-$$"; then mv -f "$unpacked.part-$$" "$unpacked"; else rm -f "$unpacked.part-$$"; fi
+    fi
+  done
+  for kept in "$measured"/*; do
+    [[ $kept == *.xz || $(basename "$kept") == SHA256SUMS ]] && continue
+    cp "$kept" "$folder/$(basename "$kept").part-$$"
+    mv -f "$folder/$(basename "$kept").part-$$" "$folder/$(basename "$kept")"
+  done
+}
+roundSums() {  #round
+  local sum=(shasum -a 256)
+  if command -v sha256sum > /dev/null; then sum=(sha256sum); fi
+  (cd "$BUILD/ge-round$1" && "${sum[@]}" -c "$HERE/measurements/ge-round$1/SHA256SUMS") > "$BUILD/ge-round$1.sums" 2>&1
+}
+for round in 6 8 9 10; do
+  variable=PSP_GE_ROUND$round
+  [[ -n ${!variable+set} ]] && continue
+  export "$variable=$BUILD/ge-round$round"
+  mkdir -p "$BUILD/ge-round$round"
+  command -v xz > /dev/null || { echo "tests/psp/measurements/ge-round$round needs xz to unpack" >&2; exit 1; }
+  unpackRound "$round"
+  if ! roundSums "$round"; then
+    unpackRound "$round" all
+    if ! roundSums "$round"; then
+      grep -v ': OK$' "$BUILD/ge-round$round.sums" >&2
+      echo "tests/psp/measurements/ge-round$round: unpacked, the files don't match SHA256SUMS" >&2
       exit 1
     fi
   fi
-fi
+done
 
 CC=${CC:-cc}
 CXX=${CXX:-c++}
@@ -120,7 +127,7 @@ for source in "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cp
   "$HERE/disc-formats.cpp" "$HERE/disc-info.cpp" "$HERE/desktop-disc-info.cpp" "$HERE/crypto.cpp" \
   "$HERE/decrypt.cpp" "$HERE/pgd.cpp" "$HERE/modules.cpp" "$ROOT/desktop/PspDiscInfo.cpp" \
   "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/curves.cpp" \
-  "$HERE/measure.cpp" "$HERE/measured6.cpp" "$ROOT/ares/psp/ge/gpu/gpu.cpp" "$HERE/gpu.cpp"; do
+  "$HERE/measure.cpp" "$HERE/measured6.cpp" "$HERE/measured8.cpp" "$ROOT/ares/psp/ge/gpu/gpu.cpp" "$HERE/gpu.cpp"; do
   object "$CXX" "$source" "${FLAGS[@]}"
 done
 objects_done

@@ -127,6 +127,7 @@ struct GeProfile {
   std::vector<std::pair<u32, std::string>> threads{{0, "interrupt"}};  //each thread's UID and name
   u32 startTime = 0, endTime = 0, startVcount = 0, endVcount = 0;
   u32 cpuMhz = 0, busMhz = 0, cpuMhzEnd = 0, busMhzEnd = 0, firmware = 0;
+  bool pspTiming = false;  //the GE timed as a PSP's (the option "GE Timing"), not by Sony's peaks: flag 16
   //The capture file: the 256-byte header (the version, disc ID and title as given, cut to fit), the records, the
   //thread table.
   auto file(const std::string& version, const std::string& discId, const std::string& title) const -> std::vector<u8>;
@@ -1113,6 +1114,20 @@ struct Kernel {
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
   mutable u64 geDoneAt = 0; //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
+  bool gePspTiming = true;  //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", its default,
+                            //geTime()); power() leaves it
+  u64 geReachAt = 0;        //when (cycles) a PSP's GE's front end would have got through what it was last given
+  bool geSignalDue = false; //with the PSP's timing, the list met a SIGNAL, its interrupt taken from geReachAt on, the
+                            //GE waiting there (geRun())
+  u64 gePipeAt = 0;         //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
+                            //a list's, from one of its runs to the next)
+  //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended
+  //alone, and not saved till then): the GE's busy window so far, its cycles passed and those the CPU worked beside
+  //it, the push still owed (a part of a cycle), and the instructions of the CPU's stretch under way.
+  f64 geWindowPassed = 0, geWindowWorked = 0, geContendCarry = 0;
+  u64 geStretch = 0;
+  auto geContend(u64 from, u64 to, bool worked) -> void;
+  auto geStretchEnded(u64 instructions, bool ended) -> void;
   //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
   //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
   //takes for it as it's handed over, and geDoneAt is a lower bound of the synchronous GE's till none is left
@@ -1138,7 +1153,10 @@ struct Kernel {
   u64 goExact = ~0ull;            //the least of the go's limits known exactly (in the go's instructions)
   auto geExactLimit(const GeLimit& limit) -> u64;
   auto geIndex(u32 id) const -> s32;
-  auto geTime() -> void;
+  auto geTime(u64 commands) -> void;
+  auto geResume() -> void;
+  auto geOwe(f64 clocks) -> void;
+  auto geDriven(u64 cpuCycles) -> void;
   auto geFoldKept() const -> void;
   auto geProfiledRun() -> void;
   auto geInterrupt() -> bool;
@@ -2148,7 +2166,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 33;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 34;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

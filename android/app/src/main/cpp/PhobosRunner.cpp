@@ -997,6 +997,8 @@ namespace ares {
   static std::atomic<s32> pspRenderer{0};
   // How many times over Vulkan's draws each of the PSP's pixels (Settings' "PSP Resolution"): 1, Native, to 10.
   static std::atomic<s32> pspResolution{1};
+  // The GE timed as a real PSP's, not by Sony's peak rates (Settings' "PSP GE Timing", on by default).
+  static std::atomic<bool> pspGeTiming{true};
   // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
   static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;
@@ -3619,6 +3621,8 @@ else if (port->type() == "Keyboard") {
       ::ares::PlayStationPortable::option("Renderer", rendererName);
       LOGI("PSP: resolution %dx", pspResolution.load());
       ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      LOGI("PSP: GE timing %s", pspGeTiming.load() ? "PSP" : "Fast");
+      ::ares::PlayStationPortable::option("GE Timing", pspGeTiming.load() ? "PSP" : "Fast");
       // The Vulkan renderer's pipelines kept between sessions, beside the N64's (the Vulkan cache folder, or saves').
       string pspCacheDir = vulkanCachePath;
       if (!pspCacheDir) pspCacheDir = savesPath;
@@ -4732,6 +4736,7 @@ else if (port->type() == "Keyboard") {
   auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
   auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 || renderer == 2 ? renderer : 0; }
   auto setPspResolution(s32 scale) -> void { pspResolution = std::clamp(scale, 1, 10); }
+  auto setPspGeTiming(bool psp) -> void { pspGeTiming = psp; }
   auto takePspNotice() -> std::string {
     std::string text = (const char*)::ares::PlayStationPortable::notice();
     if (!text.empty()) addLog(LogLevel::Warn, {"PSP: ", text.c_str()});

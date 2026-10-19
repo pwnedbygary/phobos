@@ -445,20 +445,7 @@ class Decoder(unittest.TestCase):
         # Phobos's runner's captures: CoO's loop (sync the last list, flip, queue the next, no callbacks, no vblank
         # waits), each list charged by the model in two pieces, one set by its pixels, one by its primitives; and the
         # counts a dry run would give.
-        game = Game()
-        list_id = None
-        for k in range(30):
-            t = k * 6000
-            if k % 3 == 0:
-                game.vblank(t, 100 + k // 3)
-            if list_id is not None:
-                game.call(g.LIST_SYNC, t, t + 500, list_id, 0, ge=g.GE_DRAWING)
-            game.flip(t + 600, FRAMEBUFFERS[k % 2], sync=0)
-            list_id = game.enqueue(t + 700, LIST + (k % 2) * 0x10000, cbid=-1)
-            game.records.append((g.MODEL, 1, 0, game.at(t + 705), game.at(t + 4705), g.GE_DRAWING, 400_000, 100,
-                                 1_332_000, list_id))
-            game.records.append((g.MODEL, 1, 0, game.at(t + 706), game.at(t + 5706), g.GE_DRAWING, 1000, 30_000,
-                                 333_000, list_id))
+        game = model_loop()
         capture, lists, rows = self.decode(game, 30 * 6000)
         model = g.model_charges(capture, lists)
         self.assertEqual((model.charges, model.pixels, model.primitives, model.pixel_bound), (60, 30 * 401_000, 30 * 30_100, 30))
@@ -486,6 +473,42 @@ class Decoder(unittest.TestCase):
         g.print_report(capture, out, show_lists=True)
         self.assertNotIn("GE model", out.getvalue())
         self.assertNotIn("model ms", out.getvalue())
+
+    def test_model_charges_psp_timing(self):
+        # the header's flag 16 (PSP_TIMING): the charges are the PSP's timing's (Phobos's GE Timing "PSP"), not Sony's
+        # peaks', so the line says so and has no share set by pixels; the charges themselves are read as before
+        capture, lists, rows = self.decode(model_loop(), 30 * 6000, flags=g.GE_SAMPLED | g.PSP_TIMING)
+        self.assertTrue(capture.header["flags"] & g.PSP_TIMING)
+        model = g.model_charges(capture, lists)
+        self.assertEqual((model.charges, model.pixels, model.primitives), (60, 30 * 401_000, 30 * 30_100))
+        out = io.StringIO()
+        g.print_report(capture, out, show_lists=True)
+        text = out.getvalue()
+        self.assertIn("Phobos's GE model (the PSP's timing): 60 charges, 12.03 M pixels, 903000 primitives, 150.00 ms",
+                      text)
+        self.assertNotIn("set by their pixels", text)
+        capture, lists, rows = self.decode(model_loop(), 30 * 6000)
+        self.assertFalse(capture.header["flags"] & g.PSP_TIMING)
+
+
+def model_loop():
+    """CoO's loop as Phobos's runner records it (sync the last list, flip, queue the next, no callbacks, no vblank
+    waits), each list charged by the model in two pieces, one set by its pixels, one by its primitives"""
+    game = Game()
+    list_id = None
+    for k in range(30):
+        t = k * 6000
+        if k % 3 == 0:
+            game.vblank(t, 100 + k // 3)
+        if list_id is not None:
+            game.call(g.LIST_SYNC, t, t + 500, list_id, 0, ge=g.GE_DRAWING)
+        game.flip(t + 600, FRAMEBUFFERS[k % 2], sync=0)
+        list_id = game.enqueue(t + 700, LIST + (k % 2) * 0x10000, cbid=-1)
+        game.records.append((g.MODEL, 1, 0, game.at(t + 705), game.at(t + 4705), g.GE_DRAWING, 400_000, 100,
+                             1_332_000, list_id))
+        game.records.append((g.MODEL, 1, 0, game.at(t + 706), game.at(t + 5706), g.GE_DRAWING, 1000, 30_000,
+                             333_000, list_id))
+    return game
 
 
 if __name__ == "__main__":

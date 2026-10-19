@@ -54,8 +54,9 @@
 //    round 4's curves-lit gave its patches with normals given the brightness of those without (part 75).
 //  - The triangles are culled as any are (CULL_FACE_ENABLE and CULL), every other one of a strip the other way round.
 //    PATCH_CULL_ENABLE changes no pixel (round 6's patch-cull and patch-cull-edges: every patch the same with it or
-//    without, a patch across the scissor rectangle's edges, the near plane or the far one included). (What it saves
-//    the GE, the time of making a patch wholly out of sight, isn't counted here.)
+//    without, a patch across the scissor rectangle's edges, the near plane or the far one included); it saves the GE
+//    the time of making a patch wholly out of sight (time-primitives, part 76), so here a surface that draws no pixel
+//    with it on owes only its own time and its points' fetch.
 //
 //Positions are worked out in doubles, then transformed as any vertex is: that draws exactly the pixels a PSP covered
 //in all of round 3's Bezier pictures and pspautotests' two, and all but 4 edge pixels of round 3's spline with both
@@ -227,7 +228,10 @@ auto GE::patch(bool spline, u32 argument) -> void {
     }
   }
 
-  //Drawn as PATCH_PRIMITIVE says: the rows two at a time as strips, of triangles, lines or points.
+  //Drawn as PATCH_PRIMITIVE says: the rows two at a time as strips, of triangles, lines or points. The GE's time
+  //(Cost): the surface's own and its vertices'; with PATCH_CULL_ENABLE, a surface that draws no pixel takes only its
+  //own, and its points' fetch (readVertices()): the GE drops it before making its vertices. (Lights and weights are
+  //counted for the strips' vertices, an inner row's twice, as drawVertices() meets them: round 6 timed unlit patches.)
   u32 kind = commands[PatchPrimitive] & 3;
   auto& vertices = patchVertices;
   vertices.clear();
@@ -237,7 +241,22 @@ auto GE::patch(bool spline, u32 argument) -> void {
       vertices.push_back(grid[(r + 1) * columns + c]);
     }
   }
-  drawVertices(kind == 0 ? TriangleStrip : kind == 1 ? LineStrip : Points, format, vertices, columns * 2);
+  u32 drawn = kind == 0 ? TriangleStrip : kind == 1 ? LineStrip : Points;
+  if(!pspTiming) {
+    drawVertices(drawn, format, vertices, columns * 2);
+  } else {
+    //(BEZIER's or SPLINE's own work and the patch's go first, then its vertices' are shared out among the primitives
+    //it may draw; one that PATCH_CULL_ENABLE leaves undrawn takes its own work alone: Cost, Pipe)
+    pipe.pending += pipe.vertices + Cost::Prim + Cost::Patch, pipe.vertices = 0;
+    bool culls = commands[PatchCullEnable] & 1;
+    u64 pixels = owedPixels;
+    Pipe kept;
+    if(culls) kept = pipe;
+    pipe.vertices = f64(columns * rows) * Cost::PatchVertex, pipe.left = vertices.size();
+    drawVertices(drawn, format, vertices, columns * 2);
+    if(culls && owedPixels == pixels) pipe = kept;
+    pipe.pending += pipe.vertices, pipe.vertices = 0, pipe.left = 0;
+  }
   //A huge surface's vertices (up to tens of MB at the budget) aren't kept once drawn: drawVertices() is done with
   //them (what it defers, it copies), and only room for an ordinary surface's stays for the next.
   if(vertices.capacity() > PatchKept) std::vector<Vertex>().swap(vertices);

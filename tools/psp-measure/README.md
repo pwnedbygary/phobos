@@ -88,6 +88,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
 | `fit.py` | Fits the model behind the maths functions (128 segments of integer coefficients per function) from the results alone, and checks it reproduces every recorded value. It gave the core's `vfpu-segments.hpp`. Needs numpy. |
+| `ge-terms.py`, `ge-fit.py`, `contention10.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md part 106): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6, 8, 9 and 10's timed lists; `contention10.py` fits the CPU beside the GE to round 10's time-contention. Python alone. |
 
 ## The VFPU and the FPU
 
@@ -438,3 +439,42 @@ and, with exact cosines, plain diffuse are the core's arithmetic in all but two 
 lighting cases and the color and fog ramps are a level apart in places (lower on the PSP, but both ways in the
 vertical ramps); only VRAM's fourth copy reads the depth buffer in order. The findings go into
 [docs/psp-core.md](../../docs/psp-core.md), under "Measuring the GE and the controller on a PSP".
+
+### The GE timing's fit
+
+`GE::Cost` (`ares/psp/ge/ge.hpp`), the clocks of the GE timing "PSP", is fitted to rounds 6, 8, 9 and 10's timed lists
+(docs/psp-core.md, part 106): `ge-terms.py` counts, for each run of the GE, what each of its terms multiplies, in a
+runner built from a patched copy of the source (the core itself carries no counting code), and `ge-fit.py` fits the
+clocks to the PSP's times. To fit them again:
+
+```
+git archive HEAD | tar -x -C /tmp/terms          # a copy of the checkout, which ge-terms.py patches
+python3 tools/psp-measure/ge-terms.py /tmp/terms
+(cd /tmp/terms && tools/psp-runner/build.sh)     # its last line names the runner
+```
+
+Then the program's rounds 10, 9, 8 and 6 in that runner with the GE timing "PSP", each with its terms written to a
+file: `EBOOT.PBP` (`make` here, with round 10b) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
+chosen with presses (round 10b the first line, round 10 the second, round 9 the third, round 8 the fourth, round 6 the
+sixth), each run's `results/ge` kept beside its terms, the stick emptied between runs:
+
+```
+PHOBOS_GE_TERMS=r10.txt RUNNER STICK/PSP/GAME/PSPMEASURE/EBOOT.PBP --memory-stick STICK --ge-timing psp \
+  --frames 30000 --press 60:Down,66:Down!,80:Cross,86:Cross! --start-time 1791290096   # then keep results/ge as ours10
+PHOBOS_GE_TERMS=r9.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Cross,106:Cross! ...    # as ours9
+PHOBOS_GE_TERMS=r8.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Cross,126:Cross! ... # ours8
+PHOBOS_GE_TERMS=r6.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Down,126:Down!,\
+  140:Down,146:Down!,160:Cross,166:Cross! ...                                                      # as ours6
+python3 tools/psp-measure/ge-fit.py PSP_RESULTS r10.txt ours10 r9.txt ours9 r8.txt ours8 r6.txt ours6 --again PSP_AGAIN
+```
+
+`PSP_RESULTS` holds the PSP's files of the four rounds (`tests/psp/measurements/ge-round6`, `ge-round8`, `ge-round9` and
+`ge-round10` unpacked into one folder), `PSP_AGAIN` the owner's runs of the earlier rounds again on round 10's evening
+(`ge-reruns-round10`): a list that moved more than 5% between the two (and more than 4 microseconds) is held out as a
+check, as where the program's arrays moved and a texture's place with them. The owner ran round 10's own build (round 10
+on its menu's first line); the committed one is round 10b's, whose lines are one further down. `ge-fit.py` prints each
+term's clocks under `GE::Cost`'s names, then how far the fitted model misses each test's lists (and the checks:
+`time-anchors` and `time-anchors2`, round 8's cases again, the cases outside the model, the lists held out); part 106
+has the command that gave the clocks in `ge.hpp`. `contention10.py PSP_RESULTS r10.txt ours10` reads round 10's
+time-contention: each list's slowdown beside each CPU pattern, each pattern's RAM traffic, and the GE's contention by
+kind of read fitted to them (`GE::Cost::Contention`).
