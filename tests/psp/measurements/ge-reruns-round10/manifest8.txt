@@ -1,0 +1,345 @@
+psp-measure's GE tests, round 8 (tools/psp-measure/ge.c and cpu.c in Phobos say what each test draws and runs;
+docs/psp-core.md, part 107, what each is for). time-* and cpu-contention: records of words as round 6's: case,
+size, CPU MHz << 16 | bus MHz (as scePower gave them back), repeats | values << 16, then per run `values` times
+in microseconds from just before sceGeListEnQueue: to the finish callback, to sceGeListEnQueue's return, and
+(time-lists) to the last sceGeListEnQueue's or sceGeListUpdateStallAddr's return, (time-signals2) to the signal
+callback; 0xffffffff for a run not
+finished (see <name>.stalled). time-lists and time-scenes run at 222/111, 333/166, 333/222/166 and 266/133 MHz
+as asked, the rest at the first two; the clocks as found are put back after each. cpu-contention's cases 0-4:
+the CPU's loop (us), then sceGeDrawSync(1) as it ended. cpu-*: records of words: case, size, CPU MHz << 16 |
+bus MHz, repeats | values << 16, then per run `values` words (cpu.c says which). The cases (test case: what;
+size):
+time-lists 0: a list of N sprites 4x4 pixels, flat; sprites
+time-lists 1: N lists of 16 such sprites queued at once, timed to the last one's finish; lists
+time-lists 2: 64 sprites 256x16 (4 layers), the stall address moved on N times, as fast as the CPU goes; pieces
+time-lists 3: the same, each move once the GE has reached the stall address; pieces
+time-lists 4: N CALLs of a list drawing one 4x4 sprite (then its RET); calls
+time-signals2 0: N sprites 64x64, flat, in turn over 256x256 of the target, then a SIGNAL that lets the GE go on, then the FINISH; sprites
+time-signals2 1: the same with sprites 8x8; sprites
+time-signals2 2: the same with triangles, each half of a 64x64 square; triangles
+time-state 0: nothing between the sprites; sprites
+time-state 1: TEX_FLUSH before each; sprites
+time-state 2: the texture changed before each (two 16x16 textures in turn: its address, width, size, TEX_FLUSH); sprites
+time-state 3: the same texture set again before each; sprites
+time-state 4: a 256-color palette loaded before each (a CLUT8 16x16 texture); sprites
+time-state 5: a 16-color palette loaded before each (a CLUT4 16x16 texture); sprites
+time-state 6: TEX_MODE before each, swizzling on and off in turn (GU's sceGuTexMode, with the TEX_FLUSH it adds); sprites
+time-state 7: the blend function changed before each (blending on, two functions in turn); sprites
+time-state 8: the depth function changed before each (ALWAYS and GEQUAL in turn, passing, not writing); sprites
+time-state 9: the world matrix set before each (12 words); sprites
+time-state 10: the view matrix set before each; sprites
+time-state 11: the projection matrix set before each (16 words); sprites
+time-state 12: a bone matrix set before each; sprites
+time-state 13: TEX_SYNC before each; sprites
+time-state 14: the alpha test on and off in turn (ALWAYS); sprites
+time-state 15: each sprite's PRIM in a CALLed list of its own (its VTYPE and VADDR set before the CALL); sprites
+time-state 16: 3D: each an 8x8 square of two textured triangles, the world matrix set before each; sprites
+time-vertices 0: a strip, float positions; triangles
+time-vertices 1: a strip, 16-bit positions; triangles
+time-vertices 2: a strip, 8-bit positions; triangles
+time-vertices 3: a strip, float positions and an 8888 color; triangles
+time-vertices 4: a strip, float positions and a 5650 color; triangles
+time-vertices 5: a strip, float positions and a float normal (unlit); triangles
+time-vertices 6: a strip, float positions and an 8-bit normal (unlit); triangles
+time-vertices 7: a strip, float positions and float texture coordinates (no texture); triangles
+time-vertices 8: a strip, float positions and 16-bit texture coordinates (no texture); triangles
+time-vertices 9: a triangle list, three vertices each; triangles
+time-vertices 10: a triangle fan; triangles
+time-vertices 11: the triangle list through 8-bit indices, 85 triangles a draw; triangles
+time-vertices 12: the triangle list through 16-bit indices, 85 triangles a draw; triangles
+time-vertices 13: 16-bit indices, every triangle the same three vertices; triangles
+time-vertices 14: 16-bit indices over a grid of 17x17 vertices, each in six triangles (512 triangles a draw); triangles
+time-vertices 15: a strip lit by 1 directional light, diffuse (float normals); triangles
+time-vertices 16: 2 directional lights; triangles
+time-vertices 17: 4 directional lights; triangles
+time-vertices 18: 1 point light; triangles
+time-vertices 19: 4 point lights; triangles
+time-vertices 20: 1 spotlight; triangles
+time-vertices 21: 4 spotlights; triangles
+time-vertices 22: 1 directional light with its shine (specular); triangles
+time-vertices 23: 4 directional lights with their shine; triangles
+time-vertices 24: skinned: 1 bone, float weights; triangles
+time-vertices 25: skinned: 2 bones; triangles
+time-vertices 26: skinned: 4 bones; triangles
+time-vertices 27: skinned: 8 bones; triangles
+time-vertices 28: skinned: 4 bones, 16-bit weights; triangles
+time-vertices 29: skinned: 4 bones, 8-bit weights; triangles
+time-vertices 30: morphed: 2 vertices each; triangles
+time-vertices 31: morphed: 4; triangles
+time-vertices 32: morphed: 8; triangles
+time-vertices 33: texture coordinates through the texture matrix (float coordinates, a 16x16 texture); triangles
+time-vertices 34: texture coordinates projected from the positions; triangles
+time-vertices 35: environment mapping (2 directional lights, float normals); triangles
+time-vertices 36: fog; triangles
+time-vertices 37: through mode: a triangle list covering no pixel's middle (float positions); triangles
+time-setup 0: squares 8x8; layers
+time-setup 1: squares 16x16; layers
+time-setup 2: squares 32x32; layers
+time-setup 3: squares 64x64; layers
+time-setup 4: squares 16x16 in perspective (w 1 at the left to 2 at the right); layers
+time-setup 5: squares 16x16 as a triangle strip a row; layers
+time-setup 6: squares 16x16 as fans of four triangles about their middles; layers
+time-setup 7: squares 16x16, half the triangles cut by the near plane (a corner past it); layers
+time-setup 8: squares 16x16, every triangle cut by the near plane; layers
+time-setup 9: squares 16x16, every other square culled as back faces; layers
+time-setup 10: squares 16x16, every square culled; layers
+time-setup 11: rectangles 4 wide, 64 tall; layers
+time-setup 12: rectangles 64 wide, 4 tall; layers
+time-setup 13: squares 16x16, bilinear; layers
+time-setup 14: squares 16x16, no texture; layers
+time-setup 15: squares 16x16, no texture, no depth test; layers
+time-setup 16: squares 16x16, no depth test; layers
+time-setup 17: squares 16x16, an 8888 64x64 texture not swizzled (16 KiB); layers
+time-pixels 0: the textured fill alone; layers
+time-pixels 1: depth test GEQUAL passing, writing; layers
+time-pixels 2: depth test failing; layers
+time-pixels 3: depth test failing, the texture not swizzled (round 6's slowest fill); layers
+time-pixels 4: depth test passing, the texture not swizzled; layers
+time-pixels 5: depth test passing, not writing; layers
+time-pixels 6: alpha test passing (ALWAYS); layers
+time-pixels 7: alpha test failing (NEVER); layers
+time-pixels 8: stencil test passing (ALWAYS, REPLACE); layers
+time-pixels 9: stencil test failing (NEVER); layers
+time-pixels 10: blending: source alpha, 1 - source alpha; layers
+time-pixels 11: blending: ADD, fixed factors; layers
+time-pixels 12: blending: SUBTRACT; layers
+time-pixels 13: blending: REVERSE_SUBTRACT; layers
+time-pixels 14: blending: MIN; layers
+time-pixels 15: blending: MAX; layers
+time-pixels 16: blending: ABS; layers
+time-pixels 17: blending: the destination's alpha, 1 - the destination's alpha; layers
+time-pixels 18: blending (source alpha) into 5650; layers
+time-pixels 19: texture function DECAL; layers
+time-pixels 20: texture function BLEND (the environment color); layers
+time-pixels 21: texture function ADD; layers
+time-pixels 22: color doubling, MODULATE; layers
+time-pixels 23: color test passing (ALWAYS); layers
+time-pixels 24: a game's pixel: CLUT8 64x64 swizzled repeating, depth test passing and writing, blending; layers
+time-pixels 25: the same, depth test failing (overdraw); layers
+time-pixels 26: the same as the first, into 5650; layers
+time-pixels 27: no texture, depth test passing, writing; layers
+time-pixels 28: no texture, depth test failing; layers
+time-strips 0: VRAM, 8888 512x512, strips 8 wide; layers
+time-strips 1: VRAM, 8888 512x512, strips 16 wide; layers
+time-strips 2: VRAM, 8888 512x512, strips 32 wide; layers
+time-strips 3: VRAM, 8888 512x512, strips 64 wide; layers
+time-strips 4: VRAM, 8888 512x512, strips 128 wide; layers
+time-strips 5: VRAM, 8888 512x512, strips 256 wide; layers
+time-strips 6: VRAM, 8888 512x512, one sprite 512 wide; layers
+time-strips 7: VRAM, CLUT32 512x512, strips 8 wide; layers
+time-strips 8: VRAM, CLUT32 512x512, strips 16 wide; layers
+time-strips 9: VRAM, CLUT32 512x512, strips 32 wide; layers
+time-strips 10: VRAM, CLUT32 512x512, strips 64 wide; layers
+time-strips 11: VRAM, CLUT32 512x512, strips 128 wide; layers
+time-strips 12: VRAM, CLUT32 512x512, strips 256 wide; layers
+time-strips 13: VRAM, CLUT32 512x512, one sprite 512 wide; layers
+time-strips 14: VRAM, 5650 512x512, strips 8 wide; layers
+time-strips 15: VRAM, 5650 512x512, strips 16 wide; layers
+time-strips 16: VRAM, 5650 512x512, strips 32 wide; layers
+time-strips 17: VRAM, 5650 512x512, strips 64 wide; layers
+time-strips 18: VRAM, 5650 512x512, strips 128 wide; layers
+time-strips 19: VRAM, 5650 512x512, strips 256 wide; layers
+time-strips 20: VRAM, 5650 512x512, one sprite 512 wide; layers
+time-strips 21: VRAM, CLUT8 512x512, strips 8 wide; layers
+time-strips 22: VRAM, CLUT8 512x512, strips 16 wide; layers
+time-strips 23: VRAM, CLUT8 512x512, strips 32 wide; layers
+time-strips 24: VRAM, CLUT8 512x512, strips 64 wide; layers
+time-strips 25: VRAM, CLUT8 512x512, strips 128 wide; layers
+time-strips 26: VRAM, CLUT8 512x512, strips 256 wide; layers
+time-strips 27: VRAM, CLUT8 512x512, one sprite 512 wide; layers
+time-strips 28: RAM, 8888 512x512 not swizzled, strips 8 wide; layers
+time-strips 29: RAM, 8888 512x512 not swizzled, strips 16 wide; layers
+time-strips 30: RAM, 8888 512x512 not swizzled, strips 32 wide; layers
+time-strips 31: RAM, 8888 512x512 not swizzled, strips 64 wide; layers
+time-strips 32: RAM, 8888 512x512 not swizzled, strips 128 wide; layers
+time-strips 33: RAM, 8888 512x512 not swizzled, strips 256 wide; layers
+time-strips 34: RAM, 8888 512x512 not swizzled, one sprite 512 wide; layers
+time-strips 35: RAM, 8888 512x512 swizzled, strips 8 wide; layers
+time-strips 36: RAM, 8888 512x512 swizzled, strips 16 wide; layers
+time-strips 37: RAM, 8888 512x512 swizzled, strips 32 wide; layers
+time-strips 38: RAM, 8888 512x512 swizzled, strips 64 wide; layers
+time-strips 39: RAM, 8888 512x512 swizzled, strips 128 wide; layers
+time-strips 40: RAM, 8888 512x512 swizzled, strips 256 wide; layers
+time-strips 41: RAM, 8888 512x512 swizzled, one sprite 512 wide; layers
+time-strips 42: RAM, CLUT8 512x256 swizzled, strips 8 wide; layers
+time-strips 43: RAM, CLUT8 512x256 swizzled, strips 16 wide; layers
+time-strips 44: RAM, CLUT8 512x256 swizzled, strips 32 wide; layers
+time-strips 45: RAM, CLUT8 512x256 swizzled, strips 64 wide; layers
+time-strips 46: RAM, CLUT8 512x256 swizzled, strips 128 wide; layers
+time-strips 47: RAM, CLUT8 512x256 swizzled, strips 256 wide; layers
+time-strips 48: RAM, CLUT8 512x256 swizzled, one sprite 512 wide; layers
+time-strips 49: RAM, CLUT8 512x256 not swizzled, strips 8 wide; layers
+time-strips 50: RAM, CLUT8 512x256 not swizzled, strips 16 wide; layers
+time-strips 51: RAM, CLUT8 512x256 not swizzled, strips 32 wide; layers
+time-strips 52: RAM, CLUT8 512x256 not swizzled, strips 64 wide; layers
+time-strips 53: RAM, CLUT8 512x256 not swizzled, strips 128 wide; layers
+time-strips 54: RAM, CLUT8 512x256 not swizzled, strips 256 wide; layers
+time-strips 55: RAM, CLUT8 512x256 not swizzled, one sprite 512 wide; layers
+time-strips 56: RAM, 5650 512x512 swizzled, strips 8 wide; layers
+time-strips 57: RAM, 5650 512x512 swizzled, strips 16 wide; layers
+time-strips 58: RAM, 5650 512x512 swizzled, strips 32 wide; layers
+time-strips 59: RAM, 5650 512x512 swizzled, strips 64 wide; layers
+time-strips 60: RAM, 5650 512x512 swizzled, strips 128 wide; layers
+time-strips 61: RAM, 5650 512x512 swizzled, strips 256 wide; layers
+time-strips 62: RAM, 5650 512x512 swizzled, one sprite 512 wide; layers
+time-strips 63: RAM, 5650 512x512 not swizzled, strips 8 wide; layers
+time-strips 64: RAM, 5650 512x512 not swizzled, strips 16 wide; layers
+time-strips 65: RAM, 5650 512x512 not swizzled, strips 32 wide; layers
+time-strips 66: RAM, 5650 512x512 not swizzled, strips 64 wide; layers
+time-strips 67: RAM, 5650 512x512 not swizzled, strips 128 wide; layers
+time-strips 68: RAM, 5650 512x512 not swizzled, strips 256 wide; layers
+time-strips 69: RAM, 5650 512x512 not swizzled, one sprite 512 wide; layers
+time-textures 0: VRAM 8888 512x512 shrunk 2:1 (512x256 texels onto 256x128 pixels), nearest, one sprite; layers
+time-textures 1: the same, bilinear; layers
+time-textures 2: the same, nearest, in strips 32 pixels (64 texels) wide; layers
+time-textures 3: VRAM 8888 shrunk 4:1 (512x256 texels onto 128x64 pixels), nearest; layers
+time-textures 4: VRAM CLUT32 shrunk 2:1, nearest; layers
+time-textures 5: RAM 8888 512x512 swizzled, shrunk 2:1, nearest; layers
+time-textures 6: RAM 8888 512x512 not swizzled, shrunk 2:1, nearest; layers
+time-textures 7: VRAM 8888, 256x128 texels stretched 1:2 onto 512x256 pixels, nearest; layers
+time-textures 8: the same, bilinear; layers
+time-textures 9: 3D: RAM 8888 256x256 swizzled shrunk 2:1 onto 128x128 pixels, no mipmaps; layers
+time-textures 10: the same with 3 mipmap levels (256, 128, 64), the level chosen (auto), nearest; layers
+time-textures 11: the same, level 1 set (const); layers
+time-textures 12: the same, the level chosen, linear between levels; layers
+time-textures 13: 3D: RAM 8888 256x256 swizzled over 256x256 pixels, w 1 at the left to 2 at the right; layers
+time-textures 14: the same, w 1 to 4; layers
+time-textures 15: the same as w 1 to 2, VRAM 8888 (512 wide); layers
+time-textures 16: RAM 8888 256x256 swizzled turned a quarter (u down the screen): two triangles in through mode; layers
+time-textures 17: the same, not swizzled; layers
+time-textures 18: the same, VRAM 8888 (512 wide); layers
+time-textures 19: sprites 32x32, each its own CLUT8 32x32 texture (RAM, swizzled, 1 KiB), one palette; sprites
+time-textures 20: the same, CLUT8 64x64 textures (4 KiB), 32x32 texels of each; sprites
+time-textures 21: the same, CLUT8 128x128 textures (16 KiB), 32x32 texels of each; sprites
+time-textures 22: the same, 5650 64x64 textures (swizzled, 8 KiB), 32x32 texels of each; sprites
+time-textures 23: the same as the first, each with its palette loaded (256 colors); sprites
+time-textures 24: the same, CLUT4 32x32 textures (512 bytes), one palette; sprites
+time-transfers2 0: RAM to VRAM, 32-bit, 1 pixel wide; rows
+time-transfers2 1: RAM to VRAM, 32-bit, 2 pixels wide; rows
+time-transfers2 2: RAM to VRAM, 32-bit, 8 pixels wide; rows
+time-transfers2 3: RAM to VRAM, 32-bit, 16 pixels wide; rows
+time-transfers2 4: RAM to VRAM, 32-bit, 32 pixels wide; rows
+time-transfers2 5: RAM to VRAM, 16-bit, 2 pixels wide; rows
+time-transfers2 6: RAM to VRAM, 16-bit, 8 pixels wide; rows
+time-transfers2 7: VRAM to VRAM, 32-bit, 8 pixels wide; rows
+time-transfers2 8: RAM to VRAM, 32-bit, one row; pixels
+time-transfers2 9: VRAM to VRAM, 32-bit, one row; pixels
+time-transfers2 10: VRAM to VRAM, 32-bit, 480x272 (a frame buffer copied); copies
+time-transfers2 11: VRAM to VRAM, 16-bit, 480x272; copies
+time-transfers2 12: VRAM to RAM, 32-bit, 480x272; copies
+time-transfers2 13: RAM to VRAM, 32-bit, 256x256 from rows 1024 pixels apart; copies
+time-clears 0: clear mode, color only, 8888, one sprite; clears
+time-clears 1: clear mode, color, stencil and depth, 8888, one sprite; clears
+time-clears 2: clear mode, depth only, one sprite; clears
+time-clears 3: clear mode, color and depth, 8888, in sprites 64 wide; clears
+time-clears 4: clear mode, color, stencil and depth, 8888, in sprites 64 wide; clears
+time-clears 5: clear mode, color only, 5650, one sprite; clears
+time-clears 6: clear mode, color and depth, 5650, one sprite; clears
+time-clears 7: clear mode, color and depth, 5650, in sprites 64 wide; clears
+time-overlap 0: the two kinds of piece in turn, N of each at a time; pieces at a time
+time-overlap 1: the front-end pieces alone; pieces
+time-overlap 2: the back-end pieces alone; pieces
+time-scenes 0: Killzone's scene list: 8 passes over 480x256 of a 512x512 CLUT32 texture in VRAM, in strips 32 wide, into 8888; lists
+time-scenes 1: Killzone's full-screen list: a 512x512 8888 texture in VRAM over 480x256 in strips 120 wide, into 5650; lists
+time-scenes 2: Activision Hits Remixed's copyright screen: a clear, then a 512x256 CLUT8 texture (RAM, swizzled) over 480x256 in one sprite, into 5650; lists
+time-scenes 3: Activision Hits Remixed's menu: 2 passes of Killzone's CLUT32 strips, then 300 triangles lit by 4 point lights; lists
+time-scenes 4: Chains of Olympus's: 4,096 triangles in 16x16 squares (CLUT8, depth tested), a 512x512 8888 VRAM texture shrunk 2:1 onto 256x128, a 480x272 copy in VRAM; lists
+time-scenes 5: Super Monkey Ball Adventure's: 200 CALLed lists, each setting a CLUT8 128x128 texture (RAM, swizzled), loading its palette and drawing 10 textured triangles about 5x5 pixels, depth tested; lists
+time-scenes 6: Killzone's language menu's background: a 512x512 8888 texture in RAM, not swizzled, in one sprite over 480x256, into 8888; lists
+time-scenes 7: Super Stardust Portable's intro's glow: a 512x512 8888 VRAM texture shrunk 2:1 onto 256x128 and 4:1 onto 128x64, then its corner 256 texels wide stretched over 480x256 (1.875 times), bilinear, added; lists
+cpu-contention 0: the CPU reads big (2 MiB, cached, a word at a time) twice, the GE idle; -
+cpu-contention 1: the same, the GE drawing the layers from RAM; -
+cpu-contention 2: the same, the GE drawing the layers from VRAM; -
+cpu-contention 3: the CPU follows a chain of 32768 pointers 64 bytes apart about big, the GE idle; -
+cpu-contention 4: the same, the GE drawing the layers from RAM; -
+cpu-contention 5: the GE's layers from RAM alone; -
+cpu-contention 6: the same, a thread reading big over and over meanwhile; -
+cpu-contention 7: the GE's layers from VRAM, a thread reading big over and over meanwhile; -
+cpu-alu, cpu-latency, cpu-memory: each run's time in microseconds; cpu-alu and cpu-latency at all four settings
+(each case's instructions are the loop's addiu, bnez and nop besides what it says), cpu-memory too (RAM from the
+user partition: a record's size is the working set; 8 MiB where that much was free), cpu-syscalls at 222/111
+and 333/166 (its enqueues case's time ends when the last sceGeListEnQueue returns; its GE cases' runs are
+0xffffffff once a wait for the GE ran out its 5 s: see cpu-syscalls.stalled). cpu-clocks: one record an
+attempt (case, 0, the clocks before, 1 | 4 << 16), then what the call gave back, the CPU's and the bus's MHz
+after, and the time of 65536 passes of cpu-alu's case 1 at them (us). The cases (test case: what; size):
+cpu-alu 0: the loop alone (addiu, bnez, a nop); passes
+cpu-alu 1: 64 additions a pass, each needing the one before (addu); passes
+cpu-alu 2: 64 additions a pass in four chains; passes
+cpu-alu 3: 64 branches a pass, taken, to the instruction past their delay slot (a nop); passes
+cpu-alu 4: 64 loads a pass, each from the address the one before loaded (a word in the cache pointing to itself); passes
+cpu-alu 5: 64 loads a pass, from four words in the cache, none needing another; passes
+cpu-alu 6: 64 stores a pass, to four words in the cache; passes
+cpu-alu 7: 64 loads a pass, each used by the next instruction (lw, then addu); passes
+cpu-latency 0: 32 multiplies a pass, each needing the one before (mult, mflo); passes
+cpu-latency 1: 32 multiplies a pass, none needing another (mult), then one mflo; passes
+cpu-latency 2: 32 multiply-adds a pass (madd), then one mflo; passes
+cpu-latency 3: 16 divides a pass, each needing the one before (div, mflo, or); passes
+cpu-latency 4: 16 unsigned divides a pass, none needing another (divu), then one mflo; passes
+cpu-latency 5: 64 FPU additions a pass, each needing the one before (add.s); passes
+cpu-latency 6: 64 FPU additions a pass in four chains; passes
+cpu-latency 7: 64 FPU multiplies a pass, each needing the one before (mul.s); passes
+cpu-latency 8: 16 FPU divides a pass, each needing the one before (div.s); passes
+cpu-latency 9: 16 FPU square roots a pass, each needing the one before (sqrt.s); passes
+cpu-latency 10: 32 FPU loads and 32 stores a pass, a word in the cache (lwc1, swc1); passes
+cpu-latency 11: 32 moves to the FPU and 32 back a pass (mtc1, mfc1); passes
+cpu-latency 12: 64 VFPU additions a pass, each needing the one before (vadd.s); passes
+cpu-latency 13: 64 VFPU multiplies of four lanes a pass, each needing the one before (vmul.q); passes
+cpu-latency 14: 64 VFPU dot products of four lanes a pass, each needing the one before (vdot.q); passes
+cpu-latency 15: 16 VFPU sines a pass, each needing the one before (vsin.s); passes
+cpu-latency 16: 16 VFPU reciprocal square roots a pass, each needing the one before (vrsq.s); passes
+cpu-latency 17: 16 VFPU loads and 16 stores of four lanes a pass, in the cache (lv.q, sv.q); passes
+cpu-memory 0: 65536 steps of a chain of pointers 64 bytes apart (cpuChain) over this many bytes of RAM; bytes
+cpu-memory 1: 16384 steps of the chain through RAM's uncached addresses; bytes
+cpu-memory 2: 65536 steps of the chain in the scratchpad; bytes
+cpu-memory 3: 65536 steps of the chain in VRAM; bytes
+cpu-memory 4: 16384 steps of the chain through VRAM's uncached addresses; bytes
+cpu-memory 5: 8 MiB of words read, this many bytes over and over (8 words a pass); bytes
+cpu-memory 6: 8 MiB of words written, this many bytes over and over; bytes
+cpu-memory 7: 1 MiB of words read through RAM's uncached addresses, this many bytes over and over; bytes
+cpu-memory 8: 1 MiB of words written through RAM's uncached addresses; bytes
+cpu-memory 9: memcpy, this many bytes; bytes
+cpu-memory 10: 1 MiB of words read from VRAM (uncached), this many bytes over and over; bytes
+cpu-memory 11: 1 MiB of words written to VRAM (uncached); bytes
+cpu-syscalls 0: sceKernelGetSystemTimeLow; calls
+cpu-syscalls 1: sceKernelGetThreadId; calls
+cpu-syscalls 2: sceKernelSignalSema and sceKernelPollSema (no thread waiting); pairs
+cpu-syscalls 3: sceKernelDelayThread(0); calls
+cpu-syscalls 4: a thread switch there and back: sceKernelSignalSema to a thread of higher priority waiting, which signals back; round trips
+cpu-syscalls 5: sceKernelCpuSuspendIntr and sceKernelCpuResumeIntr; pairs
+cpu-syscalls 6: sceKernelDcacheWritebackAll, nothing to write back; calls
+cpu-syscalls 7: sceKernelDcacheWritebackInvalidateAll; calls
+cpu-syscalls 8: sceKernelDcacheWritebackRange over 64 KiB; calls
+cpu-syscalls 9: 16 KiB written, then sceKernelDcacheWritebackAll; calls
+cpu-syscalls 10: 16 KiB written alone; times
+cpu-syscalls 11: sceGeListEnQueue of an empty list (FINISH, END), then sceGeListSync(id, 1) till it's done; calls
+cpu-syscalls 12: sceGeListEnQueue of empty lists back to back (then sceGeDrawSync(1) till they're done, outside the time: see below); calls
+cpu-syscalls 13: sceGeListUpdateStallAddr, a list waiting at its stall address, left there; calls
+cpu-syscalls 14: sceGeListSync(id, 1) of that list; calls
+cpu-syscalls 15: sceGeDrawSync(1), the GE idle; calls
+cpu-syscalls 16: sceDisplaySetFrameBuf, the frame buffer shown; calls
+cpu-syscalls 17: sceDisplayGetVcount; calls
+cpu-syscalls 18: sceCtrlPeekBufferPositive; calls
+cpu-syscalls 19: sceGeEdramGetAddr; calls
+cpu-clocks 0: scePowerSetClockFrequency(333, 333, 166) from 222/222/111
+cpu-clocks 1: scePowerSetClockFrequency(333, 222, 166) from 222/222/111
+cpu-clocks 2: scePowerSetClockFrequency(266, 266, 133) from 222/222/111
+cpu-clocks 3: scePowerSetClockFrequency(222, 222, 111) from 333/333/166
+cpu-clocks 4: scePowerSetClockFrequency(190, 190, 95) from 222/222/111
+cpu-clocks 5: scePowerSetClockFrequency(333, 333, 111) from 222/222/111
+cpu-clocks 6: scePowerSetClockFrequency(300, 300, 150) from 222/222/111
+cpu-clocks 7: scePowerSetCpuClockFrequency(333) from 222/222/111
+cpu-clocks 8: scePowerSetBusClockFrequency(166) from 222/222/111
+cpu-clocks 9: scePowerSetCpuClockFrequency(266) from 333/333/166
+cpu-clocks 10: scePowerSetCpuClockFrequency(100) from 333/333/166
+cpu-clocks 11: scePowerSetBusClockFrequency(111) from 333/333/166
+cpu-clocks 12: scePowerSetBusClockFrequency(133) from 333/333/166
+display-start: words: the address, width and format sceDisplayGetFrameBuf read as the program started, before
+anything was set, with sync 0, then with sync 1, and sceDisplayIsForeground; then for each attempt, made from
+that state, what sceDisplaySetFrameBuf gave back and the address, width and format read with sync 0 after:
+display-start 0: VRAM's start, 512 wide, 8888, at once (as a game's first frame buffer may be)
+display-start 1: VRAM's start, 512 wide, 5650, at once
+display-start 2: VRAM's start with the width and format the program started with, at once
+display-start 3: 0, 0, 0 (the display off), at once
+display-start 4: VRAM's start, 512 wide, 8888, for the next vblank
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.

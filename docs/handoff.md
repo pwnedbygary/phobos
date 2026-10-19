@@ -75,6 +75,60 @@ bytes, and the GE's pipeline: 28 and 16 a queued item; "Fast" 46 in all).
   triangles; bilinear filtering's cost; narrow CLUT strips from VRAM; "Fast"'s templates per timing; fixed-point
   charges before any default change.
 
+## PSP measure, round 10: lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective, mipmaps, the CPU beside the GE — 2026-10-18
+
+Branch `cursor/psp-measure-round10-2b67` (PR #278, draft), from master `d428d91f9` (#276, part 110);
+docs/psp-core.md, part 112.
+- **Why**: #269's refit with round 9 (`c0d9c14a2`) leaves three scenes outside 15%: Super Monkey Ball −30% (mostly the
+  PSP's CPU competing with the GE for RAM), Activision Hits' 3D menu (its first list −19%: spotlights with their shine;
+  its second +56%: CLUT32 triangles, a format no round timed) and its copyright screen (−24%: two wide triangles into
+  5650). #269's agent (1fd9133c) specified the cases from each scene's terms and a log of the games' PRIM state
+  (`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-1fd9133c.md`); synthetic, nothing of a game's lists, textures or
+  vertices in the program.
+- **What**: a new first menu line, round 10 (about 0.2 MB, `manifest10.txt`): `time-anchors2` (six of round 9's anchors;
+  time-strips 37's texture at four alignments), `time-lights` (39: 1 to 4 lights of each kind, diffuse and shining; the
+  shine's power, which lights shine, fall-off; the game's mixes, skinned; strips drawn as the game draws them),
+  `time-clut32` (22: the menu's tiles as logged, one thing at a time changed; CLUT32 strips as triangles),
+  `time-widetri` (18: the copyright screen's pass, one thing at a time changed; round 9's wide triangles and a sprite
+  into each 16-bit format), `time-perspective` (48: w 1 to 1.25/1.5/2/4 across and 1 to 2 down, three textures; squares
+  in through mode turned a quarter), `time-mipmaps` (22: round 8's mipmap cases, level 1 alone, the filters, CLUT8;
+  Super Monkey Ball's small trilinear CLUT4 strips), `time-vram8` (60: strips 4 to 24 wide, CLUT8 and CLUT4, VRAM and
+  RAM), `time-contention` (197: ten GE lists, each alone and beside a thread running one of 17 memory patterns, and each
+  pattern alone) and `time-contention2` (54: the streaming reads at 333/222/166). About two minutes on the PSP, three at
+  most.
+- **Safety**: new names only; the clocks put back after each test; every GE wait 5 s with the reset path; the contention
+  thread (above the program's priority, as the spec asks) stops at the finish callback's flag, its 10 ms alone, or 5 s
+  whatever happens; its memory a 1 MiB array of its own and VRAM's last 256 KiB (time-clut32's filled buffer runs into
+  it, at another time), written back and invalidated after each run.
+- **Test**: "psp measure" runs round 10 after round 9 and checks every record; `tests/psp/programs/pspmeasure.elf`
+  rebuilt.
+- **Results** (the owner's PSP, 2026-10-18 evening, every earlier round again after it; part 112): placement first: this
+  build put the RAM textures and palette 64 bytes off a 128-byte boundary, and a swizzled texture there costs 7% more
+  (time-anchors2: 2,307.5 against 2,154.5 µs on a 1 KiB boundary; 256 to 768 past 1.0 to 1.6%), which is tonight's round
+  9 shift (swizzled RAM cases 3 to 11% dearer, unswizzled and VRAM within 0.6%); other placements moved RAM reads up to
+  26% either way. The re-runs: every picture the same bit for bit, the timing medians within 0.0 to 2.1%. Lights: point
+  and spot lights alike, 11 a light-vertex diffuse, 19 with shine (8 more); directional ones shine for about 1, but a
+  lone one costs 21 more when the disabled light registers hold spotlights (round 8's 20.7 was that). CLUT32 fetches as
+  8888; the menu's logged tiles take 3.23 ms, leaving 0.25 ms of the game's 3.48 ms list for its 66 sprites (about 1.7
+  ms of texels): the log's tiles aren't the game's. The copyright pass matches the game (462,500 against about 450,000
+  bus clocks a pass); its miss is bilinear reading wide (+20%), not 16-bit. Perspective halves wide rows when w changes
+  along the row (10.0 to 4.2 clocks a pixel), not otherwise; a mipmapped 8888 texture reads level 1 at level 0's wide
+  cost (10.3 against 2.2); narrow strips cost by 16-byte units; the CPU's RAM traffic slows the GE's RAM reads by kind
+  (Super Monkey Ball's lists ×1.38 beside streaming reads, ×1.54 beside a game's mix; wide texels ×1.85 to 3.2; VRAM
+  work not at all).
+- **Round 10b** (part 112), for the owner the same night: `time-contention3` (the spec's patterns 11 and 12: polling
+  through system calls, 1 MiB written before the enqueue with and without a writeback, and once beside the list, against
+  six of round 10's lists) and `time-placement` (one swizzled RAM texture 0 to 512 bytes past a 1 KiB boundary,
+  controls, a palette at two offsets, CLUT32 swizzled in RAM); its own menu line (the first) and `manifest10b.txt`; the
+  program's arrays on 1 KiB boundaries from this build on. About half a minute. He ran it the same night
+  (`tests/psp/measurements/ge-round10b`, part 112): polling doesn't slow the GE (×0.97 to 1.03), nor 1 MiB written just
+  before the list (×0.99 to 1.05); a writer beside it slows it by its rate (wide RAM texels ×2.0 to 2.1, Super Monkey
+  Ball's lists ×1.36, its small strips ×1.27); a swizzled texture or palette off a 128-byte boundary costs 5 to 8%, a
+  multiple of 128 off 1 KiB 1.5 to 2%, unswizzled nothing; CLUT32 swizzled in RAM 2.42 clocks a pixel.
+- **Next**: #269's agent refits with rounds 10 and 10b (no model change here); round 10's files
+  (`tests/psp/measurements/ge-round10`), the re-runs of rounds 2 to 9 (`ge-reruns-round10`) and round 10b's
+  (`ge-round10b`) are in the repository with the owner's go-ahead (2026-10-18; `development-process.md`).
+
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 
 Branch `cursor/psp-measure-round9-2b67` (PR #276, draft), on master `14e8065dc` (#270, part 107, merged; this branch

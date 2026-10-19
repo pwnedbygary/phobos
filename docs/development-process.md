@@ -80,6 +80,12 @@ are excluded; copying the portable template elsewhere requires explicit adoption
   repository): round 8's measurements from the same PSP (`tests/psp/measurements/ge-round8`, packed with xz).
   Authorized by the owner on 2026-10-18: round 9's GE measurements from the same PSP
   (`tests/psp/measurements/ge-round9`, packed with xz), for the same reason.
+  Authorized by the owner on 2026-10-18: round 10's GE measurements from the same PSP
+  (`tests/psp/measurements/ge-round10`, packed with xz), for the same reason.
+  Authorized by the owner on 2026-10-18: the re-runs of rounds 2 to 9 in round 10's session on the same PSP
+  (`tests/psp/measurements/ge-reruns-round10`, packed with xz), for the same reason.
+  Authorized by the owner on 2026-10-18: round 10b's GE measurements from the same PSP
+  (`tests/psp/measurements/ge-round10b`, packed with xz), for the same reason.
   Authorized by the owner on 2026-10-18: his GE profiler captures of games on the same PSP
   (`tests/psp/measurements/ge-captures`, packed with xz: timing records, game IDs and thread names, the firmware's
   and ARK's versions; no game content), so the GE timing's 15% check runs from the repository.

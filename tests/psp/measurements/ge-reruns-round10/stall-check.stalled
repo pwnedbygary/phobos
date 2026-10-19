@@ -1,0 +1,3 @@
+The GE hadn't finished after 5000 ms (sceGeDrawSync(1) gave 3: 2 drawing, 3 at a stall address).
+Its list: a FINISH and an END, left waiting at its stall address, on purpose.
+Reset: sceGuBreak(GU_BREAK_CANCEL) gave 0x00000000, sceGuInit 0x00000000. The .bin is what the GE had drawn.

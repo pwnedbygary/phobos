@@ -1,0 +1,481 @@
+psp-measure's GE tests, round 10 (tools/psp-measure/ge.c in Phobos says what each test draws and runs;
+docs/psp-core.md, part 112, what each is for). Records of words as round 8's (manifest8.txt): case, size, CPU
+MHz << 16 | bus MHz (as scePower gave them back), repeats | values << 16, then per run `values` words: times in
+microseconds from just before sceGeListEnQueue to the finish callback and to sceGeListEnQueue's return;
+time-contention and time-contention2 two more, a thread's turns of its pattern while the GE drew and their time
+(the GE idle: the first time is the thread's 10 ms); 0xffffffff for a run not finished (see <name>.stalled). All
+run at 222/111 and 333/166 MHz but time-contention2, at 333/222/166; the clocks as found are put back after each.
+time-anchors2's first six cases are round 8's, built the same way at the same sizes. The cases (test case:
+what; size):
+time-anchors2 0: round 8's time-strips 2: VRAM, 8888 512x512, strips 32 wide; layers
+time-anchors2 1: round 8's time-strips 37: RAM, 8888 512x512 swizzled, strips 32 wide; layers
+time-anchors2 2: round 8's time-textures 13: 3D: RAM 8888 256x256 swizzled over 256x256 pixels, w 1 at the left to 2 at the right; layers
+time-anchors2 3: round 8's time-textures 19: sprites 32x32, each its own CLUT8 32x32 texture (RAM, swizzled, 1 KiB), one palette; sprites
+time-anchors2 4: round 8's time-vertices 0: a strip, float positions; triangles
+time-anchors2 5: round 8's time-scenes 0: Killzone's scene list; lists
+time-anchors2 6: time-strips 37's strips, the texture on a 1 KiB boundary; layers
+time-anchors2 7: the same, the texture 256 bytes past a 1 KiB boundary (round 8's place); layers
+time-anchors2 8: the same, 512 bytes past; layers
+time-anchors2 9: the same, 768 bytes past; layers
+time-lights 0: a strip lit by 1 directional light, diffuse; triangles
+time-lights 1: 2 directional lights, diffuse; triangles
+time-lights 2: 3 directional lights, diffuse; triangles
+time-lights 3: 4 directional lights, diffuse; triangles
+time-lights 4: a strip lit by 1 directional light, diffuse and shine (specular); triangles
+time-lights 5: 2 directional lights, diffuse and shine (specular); triangles
+time-lights 6: 3 directional lights, diffuse and shine (specular); triangles
+time-lights 7: 4 directional lights, diffuse and shine (specular); triangles
+time-lights 8: a strip lit by 1 point light, diffuse; triangles
+time-lights 9: 2 point lights, diffuse; triangles
+time-lights 10: 3 point lights, diffuse; triangles
+time-lights 11: 4 point lights, diffuse; triangles
+time-lights 12: a strip lit by 1 point light, diffuse and shine; triangles
+time-lights 13: 2 point lights, diffuse and shine; triangles
+time-lights 14: 3 point lights, diffuse and shine; triangles
+time-lights 15: 4 point lights, diffuse and shine; triangles
+time-lights 16: a strip lit by 1 spotlight, diffuse; triangles
+time-lights 17: 2 spotlights, diffuse; triangles
+time-lights 18: 3 spotlights, diffuse; triangles
+time-lights 19: 4 spotlights, diffuse; triangles
+time-lights 20: a strip lit by 1 spotlight, diffuse and shine; triangles
+time-lights 21: 2 spotlights, diffuse and shine; triangles
+time-lights 22: 3 spotlights, diffuse and shine; triangles
+time-lights 23: 4 spotlights, diffuse and shine; triangles
+time-lights 24: 1 directional light with shine of power 1; triangles
+time-lights 25: the same, power 64; triangles
+time-lights 26: 4 directional lights with shine of power 1; triangles
+time-lights 27: the same, power 64; triangles
+time-lights 28: 4 directional lights, only light 0 with shine; triangles
+time-lights 29: 4 directional lights, only light 3 with shine; triangles
+time-lights 30: 4 directional lights, lights 0 and 1 with shine; triangles
+time-lights 31: 1 point light with shine, not falling off (1, 0, 0); triangles
+time-lights 32: 1 point light with shine, falling off (0.145, 0, 0.145); triangles
+time-lights 33: the game's mix: 2 spotlights with shine (exponent 21.1, cutoff 0.925, falling off (0.145, 0, 0.145)); triangles
+time-lights 34: the game's mix: the 2 spotlights and a directional light, all with shine; triangles
+time-lights 35: the game's mix: the 2 spotlights and a directional light, none with shine; triangles
+time-lights 36: skinned (2 weights, 8-bit), the 2 spotlights with shine; triangles
+time-lights 37: drawn as the game draws: strips of 9 vertices (16x20-pixel triangles, CLUT4 64x64 bilinear, depth and alpha tests), the 2 spotlights and a directional light, all with shine; strips
+time-lights 38: the same unlit; strips
+time-clut32 0: the game's tiles: CLUT32 512x512 in VRAM, not swizzled, nearest, tiles 32x34 as 3D strips of two triangles, three passes (palette shifts 0, 8, 16; the last two blended, fixed factors), 240 palette loads a layer, into 5650; layers
+time-clut32 1: the same tiles, one pass, no palette load after the first; layers
+time-clut32 2: the same, the bytes read as 8888; layers
+time-clut32 3: the same, a CLUT8 512x512 texture; layers
+time-clut32 4: the game's three passes without the palette loads; layers
+time-clut32 5: the game's three passes and palette loads without a texture; layers
+time-clut32 6: one pass, the tiles as sprites in through mode; layers
+time-clut32 7: one pass, into 8888; layers
+time-clut32 8: one pass, CLUT32 swizzled; layers
+time-clut32 9: one pass, CLUT32 in RAM, not swizzled; layers
+time-clut32 10: one pass, tiles 16x17; layers
+time-clut32 11: one pass, tiles 64x68; layers
+time-clut32 12: one pass reading an 8888 buffer filled just before in the list (480x272, no texture); layers
+time-clut32 13: the same fill, then one pass reading VRAM's first megabyte; layers
+time-clut32 14: one pass, bilinear; layers
+time-clut32 15: VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256, strips 8 wide as triangles; layers
+time-clut32 16: VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256, strips 16 wide as triangles; layers
+time-clut32 17: VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256, strips 32 wide as triangles; layers
+time-clut32 18: VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256, strips 64 wide as triangles; layers
+time-clut32 19: VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256, strips 128 wide as triangles; layers
+time-clut32 20: VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256, strips 256 wide as triangles; layers
+time-clut32 21: VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256, all 512 wide as two triangles; layers
+time-widetri 0: the game's pass: a 3D strip of two triangles over 480x272, CLUT8 512x256 (RAM, swizzled), bilinear, modulated, blended, the alpha test, into 5650; layers
+time-widetri 1: the same into 8888; layers
+time-widetri 2: the same into 5650, nearest; layers
+time-widetri 3: the same, bilinear, not blended, no alpha test; layers
+time-widetri 4: the game's pass as two triangles in through mode; layers
+time-widetri 5: the game's pass as one sprite; layers
+time-widetri 6: round 8's time-scenes 2: a clear, then the texture over 480x256 in one sprite, into 5650; lists
+time-widetri 7: the game's pass, 480 texels across (1:1); layers
+time-widetri 8: the game's pass, an 8888 512x256 texture (RAM, swizzled); layers
+time-widetri 9: round 9's time-tristrips 34 (512 wide as two triangles over 512x256, through mode, nearest) into 5650; layers
+time-widetri 10: round 9's time-tristrips 34 as it was (into 8888); layers
+time-widetri 11: the game's pass, its triangles split from top left to bottom right; layers
+time-widetri 12: round 9's time-tristrips 34 into 5551; layers
+time-widetri 13: round 9's time-tristrips 34 into 4444; layers
+time-widetri 14: the same texture as one sprite 512 wide over 512x256 (round 8's time-strips 48), into 8888; layers
+time-widetri 15: the same into 5650; layers
+time-widetri 16: the same into 5551; layers
+time-widetri 17: the same into 4444; layers
+time-perspective 0: 3D: RAM 8888 256x256 swizzled, two triangles over 256x256 pixels, w 1; layers
+time-perspective 1: the same, w 1 at the left to 1.25 at the right; layers
+time-perspective 2: the same, w 1 to 1.5; layers
+time-perspective 3: the same, w 1 to 2; layers
+time-perspective 4: the same, w 1 to 4; layers
+time-perspective 5: the same, w 1 at the top to 2 at the bottom; layers
+time-perspective 6: 3D: VRAM 8888 512x512, its top-left 256x256, two triangles over 256x256 pixels, w 1; layers
+time-perspective 7: the same, w 1 at the left to 1.25 at the right; layers
+time-perspective 8: the same, w 1 to 1.5; layers
+time-perspective 9: the same, w 1 to 2; layers
+time-perspective 10: the same, w 1 to 4; layers
+time-perspective 11: the same, w 1 at the top to 2 at the bottom; layers
+time-perspective 12: 3D: RAM CLUT8 256x256 swizzled, two triangles over 256x256 pixels, w 1; layers
+time-perspective 13: the same, w 1 at the left to 1.25 at the right; layers
+time-perspective 14: the same, w 1 to 1.5; layers
+time-perspective 15: the same, w 1 to 2; layers
+time-perspective 16: the same, w 1 to 4; layers
+time-perspective 17: the same, w 1 at the top to 2 at the bottom; layers
+time-perspective 18: 3D: RAM 8888 256x256 swizzled, squares 64x64 of two triangles over 256x256 pixels, w 1; layers
+time-perspective 19: the same, w 1 at the left to 2 at the right; layers
+time-perspective 20: the same, squares 128x128, w 1; layers
+time-perspective 21: the same, w 1 at the left to 2 at the right; layers
+time-perspective 22: 3D: RAM 8888 256x256 swizzled, two triangles over 256x256 pixels, w 2; layers
+time-perspective 23: the same, w 2 at the left to 1 at the right; layers
+time-perspective 24: through mode: RAM 8888 256x256 swizzled, squares 32x32 of two triangles over 256x256 pixels; layers
+time-perspective 25: the same, each turned a quarter (u down the screen); layers
+time-perspective 26: the same, squares 64x64; layers
+time-perspective 27: the same turned; layers
+time-perspective 28: the same, squares 128x128; layers
+time-perspective 29: the same turned; layers
+time-perspective 30: the same, two triangles 256x256; layers
+time-perspective 31: the same turned; layers
+time-perspective 32: through mode: RAM 8888 256x256 not swizzled, squares 32x32 of two triangles over 256x256 pixels; layers
+time-perspective 33: the same, each turned a quarter (u down the screen); layers
+time-perspective 34: the same, squares 64x64; layers
+time-perspective 35: the same turned; layers
+time-perspective 36: the same, squares 128x128; layers
+time-perspective 37: the same turned; layers
+time-perspective 38: the same, two triangles 256x256; layers
+time-perspective 39: the same turned; layers
+time-perspective 40: through mode: VRAM 8888 512x512, squares 32x32 of two triangles over 256x256 pixels; layers
+time-perspective 41: the same, each turned a quarter (u down the screen); layers
+time-perspective 42: the same, squares 64x64; layers
+time-perspective 43: the same turned; layers
+time-perspective 44: the same, squares 128x128; layers
+time-perspective 45: the same turned; layers
+time-perspective 46: the same, two triangles 256x256; layers
+time-perspective 47: the same turned; layers
+time-mipmaps 0: round 8's time-textures 9: 3D: RAM 8888 256x256 swizzled shrunk 2:1 onto 128x128 pixels, no mipmaps; layers
+time-mipmaps 1: round 8's time-textures 10: the same with 3 levels (256, 128, 64), the level chosen, nearest; layers
+time-mipmaps 2: round 8's time-textures 11: the same, level 1 set; layers
+time-mipmaps 3: round 8's time-textures 12: the same, the level chosen, linear between levels; layers
+time-mipmaps 4: the same, the level chosen, bilinear within it; layers
+time-mipmaps 5: the same, the level chosen, nearest, the two nearest levels blended; layers
+time-mipmaps 6: level 1 alone (128x128 at its place, a texture of its own) over 128x128 pixels, 1:1; layers
+time-mipmaps 7: 3D: RAM CLUT8 256x256 swizzled shrunk 2:1 onto 128x128 pixels, no mipmaps; layers
+time-mipmaps 8: the same with its levels, the level chosen, nearest; layers
+time-mipmaps 9: the same, level 1 set; layers
+time-mipmaps 10: the same, the level chosen, trilinear; layers
+time-mipmaps 11: level 1 alone (128x128 at its place) over 128x128 pixels, 1:1; layers
+time-mipmaps 12: the same 256x256 with its levels, the level chosen, bilinear within it; layers
+time-mipmaps 13: the same, the level chosen, nearest, the two nearest levels blended; layers
+time-mipmaps 14: the game's small strips: CLUT4 64x64, 7 levels, trilinear, the level chosen less 2.625; triangles
+time-mipmaps 15: the same, nearest within the level chosen; triangles
+time-mipmaps 16: the same, bilinear without levels; triangles
+time-mipmaps 17: the same, nearest without levels; triangles
+time-mipmaps 18: the game's small strips: CLUT4 64x32, 6 levels, trilinear, the level chosen less 2.625; triangles
+time-mipmaps 19: the same, nearest within the level chosen; triangles
+time-mipmaps 20: the same, bilinear without levels; triangles
+time-mipmaps 21: the same, nearest without levels; triangles
+time-vram8 0: VRAM, not swizzled, CLUT8 512x512, strips 4 wide as sprites; layers
+time-vram8 1: VRAM, not swizzled, CLUT8 512x512, strips 8 wide as sprites; layers
+time-vram8 2: VRAM, not swizzled, CLUT8 512x512, strips 12 wide as sprites; layers
+time-vram8 3: VRAM, not swizzled, CLUT8 512x512, strips 16 wide as sprites; layers
+time-vram8 4: VRAM, not swizzled, CLUT8 512x512, strips 24 wide as sprites; layers
+time-vram8 5: VRAM, not swizzled, CLUT8 512x512, strips 4 wide as triangles; layers
+time-vram8 6: VRAM, not swizzled, CLUT8 512x512, strips 8 wide as triangles; layers
+time-vram8 7: VRAM, not swizzled, CLUT8 512x512, strips 12 wide as triangles; layers
+time-vram8 8: VRAM, not swizzled, CLUT8 512x512, strips 16 wide as triangles; layers
+time-vram8 9: VRAM, not swizzled, CLUT8 512x512, strips 24 wide as triangles; layers
+time-vram8 10: VRAM, not swizzled, CLUT4 512x512, strips 4 wide as sprites; layers
+time-vram8 11: VRAM, not swizzled, CLUT4 512x512, strips 8 wide as sprites; layers
+time-vram8 12: VRAM, not swizzled, CLUT4 512x512, strips 12 wide as sprites; layers
+time-vram8 13: VRAM, not swizzled, CLUT4 512x512, strips 16 wide as sprites; layers
+time-vram8 14: VRAM, not swizzled, CLUT4 512x512, strips 24 wide as sprites; layers
+time-vram8 15: VRAM, not swizzled, CLUT4 512x512, strips 4 wide as triangles; layers
+time-vram8 16: VRAM, not swizzled, CLUT4 512x512, strips 8 wide as triangles; layers
+time-vram8 17: VRAM, not swizzled, CLUT4 512x512, strips 12 wide as triangles; layers
+time-vram8 18: VRAM, not swizzled, CLUT4 512x512, strips 16 wide as triangles; layers
+time-vram8 19: VRAM, not swizzled, CLUT4 512x512, strips 24 wide as triangles; layers
+time-vram8 20: VRAM, swizzled, CLUT8 512x512, strips 4 wide as sprites; layers
+time-vram8 21: VRAM, swizzled, CLUT8 512x512, strips 8 wide as sprites; layers
+time-vram8 22: VRAM, swizzled, CLUT8 512x512, strips 12 wide as sprites; layers
+time-vram8 23: VRAM, swizzled, CLUT8 512x512, strips 16 wide as sprites; layers
+time-vram8 24: VRAM, swizzled, CLUT8 512x512, strips 24 wide as sprites; layers
+time-vram8 25: VRAM, swizzled, CLUT8 512x512, strips 4 wide as triangles; layers
+time-vram8 26: VRAM, swizzled, CLUT8 512x512, strips 8 wide as triangles; layers
+time-vram8 27: VRAM, swizzled, CLUT8 512x512, strips 12 wide as triangles; layers
+time-vram8 28: VRAM, swizzled, CLUT8 512x512, strips 16 wide as triangles; layers
+time-vram8 29: VRAM, swizzled, CLUT8 512x512, strips 24 wide as triangles; layers
+time-vram8 30: VRAM, swizzled, CLUT4 512x512, strips 4 wide as sprites; layers
+time-vram8 31: VRAM, swizzled, CLUT4 512x512, strips 8 wide as sprites; layers
+time-vram8 32: VRAM, swizzled, CLUT4 512x512, strips 12 wide as sprites; layers
+time-vram8 33: VRAM, swizzled, CLUT4 512x512, strips 16 wide as sprites; layers
+time-vram8 34: VRAM, swizzled, CLUT4 512x512, strips 24 wide as sprites; layers
+time-vram8 35: VRAM, swizzled, CLUT4 512x512, strips 4 wide as triangles; layers
+time-vram8 36: VRAM, swizzled, CLUT4 512x512, strips 8 wide as triangles; layers
+time-vram8 37: VRAM, swizzled, CLUT4 512x512, strips 12 wide as triangles; layers
+time-vram8 38: VRAM, swizzled, CLUT4 512x512, strips 16 wide as triangles; layers
+time-vram8 39: VRAM, swizzled, CLUT4 512x512, strips 24 wide as triangles; layers
+time-vram8 40: RAM, swizzled, CLUT8 512x512, strips 4 wide as sprites; layers
+time-vram8 41: RAM, swizzled, CLUT8 512x512, strips 8 wide as sprites; layers
+time-vram8 42: RAM, swizzled, CLUT8 512x512, strips 12 wide as sprites; layers
+time-vram8 43: RAM, swizzled, CLUT8 512x512, strips 16 wide as sprites; layers
+time-vram8 44: RAM, swizzled, CLUT8 512x512, strips 24 wide as sprites; layers
+time-vram8 45: RAM, swizzled, CLUT8 512x512, strips 4 wide as triangles; layers
+time-vram8 46: RAM, swizzled, CLUT8 512x512, strips 8 wide as triangles; layers
+time-vram8 47: RAM, swizzled, CLUT8 512x512, strips 12 wide as triangles; layers
+time-vram8 48: RAM, swizzled, CLUT8 512x512, strips 16 wide as triangles; layers
+time-vram8 49: RAM, swizzled, CLUT8 512x512, strips 24 wide as triangles; layers
+time-vram8 50: RAM, swizzled, CLUT4 512x512, strips 4 wide as sprites; layers
+time-vram8 51: RAM, swizzled, CLUT4 512x512, strips 8 wide as sprites; layers
+time-vram8 52: RAM, swizzled, CLUT4 512x512, strips 12 wide as sprites; layers
+time-vram8 53: RAM, swizzled, CLUT4 512x512, strips 16 wide as sprites; layers
+time-vram8 54: RAM, swizzled, CLUT4 512x512, strips 24 wide as sprites; layers
+time-vram8 55: RAM, swizzled, CLUT4 512x512, strips 4 wide as triangles; layers
+time-vram8 56: RAM, swizzled, CLUT4 512x512, strips 8 wide as triangles; layers
+time-vram8 57: RAM, swizzled, CLUT4 512x512, strips 12 wide as triangles; layers
+time-vram8 58: RAM, swizzled, CLUT4 512x512, strips 16 wide as triangles; layers
+time-vram8 59: RAM, swizzled, CLUT4 512x512, strips 24 wide as triangles; layers
+time-contention 0: the GE idle; the CPU: arithmetic alone; -
+time-contention 1: the GE idle; the CPU: reads within 8 KiB; -
+time-contention 2: the GE idle; the CPU: streaming reads over 1 MiB; -
+time-contention 3: the GE idle; the CPU: streaming reads, a half of flat out; -
+time-contention 4: the GE idle; the CPU: streaming reads, a quarter; -
+time-contention 5: the GE idle; the CPU: streaming reads, an eighth; -
+time-contention 6: the GE idle; the CPU: streaming writes over 1 MiB; -
+time-contention 7: the GE idle; the CPU: streaming writes, a quarter; -
+time-contention 8: the GE idle; the CPU: copies, 64 KiB at a time; -
+time-contention 9: the GE idle; the CPU: a chain of pointers over 1 MiB; -
+time-contention 10: the GE idle; the CPU: uncached reads; -
+time-contention 11: the GE idle; the CPU: VRAM reads; -
+time-contention 12: the GE idle; the CPU: VRAM writes; -
+time-contention 13: the GE idle; the CPU: a mix over 16 KiB; -
+time-contention 14: the GE idle; the CPU: a mix over 64 KiB; -
+time-contention 15: the GE idle; the CPU: a mix over 256 KiB; -
+time-contention 16: the GE idle; the CPU: a mix over 1 MiB; -
+time-contention 17: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU idle; layers
+time-contention 18: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: arithmetic alone; layers
+time-contention 19: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: reads within 8 KiB; layers
+time-contention 20: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads over 1 MiB; layers
+time-contention 21: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads, a half of flat out; layers
+time-contention 22: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads, a quarter; layers
+time-contention 23: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads, an eighth; layers
+time-contention 24: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming writes over 1 MiB; layers
+time-contention 25: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming writes, a quarter; layers
+time-contention 26: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: copies, 64 KiB at a time; layers
+time-contention 27: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: a chain of pointers over 1 MiB; layers
+time-contention 28: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: uncached reads; layers
+time-contention 29: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: VRAM reads; layers
+time-contention 30: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: VRAM writes; layers
+time-contention 31: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: a mix over 16 KiB; layers
+time-contention 32: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: a mix over 64 KiB; layers
+time-contention 33: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: a mix over 256 KiB; layers
+time-contention 34: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: a mix over 1 MiB; layers
+time-contention 35: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU idle; layers
+time-contention 36: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: arithmetic alone; layers
+time-contention 37: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: reads within 8 KiB; layers
+time-contention 38: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads over 1 MiB; layers
+time-contention 39: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads, a half of flat out; layers
+time-contention 40: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads, a quarter; layers
+time-contention 41: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads, an eighth; layers
+time-contention 42: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming writes over 1 MiB; layers
+time-contention 43: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming writes, a quarter; layers
+time-contention 44: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: copies, 64 KiB at a time; layers
+time-contention 45: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: a chain of pointers over 1 MiB; layers
+time-contention 46: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: uncached reads; layers
+time-contention 47: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: VRAM reads; layers
+time-contention 48: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: VRAM writes; layers
+time-contention 49: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: a mix over 16 KiB; layers
+time-contention 50: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: a mix over 64 KiB; layers
+time-contention 51: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: a mix over 256 KiB; layers
+time-contention 52: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: a mix over 1 MiB; layers
+time-contention 53: C: 512x256 without a texture; the CPU idle; layers
+time-contention 54: C: 512x256 without a texture; the CPU: arithmetic alone; layers
+time-contention 55: C: 512x256 without a texture; the CPU: reads within 8 KiB; layers
+time-contention 56: C: 512x256 without a texture; the CPU: streaming reads over 1 MiB; layers
+time-contention 57: C: 512x256 without a texture; the CPU: streaming reads, a half of flat out; layers
+time-contention 58: C: 512x256 without a texture; the CPU: streaming reads, a quarter; layers
+time-contention 59: C: 512x256 without a texture; the CPU: streaming reads, an eighth; layers
+time-contention 60: C: 512x256 without a texture; the CPU: streaming writes over 1 MiB; layers
+time-contention 61: C: 512x256 without a texture; the CPU: streaming writes, a quarter; layers
+time-contention 62: C: 512x256 without a texture; the CPU: copies, 64 KiB at a time; layers
+time-contention 63: C: 512x256 without a texture; the CPU: a chain of pointers over 1 MiB; layers
+time-contention 64: C: 512x256 without a texture; the CPU: uncached reads; layers
+time-contention 65: C: 512x256 without a texture; the CPU: VRAM reads; layers
+time-contention 66: C: 512x256 without a texture; the CPU: VRAM writes; layers
+time-contention 67: C: 512x256 without a texture; the CPU: a mix over 16 KiB; layers
+time-contention 68: C: 512x256 without a texture; the CPU: a mix over 64 KiB; layers
+time-contention 69: C: 512x256 without a texture; the CPU: a mix over 256 KiB; layers
+time-contention 70: C: 512x256 without a texture; the CPU: a mix over 1 MiB; layers
+time-contention 71: D: culled triangles, 24-byte vertices from RAM; the CPU idle; triangles
+time-contention 72: D: culled triangles, 24-byte vertices from RAM; the CPU: arithmetic alone; triangles
+time-contention 73: D: culled triangles, 24-byte vertices from RAM; the CPU: reads within 8 KiB; triangles
+time-contention 74: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads over 1 MiB; triangles
+time-contention 75: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads, a half of flat out; triangles
+time-contention 76: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads, a quarter; triangles
+time-contention 77: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads, an eighth; triangles
+time-contention 78: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming writes over 1 MiB; triangles
+time-contention 79: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming writes, a quarter; triangles
+time-contention 80: D: culled triangles, 24-byte vertices from RAM; the CPU: copies, 64 KiB at a time; triangles
+time-contention 81: D: culled triangles, 24-byte vertices from RAM; the CPU: a chain of pointers over 1 MiB; triangles
+time-contention 82: D: culled triangles, 24-byte vertices from RAM; the CPU: uncached reads; triangles
+time-contention 83: D: culled triangles, 24-byte vertices from RAM; the CPU: VRAM reads; triangles
+time-contention 84: D: culled triangles, 24-byte vertices from RAM; the CPU: VRAM writes; triangles
+time-contention 85: D: culled triangles, 24-byte vertices from RAM; the CPU: a mix over 16 KiB; triangles
+time-contention 86: D: culled triangles, 24-byte vertices from RAM; the CPU: a mix over 64 KiB; triangles
+time-contention 87: D: culled triangles, 24-byte vertices from RAM; the CPU: a mix over 256 KiB; triangles
+time-contention 88: D: culled triangles, 24-byte vertices from RAM; the CPU: a mix over 1 MiB; triangles
+time-contention 89: E1: NOPs; the CPU idle; commands
+time-contention 90: E1: NOPs; the CPU: arithmetic alone; commands
+time-contention 91: E1: NOPs; the CPU: reads within 8 KiB; commands
+time-contention 92: E1: NOPs; the CPU: streaming reads over 1 MiB; commands
+time-contention 93: E1: NOPs; the CPU: streaming reads, a half of flat out; commands
+time-contention 94: E1: NOPs; the CPU: streaming reads, a quarter; commands
+time-contention 95: E1: NOPs; the CPU: streaming reads, an eighth; commands
+time-contention 96: E1: NOPs; the CPU: streaming writes over 1 MiB; commands
+time-contention 97: E1: NOPs; the CPU: streaming writes, a quarter; commands
+time-contention 98: E1: NOPs; the CPU: copies, 64 KiB at a time; commands
+time-contention 99: E1: NOPs; the CPU: a chain of pointers over 1 MiB; commands
+time-contention 100: E1: NOPs; the CPU: uncached reads; commands
+time-contention 101: E1: NOPs; the CPU: VRAM reads; commands
+time-contention 102: E1: NOPs; the CPU: VRAM writes; commands
+time-contention 103: E1: NOPs; the CPU: a mix over 16 KiB; commands
+time-contention 104: E1: NOPs; the CPU: a mix over 64 KiB; commands
+time-contention 105: E1: NOPs; the CPU: a mix over 256 KiB; commands
+time-contention 106: E1: NOPs; the CPU: a mix over 1 MiB; commands
+time-contention 107: E2: Super Monkey Ball's lists; the CPU idle; passes
+time-contention 108: E2: Super Monkey Ball's lists; the CPU: arithmetic alone; passes
+time-contention 109: E2: Super Monkey Ball's lists; the CPU: reads within 8 KiB; passes
+time-contention 110: E2: Super Monkey Ball's lists; the CPU: streaming reads over 1 MiB; passes
+time-contention 111: E2: Super Monkey Ball's lists; the CPU: streaming reads, a half of flat out; passes
+time-contention 112: E2: Super Monkey Ball's lists; the CPU: streaming reads, a quarter; passes
+time-contention 113: E2: Super Monkey Ball's lists; the CPU: streaming reads, an eighth; passes
+time-contention 114: E2: Super Monkey Ball's lists; the CPU: streaming writes over 1 MiB; passes
+time-contention 115: E2: Super Monkey Ball's lists; the CPU: streaming writes, a quarter; passes
+time-contention 116: E2: Super Monkey Ball's lists; the CPU: copies, 64 KiB at a time; passes
+time-contention 117: E2: Super Monkey Ball's lists; the CPU: a chain of pointers over 1 MiB; passes
+time-contention 118: E2: Super Monkey Ball's lists; the CPU: uncached reads; passes
+time-contention 119: E2: Super Monkey Ball's lists; the CPU: VRAM reads; passes
+time-contention 120: E2: Super Monkey Ball's lists; the CPU: VRAM writes; passes
+time-contention 121: E2: Super Monkey Ball's lists; the CPU: a mix over 16 KiB; passes
+time-contention 122: E2: Super Monkey Ball's lists; the CPU: a mix over 64 KiB; passes
+time-contention 123: E2: Super Monkey Ball's lists; the CPU: a mix over 256 KiB; passes
+time-contention 124: E2: Super Monkey Ball's lists; the CPU: a mix over 1 MiB; passes
+time-contention 125: F: 480x272 32-bit copied RAM to VRAM; the CPU idle; copies
+time-contention 126: F: 480x272 32-bit copied RAM to VRAM; the CPU: arithmetic alone; copies
+time-contention 127: F: 480x272 32-bit copied RAM to VRAM; the CPU: reads within 8 KiB; copies
+time-contention 128: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads over 1 MiB; copies
+time-contention 129: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads, a half of flat out; copies
+time-contention 130: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads, a quarter; copies
+time-contention 131: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads, an eighth; copies
+time-contention 132: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming writes over 1 MiB; copies
+time-contention 133: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming writes, a quarter; copies
+time-contention 134: F: 480x272 32-bit copied RAM to VRAM; the CPU: copies, 64 KiB at a time; copies
+time-contention 135: F: 480x272 32-bit copied RAM to VRAM; the CPU: a chain of pointers over 1 MiB; copies
+time-contention 136: F: 480x272 32-bit copied RAM to VRAM; the CPU: uncached reads; copies
+time-contention 137: F: 480x272 32-bit copied RAM to VRAM; the CPU: VRAM reads; copies
+time-contention 138: F: 480x272 32-bit copied RAM to VRAM; the CPU: VRAM writes; copies
+time-contention 139: F: 480x272 32-bit copied RAM to VRAM; the CPU: a mix over 16 KiB; copies
+time-contention 140: F: 480x272 32-bit copied RAM to VRAM; the CPU: a mix over 64 KiB; copies
+time-contention 141: F: 480x272 32-bit copied RAM to VRAM; the CPU: a mix over 256 KiB; copies
+time-contention 142: F: 480x272 32-bit copied RAM to VRAM; the CPU: a mix over 1 MiB; copies
+time-contention 143: G: a new CLUT8 32x32 texture before each sprite; the CPU idle; sprites
+time-contention 144: G: a new CLUT8 32x32 texture before each sprite; the CPU: arithmetic alone; sprites
+time-contention 145: G: a new CLUT8 32x32 texture before each sprite; the CPU: reads within 8 KiB; sprites
+time-contention 146: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads over 1 MiB; sprites
+time-contention 147: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads, a half of flat out; sprites
+time-contention 148: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads, a quarter; sprites
+time-contention 149: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads, an eighth; sprites
+time-contention 150: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming writes over 1 MiB; sprites
+time-contention 151: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming writes, a quarter; sprites
+time-contention 152: G: a new CLUT8 32x32 texture before each sprite; the CPU: copies, 64 KiB at a time; sprites
+time-contention 153: G: a new CLUT8 32x32 texture before each sprite; the CPU: a chain of pointers over 1 MiB; sprites
+time-contention 154: G: a new CLUT8 32x32 texture before each sprite; the CPU: uncached reads; sprites
+time-contention 155: G: a new CLUT8 32x32 texture before each sprite; the CPU: VRAM reads; sprites
+time-contention 156: G: a new CLUT8 32x32 texture before each sprite; the CPU: VRAM writes; sprites
+time-contention 157: G: a new CLUT8 32x32 texture before each sprite; the CPU: a mix over 16 KiB; sprites
+time-contention 158: G: a new CLUT8 32x32 texture before each sprite; the CPU: a mix over 64 KiB; sprites
+time-contention 159: G: a new CLUT8 32x32 texture before each sprite; the CPU: a mix over 256 KiB; sprites
+time-contention 160: G: a new CLUT8 32x32 texture before each sprite; the CPU: a mix over 1 MiB; sprites
+time-contention 161: H: the game's small strips (CLUT4 64x64, trilinear); the CPU idle; triangles
+time-contention 162: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: arithmetic alone; triangles
+time-contention 163: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: reads within 8 KiB; triangles
+time-contention 164: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads over 1 MiB; triangles
+time-contention 165: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads, a half of flat out; triangles
+time-contention 166: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads, a quarter; triangles
+time-contention 167: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads, an eighth; triangles
+time-contention 168: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming writes over 1 MiB; triangles
+time-contention 169: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming writes, a quarter; triangles
+time-contention 170: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: copies, 64 KiB at a time; triangles
+time-contention 171: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: a chain of pointers over 1 MiB; triangles
+time-contention 172: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: uncached reads; triangles
+time-contention 173: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: VRAM reads; triangles
+time-contention 174: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: VRAM writes; triangles
+time-contention 175: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: a mix over 16 KiB; triangles
+time-contention 176: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: a mix over 64 KiB; triangles
+time-contention 177: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: a mix over 256 KiB; triangles
+time-contention 178: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: a mix over 1 MiB; triangles
+time-contention 179: I: Ghost of Sparta's kind (skinned, lit strips); the CPU idle; strips
+time-contention 180: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: arithmetic alone; strips
+time-contention 181: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: reads within 8 KiB; strips
+time-contention 182: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads over 1 MiB; strips
+time-contention 183: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads, a half of flat out; strips
+time-contention 184: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads, a quarter; strips
+time-contention 185: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads, an eighth; strips
+time-contention 186: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming writes over 1 MiB; strips
+time-contention 187: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming writes, a quarter; strips
+time-contention 188: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: copies, 64 KiB at a time; strips
+time-contention 189: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: a chain of pointers over 1 MiB; strips
+time-contention 190: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: uncached reads; strips
+time-contention 191: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: VRAM reads; strips
+time-contention 192: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: VRAM writes; strips
+time-contention 193: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: a mix over 16 KiB; strips
+time-contention 194: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: a mix over 64 KiB; strips
+time-contention 195: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: a mix over 256 KiB; strips
+time-contention 196: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: a mix over 1 MiB; strips
+time-contention2 0: the GE idle; the CPU: streaming reads over 1 MiB; -
+time-contention2 1: the GE idle; the CPU: streaming reads, a half of flat out; -
+time-contention2 2: the GE idle; the CPU: streaming reads, a quarter; -
+time-contention2 3: the GE idle; the CPU: streaming reads, an eighth; -
+time-contention2 4: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU idle; layers
+time-contention2 5: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads over 1 MiB; layers
+time-contention2 6: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads, a half of flat out; layers
+time-contention2 7: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads, a quarter; layers
+time-contention2 8: A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128; the CPU: streaming reads, an eighth; layers
+time-contention2 9: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU idle; layers
+time-contention2 10: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads over 1 MiB; layers
+time-contention2 11: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads, a half of flat out; layers
+time-contention2 12: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads, a quarter; layers
+time-contention2 13: B: VRAM 8888 512x512, one sprite 512 wide over 512x128; the CPU: streaming reads, an eighth; layers
+time-contention2 14: C: 512x256 without a texture; the CPU idle; layers
+time-contention2 15: C: 512x256 without a texture; the CPU: streaming reads over 1 MiB; layers
+time-contention2 16: C: 512x256 without a texture; the CPU: streaming reads, a half of flat out; layers
+time-contention2 17: C: 512x256 without a texture; the CPU: streaming reads, a quarter; layers
+time-contention2 18: C: 512x256 without a texture; the CPU: streaming reads, an eighth; layers
+time-contention2 19: D: culled triangles, 24-byte vertices from RAM; the CPU idle; triangles
+time-contention2 20: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads over 1 MiB; triangles
+time-contention2 21: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads, a half of flat out; triangles
+time-contention2 22: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads, a quarter; triangles
+time-contention2 23: D: culled triangles, 24-byte vertices from RAM; the CPU: streaming reads, an eighth; triangles
+time-contention2 24: E1: NOPs; the CPU idle; commands
+time-contention2 25: E1: NOPs; the CPU: streaming reads over 1 MiB; commands
+time-contention2 26: E1: NOPs; the CPU: streaming reads, a half of flat out; commands
+time-contention2 27: E1: NOPs; the CPU: streaming reads, a quarter; commands
+time-contention2 28: E1: NOPs; the CPU: streaming reads, an eighth; commands
+time-contention2 29: E2: Super Monkey Ball's lists; the CPU idle; passes
+time-contention2 30: E2: Super Monkey Ball's lists; the CPU: streaming reads over 1 MiB; passes
+time-contention2 31: E2: Super Monkey Ball's lists; the CPU: streaming reads, a half of flat out; passes
+time-contention2 32: E2: Super Monkey Ball's lists; the CPU: streaming reads, a quarter; passes
+time-contention2 33: E2: Super Monkey Ball's lists; the CPU: streaming reads, an eighth; passes
+time-contention2 34: F: 480x272 32-bit copied RAM to VRAM; the CPU idle; copies
+time-contention2 35: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads over 1 MiB; copies
+time-contention2 36: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads, a half of flat out; copies
+time-contention2 37: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads, a quarter; copies
+time-contention2 38: F: 480x272 32-bit copied RAM to VRAM; the CPU: streaming reads, an eighth; copies
+time-contention2 39: G: a new CLUT8 32x32 texture before each sprite; the CPU idle; sprites
+time-contention2 40: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads over 1 MiB; sprites
+time-contention2 41: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads, a half of flat out; sprites
+time-contention2 42: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads, a quarter; sprites
+time-contention2 43: G: a new CLUT8 32x32 texture before each sprite; the CPU: streaming reads, an eighth; sprites
+time-contention2 44: H: the game's small strips (CLUT4 64x64, trilinear); the CPU idle; triangles
+time-contention2 45: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads over 1 MiB; triangles
+time-contention2 46: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads, a half of flat out; triangles
+time-contention2 47: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads, a quarter; triangles
+time-contention2 48: H: the game's small strips (CLUT4 64x64, trilinear); the CPU: streaming reads, an eighth; triangles
+time-contention2 49: I: Ghost of Sparta's kind (skinned, lit strips); the CPU idle; strips
+time-contention2 50: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads over 1 MiB; strips
+time-contention2 51: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads, a half of flat out; strips
+time-contention2 52: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads, a quarter; strips
+time-contention2 53: I: Ghost of Sparta's kind (skinned, lit strips); the CPU: streaming reads, an eighth; strips
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.
