@@ -18801,14 +18801,23 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
   compiled load and store, Chains of Olympus's scene sends 0.46% to the scratchpad, Burnout Legends from boot 0.26% to
   VRAM, Super Monkey Ball's and Activision Hits' scenes none).
 - **Where.** Only compiled code looks, and only in blocks compiled for a system started with the PSP's timing
-  (`System::power()` turns the caches on with it): "Fast" compiles none of it, its code master's. A load or store looks
-  its line up in its set's most recently used way, inline after the alignment test (seven host instructions), the rest
-  out of line (`dataCacheMiss()`: the other way, a miss, a write-back). An instruction line is looked up as a block
-  starts and wherever its code reaches a line's first word: on ARM64 three instructions for code in RAM (`codeKey()`'s
-  keys fit a compare's immediate), the rest out of line (`instructionCacheMiss()`). A block going on to itself goes back
-  past its first line's look (`lineHeld`): nothing can have replaced that line in between, so the look would only hit.
-  The interpreter's instructions and accesses aren't counted, nor those the recompiler leaves to it (misaligned,
-  hardware's, stores to compiled code), nor a delay slot's line.
+  (`System::power()` turns the caches on with it): "Fast" compiles none of it, and what its code does is master's (the
+  caches' 2,112 bytes come before the CPU's registers in `Allegrex`, so the offsets compiled code reaches them by moved
+  and its bytes aren't master's; no cost to measure). A load or store looks its line up in its set's most recently
+  used way, inline after the alignment test (seven host instructions), the rest out of line (`dataCacheMiss()`: the
+  other way, a miss, a write-back). The look comes before the page is looked up, so hardware's accesses and stores to
+  compiled code, which go on to the interpreter, are looked up too (counted where they're RAM's); a misaligned access
+  leaves for the interpreter before it. An instruction line is looked up as a block starts and wherever its code
+  reaches a line's first word: on ARM64 three instructions for code in RAM (`codeKey()`'s keys fit a compare's
+  immediate), the rest out of line (`instructionCacheMiss()`). A block going on to itself goes back past its first
+  line's look (`lineHeld`): nothing can have replaced that line in between, so the look would only hit. A delay slot's
+  line isn't looked up. Keys are virtual addresses, so a line seen through both cached mirrors of the same memory
+  (0x0… and 0x8…) is two lines to the model (games use one).
+- **The interpreter isn't counted**: neither the CPU's other engine nor the instructions compiled code hands it. Under
+  the PSP's timing the two engines, alike in all else, so give the GE other times: the runner's `--interpreter` sees
+  less contention than its recompiler (the app always compiles: players aren't affected). Counting it alike would mean
+  looking up exactly what compiled code looks up, each load's and store's address once, a hardware access not again
+  after its compiled look, a delay slot's line passed over: left for when the interpreter needs it.
 - **What it counts in the gate's scenes** (lines a frame, the PSP's timing): Super Monkey Ball 8,218 data lines read in,
   3,033 written back, 1,206 uncached accesses, 3,439 instruction lines; Killzone 9,047, 2,529, 2,885, 9,354; Ghost of
   Sparta 4,657, 2,068, 1,829, 5,924; Chains of Olympus 3,187, 1,422, 1,873, 4,625; Army of Two 5,400, 2,036, 13,240,
@@ -18818,24 +18827,44 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
 ### The CPU beside the GE (`Kernel::geContend()`, kernel/ge.cpp; `GE::Cost`)
 
 - **The window.** From the GE getting busy to its being idle, each stretch of the CPU's (to a syscall, a go's end, an
-  idle wait, a spin skipped) adds its cycles passed while the GE was busy, its instructions, the lines its caches moved
-  (`WritebackLine` of one a line written back, `UncachedLine` an uncached access) and their stalls in the PSP's CPU
-  cycles. The CPU's work before a list costs it nothing: the window starts afresh when the GE is idle, the caches'
-  counts seen again as it gets busy (`geSeeCaches()`: `geOwe()`, and `geTime()` for a stalled list going on).
-- **The traffic.** u = lines / max(passed, T), as a share of a thread streaming RAM flat out (`StreamLines`, 1/164.4 a
-  CPU cycle: round 10's streaming at 222 and 333 MHz alike); T, the PSP's CPU's time for the window's instructions and
-  stalls (`InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40), spreads a burst of the
-  emulated CPU's (which runs several times a PSP's speed) over the time a PSP's would take.
+  idle wait, a spin skipped) begun while the GE is busy adds its cycles until the GE is done, its instructions and the
+  lines its caches moved (data lines read in, written back, uncached accesses, instruction lines read in; with the GE
+  done part way through it, their share that fell before). The sums are whole counts, so they come out the same however
+  the stretches are grouped (a spin's skipped turns as one stretch: below). The CPU's work before a list costs it
+  nothing: the window starts afresh when the GE is idle, the caches' counts seen again as it gets busy (`geSeeCaches()`:
+  `geOwe()`, and `geTime()` for a stalled list going on).
+- **The traffic.** u = lines / max(passed, T), the lines weighted (`WritebackLine` of one a line written back,
+  `UncachedLine` an uncached access), as a share of a thread streaming RAM flat out (`StreamLines`, 1/164.4 a CPU
+  cycle: round 10's streaming at 222 and 333 MHz alike); T, the PSP's CPU's time for the window's instructions and its
+  lines' stalls (`InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40), spreads a burst
+  of the emulated CPU's (which runs several times a PSP's speed) over the time a PSP's would take.
 - **The slowdown.** slow = sum(`Contention[kind]` x the kind's share of the list's clocks so far) x u, the kinds the
   GE's reads of RAM: the front end's vertices and list words (a run's last words too: `pipeStop()`), the back end's
-  texels from RAM, transfers' reads. The window owes passed x slow / (1 + slow); what it hasn't pushed of that moves the
-  GE's pipeline back (`gePipeAt`, which its times count from, so the list's next run keeps it; `geDoneAt`, `geReachAt`).
-  A line so costs the GE its share once: over a long window, `Contention` x share x the line's streaming time, never
-  more (the window's push P(W) = aW / (W + a), a that cost). The first version pushed slow / (1 + slow) of every cycle
-  passed, the window's average u falling only as 1/W after a burst, so a burst cost the GE again and again (a·ln W):
-  Super Monkey Ball, a burst of the CPU's work then a wait, came out at −14.5%. The writer test caught it.
+  texels from RAM, transfers' reads. The window owes passed x slow / (1 + slow) in whole cycles (rounded down,
+  `geContendDue()`); what it hasn't pushed of that moves the GE's pipeline back (`gePipeAt`, which its times count from,
+  so the list's next run keeps it; `geDoneAt`; and a due SIGNAL's `geReachAt`, which `geTime()` works out from
+  `gePipeAt` otherwise). A line so costs the GE its share once: over a long window, `Contention` x share x the line's
+  streaming time, never more (the window's push P(W) = aW / (W + a), a that cost). The first version pushed slow / (1 +
+  slow) of every cycle passed, the window's average u falling only as 1/W after a burst, so a burst cost the GE again
+  and again (a·ln W): Super Monkey Ball, a burst of the CPU's work then a wait, came out at −14.5%. The writer test
+  caught it.
 - **What doesn't slow it**: polling through syscalls (a loop waiting on a cached word moves no lines), arithmetic, the
   cache's own hits, the CPU's work before a list. As round 10b's PSP has it.
+- **Spins skipped** (`spins.cpp`, parts 91 and 105). A turn may move lines (an uncached word read each turn, or lines
+  one set can't hold): each turn skipped is counted as moving what the turn before it moved. The turns are alike, the
+  same accesses in the same order, and after one of them the caches hold what any later one leaves them holding (each
+  set its turn's last two lines, or as it was if one line or none touched it), so every turn from there counts the
+  same and changes nothing; a skip comes after `SpinTurns` such turns in a row. Their one stretch then adds to the
+  window what theirs would if the GE is busy for all of them or idle for all (no turns are skipped with it done part
+  way), and pushes the GE back as far as theirs would by the last one's end if what the window owes is at its most
+  there, or no more than before the first: so it is where it falls and then rises at most along the turns (each of
+  them all instructions: a spin turn makes no waits). It does so for turns of one stretch each (one syscall), and for
+  turns of any number moving no lines, with the window's time the same kind throughout (its cycles passed or the
+  CPU's time, `geContendBound()`); with lines in the window or the turns' other turns aren't skipped, and with none
+  the window owes nothing. The review found the first version counting no skipped turn's lines, exact only while
+  turns moved none; the test it asked for (the GE's looks polled, each turn reading an uncached word or three lines one
+  set can't hold, `tests/psp/spins.cpp`) then found the window's sums, floats, differing in their last bits from the
+  turns': hence the whole counts.
 
 ### The fit (`tools/psp-measure/contention11.py`)
 
@@ -18895,8 +18924,9 @@ PSP's; Activision Hits' copyright screen doesn't move; its menu's frame moves aw
 27% (the CPU barely touches them). Its frame matched only by the first list's shortfall making up for the others'
 excess.
 
-- **Super Monkey Ball** keeps its exception (`gate.py`'s `EXCEPTED`, now with a limit: −21%, past which it fails). Its
-  rest points at the GE's side: round 10's list H, the small trilinear strips modelled on its own (CLUT4 mipmaps), is
+- **Super Monkey Ball** keeps its exception (`gate.py`'s `EXCEPTED`, now with a limit: −21%, past which it fails; 0.4
+  points from today's −20.6%, so any change to the model that moves it trips the gate, as meant). Its rest points at the
+  GE's side: round 10's list H, the small trilinear strips modelled on its own (CLUT4 mipmaps), is
   predicted about 16% short beside any of the CPU's patterns; the model has it reading RAM for 37% of its clocks (its
   vertices 32%, its words 5%, its texels 0.6%: its little textures stay in the texture cache), and the PSP slows it as
   if it read more. List E2, its CALLed lists, comes out over (x1.69 beside the writer against the PSP's x1.36).
@@ -18942,7 +18972,9 @@ The library check's polling games, 3600 frames from boot with its presses:
   as it gets busy instead). The counting before these cost Activision Hits' menu +21.4% and its copyright screen +25.3%.
 - **Measured and left**: skipping VRAM's and the scratchpad's looks (of every look, 0 to 2.2% reach them: Dante's 2.2%
   VRAM's, Chains of Olympus 0.46% the scratchpad's; nothing to save, and the test itself would cost what the look
-  costs); a shorter data look (only by moving fields "Fast"'s code addresses, which must stay master's).
+  costs); a shorter data look: the set's tags indexed from the CPU's own base register with no add would need them at
+  `Allegrex`'s very start, where its vtable pointer is (sljit's indexed loads take no displacement, so at any other
+  place the add stays).
 - **What would take more**: spins without syscalls pay a data look every turn (the spin skip's widening, a pull request
   of its own, takes the turns away); a miss's call (the other way looked at inline would spare the calls of lines in the
   older way).
@@ -18993,13 +19025,25 @@ put in.
 - GitHub's checks: the first push failed GCC's `-Wparentheses` (a set's index, clang silent) and two state tests that
   build older layouts from this one (layout 35's bytes not taken out); with those put right, the new groups pass in both
   PSP jobs, the sanitized one finding nothing.
+- The review (approve, with should-fixes): "Fast" exact (12 of 12) at no cost to measure; under the PSP's timing the
+  caches deterministic (six scenes run twice) and states saved mid-run carried on byte for byte; both fits and the gate
+  reproduced from the tree; the spin skip on and off the same in Resistance, Burnout Dominator and the gate's scenes.
+  Its should-fixes: the skipped turns' lines (now counted, with the test "the GE's looks polled with the PSP's GE
+  timing"), and the interpreter (documented, above).
 
 ### Not yet
 
-- **The owner's two decisions**: whether Activision Hits' menu frame moving from +2.2% to +6.7% (its first list now
-  nearly right, its others as they were) is acceptable; and whether round 10c should time list H's kind (small strips of
-  a CLUT4 mipmapped texture, trilinear) beside the CPU's streaming, taken apart (no mipmaps, nearest, untextured), to
-  find what the GE reads there that its clocks don't show.
+- **The owner's decisions** (2026-10-19, 11:08): Activision Hits' menu frame at +6.7% accepted (its first list now
+  nearly right, its others as they were); the host cost accepted; and round 10c (draft PR #280) times list H's kind
+  (small strips of a CLUT4 mipmapped texture, trilinear) beside the CPU's streaming, taken apart, to find what the GE
+  reads there that its clocks don't show: its refit follows this pull request.
+- **A threaded GE** (#277's, ported onto this): its runs' counts folded later, each stretch of the CPU's has to keep, as
+  it ends, its instructions and the caches' four counts' deltas (data lines read in, written back, uncached accesses,
+  instruction lines read in), the live counts moving on while it waits for its run's fold; the window's pushes
+  (`gePipeAt`, `geDoneAt`, a due SIGNAL's `geReachAt`) have to agree with the folds and the go's limits; a state saves
+  the drawing GE's clocks by kind, not the kernel's GE's; and the measured rounds' machines keep
+  `KernelMachine::pspTiming()`, which turns the caches on.
+- The interpreter's accesses and instructions (above).
 - The kernel's cache calls (`sceKernelDcacheWritebackRange` and its kin) and the `cache` instruction change nothing in
   the model: a PSP's would write lines back and make them miss again.
 - The CPU's traffic with VRAM (round 10's VRAM patterns slow VRAM-textured and untextured lists 1.5 to 2.4 times) isn't
