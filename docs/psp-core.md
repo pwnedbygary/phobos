@@ -16939,7 +16939,8 @@ the RP6.
 On branch `cursor/psp-ge-time-2b67` (draft PR #269), from #266's branch (part 103, merged as `a014706e9`) on master
 `a8d5640f5` (part 101, #263), masters `dd63f4ffb` (parts 103 and 104, #266 and #267), `230c0a731` (part 105, #268)
 and `fe3deab82` (part 109, #272: the GE on a thread of its own; part 108, #271: the display's frame buffer for the
-next vertical sync; #273), `14e8065dc` (part 107, #270: round 8) and `d428d91f9` (part 110, #276: round 9) merged in.
+next vertical sync; #273), `14e8065dc` (part 107, #270: round 8), `d428d91f9` (part 110, #276: round 9) and `46922a9d9`
+(part 112, #278: rounds 10 and 10b) merged in.
 The design the owner approved: the PSP's timing behind an option, off by default
 and switched in the app; on by default only once every captured scene is within 15%, none more than 15% too slow, and
 he holds this pull request until then. Sources: the owner's rounds 6, 8, 9 and 10 (parts 76, 107, 110 and 112; round
@@ -17021,16 +17022,18 @@ triangles into 16-bit and the CPU beside the GE, holding out the lists that move
   Python alone: least squares on the relative error, each run of the GE its longer end, taken from the last fit's
   clocks until no run changes ends (part 76's way), and a term that would go below 0 left out. `GE::Cost` is its fit
   of rounds 6, 8, 9 and 10 to three figures, from this branch's runner with `ge-terms.py` (tools/psp-measure/README.md,
-  "The GE timing's fit"; round 10's program, its menu's lines 0, 1, 2 and 4), with no term held fixed and the lists
-  that moved between the owner's two sessions held out:
+  "The GE timing's fit"; round 10's program as the owner ran it, its menu's lines 0, 1, 2 and 4: the committed build,
+  round 10b's, has them one line further down), with no term held fixed and the lists that moved between the owner's
+  two sessions held out:
 
   ```
   python3 tools/psp-measure/ge-fit.py PSP_RESULTS r10.txt ours10 r9.txt ours9 r8.txt ours8 r6.txt ours6 \
     --again PSP_AGAIN
   ```
 
-  PSP_RESULTS holds rounds 6, 8 and 9 as first run (`tests/psp/measurements/ge-round6`, `-round8`, `-round9`) and round
-  10 (#278's); PSP_AGAIN the owner's runs of rounds 2 to 9 again in round 10's session (#278's, the same evening). A
+  PSP_RESULTS holds rounds 6, 8 and 9 as first run and round 10 (`tests/psp/measurements/ge-round6`, `-round8`,
+  `-round9`, `-round10`, unpacked into one folder); PSP_AGAIN the owner's runs of rounds 2 to 9 again in round 10's
+  session (`ge-reruns-round10`). A
   list whose time there is more than 5% (and more than 4 microseconds, the timer's steps) from the first run's is held
   out, shown as a check: 253 lists (time-tristrips 115, time-strips 61, time-loads 37, time-state 14, time-transfers 9,
   time-textures 8, time-lists2 4, time-scenes 3, time-lists and time-transfers2 1 each), 9.1% from the fit at the
@@ -17260,6 +17263,15 @@ ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like compariso
   68% and 91%: the refit trades a little of them for round 10, and several of the cases named took the PSP 4 to 10%
   longer on round 10's evening (the shrink, the wide triangles, the wide sprite, the new textures), against which
   they're within 2 to 6%.
+- measured8's "measured round 10 GE time" (with #278's files merged): round 10 the same way (`round10Files()`, its
+  line of the committed program, round 10b's build: its arrays' places don't move the core's times; `run-tests.sh`
+  unpacks `ge-round10` into `PSP_GE_ROUND10`, and CI requires it), the cases `ge-fit.py` leaves out left out too (the
+  squares in perspective and turned that the model can't follow, the textures with levels, time-anchors2's round 8
+  square in perspective, the contention tests' patterns alone and lists beside a CPU thread): 832 lists, half within
+  5.5%, 64% within 10%, 83% within 25%, none off by 64% (the narrow strips from VRAM the furthest); Activision Hits'
+  mixes of spotlights with their shine within 2 to 4%, its menu's CLUT32 tiles as logged 4%, the copyright screen's
+  pass 12.5% (its bilinear reads), Super Monkey Ball's small strips without their mipmaps 6% and its CALLed lists with
+  the CPU idle 14%, round 8's 32-wide strips at round 8's place 5% (bounds a little past each).
 - "ge time, the PSP's": a list's start, the driver's own time, the two ends and the queue, stall updates, PAUSE, SYNC,
   a list queued at the head, `sceGeBreak` at a FINISH, states; a SIGNAL waiting for its time, a state keeping it,
   "Fast" going past it at once. "... a SIGNAL's lead through stall updates": the 24 sprites given whole, as one part,

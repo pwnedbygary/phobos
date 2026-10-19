@@ -1,8 +1,8 @@
-//Rounds 8 and 9 of tools/psp-measure against the owner's PSP (docs/psp-core.md, parts 107, 110 and 106): their GE
-//timing files as this core writes them (measure.cpp's round8Files() and round9Files(): the measuring program run in
-//the core with the option "GE Timing" "PSP") beside the PSP's own (tests/psp/measurements/ge-round8 and ge-round9,
-//which run-tests.sh unpacks into PSP_GE_ROUND8 and PSP_GE_ROUND9): each timed list's middle finish time here and on
-//the PSP.
+//Rounds 8, 9 and 10 of tools/psp-measure against the owner's PSP (docs/psp-core.md, parts 107, 110, 112 and 106):
+//their GE timing files as this core writes them (measure.cpp's round8Files(), round9Files() and round10Files(): the
+//measuring program run in the core with the option "GE Timing" "PSP") beside the PSP's own
+//(tests/psp/measurements/ge-round8, ge-round9 and ge-round10, which run-tests.sh unpacks into PSP_GE_ROUND8, 9 and 10):
+//each timed list's middle finish time here and on the PSP.
 #include "kernel-machine.hpp"
 
 #include <cstdlib>
@@ -12,6 +12,7 @@ namespace allegrex_test::psp {
 
 auto round8Files() -> std::filesystem::path;
 auto round9Files() -> std::filesystem::path;
+auto round10Files() -> std::filesystem::path;
 
 namespace {
 
@@ -22,6 +23,7 @@ struct Round {
 };
 const Round Round8{"PSP_GE_ROUND8", "ge-round8", round8Files};
 const Round Round9{"PSP_GE_ROUND9", "ge-round9", round9Files};
+const Round Round10{"PSP_GE_ROUND10", "ge-round10", round10Files};
 
 auto words(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
@@ -83,10 +85,21 @@ auto timed(const std::vector<u32>& w) -> std::vector<Timed> {
 struct Key { const char* test; u32 which, size, bus; f64 within; };
 
 //A case the model's texels can't follow, left out as ge-fit.py leaves it out (OUTSIDE): round 8's 3D squares mipmapped
-//(time-textures 10-12: level 1 of a 256x256 texture), in perspective (13-15, and time-anchors 6, its 13 again) and
-//turned a quarter (16-18).
-struct Outside { const char* test; u32 first, last; };
-const Outside outside[] = {{"time-textures", 10, 18}, {"time-anchors", 6, 6}};
+//(time-textures 10-12: level 1 of a 256x256 texture), in perspective (13-15, and time-anchors 6 and time-anchors2 2,
+//its 13 again) and turned a quarter (16-18); round 10's of the same kinds, time-perspective's squares in perspective
+//(1-5, 7-11, 13-17, 19, 21, 23) and turned (every other from 25) and time-mipmaps' textures with levels.
+struct Outside { const char* test; u32 first, last, step = 1; };
+const Outside outside[] = {
+  {"time-textures", 10, 18}, {"time-anchors", 6, 6}, {"time-anchors2", 2, 2}, {"time-perspective", 1, 5},
+  {"time-perspective", 7, 11}, {"time-perspective", 13, 17}, {"time-perspective", 19, 23, 2},
+  {"time-perspective", 25, 47, 2}, {"time-mipmaps", 1, 5}, {"time-mipmaps", 8, 10}, {"time-mipmaps", 12, 15},
+  {"time-mipmaps", 18, 19},
+};
+//Round 10's lists beside a CPU thread (time-contention's 17 patterns alone, then ten lists, each alone and beside each
+//pattern; time-contention2's 4 and 5): the patterns alone have no list to match and the lists with a thread beside
+//them are contention10.py's (the term held at none: part 106); those with the CPU idle are fitted as any other.
+struct Contended { const char* test; u32 first, row; };
+const Contended contended[] = {{"time-contention", 17, 18}, {"time-contention2", 4, 5}};
 
 //Each record of the tests named, here against the PSP (time-lists' and time-lists2's cases 2 and 3 left out: the CPU
 //moves their stall addresses, ge-fit.py's rule; and the cases outside the model), its miss checked against a key that
@@ -105,7 +118,14 @@ auto misses(const Round& round, std::initializer_list<const char*> tests, std::i
       CHECK(here[n].test == there[n].test && here[n].size == there[n].size && here[n].bus == there[n].bus, true);
       if(!(there[n].middle > 0) || (lists && (here[n].test == 2 || here[n].test == 3))) continue;
       bool modelled = true;
-      for(auto& o : outside) modelled &= std::string(o.test) != name || here[n].test < o.first || here[n].test > o.last;
+      for(auto& o : outside) {
+        bool in = here[n].test >= o.first && here[n].test <= o.last && (here[n].test - o.first) % o.step == 0;
+        modelled &= std::string(o.test) != name || !in;
+      }
+      for(auto& c : contended) {
+        bool idle = here[n].test >= c.first && (here[n].test - c.first) % c.row == 0;
+        modelled &= std::string(c.test) != name || idle;
+      }
       if(!modelled) continue;
       f64 error = here[n].middle / there[n].middle - 1;
       errors.push_back(std::abs(error));
@@ -174,10 +194,36 @@ auto measuredTime9() -> void {
   CHECK(*std::max_element(errors.begin(), errors.end()) < 0.65, true);
 }
 
+//Round 10's (part 112): the lights by kind, CLUT32, the wide triangles, the squares in perspective and turned that the
+//model follows, the mipmaps without levels, the narrow strips, time-anchors2 (round 8's cases on round 10's day, one
+//texture at four places) and the contention tests' lists with the CPU idle: 832 lists, half within 6%, 62% within 10%,
+//81% within 25%, none off by 65% (the narrow strips from VRAM the furthest: 4- to 8-texel CLUT strips, to -63%); and
+//the lists the refit's terms rest on: Activision Hits' mixes of spotlights with their shine within 5% (a directional
+//light shining with them too) and 4% (none shining), its menu's CLUT32 tiles as logged within 5%, the copyright
+//screen's pass within 14% (its bilinear reads: part 106), Super Monkey Ball's small strips within 8% (without their
+//mipmaps) and its CALLed lists within 16%, round 8's 32-wide strips of a swizzled RAM texture at round 8's place
+//within 6%.
+auto measuredTime10() -> void {
+  auto errors = misses(Round10,
+                       {"time-anchors2", "time-lights", "time-clut32", "time-widetri", "time-perspective",
+                        "time-mipmaps", "time-vram8", "time-contention", "time-contention2"},
+                       {{"time-lights", 33, 4096, 111, 0.04}, {"time-lights", 34, 4096, 111, 0.05},
+                        {"time-lights", 35, 4096, 111, 0.04}, {"time-clut32", 0, 1, 111, 0.05},
+                        {"time-widetri", 0, 1, 111, 0.14}, {"time-mipmaps", 16, 4096, 111, 0.08},
+                        {"time-contention", 107, 2, 111, 0.16}, {"time-anchors2", 7, 1, 111, 0.06}});
+  if(errors.empty()) return;
+  CHECK(errors.size(), 832u);
+  CHECK(median(errors) <= 0.06, true);
+  CHECK(within(errors, 0.10) >= 0.62, true);
+  CHECK(within(errors, 0.25) >= 0.81, true);
+  CHECK(*std::max_element(errors.begin(), errors.end()) < 0.65, true);
+}
+
 }
 
 auto measured8Tests() -> Tests {
-  return {{"measured round 8 GE time", measuredTime8}, {"measured round 9 GE time", measuredTime9}};
+  return {{"measured round 8 GE time", measuredTime8}, {"measured round 9 GE time", measuredTime9},
+          {"measured round 10 GE time", measuredTime10}};
 }
 
 }

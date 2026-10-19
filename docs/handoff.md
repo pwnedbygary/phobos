@@ -39,10 +39,11 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
 `dd63f4ffb` (#266, #267), `230c0a731` (#268), `fe3deab82` (#272, the GE thread; #271, the display latch; #273),
-`14e8065dc` (#270, round 8) and `d428d91f9` (#276, round 9) merged in; draft PR #269, its merge held by the owner till
-the gate passes. docs/psp-core.md, part 106, has the evidence (part 76, the first model's fit, is here too). Clean
-room: our code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 18
-bytes, and the GE's pipeline: 28 and 16 a queued item; "Fast" 46 in all).
+`14e8065dc` (#270, round 8), `d428d91f9` (#276, round 9) and `46922a9d9` (#278, rounds 10 and 10b) merged in; draft PR
+#269, its merge held by the owner till the gate passes (by the whole frame, his bar since 2026-10-18 20:35).
+docs/psp-core.md, part 106, has the evidence (part 76, the first model's fit, is here too). Clean room: our code, uOFW
+for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 18 bytes, and the GE's
+pipeline: 28 and 16 a queued item; "Fast" 46 in all).
 - **The model** (`GE::Cost`, `GE::Pipe`): the front end (words, PRIMs, vertices at 0.512 a byte with a floor of 5.02,
   lights and their shine by kind, cuts) hands each primitive, transfer and palette load to the back end (rows, pixels,
   texels) through an 83-entry queue; the texture cache keeps the texels fetched since the last TEX_FLUSH (a box in whole
@@ -69,8 +70,9 @@ bytes, and the GE's pipeline: 28 and 16 a queued item; "Fast" 46 in all).
   16 the same, every frame and the states (46 zero bytes put in).
 - **Round 10's refit** (PR #278's files, part 112): "ge time" and the measured groups pass with the new clocks
   (measured8's bounds restated: the refit trades a little of rounds 8 and 9 for round 10); "Fast" the same as the last
-  head on four scenes, Software and Vulkan-fast. A round 10b (the refit's agent's SPECS-10b) would time the menu's
-  second and third lists' cases; `measured10` waits for #278's files and its program (`tests/psp/programs`).
+  head on four scenes, Software and Vulkan-fast. With #278 merged, "measured round 10 GE time" runs round 10 in the
+  core against its files (832 lists, half within 5.5%; CI requires `ge-round10`). A round 10c (the refit's agent's
+  spec) would time the menu's second and third lists' cases.
 - **Not yet**: the CPU beside the GE (the CPU's RAM traffic, from the CPU core); perspective, turned and mipmapped
   triangles; bilinear filtering's cost; narrow CLUT strips from VRAM; "Fast"'s templates per timing; fixed-point
   charges before any default change.

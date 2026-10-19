@@ -24,8 +24,9 @@ xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS
 `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another folder), and
 `tests/psp/measured6.cpp` compares the core's run of round 6 with them.
 
-Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8` or `PSP_GE_ROUND9` set empty), the groups
-comparing with them say so as a skip of `ge-round3`, `ge-round6`, `ge-round8` or `ge-round9`; where
+Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8`, `PSP_GE_ROUND9` or `PSP_GE_ROUND10` set
+empty), the groups comparing with them say so as a skip of `ge-round3`, `ge-round6`, `ge-round8`, `ge-round9` or
+`ge-round10`; where
 `PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead.
 
 ## `ge-round8/`
@@ -82,7 +83,9 @@ which draws round 10's lists the same way but for where its arrays sit: on 1 KiB
 RAM textures and palette 64 bytes off a 128-byte boundary, which made swizzled RAM textures about 7% dearer (by
 time-placement the committed build's would come out 6 to 7% cheaper). Part 112 says so with what each test is for and
 what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 160 KB as 36 KB); `SHA256SUMS` holds the unpacked files'
-sums (and the manifest's). No test reads them yet: they're for the GE timing's fit (#269).
+sums (and the manifest's). As round 9's, they're unpacked (`PSP_GE_ROUND10`), fitted (`ge-fit.py`, #269's part 106) and
+compared with the core's run (`tests/psp/measured8.cpp`: the committed program's, whose arrays' places don't move the
+core's times).
 
 ## `ge-round10b/`
 
@@ -101,7 +104,8 @@ Rounds 2 to 9 run again on the same PSP in round 10's session (the evening of 20
 Every picture is the same bit for bit as the earlier runs' (rounds 2 and 3's 87 against `ge-round3`, round 6's 28
 against `ge-round6`, rounds 6 and 7's 34 against round 8's session); the timing records repeat within 0.0 to 2.1% at the
 median, their tails where the program's arrays moved (part 112). Each `.bin` is packed with xz (`xz -9e`, 44 MB as 3.6
-MB); `SHA256SUMS` holds the unpacked files' sums (and the manifests', notes' and markers').
+MB); `SHA256SUMS` holds the unpacked files' sums (and the manifests', notes' and markers'). `ge-fit.py --again` holds
+out of the GE timing's fit the lists that moved more than 5% between these and the first runs (part 106).
 
 ## Not here
 
