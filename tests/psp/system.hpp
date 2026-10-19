@@ -160,6 +160,7 @@ auto draw3dTests() -> Tests;
 auto curvesTests() -> Tests;
 auto measureTests() -> Tests;
 auto measured6Tests() -> Tests;
+auto measured8Tests() -> Tests;
 auto gpuTests() -> Tests;
 auto discTests() -> Tests;
 auto discFormatTests() -> Tests;

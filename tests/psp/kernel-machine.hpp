@@ -28,6 +28,7 @@ struct KernelMachine {
   u32 nextString = Strings;
 
   KernelMachine(u32 ramSize = 32_MiB) : system(ramSize) {
+    kernel.gePspTiming = false;  //("Fast", master's GE timing, chosen: the tests that time the GE as the PSP's say so)
     kernel.output = [this](const std::string& text) { output += text; };
     kernel.log = [this](const std::string& text) { notes.push_back(text); };
     kernel.power();

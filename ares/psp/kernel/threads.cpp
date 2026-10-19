@@ -290,6 +290,9 @@ auto Kernel::untilNextEvent() const -> u64 {
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
   }
+  //(with the PSP's GE timing, a SIGNAL met whose time is to come, the GE waiting there: never with runs on the GE's
+  //thread, nor with a FINISH due)
+  if(geSignalDue && geReachAt > cycles) next = std::min(next, geReachAt);
   //(the GE's time, due already: taken once it may be. Where runs are still being counted on the GE's thread and its
   //bound doesn't put it past the rest, a time no later than it, the inputs left for run() to work out exactly: geLimit)
   if(geFinishDue) {
@@ -312,7 +315,8 @@ auto Kernel::idle(u64 end) -> bool {
   if(interrupting || (!calls.empty() && interruptsEnabled)) return true;
   //(a file's asynchronous request being done may wake a thread: one waiting for it, or through its callback; and so
   //may an alarm's or a virtual timer's handler)
-  bool timed = geBusy || geFinishDue || vblankHandlers() || nextAsyncEvent() != ~0ull || nextTimerEvent() != ~0ull;
+  bool timed = geBusy || geFinishDue || geSignalDue || vblankHandlers() || nextAsyncEvent() != ~0ull ||
+               nextTimerEvent() != ~0ull;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
@@ -327,7 +331,9 @@ auto Kernel::idle(u64 end) -> bool {
   }
   //(the GE's exact time, where it may be the next thing: ge/thread.hpp)
   if(geFinishDue && !geRuns.empty()) geFold(true);
+  u64 from = cycles;
   cycles = std::min(end, cycles + untilNextEvent());
+  if constexpr(GE::Cost::Contended) if(gePspTiming) geContend(from, cycles, false);
   events();
   return true;
 }

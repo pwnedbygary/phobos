@@ -33,11 +33,13 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-9) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-10b) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 10b: the CPU polling, before and beside; placement (30 KB)
+   - Round 10: the GE's triangles, lights, the CPU beside it (0.2 MB)
    - Round 9: the GE's triangles, textures, vertices (about 0.1 MB)
    - Round 8: the GE's time again, and the CPU's (about 1 MB)
    - Round 7: the GE's anti-aliased lines (about 1.5 MB)
@@ -80,12 +82,13 @@ start the program again first (otherwise it says so, and skips that one test).
 | `main.c` | The menu, starting afresh, and leaving. |
 | `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
-| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8 and 9. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
+| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8, 9, 10 and 10b (round 10's and 10b's with a thread reading and writing memory beside the GE). Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
 | `cpu.c` | Round 8's tests of the CPU alone: its loops in assembly (memory's in C), memory, system and driver calls, the clocks granted. Its waits for the GE are timed as `ge.c`'s are, sharing its reset (`geReset`). |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
 | `fit.py` | Fits the model behind the maths functions (128 segments of integer coefficients per function) from the results alone, and checks it reproduces every recorded value. It gave the core's `vfpu-segments.hpp`. Needs numpy. |
+| `ge-terms.py`, `ge-fit.py`, `contention10.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md part 106): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6, 8, 9 and 10's timed lists; `contention10.py` fits the CPU beside the GE to round 10's time-contention. Python alone. |
 
 ## The VFPU and the FPU
 
@@ -346,15 +349,62 @@ Round 9 takes about a minute, two at most (its lists about 35 seconds of the GE'
 own overhead and building the lists the rest); it changes the clocks as round 8 does. The owner ran it on 2026-10-18
 (`tests/psp/measurements/ge-round9`); part 110 says what it showed.
 
+Round 10 (about 0.2 MB, `manifest10.txt`) takes the cases #269's refit with round 9 still misses, as its agent
+specified them from the games' logged state (docs/psp-core.md, part 112; synthetic lists, textures and vertices, none
+a game's). Its timed lists are round 8's kind, at 222/111 and 333/166 MHz:
+
+- **Anchors** (`time-anchors2`), first: six of round 9's anchors, and round 8's time-strips 37 with its texture 0,
+  256, 512 and 768 bytes past a 1 KiB boundary (round 9 drew it 2% faster than round 8; its texture's place the likely
+  cause).
+- **Lights** (`time-lights`): round 8's culled strips lit by 1 to 4 directional lights, point lights and spotlights,
+  diffuse and with their shine; the shine's power; which of four lights shine; a point light's fall-off; Activision
+  Hits Remixed's menu's mixes of spotlights and a directional light, skinned too; strips drawn as that game draws
+  them, lit and unlit (its first list is 19% short in the refit).
+- **CLUT32** (`time-clut32`): that menu's second list's tiles, 32x34 pixels reading a VRAM CLUT32 texture 1:1 in three
+  passes with palette loads, into 5650, and one thing at a time changed (one pass, as 8888, as CLUT8, no loads, no
+  texture, sprites, into 8888, swizzled, from RAM, other tile sizes, a buffer drawn just before, bilinear); round 9's
+  strips as triangles from the CLUT32 texture. No round had timed CLUT32 in triangles.
+- **Wide triangles into 16-bit** (`time-widetri`): its copyright screen's pass, two triangles over 480x272 reading a
+  CLUT8 512x256 texture, bilinear, blended, into 5650, and one thing at a time changed; round 9's two wide triangles
+  and one sprite into 8888, 5650, 5551 and 4444.
+- **Perspective and turned** (`time-perspective`): two triangles over 256x256 under the lens, w 1 at the left to 1,
+  1.25, 1.5, 2 and 4 at the right and 1 to 2 down, from three textures; squares 64 and 128 wide; w 2, and 2 to 1;
+  squares 32 to 256 wide in through mode, as they are and turned a quarter (u down the screen), from three textures.
+- **Mipmaps** (`time-mipmaps`): round 8's 256x256 texture shrunk 2:1 with and without its levels, level 1 alone,
+  bilinear within a level, levels blended; the same in CLUT8; Super Monkey Ball's small CLUT4 textures (64x64, 7
+  levels; 64x32, 6) in small 3D strips, trilinear with the game's level bias, against nearest and no levels.
+- **Narrow strips** (`time-vram8`): strips 4 to 24 texels wide, sprites and triangles, CLUT8 and CLUT4, from VRAM
+  not swizzled and swizzled and from RAM swizzled.
+- **The CPU beside the GE** (`time-contention`, `time-contention2`): ten GE lists (RAM and VRAM textures read wide,
+  fills, vertices from RAM, NOPs, Super Monkey Ball's CALLed lists, RAM-to-VRAM copies, a new texture each sprite,
+  that game's small trilinear strips, Ghost of Sparta's skinned lit strips), each alone and while a thread at a
+  higher priority runs one of 17 patterns till the list's finish callback (arithmetic; reads within the data cache;
+  streaming reads flat out and slowed to a half, a quarter and an eighth; streaming writes; copies; a chain of
+  pointers; uncached reads; VRAM reads and writes; a game's mix over 16 KiB to 1 MiB), and each pattern alone for 10
+  ms: the GE's time, the thread's turns and their time. The streaming reads again at 333/222/166, the bus apart from
+  the CPU. The thread stops after 5 seconds whatever happens, so a stalled GE is reset as ever.
+
+Round 10 takes about two minutes, three at most (its lists about 70 seconds of the GE's time by rounds 8 and 9's
+rates, the runs' own overhead and building the lists the rest); it changes the clocks as round 8 does. The owner
+ran it on the evening of 2026-10-18; part 112 says what it showed.
+
+Round 10b (about 30 KB, `manifest10b.txt`) tops round 10 up the same night, as #269's agent specified it:
+`time-contention3`, six of round 10's GE lists alone and beside a CPU polling through system calls (`sceKernelPollSema`,
+`sceGeListSync`, `sceGeDrawSync`, each with `sceKernelGetSystemTimeLow`) or writing 1 MiB before the list is queued
+(with and without the cache written back) or once beside it; and `time-placement`, one swizzled RAM texture at offsets
+from 0 to 512 bytes past a 1 KiB boundary, controls not swizzled and CLUT8, a palette at two offsets, and CLUT32
+swizzled in RAM. From round 10b on the arrays the GE reads are on 1 KiB boundaries (round 10's build had them 64 bytes
+off a 128-byte one: part 112). About half a minute. The owner ran it the same night; part 112 says what it showed.
+
 ### How the GE's comparison works
 
-The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
-menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4
-again over counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, leaving), and
-checks every file is written (that the stall check got past its stall, and the timing records of rounds 6, 8 and 9
-are whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder, and for round
-6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a closer
-look):
+The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its menu as
+a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4 again over
+counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, round 10, round 10b,
+leaving), and checks every file is written (that the stall check got past its stall, and the timing records of rounds 6,
+8, 9, 10 and 10b are whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder,
+and for round 6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a
+closer look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs
@@ -389,3 +439,42 @@ and, with exact cosines, plain diffuse are the core's arithmetic in all but two 
 lighting cases and the color and fog ramps are a level apart in places (lower on the PSP, but both ways in the
 vertical ramps); only VRAM's fourth copy reads the depth buffer in order. The findings go into
 [docs/psp-core.md](../../docs/psp-core.md), under "Measuring the GE and the controller on a PSP".
+
+### The GE timing's fit
+
+`GE::Cost` (`ares/psp/ge/ge.hpp`), the clocks of the GE timing "PSP", is fitted to rounds 6, 8, 9 and 10's timed lists
+(docs/psp-core.md, part 106): `ge-terms.py` counts, for each run of the GE, what each of its terms multiplies, in a
+runner built from a patched copy of the source (the core itself carries no counting code), and `ge-fit.py` fits the
+clocks to the PSP's times. To fit them again:
+
+```
+git archive HEAD | tar -x -C /tmp/terms          # a copy of the checkout, which ge-terms.py patches
+python3 tools/psp-measure/ge-terms.py /tmp/terms
+(cd /tmp/terms && tools/psp-runner/build.sh)     # its last line names the runner
+```
+
+Then the program's rounds 10, 9, 8 and 6 in that runner with the GE timing "PSP", each with its terms written to a
+file: `EBOOT.PBP` (`make` here, with round 10b) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
+chosen with presses (round 10b the first line, round 10 the second, round 9 the third, round 8 the fourth, round 6 the
+sixth), each run's `results/ge` kept beside its terms, the stick emptied between runs:
+
+```
+PHOBOS_GE_TERMS=r10.txt RUNNER STICK/PSP/GAME/PSPMEASURE/EBOOT.PBP --memory-stick STICK --ge-timing psp \
+  --frames 30000 --press 60:Down,66:Down!,80:Cross,86:Cross! --start-time 1791290096   # then keep results/ge as ours10
+PHOBOS_GE_TERMS=r9.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Cross,106:Cross! ...    # as ours9
+PHOBOS_GE_TERMS=r8.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Cross,126:Cross! ... # ours8
+PHOBOS_GE_TERMS=r6.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Down,126:Down!,\
+  140:Down,146:Down!,160:Cross,166:Cross! ...                                                      # as ours6
+python3 tools/psp-measure/ge-fit.py PSP_RESULTS r10.txt ours10 r9.txt ours9 r8.txt ours8 r6.txt ours6 --again PSP_AGAIN
+```
+
+`PSP_RESULTS` holds the PSP's files of the four rounds (`tests/psp/measurements/ge-round6`, `ge-round8`, `ge-round9` and
+`ge-round10` unpacked into one folder), `PSP_AGAIN` the owner's runs of the earlier rounds again on round 10's evening
+(`ge-reruns-round10`): a list that moved more than 5% between the two (and more than 4 microseconds) is held out as a
+check, as where the program's arrays moved and a texture's place with them. The owner ran round 10's own build (round 10
+on its menu's first line); the committed one is round 10b's, whose lines are one further down. `ge-fit.py` prints each
+term's clocks under `GE::Cost`'s names, then how far the fitted model misses each test's lists (and the checks:
+`time-anchors` and `time-anchors2`, round 8's cases again, the cases outside the model, the lists held out); part 106
+has the command that gave the clocks in `ge.hpp`. `contention10.py PSP_RESULTS r10.txt ours10` reads round 10's
+time-contention: each list's slowdown beside each CPU pattern, each pattern's RAM traffic, and the GE's contention by
+kind of read fitted to them (`GE::Cost::Contention`).

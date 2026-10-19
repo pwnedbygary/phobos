@@ -86,7 +86,8 @@ object PspResolution {
  * everything the game sees are the same either way; whether On is faster depends on the game (it's slower in some that
  * write a lot to the PSP's video memory each frame). What On costs: each picture reaches the screen a frame later (at
  * a frame's end the screen shows the frame before, the next still being drawn), about 17 ms more at 60 frames a second
- * between pressing a button and seeing what it did.
+ * between pressing a button and seeing what it did. With "PSP GE timing" on (the default) it has no effect: the core
+ * keeps the GE on the game's thread then.
  */
 object PspGraphicsOverlap {
     const val OFF = 0
@@ -102,7 +103,8 @@ object PspGraphicsOverlap {
 
     /** What each choice does, for Settings. */
     fun description(mode: Int): String = when (mode) {
-        ON -> "On draws them on a thread of their own while the game goes on: faster in some games, slower in others."
+        ON -> "On draws them on a thread of their own while the game goes on: faster in some games, slower in others. " +
+            "No effect with PSP GE timing."
         else -> "Off draws them in turn with the game's own work, as before."
     }
 
@@ -113,22 +115,32 @@ object PspGraphicsOverlap {
     fun option(mode: Int): String = if (forCore(mode) == ON) "On" else "Off"
 }
 
-/** The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. */
+/**
+ * The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. [geTiming]: the
+ * GE timed as a real PSP's (the core's "GE Timing"), which paces the game as a PSP does, not by Sony's peak rates.
+ */
 data class PspStartSettings(
     val renderer: Int,
     val resolution: Int,
     val drawingThreads: Int,
+    val geTiming: Boolean = true,
     val graphicsOverlap: Int = PspGraphicsOverlap.OFF,
 ) {
     /** Whether a game started with these runs as one started with [other] would: Resolution is the Vulkan renderer's alone. */
     fun runsAs(other: PspStartSettings): Boolean =
-        renderer == other.renderer && drawingThreads == other.drawingThreads && graphicsOverlap == other.graphicsOverlap &&
-            (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
+        renderer == other.renderer && drawingThreads == other.drawingThreads && geTiming == other.geTiming &&
+            graphicsOverlap == other.graphicsOverlap && (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
 
     companion object {
-        fun of(renderer: Int, resolution: Int, drawingThreads: Int, graphicsOverlap: Int = PspGraphicsOverlap.OFF) = PspStartSettings(
+        fun of(
+            renderer: Int,
+            resolution: Int,
+            drawingThreads: Int,
+            geTiming: Boolean = true,
+            graphicsOverlap: Int = PspGraphicsOverlap.OFF,
+        ) = PspStartSettings(
             PspRenderer.forCore(renderer), PspResolution.forCore(resolution), PspDrawingThreads.forCore(drawingThreads),
-            graphicsOverlap = PspGraphicsOverlap.forCore(graphicsOverlap),
+            geTiming, graphicsOverlap = PspGraphicsOverlap.forCore(graphicsOverlap),
         )
     }
 }

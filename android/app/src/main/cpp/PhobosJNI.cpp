@@ -704,6 +704,11 @@ Java_com_phobos_emulator_PhobosCore_setPspThreadPlacement(JNIEnv* env, jobject, 
     ares::setPspThreadPlacement(enabled == JNI_TRUE);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspGeTiming(JNIEnv* env, jobject, jboolean psp) {
+    ares::setPspGeTiming(psp != JNI_FALSE);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_phobos_emulator_PhobosCore_takePspNotice(JNIEnv* env, jobject) {
     return env->NewStringUTF(ares::takePspNotice().c_str());

@@ -16,6 +16,7 @@ auto GE::run(u64 budget) -> Stop {
 //they're drawn, or go on being drawn by the GE's workers while the CPU runs on. (With the GE on a thread of its own,
 //the loop hands its words over as it goes, thread.hpp: one made for each, so that the thread off costs it nothing.)
 auto GE::run(u64 budget, u64& ran) -> Stop {
+  wordsRun = &ran;  //(with the PSP's timing, its words' time: pipeItem())
   return thread ? runList<true>(budget, ran) : runList<false>(budget, ran);
 }
 
@@ -92,9 +93,9 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
     case Spline:        patch(true, argument), undrawn = ~0u; break;
     case BoundingBox:   boxOutside = boundingBox(argument & 0xffff); break;
     case ConditionalJump:  //where JUMP would go, if the last BOUNDING_BOX was out of sight (pspsdk's sceGuEndObject)
-      if(boxOutside) list.address = relative(argument & ~3u);
+      if(boxOutside) list.address = relative(argument & ~3u), pipeFront(Cost::Jump);
       break;
-    case Jump:          list.address = relative(argument & ~3u); break;
+    case Jump:          list.address = relative(argument & ~3u), pipeFront(Cost::Jump); break;
     case Call:
       if(list.depth == 2) {
         note("a display list CALLed three deep, and the GE has room for two");
@@ -104,6 +105,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
       list.returnOffset[list.depth] = list.offset;
       list.depth++;
       list.address = relative(argument & ~3u);
+      pipeFront(Cost::Call);
       break;
     case Return:
       //With no CALL to return from, the GE goes on with the next command. Need for Speed: Most Wanted runs lists
@@ -112,6 +114,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
       list.depth--;
       list.address = list.returnAddress[list.depth];
       list.offset = list.returnOffset[list.depth];
+      pipeFront(Cost::Call);
       break;
     case Signal: signalWord = word; pending = Stop::Signaled; break;
     case Finish: finishWord = word; pending = Stop::Finished; break;
@@ -135,6 +138,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
     case TransferStart:          transfer(), undrawn = ~0u; break;  //(after the drawing it depends on: threads.cpp)
     case ClutLoad:               loadClut(); break;
+    case TextureFlush:           texelCache = {}; break;  //(the GE's time: its cache emptied, Cost)
     }
   }
   return Stop::Busy;

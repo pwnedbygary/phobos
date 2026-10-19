@@ -660,9 +660,10 @@ auto states(const fs::path& programs) -> void {
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
     //deactivated (part 37). Layouts 15 and 16 load with the message-dialog abort counters defaulted (part 42).
     //Each older layout is refused by its header, before anything is touched (even the compiled code, which any load
-    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 33,
-    //and takes it out of this list), and 34, past this one. 27, 28, 31 and 32 (parts 87, 88, 82 and 95) load.
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 34}) {
+    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 34,
+    //and takes it out of this list), and 35, past this one. 27, 28, 31, 32 and 33 (parts 87, 88, 82, 95 and 108)
+    //load.
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 35}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};
@@ -821,6 +822,31 @@ auto drawingThreads() -> void {
     });
   }
   PlayStationPortable::option("GE Threads", "0");
+}
+
+//The GE on a thread of its own and the PSP's GE timing (docs/psp-core.md, part 106): that timing takes each run's time
+//as the run ends on the emulation thread, so with "GE Timing" "PSP" the GE stays there whatever "GE Thread" says, the
+//thread never started, nor when asked for again (System::threadGE()); with "Fast", "GE Thread" On starts it.
+auto geThreadAndPspTiming() -> void {
+  std::printf("the GE's thread and the PSP's GE timing\n");
+  host.game.reset();
+  PlayStationPortable::option("GE Thread", "On");
+  for(bool pspTiming : {true, false}) {
+    std::string timing = pspTiming ? "PSP" : "Fast";
+    PlayStationPortable::option("GE Timing", timing.c_str());
+    Node::System root;
+    reports([&] {
+      if(!CHECK(start(root), "the PSP starts, GE Thread On, GE Timing " + timing)) return;
+      CHECK(psp.kernel.gePspTiming == pspTiming, "GE Timing " + timing + " taken");
+      CHECK((bool)psp.geThreading == !pspTiming && (psp.ge.thread != nullptr) == !pspTiming,
+            "GE Timing " + timing + ": the GE on its thread " + (pspTiming ? "refused" : "started"));
+      psp.threadGE(true);
+      CHECK((bool)psp.geThreading == !pspTiming, "GE Timing " + timing + ": the thread asked for again");
+      root->unload();
+    });
+  }
+  PlayStationPortable::option("GE Thread", "Off");
+  PlayStationPortable::option("GE Timing", "Fast");
 }
 
 //The frame the system shows (System::run(), and present() where the GPU presents on the host's window itself, as
@@ -1194,9 +1220,15 @@ auto main() -> int {
   fs::remove_all(scratch);
   fs::create_directories(scratch);
 
+  //"GE Timing" is "PSP" till a front end says otherwise (the owner's choice); the checks after this one choose "Fast",
+  //master's timing, but for the one that tries both (geThreadAndPspTiming())
+  std::printf("the GE timed as the PSP's by default\n");
+  CHECK(psp.gePspTiming, "GE Timing PSP by default");
+  PlayStationPortable::option("GE Timing", "Fast");
   names();
   nodeTree();
   drawingThreads();
+  geThreadAndPspTiming();
   presentedFrame();
   bool programsRun = false;
   if(auto programs = std::getenv("PSP_TEST_PROGRAMS"); programs && fs::exists(fs::path{programs} / "hello.elf")) {

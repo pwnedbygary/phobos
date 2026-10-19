@@ -63,6 +63,7 @@ auto GE::transfer() -> void {
   u32 destinationStride = t.destinationStride, sourceX = t.sourceX, sourceY = t.sourceY;
   u32 destinationX = t.destinationX, destinationY = t.destinationY, width = t.width, height = t.height;
   u32 bytes = t.bytes;
+  if(pspTiming) oweTransfer(width, height, bytes, source, destination);  //(the GE's time: Cost)
   drawnBefore(t.read, t.written);
   std::vector<u8> row(width * bytes);
   for(u32 y = 0; y < height; y++) {

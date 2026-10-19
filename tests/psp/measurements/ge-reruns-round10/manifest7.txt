@@ -1,0 +1,21 @@
+psp-measure's GE tests, round 7 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,
+part 78, what each is for): anti-aliased lines (GU_LINE_SMOOTH). Pictures: the target's pixels after one test, a
+little-endian 32-bit word each, row by row, 256x256, 16x16 cells of a line each. In aa-slopes, aa-axes,
+aa-blend and aa-textured, cell (i, j)'s line (d its direction) starts (8 - dx / 2 + i / 16, 8 - dy / 2 + j / 16)
+pixels into the cell; in aa-alpha and aa-3d, (4 + i / 16, 4 + j / 16), going (7.5, 2.25).
+aa-slopes: white over black by its alpha, row k in direction k: (7.5, 2.25) and (7.5, 5.5) and each turned and
+mirrored (ge.c's slopes), each pair of rows one direction and its reverse over the same segments (j = k & ~1).
+aa-axes: as aa-slopes, row k in direction axes[k] (level, upright, diagonal, each way; rows 8-15 shorter), j 0
+but for level lines (j = i): a level line along its row's edge at i = 0, through the pixels' middles at i = 8.
+aa-alpha: round 4's lines-smooth with each cell's vertex alpha its number (0-255).
+aa-blend: 0xff20a0e0 over 0x80c06020 in 8 modes, two rows each (the second with the alpha test above 0): none,
+src alpha / 1 - src alpha, src alpha / fixed white, fixed white / 1 - src alpha, reverse subtract src alpha /
+fixed white, dst alpha / 1 - dst alpha, double src alpha / 1 - double src alpha, clear mode.
+aa-textured: texel (x, y) x | y << 8 | 0x80 << 16, alpha x ^ y; rows 0-3 at texel (200.5, 100.5) replace RGB,
+4-7 (0, 0) to (255, 255) replace RGBA over white by the alpha alone (fixed 0, source alpha: each channel the
+alpha), 8-11 (200.5, 100.5) modulate RGBA over black, 12-15 (200.5, 100.5) bilinear replace RGB; blending off
+but in rows 4-11 (the frame buffer's alpha byte is the stencil's).
+aa-3d: in 3D (identity matrices), rows 0-7 red to blue over black, 8-15 textured at (200.5, 100.5) / 256,
+rows 12-15 with the texture scale 0.5 and offset (0.25, 0.125).
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.

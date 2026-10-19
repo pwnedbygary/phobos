@@ -1001,8 +1001,9 @@ auto Kernel::power() -> void {
   geLeft = GeBudget;
   geCommands = 0;
   geClearRuns();
-  geDoneAt = 0;
+  geDoneAt = geReachAt = gePipeAt = 0;
   geFinishDue = false;
+  geSignalDue = false;
   startTime = u64(std::time(nullptr)) * 1'000'000;
   trampoline();
 }
@@ -1159,7 +1160,9 @@ auto Kernel::run(u64 budget) -> u64 {
     if(!ge.thread) {
       u64 ran = cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
       going = false;
-      cycles += ran - counted;
+      u64 tail = ran - counted;
+      cycles += tail;
+      if constexpr(GE::Cost::Contended) if(gePspTiming) geStretchEnded(tail, tail >= GE::Cost::PollInstructions);
       counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
     } else {
       goThreaded(end);
@@ -1201,6 +1204,7 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 auto Kernel::syscall(u32 code) -> bool {
   u64 before = cpu.instructionsBefore();
   if(before > counted) cycles += before - counted;
+  if constexpr(GE::Cost::Contended) if(gePspTiming) geStretchEnded(before > counted ? before - counted : 0, true);
   counted = before;
   bool quiet = false;
   bool handled = dispatch(code, quiet);
@@ -1271,7 +1275,7 @@ auto Kernel::dispatchImport(u32 code, bool& quiet) -> bool {
   calm = false;
   if(ioTrace && !std::strcmp(function->library, "IoFileMgrForUser")) traceIo(*function);
   else (this->*function->handler)();
-  bool taken = geFinishDue && geInterrupt();  //(a display list's FINISH, met by the GE in it)
+  bool taken = (geFinishDue || geSignalDue) && geInterrupt();  //(a display list's FINISH, or SIGNAL, met by the GE)
   //what the function set off (a display list finishing) may call into the program now
   bool started = !interrupting && interruptsEnabled && (vblankPending || !calls.empty()) && startCall();
   quiet = (looks || calm) && !taken && !started;

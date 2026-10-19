@@ -452,19 +452,22 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
 }
 
 /**
- * Settings → Emulation's PSP settings. The core takes the renderer, resolution, drawing threads and graphics overlap as
- * the game starts, so once they differ from those the running game started with, a row offers to restart it with them
- * ([onRestart]).
+ * Settings → Emulation's PSP settings. The core takes the renderer, resolution, drawing threads, GE timing and
+ * graphics overlap as the game starts, so once they differ from those the running game started with, a row offers
+ * to restart it with them ([onRestart]).
  */
 @Composable
 private fun PspSection(viewModel: MainViewModel, settings: EmulatorSettings, onRestart: () -> Unit) {
     val started by viewModel.pspStartSettings.collectAsState()
-    val chosen = PspStartSettings.of(settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads,
-        graphicsOverlap = settings.pspGraphicsOverlap)
+    val chosen = PspStartSettings.of(
+        settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads, settings.pspGeTiming,
+        graphicsOverlap = settings.pspGraphicsOverlap,
+    )
     MenuSection("PlayStation Portable") {
         PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
         PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
         PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
+        PspGeTimingItem(settings.pspGeTiming) { viewModel.setPspGeTiming(it) }
         // (PspGraphicsOverlapItem not offered till On is faster than Off on the RP6)
         if (started?.runsAs(chosen) == false) {
             ListItem(
