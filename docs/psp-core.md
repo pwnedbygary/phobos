@@ -18777,10 +18777,10 @@ the device's sums). Nothing was run on the RP6.
 
 ## Part 113: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%)
 
-On branch `cursor/psp-cpu-traffic-2b67` (draft PR), from master `08801ab60` (#269, part 106: the PSP's GE timing the
-default). The goal set for it: by the whole frame, Super Monkey Ball within 15% of the owner's capture and its exception
-gone from `gate.py`, no other judged scene worse than today and none more than 15% too slow. Part 106 held the CPU
-beside the GE at none: its term needed the CPU's traffic with RAM, and the emulated CPU can't tell a game waiting
+On branch `cursor/psp-cpu-traffic-2b67` (draft PR #279), from master `08801ab60` (#269, part 106: the PSP's GE timing
+the default). The goal set for it: by the whole frame, Super Monkey Ball within 15% of the owner's capture and its
+exception gone from `gate.py`, no other judged scene worse than today and none more than 15% too slow. Part 106 held the
+CPU beside the GE at none: its term needed the CPU's traffic with RAM, and the emulated CPU can't tell a game waiting
 without syscalls (Activision Hits' menu) from one working. This part counts that traffic the way a PSP's CPU makes it,
 through models of its two caches, and slows the GE by the lines they move while it draws. Super Monkey Ball's frame goes
 from −29.6% to −20.6%: its exception stays, with a limit (−21%) so it can't get worse unseen. Two decisions are the
@@ -18812,16 +18812,16 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
 - **What it counts in the gate's scenes** (lines a frame, the PSP's timing): Super Monkey Ball 8,218 data lines read in,
   3,033 written back, 1,206 uncached accesses, 3,439 instruction lines; Killzone 9,047, 2,529, 2,885, 9,354; Ghost of
   Sparta 4,657, 2,068, 1,829, 5,924; Chains of Olympus 3,187, 1,422, 1,873, 4,625; Army of Two 5,400, 2,036, 13,240,
-  5,637; Activision Hits' menu 3,517, 1,196, 3,564, 1,372. The GE is busy 98 to 100% of the time in all but Army of Two's
-  (79%) and the copyright screen's (45%): the games queue their next frame's list while the GE draws.
+  5,637; Activision Hits' menu 3,517, 1,196, 3,564, 1,372. The GE is busy 98 to 100% of the time in all but Army of
+  Two's (79%) and the copyright screen's (45%): the games queue their next frame's list while the GE draws.
 
 ### The CPU beside the GE (`Kernel::geContend()`, kernel/ge.cpp; `GE::Cost`)
 
 - **The window.** From the GE getting busy to its being idle, each stretch of the CPU's (to a syscall, a go's end, an
   idle wait, a spin skipped) adds its cycles passed while the GE was busy, its instructions, the lines its caches moved
   (`WritebackLine` of one a line written back, `UncachedLine` an uncached access) and their stalls in the PSP's CPU
-  cycles. The CPU's work before a list costs it nothing: the window starts afresh when the GE is idle, the caches' counts
-  seen again as it gets busy (`geSeeCaches()`: `geOwe()`, and `geTime()` for a stalled list going on).
+  cycles. The CPU's work before a list costs it nothing: the window starts afresh when the GE is idle, the caches'
+  counts seen again as it gets busy (`geSeeCaches()`: `geOwe()`, and `geTime()` for a stalled list going on).
 - **The traffic.** u = lines / max(passed, T), as a share of a thread streaming RAM flat out (`StreamLines`, 1/164.4 a
   CPU cycle: round 10's streaming at 222 and 333 MHz alike); T, the PSP's CPU's time for the window's instructions and
   stalls (`InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40), spreads a burst of the
@@ -18841,8 +18841,8 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
 
 - **Each pattern's traffic a turn, as the model counts it**: streaming reads and the chain a line read in; streaming
   writes a line read in and one written back; copies 2048 read in (each line written is read in first) and 1024 written
-  back; uncached reads 16 uncached accesses; the mixes two random lines of their set, each missing as often as a set past
-  16 KiB does over two ways (1 − 16 KiB / its size) and written back in turn; the rest none.
+  back; uncached reads 16 uncached accesses; the mixes two random lines of their set, each missing as often as a set
+  past 16 KiB does over two ways (1 − 16 KiB / its size) and written back in turn; the rest none.
 - **Fitted together over both clocks' 680 list-pattern pairs**: `Contention` vertices 0.34, words 0.27, texels 1.16,
   transfers 0.57, `WritebackLine` 0, `UncachedLine` 0.2: the median miss 5.3% (round 10's own fit, its traffic counted
   four lines a mix's turn, one a write's and a line for 16 uncached words, 8.4%). The mixes' slowdowns, about the same
@@ -18855,9 +18855,9 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
 - **In the core** (`contention11.py --core`: the core's own run of rounds 10 and 10b against the PSP's): round 10's 680
   pairs, the core's slowdowns within 5.7% of the PSP's at the median (15.5% with the term held at none), 93% within 25%
   (list E1, all NOPs, slowed only once a run's last words counted as reads of RAM: x1.24 beside streaming, the PSP's
-  x1.28); round 10b's 144, 1.0%. Polling (three ways) x1.00 (the PSP 0.96 to 1.06); writing before the list x1.00 (1.00 to
-  1.07); a writer beside it once: list A x1.91 (2.02), C x1.00 (1.00), D x1.33 (1.28), E2 x1.69 (1.36), H x1.17 (1.28), I
-  x1.13 (1.07).
+  x1.28); round 10b's 144, 1.0%. Polling (three ways) x1.00 (the PSP 0.96 to 1.06); writing before the list x1.00 (1.00
+  to 1.07); a writer beside it once: list A x1.91 (2.02), C x1.00 (1.00), D x1.33 (1.28), E2 x1.69 (1.36), H x1.17
+  (1.28), I x1.13 (1.07).
 
 ### The gate
 
@@ -18892,7 +18892,8 @@ Frames judged: 8, all within 15% but Super Monkey Ball's (excepted), none too sl
 6.5% (master's 7.0%). Lists reported: 10 of 15 within 15% (master's 10). Five of the eight frames move closer to the
 PSP's; Activision Hits' copyright screen doesn't move; its menu's frame moves away (+2.2% to +6.7%, the idle capture
 +1.9% to +6.4%), its first list closer (−10.6% to −4.4%) but its second and third as they were, too slow by 48.5% and
-27% (the CPU barely touches them). Its frame matched only by the first list's shortfall making up for the others' excess.
+27% (the CPU barely touches them). Its frame matched only by the first list's shortfall making up for the others'
+excess.
 
 - **Super Monkey Ball** keeps its exception (`gate.py`'s `EXCEPTED`, now with a limit: −21%, past which it fails). Its
   rest points at the GE's side: round 10's list H, the small trilinear strips modelled on its own (CLUT4 mipmaps), is
@@ -18902,7 +18903,52 @@ PSP's; Activision Hits' copyright screen doesn't move; its menu's frame moves aw
 
 ### The host cost
 
-(below, after the measurements)
+The emulation thread's instructions a frame on the Mac (its counters; the milliseconds too noisy on a shared machine to
+quote), the PSP's timing both sides, master's bench runner (`08801ab60`) against this branch's in three forms: the
+counting alone (`Contention` held at none: master's emulation exactly, so the difference is the looks' and the kernel's
+work), the same without the self-loop skip, and the branch as players get it (the GE slowed too, which changes how much
+the games wait and poll). The gate's scenes, 600 frames from their states (the copyright screen 360):
+
+| Scene | master | the counting alone | without the self-loop skip | this branch |
+| --- | --- | --- | --- | --- |
+| Chains of Olympus, difficulty menu | 33.5 M | +9.6% | +9.0% | +6.1% |
+| Ghost of Sparta, main menu | 59.2 M | +6.2% | +6.2% | +2.1% |
+| Super Monkey Ball Adventure, story | 69.8 M | +5.8% | +5.8% | −4.2% |
+| Killzone, the courtyard | 42.4 M | +12.6% | +13.1% | +10.7% |
+| Activision Hits Remixed, 3D menu | 58.6 M | +14.4% | +18.3% | +11.7% |
+| Army of Two, gameplay | 44.4 M | +10.7% | +10.0% | +10.7% |
+| Activision Hits Remixed, copyright | 25.4 M | +16.7% | +22.5% | +16.8% |
+
+The library check's polling games, 3600 frames from boot with its presses:
+
+| Game | master | the counting alone | this branch |
+| --- | --- | --- | --- |
+| Dante's Inferno | 95.8 M | +39.5% | +41.6% |
+| Burnout Dominator | 77.8 M | +21.5% | +33.1% |
+| Need for Speed: Shift | 76.0 M | +19.0% | +28.7% |
+| Super Stardust Portable | 27.4 M | +12.6% | +12.3% |
+| Midnight Club: L.A. Remix | 80.0 M | +12.2% | −12.6% |
+| Burnout Legends | 139.7 M | +11.8% | +18.1% |
+| Shepherd's Crossing | 64.3 M | +4.3% | +4.3% |
+| Dragon Ball Z: Shin Budokai – Another Road | 43.9 M | +0.8% | +0.7% |
+
+- **Where it goes.** The data looks: seven instructions each, about 190,000 a frame in Super Monkey Ball's scene,
+  885,000 in Activision Hits' menu (a spin reading memory without syscalls), 1.8 million in Dante's Inferno from boot
+  (its loading streams through memory: many looks miss, and a miss is a call); then the instruction looks (three
+  instructions each on ARM64, 114,000 to 930,000 a frame) and the kernel's sums at each syscall while the GE is busy.
+- **Cut before this measurement**: a block going on to itself skips its own first line's look (Activision Hits' menu
+  +18.3% to +14.4%, its copyright screen +22.5% to +16.7%); an instruction line's key small enough for an ARM64
+  compare's immediate (two instructions fewer a look); the kernel's sums skipped while the GE is idle (the counts seen
+  as it gets busy instead). The counting before these cost Activision Hits' menu +21.4% and its copyright screen +25.3%.
+- **Measured and left**: skipping VRAM's and the scratchpad's looks (of every look, 0 to 2.2% reach them: Dante's 2.2%
+  VRAM's, Chains of Olympus 0.46% the scratchpad's; nothing to save, and the test itself would cost what the look
+  costs); a shorter data look (only by moving fields "Fast"'s code addresses, which must stay master's).
+- **What would take more**: spins without syscalls pay a data look every turn (the spin skip's widening, a pull request
+  of its own, takes the turns away); a miss's call (the other way looked at inline would spare the calls of lines in the
+  older way).
+- **On the RP6**: `smba-rp6.sh` in the runner-android scratch folder: master's runner from CI against this branch's, the
+  PSP's timing both, the gate's scenes and the three games whose instructions grew most here (Dante's Inferno, Burnout
+  Dominator, Need for Speed: Shift), 2 rounds taking turns.
 
 ### Save states: layout 35
 
@@ -18915,13 +18961,13 @@ put in.
 
 ### Tests
 
-- **ge time, the PSP's: the CPU's caches**: a loop reading 64 KiB reads in 1,024 lines; 16 KiB twice reads its 256
-  once; 32 KiB twice every line each time (1,024); storing over 32 KiB reads in 512 and writes back 256; 1 KiB read
-  through an uncached mirror counts 256 uncached accesses and reads in nothing; a loop polling a function and a word reads
-  in that word's line alone; 32 KiB of straight code run twice reads in its 512 lines each time; "Fast" counts nothing.
-- **the CPU beside the GE**: a list textured from RAM takes as long with the CPU polling beside it, and after the CPU has
-  written 1 MiB before it, as alone (within 0.2%); with the CPU writing 1 MiB beside it, over 10% longer, and untextured
-  sprites under 3% longer (five times less).
+- **ge time, the PSP's: the CPU's caches**: a loop reading 64 KiB reads in 1,024 lines; 16 KiB twice reads its 256 once;
+  32 KiB twice every line each time (1,024); storing over 32 KiB reads in 512 and writes back 256; 1 KiB read through an
+  uncached mirror counts 256 uncached accesses and reads in nothing; a loop polling a function and a word reads in that
+  word's line alone; 32 KiB of straight code run twice reads in its 512 lines each time; "Fast" counts nothing.
+- **the CPU beside the GE**: a list textured from RAM takes as long with the CPU polling beside it, and after the CPU
+  has written 1 MiB before it, as alone (within 0.2%); with the CPU writing 1 MiB beside it, over 10% longer, and
+  untextured sprites under 3% longer (five times less).
 - **the CPU beside the GE, by its rule**: the push of a stretch by the rule's sum, at 222/111; a stretch with nothing in
   it before and after the CPU's time has passed; ten million cycles more bring the window's push to within 2% of the
   lines' cost and never past it; a stretch running past the GE's end counts its share; one after it starts the window
@@ -18937,8 +18983,14 @@ put in.
 
 ### Checks
 
-- "Fast" against master (`--ge-timing fast` both sides; Vulkan fast and Software, six gate scenes, 300 frames): every
-  frame's picture and VRAM and the RAM after, the same; each state master's with layout 35's bytes put in, at one place.
+- "Fast" against master (`--ge-timing fast` both sides, six gate scenes, 300 frames; Vulkan fast and Software before the
+  cheap cuts, Vulkan fast after): every frame's picture and VRAM and the RAM after, the same; each state master's with
+  layout 35's 2,168 bytes put in, at one place.
+- The cheap cuts change nothing the games see: the PSP's timing before and after them (three scenes, 300 frames), every
+  frame's hashes the same; the states differ only in the instruction cache's tags, kept in their new keys.
+- GitHub's checks: the first push failed GCC's `-Wparentheses` (a set's index, clang silent) and two state tests that
+  build older layouts from this one (layout 35's bytes not taken out); with those put right, the new groups pass in both
+  PSP jobs, the sanitized one finding nothing.
 
 ### Not yet
 

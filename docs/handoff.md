@@ -37,9 +37,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP GE: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%) — 2026-10-19
 
-Branch `cursor/psp-cpu-traffic-2b67`, from master `08801ab60` (#269, part 106); draft PR. docs/psp-core.md, part 113, has
-the evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: layout 35 (2,168 bytes more, at one place; older
-layouts load with the caches empty).
+Branch `cursor/psp-cpu-traffic-2b67`, from master `08801ab60` (#269, part 106); draft PR #279. docs/psp-core.md, part
+113, has the evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: layout 35 (2,168 bytes more, at one
+place; older layouts load with the caches empty).
 - **The caches** (`Allegrex::Cache`): the PSP's CPU's data and instruction caches as tags (16 KiB each, 64-byte lines,
   two ways, least recently used out), looked up by compiled code alone in blocks compiled for a system started with the
   PSP's timing ("Fast" compiles none of it: its code master's): a load's or store's line in its set's most recent way
@@ -63,7 +63,15 @@ layouts load with the caches empty).
 - **Open, the owner's**: whether Activision Hits' menu frame moving away (+2.2% to +6.7%, the first list now nearly
   right) is acceptable; and whether round 10c should time list H's kind (Super Monkey Ball's small trilinear CLUT4
   strips, predicted about 16% short beside the CPU's patterns) taken apart, the rest of its gap.
-- **Host cost**: (below)
+- **Host cost** (the emulation thread's instructions a frame on the Mac, the PSP's timing both sides; part 113's
+  tables): the counting alone (master's emulation exactly) +5.8% (Super Monkey Ball) to +16.7% (Activision Hits'
+  copyright screen) on the gate's scenes; on the library check's polling games from boot +0.8% (Dragon Ball Z) to +39.5%
+  (Dante's Inferno, its loading streaming through memory). As players get it (the GE slowed too, so games wait and poll
+  differently): −4.2% to +16.8% on the scenes, −12.6% (Midnight Club) to +41.6% (Dante's Inferno) on the games. Cut: a
+  block going on to itself skipping its line's look (−4 to −6 points on the spinning scenes), ARM64's short instruction
+  compare, the kernel's sums skipped while the GE is idle; measured and left, skipping VRAM's and the scratchpad's
+  looks (0 to 2.2% of them). The RP6 run (master against the branch, the scenes and Dante's Inferno, Burnout Dominator
+  and Need for Speed: Shift) is the coordinator's: `smba-rp6.sh` in the runner-android scratch folder.
 - **Not yet**: the kernel's cache calls and the `cache` instruction; the CPU's traffic with VRAM; spins without syscalls
   pay a data look a turn (the spin skip's widening, its own pull request).
 
