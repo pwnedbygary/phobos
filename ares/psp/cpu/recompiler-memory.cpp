@@ -71,7 +71,7 @@ auto Allegrex::Recompiler::emitDataCache(op_base base, bool store) -> void {
 //anything; code an uncached mirror runs holds no line.
 auto Allegrex::Recompiler::emitInstructionCache(u32 address) -> void {
   if(u32 top = address >> 29; top != 0 && top != 4) return;
-  mov32(reg(0), field(&self.instructionCache.recent[address >> 6 & Cache::Sets - 1]));
+  mov32(reg(0), field(&self.instructionCache.recent[(address >> 6) & (Cache::Sets - 1)]));
   auto missed = cmp32_jump(reg(0), imm(Cache::codeKey(address)), flag_ne);
   emitCold({missed}, [=, this] { callf(&Allegrex::instructionCacheMiss, imm(address)); });
 }

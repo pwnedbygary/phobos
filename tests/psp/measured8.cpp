@@ -256,7 +256,7 @@ auto measuredContention10() -> void {
   auto core = ours(Round10, "time-contention");
   if(!core.empty()) {
     std::vector<f64> errors;
-    for(auto& [key, miss] : pairs(core, theirs(Round10, "time-contention"), 17, 18)) errors.push_back(std::abs(miss));
+    for(auto& pair : pairs(core, theirs(Round10, "time-contention"), 17, 18)) errors.push_back(std::abs(pair.second));
     CHECK(errors.size(), 680u);
     if(!errors.empty()) {
       CHECK(median(errors) <= 0.07, true);
@@ -267,8 +267,7 @@ auto measuredContention10() -> void {
   if(core.empty()) return;
   std::vector<f64> errors;
   for(auto& [key, miss] : pairs(core, theirs(Round10b, "time-contention3"), 6, 7)) {
-    auto [test, size, bus] = key;
-    u32 list = (test - 6) / 7, pattern = (test - 6) % 7;
+    u32 test = std::get<0>(key), size = std::get<1>(key), list = (test - 6) / 7, pattern = (test - 6) % 7;
     errors.push_back(std::abs(miss));
     f64 bound = pattern <= 5 ? 0.08 : list == 1 ? 0.01 : list == 0 ? (size == 1 ? 0.10 : 0.30) : 1.0;
     if(std::abs(miss) > bound) std::printf("  time-contention3 case %u size %u: %+.1f%%\n", test, size, miss * 100);

@@ -18797,7 +18797,9 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
   line, its reads 164: a write reads its line first).
 - **What's counted**: data lines read in from RAM, dirty ones written back to it, accesses to RAM through an uncached
   mirror (each one), and instruction lines read in. VRAM's and the scratchpad's lines are held like RAM's but not
-  counted: telling them apart as compiled code runs would cost what the look itself costs.
+  counted: telling them apart as compiled code runs would cost what the look itself costs, and they're few (of every
+  compiled load and store, Chains of Olympus's scene sends 0.46% to the scratchpad, Burnout Legends from boot 0.26% to
+  VRAM, Super Monkey Ball's and Activision Hits' scenes none).
 - **Where.** Only compiled code looks, and only in blocks compiled for a system started with the PSP's timing
   (`System::power()` turns the caches on with it): "Fast" compiles none of it, its code master's. A load or store looks
   its line up in its set's most recently used way, inline after the alignment test (seven host instructions), the rest

@@ -36,7 +36,7 @@ auto Allegrex::dataCacheMiss(u32 address, u32 store) -> u32 {
 //instruction cache's keys are Cache::codeKey()'s.)
 auto Allegrex::instructionCacheMiss(u32 address) -> void {
   auto& c = instructionCache;
-  u32 key = Cache::codeKey(address), set = address >> 6 & Cache::Sets - 1;
+  u32 key = Cache::codeKey(address), set = (address >> 6) & (Cache::Sets - 1);
   u32 line = c.older[set];
   if(line != key) {
     if(Cache::ram(address)) c.fills++;
