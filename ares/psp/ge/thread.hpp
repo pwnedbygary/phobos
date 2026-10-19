@@ -60,6 +60,9 @@ struct GeThread : Memory::Writer {
     Wrote,       //(checking) the emulation thread's write to VRAM: its first and last byte, and its place
     Store,       //the emulation thread's store the GE hears of (Memory::Writer): its address, size and place (cx), for
                  //writeElsewhere()'s checks (Memory::storeChecks())
+    Stores,      //its stores one after another, no other record between them: their place (cx), how many, then each
+                 //one's address, size and (checking) the VRAM bytes it wrote, a count and each first and last, for
+                 //their checks in turn
     Copy,        //its copy or fill: the same, for copyIn()'s (Memory::copyChecks())
     Transfer,    //TRANSFER_START's copy, the kernel GE's: the place of its rows' writes, for transfer()'s checks
                  //(GE::transferChecks())
@@ -77,9 +80,9 @@ struct GeThread : Memory::Writer {
   GeThread(GE& control, GE& render);
   ~GeThread();
 
-  //(the emulation thread's) Records appended in the stream's order; words wait in a buffer until the next record or
-  //a drain. Each returns its place where it's asked for: the record's serial. nextPlace(): the next record's, the
-  //words before it handed over first (a PRIM's, which the model takes before its record goes).
+  //(the emulation thread's) Records appended in the stream's order; words and stores wait in buffers until the next
+  //record, a wait or a drain. Each returns its place where it's asked for: the record's serial. nextPlace(): the next
+  //record's, the words and stores before it handed over first (a PRIM's, which the model takes before its record goes).
   //(a list word as run() read it, at its address, or ~0 for one from no list (the kernel's): runs of words one after
   //another kept as a run. In the list's loop for every word: Super Monkey Ball's spent a fourteenth of the emulation
   //thread there, called and growing vectors)
@@ -90,9 +93,16 @@ struct GeThread : Memory::Writer {
     nextWordAt = address == ~0u ? ~0u : (address + 4) & 0x0fff'ffff;
     words[wordCount++] = word;
   }
-  auto nextPlace() -> u64 { flushWords(); return serial + 1; }
-  auto primitive(u32 word, u32 wordAddress, u32 vertexAddress, u32 indexAddress, bool hardware, bool certain,
-                 const Copies& copies, const u8* bytes) -> u64;
+  auto nextPlace() -> u64 { flushStores(), flushWords(); return serial + 1; }
+  //A PRIM's or curved surface's record, made where it goes, with the words waiting before it in it: its place
+  //(primitivePlace(), given its copies' size), then the record begun (primitiveBegin(): where its copies' bytes go),
+  //and handed over (primitiveEnd()). Where each PRIM's bytes were copied once to be copied into its record, and its
+  //words went as a record of their own. One too big for the ring has its words go first as their own, and the
+  //emulation thread draws it, once the thread has drained (primitiveBegin() nullptr; primitiveEnd() given the bytes).
+  auto primitivePlace(u32 copied) -> u64;
+  auto primitiveBegin(u32 word, u32 wordAddress, u32 vertexAddress, u32 indexAddress, bool hardware,
+                      const Copies& copies) -> u8*;
+  auto primitiveEnd(bool certain, const u8* bytes) -> void;
   auto clut(u32 word, u32 wordAddress, u32 address, const u8* bytes, u32 size) -> void;
   auto drawnFirst(u32 address, u32 size) -> u64;
   auto read(u32 address, u32 size, bool loading) -> u64;
@@ -192,7 +202,9 @@ struct GeThread : Memory::Writer {
   //drawing threads may still draw or a texture a PRIM drawn by the software renderer may still read (a conflict), its
   //record goes first and the write waits for the render GE to pass it; else, where the render GE may still read or
   //write back the bytes at an earlier place (it hasn't passed every record), their old contents are kept first
-  //(versions: with the place of the write's record, 2 per record); after it, its record (where it hasn't gone).
+  //(versions: with the place of the write's record, 2 per record); after it, its record (where it hasn't gone): a
+  //store's joins the stores waiting, which go as one record (Stores) at the place of the next. Hot Wheels's CPU stored
+  //59,000 words a frame into VRAM, each a record of its own the GE thread woke for.
   auto before(u32 address, u32 size, Memory::Writer::Kind kind) -> void override;
   auto after(u32 address, u32 size, Memory::Writer::Kind kind) -> void override;
   auto conflicts(u32 address, u32 size) -> bool;
@@ -224,13 +236,23 @@ struct GeThread : Memory::Writer {
   std::unique_ptr<GeVersions> versions;
 
 private:
-  static constexpr u32 WordsMost = 1024;
-  auto append(Kind kind, u32 size) -> u8*;
+  static constexpr u32 WordsMost = 1024, StoresMost = 16384;
+  auto append(Kind kind, u32 size) -> u8*;  //(the stores waiting handed over first)
   auto publish() -> void;  //(the record appended, handed over: ring.publish(), and the fuzzing's)
   auto flushWords() -> void;
+  auto flushStores() -> void;
+  auto addStore(u32 address, u32 size) -> void;
+  auto wordsBytes() const -> u32;  //(the words waiting, as a record holds them: their runs, then the words)
+  auto putWords(u8* at) -> void;   //(and put there, none left waiting)
   auto take() -> void;  //the thread's loop
   auto replay(const Header& header, const u8* data) -> void;
+  auto replayWords(const u8* data) -> void;
   auto listWordDrawn(u32 address) -> void;  //(the render GE: run()'s drawnFirst() for a list word, replayed)
+  //(the PRIM record under way, between primitiveBegin() and primitiveEnd(): its data, or nullptr with what it says,
+  //for the emulation thread to draw it)
+  struct Building { u32 word, wordAddress, vertexAddress, indexAddress; bool hardware; Copies copies; };
+  u8* building = nullptr;
+  Building built{};
 
   RecordRing ring;
   //(the emulation thread's: the words, and each run's first address and count; where the last run goes on, or ~0)
@@ -238,6 +260,11 @@ private:
   std::array<u32, WordsMost> words;
   std::array<WordRun, WordsMost> wordRuns;
   u32 wordCount = 0, runCount = 0, nextWordAt = ~0u;
+  //(the emulation thread's: the stores waiting, as their record holds them after its count, and how many; the place
+  //the versions were last freed as of)
+  std::vector<u32> stores;
+  u32 storeCount = 0;
+  u64 freedAt = 0;
   u32 undrawn = ~0u;  //(the render GE's: run()'s page found with nothing drawn over it, as run() keeps it)
   std::vector<std::string> notes;
   u64 serial = 0;                     //(the emulation thread's) records appended

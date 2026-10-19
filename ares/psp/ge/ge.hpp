@@ -802,13 +802,14 @@ struct GE {
   auto replayPrimitive(u32 word, u32 vertexAt, u32 indexAt, const GeThread::Copies& copies, const u8* bytes,
                        bool patching) -> void;
   auto replayClut(u32 word, u32 address, const u8* bytes, u32 size) -> void;
-  auto copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& copies, std::vector<u8>& bytes) -> void;
+  auto copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& copies) -> void;
+  auto copyRanges(const GeThread::Copies& copies, u8* to) -> void;
   auto handPrimitive(u32 word, u32 count, bool patching) -> void;
   auto handClut() -> void;
   auto readCopiedVertices(u32 count, const VertexFormat& format) -> void;
   auto handState() -> void;
   auto handSwitches() -> void;
-  std::vector<u8> handCopies;  //(the kernel's GE) a PRIM's copies as they're made
+  std::vector<u8> handCopies;  //(the kernel's GE) a PRIM's copies where its record is too big for the ring
   //(the kernel's GE) the texture the last PRIM handed over read, as the words it's from have it (format, address, row
   //width, size, mode): its bytes and their pages, worked out again only where those words have changed
   struct HandTexture {
