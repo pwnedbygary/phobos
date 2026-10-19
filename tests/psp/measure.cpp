@@ -138,6 +138,12 @@ static const TimingFile8 timingFiles10[] = {
 //Round 10b's: time-contention3 6 cases at 1 size and 42 at 2, four values a run as time-contention's; time-placement 14
 //at 2.
 static const TimingFile8 timingFiles10b[] = {{"time-contention3", 180, 4, 4, 3}, {"time-placement", 56, 8, 2, 3}};
+//Round 10c's: time-contention4 3 cases at 1 size and 28 at 2, four values a run as time-contention's; time-shrink 9 at
+//2, time-magnify 14 at 2, time-gamestrips 6 at 2, time-anchors3 7 at 2.
+static const TimingFile8 timingFiles10c[] = {
+  {"time-contention4", 118, 4, 4, 3}, {"time-shrink", 36, 8, 2, 3}, {"time-magnify", 56, 8, 2, 3},
+  {"time-gamestrips", 24, 8, 2, 3}, {"time-anchors3", 28, 8, 2, 3},
+};
 static constexpr u32 ClockAttempts8 = 13;
 struct TimingRecord { u32 test, size, clocks, repeats, values; std::vector<u32> times; };
 //The records, or none if the words don't make whole records.
@@ -302,9 +308,9 @@ static const char* probeFiles[] = {
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
 enum : u32 {
-  GeRound10bLine = 0, GeRound10Line = 1, GeRound9Line = 2, GeRound8Line = 3, GeRound7Line = 4, GeRound6Line = 5,
-  GeRound5Line = 6, GeRound4Line = 7, GeRound3Line = 9, ProbesLine = 10, GeRound2Line = 12, AfreshLine = 14,
-  LeaveLine = 15
+  GeRound10cLine = 0, GeRound10bLine = 1, GeRound10Line = 2, GeRound9Line = 3, GeRound8Line = 4, GeRound7Line = 5,
+  GeRound6Line = 6, GeRound5Line = 7, GeRound4Line = 8, GeRound3Line = 10, ProbesLine = 11, GeRound2Line = 13,
+  AfreshLine = 15, LeaveLine = 16
 };
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
@@ -569,8 +575,14 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 20000, exists(results / "time-placement.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
+  //round 10c, its anchors last
+  move(m, GeRound10bLine, GeRound10cLine);
+  press(m, Cross);
+  CHECK(waitFor(m, 20000, exists(results / "time-anchors3.bin")), true);
+  press(m, Cross);
+  onlyStallCheckStalled();
   //leaving
-  move(m, GeRound10bLine, LeaveLine);
+  move(m, GeRound10cLine, LeaveLine);
   press(m, Cross);
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
@@ -729,11 +741,13 @@ static auto pspMeasure() -> void {
   CHECK(std::filesystem::exists(results / "manifest9.txt"), true);
   for(auto& file : timingFiles10) timedFile(file);
   for(auto& file : timingFiles10b) timedFile(file);
-  //time-contention's, time-contention2's and time-contention3's thread: turns and their time where it ran (but beside
-  //a list the core finished before the thread's first turn: culled triangles, NOPs and copies take none of its time),
-  //none where it didn't (each GE list's first case); time-contention3's writes before a list, 16384 and their time
+  for(auto& file : timingFiles10c) timedFile(file);
+  //time-contention's, time-contention2's, time-contention3's and time-contention4's thread: turns and their time where
+  //it ran (but beside a list the core finished before the thread's first turn: culled triangles, NOPs and copies take
+  //none of its time), none where it didn't (each GE list's first case); time-contention3's writes before a list, 16384
+  //and their time
   for(auto [name, first, row] : {std::tuple{"time-contention", 17u, 18u}, std::tuple{"time-contention2", 4u, 5u},
-                                 std::tuple{"time-contention3", 6u, 7u}}) {
+                                 std::tuple{"time-contention3", 6u, 7u}, std::tuple{"time-contention4", 3u, 4u}}) {
     bool counted = true;
     for(auto& record : timingRecords(readWords(results / (std::string(name) + ".bin")))) {
       bool idle = record.test >= first && (record.test - first) % row == 0;
@@ -746,6 +760,7 @@ static auto pspMeasure() -> void {
   }
   CHECK(std::filesystem::exists(results / "manifest10.txt"), true);
   CHECK(std::filesystem::exists(results / "manifest10b.txt"), true);
+  CHECK(std::filesystem::exists(results / "manifest10c.txt"), true);
   //cpu-clocks: an attempt a record (1 run of 4 words: what the call gave back, the CPU's and the bus's MHz after, the
   //loop's time), each from 222/111 or 333/166; the first, 333/333/166, granted
   auto attempts = timingRecords(readWords(results / "cpu-clocks.bin"));
