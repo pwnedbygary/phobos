@@ -35,6 +35,73 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE thread, its second part: the frame shown from the GE thread, the emulation thread's work for it cut, its two threads placed, and the PSP's GE timing with it, exact — 2026-10-19
+
+Branch `cursor/psp-ge-thread2-2b67` (GE round 4, part B, second PR; draft PR #277), from master `d428d91f9` (#276) with
+`08801ab60` (#269, the PSP's GE timing the default, and #278 with it) merged in; docs/psp-core.md, part 111, has the
+evidence. Clean room: our code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 34, as #269
+left it (with the thread On, the GE's timing state is the render GE's, drained first: the same file on or off).
+- **What**: with "GE Thread" On the frame is shown from the GE thread, which takes each frame's picture at the frame's
+  record, at most two frames in flight (the screen a frame behind: about 17 ms more between a press and its picture at
+  60 frames a second); the window is handed over through it; saving and loading wait for it at most 2 s, and an unload
+  with it stuck leaves it be (design steps 3a, 3c, 3d). The app's "PSP Graphics Overlap" (Off, On; Restart to Apply)
+  is built and not offered till On beats Off on the RP6.
+- **The emulation thread's work for the thread, cut**: VRAM vertices copied whole, a PRIM's texture worked out once,
+  a target's run of PRIMs one model rectangle, a PRIM's record taking the words before it and its copies made in
+  place, the CPU's stores into VRAM as one record (Hot Wheels: 59,000 a frame), the value rule's page checks kept
+  clean. Its instructions a frame with the thread On ("Fast"): Chains of Olympus 92M to 50M, Ghost of Sparta 222M to
+  118M, Super Monkey Ball 303M to 238M, Army of Two 44M to 36M, Killzone 149M to 74M, Hot Wheels 258M to 206M.
+- **The two threads placed** (the app's "PSP thread placement", off by default and not offered; the runner's
+  `--ge-place`): the GE thread on the fastest core the app may use, the emulation thread on the next, by the kernel's
+  capacities among the cpuset's cores, asked for again every frame: 7 and 3 on the RP6, as fast as the best placement
+  pinned by hand (with "Fast": Killzone 1.02x, Army of Two 0.96x, Ghost of Sparta 0.92x, Chains of Olympus 0.87x,
+  Disaster Report 3 0.83x, Super Monkey Ball 0.76x; unplaced 0.60x to 0.89x).
+- **The PSP's GE timing with the thread** (#269 refused it): the GE thread keeps the GE's pipeline in its clocks (a
+  list's start, each run's shift, its words as `run()` counts them, the control pass's own work as marks after their
+  words, its primitives, transfers, palettes and copied vertices) and hands back each run's two times; the emulation
+  thread keeps the times in cycles and folds each run's as the synchronous GE ends it. Where a time decides something
+  (a FINISH, a SIGNAL, the go's limits, `sceGeSaveContext`, a spin's skip), the last run's bound answers first (its
+  pipeline's two ends so far, or half its words' work), and the emulation thread waits for the GE thread only where it
+  doesn't. The CPU-beside-the-GE term (held at none) is carried exactly: stretches kept and taken as the fold reaches
+  them, a cut go's stretch ended once, spin skips as long as the synchronous go's.
+- **Speed with the PSP's timing** (the M1, Vulkan fast, 600 frames, medians): On/Off Ghost of Sparta 1.15x, Chains of
+  Olympus 0.99x, Super Monkey Ball 1.08x, Army of Two 1.10x, Killzone 1.01x, Disaster Report 3 1.38x, Hot Wheels 1.09x
+  (0.78x with "Fast": with the PSP's timing the emulation thread reaches a FINISH's time after the GE thread has
+  counted its runs). The RP6 with the PSP's timing, placed (the GE thread on core 7, the emulation thread on 3):
+  Ghost of Sparta 0.95x, Chains of Olympus 0.87x, Super Monkey Ball 0.91x, Army of Two 1.03x, Killzone 0.86x,
+  Disaster Report 3 0.99x, Hot Wheels 0.82x (unplaced 0.28x to 0.94x): where the GE thread's time a frame is about
+  the emulation thread's whole time Off there's little to overlap, and the emulation thread on the A715 saves little.
+- **Off costs nothing**: the emulation thread's instructions a frame with the thread Off against master `08801ab60`:
+  -0.04% to -0.15% with the PSP's timing, -0.15% to -0.26% with "Fast".
+- **Exact, the thread On with the checks against Off, with the PSP's timing**: the gate's scenes in Vulkan fast and
+  Software (14 of 14); part 109's section 9 sets (240 of 240: the 26 scenes' end hashes with states and shown frames,
+  shown frames in Software, fuzzing three ways, Vulkan accurate and 2x, the 78 settled hashes, the stress mode at 1x,
+  2x and 4x); the contention term carried, with a scratch build that turns round 10's slopes on (12 of 12); "Fast"
+  unchanged (C's runner gives the merge's hashes, Off and On); part 109's slow three from their start, the clock
+  fixed, every frame and then RAM and the state, either timing (6 of 6); the suite Off and On, 625 groups, 0
+  failures, the measure rounds now threaded with the PSP's timing; the ares lane, 391 checks; CI green.
+  ThreadSanitizer, nothing suppressed, the GPU on MoltenVK: the threaded groups (103, the measured rounds and the GPU's
+  among them) no report; the ares lane and a sanitized runner (five scenes, the thread On, the PSP's timing) none from
+  C's code, two from elsewhere, fixed (below), then clean.
+- **Slow three** (part 109's: each from its start, Software, 3,600 frames, Off and On): BlazBlue 2 s and 7 s, SSX on
+  Tour 4 and 11, Aces of War 5 to 6 and 25 to 26, with either timing (part 109: 4 and 20, 8 and 43, 10 and 41).
+- **Found and fixed on the way**: `listWord()`'s piece cache kept a 32-byte piece clean after checking one word; with
+  the checks on the thread's model kept every passed put point (MX vs ATV crawled); under the contention term the first
+  threaded runs differed (limits taking in later stretches, a cut go never ending its stretch, spin skips sized by a
+  bound's shorter limit); the On lane's state layout checks set the kernel's GE's texel cache, not the render GE's.
+  ThreadSanitizer: the screen's passthrough flag (`Screen::setPassthrough()`) set on the emulation thread without the
+  lock its own thread reads it under (master's runner has it too; it takes the lock now), and the ares lane's save
+  states check hashing VRAM while the drawing threads could still draw (it settles them first). The runner's sparse
+  PNGs (the library check's) with the thread On showed the frame the screen showed a frame late: the frame before a
+  PNG's gets its own picture now, so On's PNGs are Off's (the slow three, 24 of 24), and Off's are as they were.
+- **Where it meets part 113** (1fd9133c's cache models and traffic-driven contention term): `Kernel::GeStretch`,
+  `geContendNow()`, `geStretchEnded()` (from `syscall()`, `run()` and now `goThreaded()`), `GeThread::Owed`'s clocks
+  by kind, `geFolded`'s stretch entries with `GeLimit`'s count, `spinSkip()`. C needs no state layout of its own;
+  part 113 takes 35.
+- **Next**: the independent review, and the coordinator's library check (with the PSP's timing On against Off, and Off
+  against master); Auto with its handover both ways (design step 4), a stacked PR; the app's option once On beats Off
+  on the RP6; Hot Wheels' remaining store cost.
+
 ## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in), the gate against the captures by the whole frame, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
