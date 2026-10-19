@@ -74,16 +74,16 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
 - **Off costs nothing**: the emulation thread's instructions a frame with the thread Off against master `08801ab60`:
   -0.04% to -0.15% with the PSP's timing, -0.15% to -0.26% with "Fast".
 - **Exact, the thread On with the checks against Off, with the PSP's timing** (the gate's scenes, section 9's sets, the
-  contention term and "Fast" run again after the review's fix, `df88b37ee`: all the same): the gate's scenes in Vulkan
-  fast and Software (14 of 14); part 109's section 9 sets (240 of 240: the 26 scenes' end hashes with states and shown
-  frames, shown frames in Software, fuzzing three ways, Vulkan accurate and 2x, the 78 settled hashes, the stress mode
-  at 1x, 2x and 4x); the contention term carried, with a scratch build that turns round 10's slopes on (12 of 12);
-  "Fast" unchanged (C's runner gives the merge's hashes, Off and On); part 109's slow three from their start, the clock
-  fixed, every frame and then RAM and the state, either timing (6 of 6); the suite Off and On, 625 groups, 0 failures,
-  the measure rounds now threaded with the PSP's timing; the ares lane, 391 checks; CI green. ThreadSanitizer, nothing
-  suppressed, the GPU on MoltenVK: the threaded groups (103, the measured rounds and the GPU's among them) no report;
-  the ares lane and a sanitized runner (five scenes, the thread On, the PSP's timing) none from C's code, two from
-  elsewhere, fixed (below), then clean.
+  contention term, "Fast" and the slow three run again after the review's fix, `df88b37ee`: all the same): the gate's
+  scenes in Vulkan fast and Software (14 of 14); part 109's section 9 sets (240 of 240: the 26 scenes' end hashes with
+  states and shown frames, shown frames in Software, fuzzing three ways, Vulkan accurate and 2x, the 78 settled hashes,
+  the stress mode at 1x, 2x and 4x); the contention term carried, with a scratch build that turns round 10's slopes on
+  (12 of 12); "Fast" unchanged (C's runner gives the merge's hashes, Off and On); part 109's slow three from their
+  start, the clock fixed, every frame and then RAM and the state, either timing (6 of 6); the suite Off and On, 625
+  groups, 0 failures, the measure rounds now threaded with the PSP's timing; the ares lane, 391 checks; CI green.
+  ThreadSanitizer, nothing suppressed, the GPU on MoltenVK: the threaded groups (103, the measured rounds and the GPU's
+  among them) no report; the ares lane and a sanitized runner (five scenes, the thread On, the PSP's timing) none from
+  C's code, two from elsewhere, fixed (below), then clean.
 - **Slow three** (part 109's: each from its start, Software, 3,600 frames, Off and On): BlazBlue 2 s and 7 s, SSX on
   Tour 4 and 11, Aces of War 5 to 6 and 25 to 26, with either timing (part 109: 4 and 20, 8 and 43, 10 and 41).
 - **Found by the independent review** (CHANGES, item 1): C lost the control pass's front-end work after a word-buffer

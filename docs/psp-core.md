@@ -18553,8 +18553,8 @@ checks grew: found by halving the commits, then the files.
 **Exactness, measured** (the M1, MoltenVK; the thread On with `PHOBOS_GE_CHECK=1` against Off, the same runner; settled
 hashes: every frame's picture and VRAM with the drawing settled, then RAM and the machine's state):
 - after the review's fix (C's front-end marks, below), on `df88b37ee`, the checks now aborting on any mark not taken:
-  the gate's scenes 14 of 14, section 9's sets 240 of 240, the contention term carried 12 of 12, "Fast" 3 of 3, all
-  the same again (as each was before it, item by item below);
+  the gate's scenes 14 of 14, section 9's sets 240 of 240, the contention term carried 12 of 12, "Fast" 3 of 3, and
+  part 109's slow three from their start 6 of 6, all the same again (as each was before it, item by item below);
 - with the PSP's timing, C's runner: the gate's scenes (Killzone's play, Activision Hits' menu and copyright screen,
   Super Monkey Ball's story, Ghost of Sparta's menu, Chains of Olympus' difficulty menu, Army of Two's play), 600
   frames (the copyright 360), Vulkan fast and Software: 14 of 14 the same;
@@ -18617,7 +18617,11 @@ list's pipeline).
   failed on `4ee2e5acf`, `geReachAt` with the thread 7601 cycles against 7875 without it, 7574 against 7722, and 7345
   against 7493 at the stall (`geDoneAt` the same: sprite A's drawing ends later), and passes after; each part of the
   fix taken out fails it (the count, the marks carried and flushed with no words, taken before the first word: three
-  by the checks' abort, one by the stall's case).
+  by the checks' abort, one by the stall's case). The second review found one part it didn't pin: the PRIM's record
+  made to carry no marks with no words waiting (the marks then taken in the next record, used, so no abort) passed it,
+  sprite A's drawing outlasting sprite B's start either way. The four cases run with sprite A a single pixel too,
+  sprite B's drawing then starting as its front end hands it over, and that removal fails the PRIM's case: `geDoneAt`
+  7889 with the thread against 8036 without it.
 - The review's nits (`df88b37ee`): `unwedge()` freed the stuck thread's object before unhooking memory from it
   (nothing called it in between; unhooked first now); quitting the desktop app with the GE thread still stuck joined
   it and hung (the system's destructor lets it go now, its object left to it); the placement kept the GE thread's ID
