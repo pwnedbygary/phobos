@@ -57,7 +57,7 @@ place; older layouts load with the caches empty).
   10's 680 list-pattern pairs within 5.7% at the median (15.5% with the term held at none); round 10b's 144 within 1.0%
   (polling and work before x1.00, a writer beside list A x1.91 against 2.02, beside the untextured list x1.00).
 - **The gate** (part 113's table, per frame and per list): Chains of Olympus −5.0% to +0.3%, Ghost of Sparta −7.1% to
-  −2.3%, Killzone −12.3% and −10.9% to −9.9% and −8.4%, Super Monkey Ball −29.6% to −20.6% (its exception kept, now with
+  −2.2%, Killzone −12.3% and −10.9% to −9.9% and −8.4%, Super Monkey Ball −29.6% to −20.6% (its exception kept, now with
   a limit, −21%), Activision Hits' copyright screen −5.8% as it was, its menu +2.2% and +1.9% to +6.7% and +6.4% (its
   first list −10.6% to −4.4%; the second and third, +48.5% and +27%, as they were). Lists 10 of 15 within 15%.
 - **The owner's decisions** (2026-10-19, 11:08): Activision Hits' menu frame at +6.7% accepted; the host cost accepted;

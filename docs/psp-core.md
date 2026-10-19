@@ -18897,7 +18897,7 @@ it:
 | Scene | Capture | List | PSP | Master | Against the PSP | This branch | Against the PSP |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Chains of Olympus, difficulty menu | UCUS98653-5 | frame (1 list) | 27.60 ms | 26.21 ms | −5.0% | 27.67 ms | +0.3% |
-| Ghost of Sparta, main menu | UCUS98737-1 | frame (1 list) | 29.62 ms | 27.52 ms | −7.1% | 28.95 ms | −2.3% |
+| Ghost of Sparta, main menu | UCUS98737-1 | frame (1 list) | 29.62 ms | 27.52 ms | −7.1% | 28.96 ms | −2.2% |
 | Super Monkey Ball Adventure, Story Mode | ULES00364-1 | frame (1 list) | 23.64 ms | 16.64 ms | −29.6% | 18.76 ms | −20.6% (excepted) |
 | Killzone, the courtyard | UCUS98646-1 | 1 of 2 | 24.31 ms | 21.15 ms | −13.0% | 21.79 ms | −10.4% |
 | | | 2 of 2 | 1.72 ms | 1.67 ms | −2.9% | 1.67 ms | −2.9% |
@@ -18984,9 +18984,10 @@ The library check's polling games, 3600 frames from boot with its presses:
 
 ### Save states: layout 35
 
-A state keeps the window (cycles passed, instructions, lines, stalls, the cycles pushed), the part of a cycle still to
-push, both caches' tags (2 KiB), the counts the window hasn't seen (none while the GE is idle) and the list's clocks by
-kind: 2,168 bytes more than layout 34, all in one place. An older state loads with the caches empty and the window
+A state keeps the window (cycles passed, instructions, the four kinds of lines, the cycles pushed: whole counts), both
+caches' tags (2 KiB), the counts the window hasn't seen (none while the GE is idle) and the list's clocks by kind: 2,168
+bytes more than layout 34, all in one place (the review's round turned the window's five floats and its carry into six
+whole counts, the same 48 bytes). An older state loads with the caches empty and the window
 afresh. A state saved while the CPU writes beside a list carries on in another machine exactly as in the one it came
 from (the test). "Fast" keeps the same bytes (the caches empty, the window afresh): its state is layout 34's with them
 put in.
@@ -19006,6 +19007,11 @@ put in.
   afresh.
 - **a state saved with the CPU beside the GE** (above); the system test's refused layouts (36 now) and loaded ones (27,
   28 and 31 to 34).
+- **the GE's looks polled with the PSP's GE timing, each turn moving lines of the CPU's caches**
+  (`tests/psp/spins.cpp`): sceGeListSync(id, 1) polled, and sceGeDrawSync(1) with the list stalled, each turn also
+  reading a word through an uncached mirror or a word from each of three lines one set can't hold; on both engines,
+  more than a thousand turns skipped, every step's state and in the end the caches' counts the same as with every turn
+  run.
 - **measured rounds 10 and 10b: the CPU beside the GE** (`measured8`): the core's own run of the two rounds' contention
   tests against the PSP's files. Round 10's 680 pairs, half within 7%, nine in ten within 25%; round 10b's 144, half
   within 1.5%: beside a CPU polling or writing before the list within 8%, beside a writer the untextured list within 1%,
@@ -19030,6 +19036,11 @@ put in.
   reproduced from the tree; the spin skip on and off the same in Resistance, Burnout Dominator and the gate's scenes.
   Its should-fixes: the skipped turns' lines (now counted, with the test "the GE's looks polled with the PSP's GE
   timing"), and the interpreter (documented, above).
+- After the review's fixes: the gate run again moves Ghost of Sparta's frame alone, 28.95 to 28.96 ms; "Fast" against
+  master again (six scenes, 300 frames, Vulkan fast) the same in every frame and the RAM, each state master's with the
+  2,168 bytes; the PSP's timing against the reviewed head (three scenes, 300 frames): every frame's picture and VRAM
+  the same, the RAM after them not in Super Monkey Ball's and Killzone's (the whole-cycle pushes and the window's end
+  move the GE by a few cycles).
 
 ### Not yet
 
