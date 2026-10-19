@@ -18457,7 +18457,9 @@ refusal, splitting the work by who knows what:
   `Owe` record, from `Kernel::geOwe()`: the pipeline begun afresh with the list's own clocks); each run's shift as it
   starts (`RunStart` carries it, from `geResume()`); the run's words, counted as `run()` counts them, so each item
   takes the synchronous GE's words (`wordsRun`); the control pass's own front-end work (JUMP, CALL, RET, a bounding
-  box's vertices) as marks after the word it came with (`GeThread::front()`); its primitives, block transfers (at the
+  box's vertices) as marks after the words handed over before it, before the next word where a record has just
+  taken those (a box's check, below), in a record of their own where no words wait (`GeThread::front()`; checking,
+  each one taken or the thread aborts); its primitives, block transfers (at the
   transfer's start word) and palettes (`replayClut()`, timed as `loadClut()` times them); the vertices it reads from
   the copies (`readCopiedVertices()` charges them as `readVertices()` does: `GE::oweVertices()`); and the run's end
   (`RunEnd`, with the run's words, checked against G's count: `GE::pipeStop()`). Each run's two times go back with
@@ -18550,6 +18552,9 @@ checks grew: found by halving the commits, then the files.
 
 **Exactness, measured** (the M1, MoltenVK; the thread On with `PHOBOS_GE_CHECK=1` against Off, the same runner; settled
 hashes: every frame's picture and VRAM with the drawing settled, then RAM and the machine's state):
+- after the review's fix (C's front-end marks, below), on `df88b37ee`, the checks now aborting on any mark not taken:
+  the gate's scenes 14 of 14, section 9's sets 240 of 240, the contention term carried 12 of 12, "Fast" 3 of 3, all
+  the same again (as each was before it, item by item below);
 - with the PSP's timing, C's runner: the gate's scenes (Killzone's play, Activision Hits' menu and copyright screen,
   Super Monkey Ball's story, Ghost of Sparta's menu, Chains of Olympus' difficulty menu, Army of Two's play), 600
   frames (the copyright 360), Vulkan fast and Software: 14 of 14 the same;
@@ -18597,6 +18602,28 @@ thread and the PSP's GE timing" (the ares lane: the thread starts with either ti
 list's pipeline).
 
 **Found and fixed on the way** (each with a test that fails without its fix, or the proof that found it):
+- Found by the independent review (C, item 1): a front-end mark made right after a record had taken the words
+  waiting was lost, and every mark after it in the same record with it. A BOUNDING_BOX's word goes over before the
+  box runs; where its vertices (or indices) lie on a VRAM page with drawing pending, or dirty, its check goes to G as a
+  record of its own (`GeThread::controlRead()`, `drawnFirst()`), which hands the words waiting over first, so the
+  box's vertices' work was marked after word −1 (`wordCount - 1`, unsigned), which the replay never reached; and a
+  box followed by a PRIM at once left its marks out of the PRIM's record, which carried none with no words. G's front
+  end then ended early: `geReachAt` (a SIGNAL's time) earlier than with the thread off, `geDoneAt` too where the front
+  end decides it. Only with the thread On, the PSP's timing and such a box (the proofs below matched before the fix
+  too, and were run again after it). Marks now count the words before them (none: before the next word), go in a
+  record with no words where none wait, and with the checks on the thread aborts on any not taken (`716171da0`).
+  The test ("ge time, the PSP's, with the GE on its thread: a bounding box's work after a record", from the review's:
+  the box in RAM; on a busy page then a JUMP, the review's case; then a PRIM at once; then the list's stall address)
+  failed on `4ee2e5acf`, `geReachAt` with the thread 7601 cycles against 7875 without it, 7574 against 7722, and 7345
+  against 7493 at the stall (`geDoneAt` the same: sprite A's drawing ends later), and passes after; each part of the
+  fix taken out fails it (the count, the marks carried and flushed with no words, taken before the first word: three
+  by the checks' abort, one by the stall's case).
+- The review's nits (`df88b37ee`): `unwedge()` freed the stuck thread's object before unhooking memory from it
+  (nothing called it in between; unhooked first now); quitting the desktop app with the GE thread still stuck joined
+  it and hung (the system's destructor lets it go now, its object left to it); the placement kept the GE thread's ID
+  up to 60 frames after it had gone (checked each frame now, by its name). And CI runs the GE thread's tests with the
+  thread on: the release-mode job, `PHOBOS_TESTS_GE_THREAD=On`, the thread's groups, the GPU's with it, the GE's times
+  and the measured rounds' (`PHOBOS_TESTS_ONLY` takes several names between `|`s for it).
 - The piece cache in `listWord()` kept a 32-byte piece clean after checking only the word asked for: a word after a
   rectangle's edge in the same piece could be read without waiting for the PRIM drawing it (`de0daaa9f`).
 - With the checks on, the thread's copy of the model kept every put point it had passed, and MX vs ATV crawled

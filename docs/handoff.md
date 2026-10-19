@@ -73,18 +73,28 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   the emulation thread's whole time Off there's little to overlap, and the emulation thread on the A715 saves little.
 - **Off costs nothing**: the emulation thread's instructions a frame with the thread Off against master `08801ab60`:
   -0.04% to -0.15% with the PSP's timing, -0.15% to -0.26% with "Fast".
-- **Exact, the thread On with the checks against Off, with the PSP's timing**: the gate's scenes in Vulkan fast and
-  Software (14 of 14); part 109's section 9 sets (240 of 240: the 26 scenes' end hashes with states and shown frames,
-  shown frames in Software, fuzzing three ways, Vulkan accurate and 2x, the 78 settled hashes, the stress mode at 1x,
-  2x and 4x); the contention term carried, with a scratch build that turns round 10's slopes on (12 of 12); "Fast"
-  unchanged (C's runner gives the merge's hashes, Off and On); part 109's slow three from their start, the clock
-  fixed, every frame and then RAM and the state, either timing (6 of 6); the suite Off and On, 625 groups, 0
-  failures, the measure rounds now threaded with the PSP's timing; the ares lane, 391 checks; CI green.
-  ThreadSanitizer, nothing suppressed, the GPU on MoltenVK: the threaded groups (103, the measured rounds and the GPU's
-  among them) no report; the ares lane and a sanitized runner (five scenes, the thread On, the PSP's timing) none from
-  C's code, two from elsewhere, fixed (below), then clean.
+- **Exact, the thread On with the checks against Off, with the PSP's timing** (the gate's scenes, section 9's sets, the
+  contention term and "Fast" run again after the review's fix, `df88b37ee`: all the same): the gate's scenes in Vulkan
+  fast and Software (14 of 14); part 109's section 9 sets (240 of 240: the 26 scenes' end hashes with states and shown
+  frames, shown frames in Software, fuzzing three ways, Vulkan accurate and 2x, the 78 settled hashes, the stress mode
+  at 1x, 2x and 4x); the contention term carried, with a scratch build that turns round 10's slopes on (12 of 12);
+  "Fast" unchanged (C's runner gives the merge's hashes, Off and On); part 109's slow three from their start, the clock
+  fixed, every frame and then RAM and the state, either timing (6 of 6); the suite Off and On, 625 groups, 0 failures,
+  the measure rounds now threaded with the PSP's timing; the ares lane, 391 checks; CI green. ThreadSanitizer, nothing
+  suppressed, the GPU on MoltenVK: the threaded groups (103, the measured rounds and the GPU's among them) no report;
+  the ares lane and a sanitized runner (five scenes, the thread On, the PSP's timing) none from C's code, two from
+  elsewhere, fixed (below), then clean.
 - **Slow three** (part 109's: each from its start, Software, 3,600 frames, Off and On): BlazBlue 2 s and 7 s, SSX on
   Tour 4 and 11, Aces of War 5 to 6 and 25 to 26, with either timing (part 109: 4 and 20, 8 and 43, 10 and 41).
+- **Found by the independent review** (CHANGES, item 1): C lost the control pass's front-end work after a word-buffer
+  flush. A bounding box whose vertices lie on a VRAM page with drawing pending hands its check to the GE thread as a
+  record of its own, which takes the words waiting, so the box's vertices' work was marked after word -1 and never
+  replayed, with every mark after it in that record (and a PRIM right after the box carried none): the GE thread's
+  front end ended early, a SIGNAL's time earlier than with the thread off. Marks now count the words before them
+  (none: before the next word), go in a record even with no words, and the checks abort on one not taken
+  (`716171da0`; its test fails on `4ee2e5acf`, a SIGNAL's time up to 274 cycles early, and passes after). The nits
+  (`df88b37ee`): `unwedge()` unhooks first; quitting with the GE thread
+  stuck lets it go, no hang; the placement checks its kept thread ID each frame; CI has a thread-On lane.
 - **Found and fixed on the way**: `listWord()`'s piece cache kept a 32-byte piece clean after checking one word; with
   the checks on the thread's model kept every passed put point (MX vs ATV crawled); under the contention term the first
   threaded runs differed (limits taking in later stretches, a cut go never ending its stretch, spin skips sized by a
@@ -98,9 +108,9 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   `geContendNow()`, `geStretchEnded()` (from `syscall()`, `run()` and now `goThreaded()`), `GeThread::Owed`'s clocks
   by kind, `geFolded`'s stretch entries with `GeLimit`'s count, `spinSkip()`. C needs no state layout of its own;
   part 113 takes 35.
-- **Next**: the independent review, and the coordinator's library check (with the PSP's timing On against Off, and Off
-  against master); Auto with its handover both ways (design step 4), a stacked PR; the app's option once On beats Off
-  on the RP6; Hot Wheels' remaining store cost.
+- **Next**: the review's look at the fix, and the coordinator's library check (with the PSP's timing On against Off,
+  and Off against master); Auto with its handover both ways (design step 4), a stacked PR; the app's option once On
+  beats Off on the RP6; Hot Wheels' remaining store cost.
 
 ## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in), the gate against the captures by the whole frame, a SIGNAL's interrupt at its time — 2026-10-18
 
