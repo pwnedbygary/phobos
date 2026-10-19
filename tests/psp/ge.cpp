@@ -2912,13 +2912,15 @@ static auto geTimePspBeside() -> void {
 //With the PSP's GE timing, the push the CPU's traffic beside the GE makes, by geContend()'s rule, at 222/111: a stretch
 //of 100,000 cycles in the GE's busy window, 50,000 instructions, 400 data lines read in and 100 instruction lines, 100
 //written back and 30 uncached accesses, beside a list whose clocks so far are 60% texels read from RAM, pushes the
-//GE's pipeline (gePipeAt, geDoneAt, geReachAt) back by 100,000 x slow / (1 + slow): slow = Contention[texels] x 0.6 x
-//u, u the lines (weighted) over the longer of the cycles passed and the PSP's CPU's time for the instructions and
-//stalls, as a share of StreamLines. A stretch with nothing in it pushes what the window owes by then that it hasn't
-//pushed: till the cycles passed reach the CPU's time, about as much again; past that, the rest of the lines' cost,
+//GE's pipeline (gePipeAt, geDoneAt, and with a SIGNAL due geReachAt) back by the window's due, in whole cycles: 100,000
+//x slow / (1 + slow), slow = Contention[texels] x 0.6 x u, u the lines (weighted) over the longer of the cycles passed
+//and the PSP's CPU's time for the instructions and stalls, as a share of StreamLines. A stretch with nothing in it
+//pushes what the window owes by then that it hasn't pushed (no SIGNAL due now: geReachAt stays, for geTime() to work
+//out again): till the cycles passed reach the CPU's time, about as much again; past that, the rest of the lines' cost,
 //which ten million cycles more bring to within 2% of Contention[texels] x 0.6 x the lines' streaming time and never
-//past it (the lines cost the GE once). A stretch running past the GE's end counts its share before it; one after it
-//starts the window afresh, pushing nothing.
+//past it (the lines cost the GE once). A stretch begun while the GE is busy and running past its end adds the cycles
+//before it and that share of its instructions and lines, in whole counts; one begun after it starts the window afresh,
+//pushing nothing. The window's sums are whole counts: the same however its stretches are grouped.
 static auto geTimePspContendRule() -> void {
   using Cost = GE::Cost;
   KernelMachine m;
@@ -2928,52 +2930,58 @@ static auto geTimePspContendRule() -> void {
   auto& data = m.system.dataCache;
   auto& code = m.system.instructionCache;
   k.cycles = 1'000'000, k.gePipeAt = 1'000'000, k.geReachAt = 2'000'000, k.geDoneAt = 3'000'000;
+  k.geSignalDue = true;  //(a SIGNAL met, its interrupt due at geReachAt, which the push moves too)
   k.geSeeCaches();  //(as the GE getting busy does)
   m.system.ge.ramClocks[2] = 600, m.system.ge.allClocks = 1000;
-  f64 counted = 333.0 / 222, window = 0, lines = 0, stalls = 0, instructions = 0, owed = 0, carry = 0;
-  auto expect = [&](f64 overlap, f64 share, f64 n, f64 fills, f64 writebacks, f64 uncached) -> u64 {
-    window += overlap, instructions += share * n;
-    lines += share * (fills + Cost::WritebackLine * writebacks + Cost::UncachedLine * uncached);
-    stalls += share * (Cost::FillCycles * fills + Cost::WritebackCycles * writebacks + Cost::UncachedCycles * uncached);
-    f64 time = std::max(window, (Cost::InstructionCycles * instructions + stalls) * counted);
-    f64 slow = Cost::Contention[2] * 0.6 * (lines * counted / (time * Cost::StreamLines));
-    f64 more = window * slow / (1 + slow) - owed;
-    if(!(more > 0)) return 0;
-    owed += more, carry += more;
-    u64 pushed = u64(carry);
-    carry -= f64(pushed);
+  f64 counted = 333.0 / 222;
+  u64 passed = 0, instructions = 0, fills = 0, writebacks = 0, uncached = 0, owed = 0;
+  auto lines = [&] { return f64(fills) + Cost::WritebackLine * f64(writebacks) + Cost::UncachedLine * f64(uncached); };
+  auto expect = [&](u64 overlap, u64 n, u64 f, u64 w, u64 c) -> u64 {
+    passed += overlap, instructions += n, fills += f, writebacks += w, uncached += c;
+    f64 stalls = Cost::FillCycles * f64(fills) + Cost::WritebackCycles * f64(writebacks) +
+                 Cost::UncachedCycles * f64(uncached);
+    f64 time = std::max(f64(passed), (Cost::InstructionCycles * f64(instructions) + stalls) * counted);
+    f64 u = lines() * counted / (time * Cost::StreamLines);
+    f64 slow = Cost::Contention[2] * 600 / 1000 * u;
+    u64 due = u64(f64(passed) * slow / (1 + slow));
+    if(due <= owed) return 0;
+    u64 pushed = due - owed;
+    owed = due;
     return pushed;
   };
   data.fills += 400, code.fills += 100, data.writebacks += 100, data.uncached += 30;
-  u64 first = expect(100'000, 1, 50'000, 500, 100, 30);
+  u64 first = expect(100'000, 50'000, 500, 100, 30);
   k.geContend(1'000'000, 1'100'000, 50'000);
   CHECK(first > 1000, true);
   CHECK(k.gePipeAt, 1'000'000 + first);
   CHECK(k.geReachAt, 2'000'000 + first);
   CHECK(k.geDoneAt, 3'000'000 + first);
-  u64 done = k.geDoneAt;
-  u64 pushed = expect(100'000, 1, 0, 0, 0, 0);  //(the CPU's time, 168,000 cycles, not yet passed)
+  u64 done = k.geDoneAt, reach = k.geReachAt;
+  k.geSignalDue = false;
+  u64 pushed = expect(100'000, 0, 0, 0, 0);  //(the CPU's time, 168,150 cycles, not yet passed)
   k.geContend(1'100'000, 1'200'000, 0);
   CHECK(pushed > first / 2, true);
   CHECK(k.geDoneAt, done + pushed);
+  CHECK(k.geReachAt, reach);
   done = k.geDoneAt;
-  pushed = expect(10'000'000, 1, 0, 0, 0, 0);
+  pushed = expect(10'000'000, 0, 0, 0, 0);
   k.geDoneAt += 10'000'000;  //(the GE busy for all of it)
   k.geContend(1'200'000, 11'200'000, 0);
   CHECK(k.geDoneAt, done + 10'000'000 + pushed);
-  f64 cost = Cost::Contention[2] * 0.6 * lines * counted / Cost::StreamLines;  //(the lines' cost, once)
-  CHECK(owed <= cost && owed > 0.98 * cost, true);
+  f64 cost = Cost::Contention[2] * 0.6 * lines() * counted / Cost::StreamLines;  //(the lines' cost, once)
+  CHECK(f64(owed) <= cost && f64(owed) > 0.98 * cost, true);
   done = k.geDoneAt;
   u64 from = done - 50'000;
   data.fills += 1000;
-  pushed = expect(50'000, 50'000.0 / 200'000, 20'000, 1000, 0, 0);
+  pushed = expect(50'000, 5'000, 250, 0, 0);  //(a quarter of it before the GE is done)
   k.geContend(from, from + 200'000, 20'000);
   CHECK(k.geDoneAt, done + pushed);
+  CHECK(k.geWindow.passed == passed && k.geWindow.fills == fills && k.geWindow.pushed == owed, true);
   done = k.geDoneAt;
   data.fills += 1000;
   k.geContend(done + 10, done + 100'000, 20'000);
   CHECK(k.geDoneAt, done);
-  CHECK(k.geWindow.passed == 0 && k.geWindow.lines == 0 && k.geWindow.instructions == 0, true);
+  CHECK(k.geWindow.passed == 0 && k.geWindow.fills == 0 && k.geWindow.instructions == 0, true);
 }
 
 //With the PSP's GE timing, a state saved while the CPU writes beside a list (its caches holding lines, the GE's busy
@@ -3007,7 +3015,7 @@ static auto geTimePspBesideState() -> void {
   a.call("sceGeDrawSync");
   a.call("sceKernelExitGame");
   m.runProgram(Code, true, Kernel::VblankCycles / 4);
-  CHECK(m.kernel.geDoneAt > m.kernel.cycles && m.kernel.geWindow.lines > 0, true);
+  CHECK(m.kernel.geDoneAt > m.kernel.cycles && m.kernel.geWindow.fills > 0, true);
   auto state = saveState(m);
   KernelMachine fresh;
   fresh.pspTiming();

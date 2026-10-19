@@ -134,10 +134,16 @@ auto Kernel::spinTurn() -> void {
   if(site != spin.site || back != spin.back) {
     if(spin.site && cycles - spin.last <= SpinLongest) return;
     spin = {site, back, cycles};
+    spinCounts(spin.counts);
+    spin.called = syscalls;
     return;
   }
   u64 period = cycles - spin.last;
   spin.last = cycles;
+  u64 counts[4];
+  spinCounts(counts);
+  for(u32 n : range(4)) spin.moved[n] = counts[n] - spin.counts[n], spin.counts[n] = counts[n];
+  spin.calls = u32(std::min<u64>(syscalls - spin.called, ~0u)), spin.called = syscalls;
   if(period != spin.period || !period) {  //(none: called from outside the CPU's go, as tests call functions)
     spin.period = period;
     spin.turns = 0;
@@ -163,6 +169,23 @@ auto Kernel::spinSkip() -> void {
   //a list's FINISH (or, with the PSP's GE timing, its SIGNAL) taken at the first system call once it's due: none comes
   //by within the turns skipped
   if((geFinishDue && geBound() <= cycles + skipped) || (geSignalDue && geReachAt <= cycles + skipped)) return;
+  //With the PSP's GE timing, the GE busy for all of the turns or idle for all of them, not done part way: their one
+  //stretch then adds to its busy window what theirs would (its sums whole counts). It pushes the GE back as far as
+  //theirs would have by the last turn's end if the push the window owes (geContendDue()) is at its most there, or no
+  //more than before the first turn: so it is where that push falls and then rises at most along the turns, which it
+  //does with each turn one stretch (one system call), or with the turns moving no lines (then any number: a spin's
+  //turn makes no waits, so its stretches are all instructions), the window's time the same kind throughout
+  //(geContendBound()). With no lines in the window nor the turns' the window owes nothing.
+  if(gePspTiming && geDoneAt > cycles) {
+    if(geDoneAt <= cycles + skipped) return;
+    bool moving = spin.moved[0] || spin.moved[1] || spin.moved[2] || spin.moved[3];
+    GeWindow end = geWindow;
+    end.passed += skipped, end.instructions += skipped;
+    end.fills += turns * (spin.moved[0] + spin.moved[3]), end.writebacks += turns * spin.moved[1];
+    end.uncached += turns * spin.moved[2];
+    bool lines = moving || geWindow.fills || geWindow.writebacks || geWindow.uncached;
+    if(lines && ((moving && spin.calls > 1) || geContendBound(geWindow) != geContendBound(end))) return;
+  }
   SpinShadow shadow{*this, memory};
   if(!spinProve(shadow) || shadow.period != spin.period) {
     spin.wait = std::min(spin.wait * 2 + SpinTurns, SpinWaitMost);
@@ -181,7 +204,24 @@ auto Kernel::spinSkip() -> void {
   counted += skipped;
   cpu.instructionsRun += skipped;
   spun += turns;
-  if(gePspTiming) geContend(cycles - skipped, cycles, skipped);  //(the turns' own accesses go uncounted)
+  if(gePspTiming) {
+    //Each turn skipped moves the lines in the CPU's caches the one before did: the turns are alike, the same accesses
+    //in the same order, and after one such turn (the last of the SpinTurns in a row before a skip) the caches hold
+    //what any later one leaves them holding, each set its turn's last two lines (or, touched by one line or none, as
+    //it was), so every turn from there counts the same and changes nothing.
+    auto& data = cpu.dataCache;
+    data.fills += turns * spin.moved[0], data.writebacks += turns * spin.moved[1];
+    data.uncached += turns * spin.moved[2], cpu.instructionCache.fills += turns * spin.moved[3];
+    for(u32 n : range(4)) spin.counts[n] += turns * spin.moved[n];
+    geContend(cycles - skipped, cycles, skipped);
+  }
+}
+
+//The CPU's caches' counts as they are (data lines read in, written back, uncached accesses, instruction lines read in).
+auto Kernel::spinCounts(u64 (&counts)[4]) const -> void {
+  auto& data = cpu.dataCache;
+  counts[0] = data.fills, counts[1] = data.writebacks, counts[2] = data.uncached;
+  counts[3] = cpu.instructionCache.fills;
 }
 
 //One turn on the shadow from the CPU as it is, after the anchor's call: true if it comes back to the anchor with every

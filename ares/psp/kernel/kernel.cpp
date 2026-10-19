@@ -1004,7 +1004,7 @@ auto Kernel::power() -> void {
   geDoneAt = geReachAt = gePipeAt = 0;
   geFinishDue = false;
   geSignalDue = false;
-  geWindow = {}, geContendCarry = 0, geBusyCycles = geBusyLines = 0;
+  geWindow = {}, geBusyCycles = geBusyLines = 0;
   for(auto& seen : geCacheSeen) seen = 0;  //(the CPU's caches start afresh with the program: Allegrex::power())
   startTime = u64(std::time(nullptr)) * 1'000'000;
   trampoline();
@@ -1209,6 +1209,7 @@ auto Kernel::syscall(u32 code) -> bool {
   cycles += stretch;
   if(gePspTiming) geContend(cycles - stretch, cycles, stretch);
   counted = before;
+  syscalls++;
   bool quiet = false;
   bool handled = dispatch(code, quiet);
   if(!quiet) {
