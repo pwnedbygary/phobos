@@ -840,6 +840,7 @@ auto main(int argc, char** argv) -> int {
   if(psp.gpu) gpu = psp.gpu->statistics;
   u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
+  psp.kernel.geFold(true);  //(with the GE on its thread, the stretches the CPU ended after its runs taken first)
   f64 geBusyCycles = psp.kernel.geBusyCycles, geBusyLines = psp.kernel.geBusyLines;  //(so too)
   //what ran, for the report, before unloading lets the renderer go
   std::string ranRenderer = psp.gpu ? (psp.gpu->fast ? "Vulkan (fast)" : "Vulkan") : "Software";
