@@ -20,6 +20,10 @@
 //                      psp-ge-thread), asked for every frame as the emulation thread's are; unset: left as it is, with
 //                      the affinity of the thread that loaded the game. The CPU it was on is kept every frame, either
 //                      way
+//  PHOBOS_GE_PLACE     1: the GE's own thread and the emulation thread placed as the app places them with its "PSP
+//                      thread placement" on (android/app/src/main/cpp/GeThreadPlacement.hpp): the GE's on the fastest
+//                      core the runner may run on as it starts, the emulation thread on the next, every frame, in
+//                      place of PHOBOS_PIN's and PHOBOS_GE_PIN's (which go on where nothing could be placed)
 //  PHOBOS_PERF         0: no hardware counters (they're tried by default)
 //  PHOBOS_FREQ_EVERY   the emulation thread's CPU's clock read every N frames (30 by default; 0: never)
 //  PHOBOS_MEASURE      0: nothing measured, nothing pinned (the runner as it is)
@@ -54,6 +58,7 @@
 #if defined(__ANDROID__)
   #include <sys/system_properties.h>
 #endif
+#include "../../../android/app/src/main/cpp/GeThreadPlacement.hpp"
 
 //The build, for the JSON (build-android.sh names them)
 #if !defined(PHOBOS_MEASURE_SOURCE)
@@ -620,6 +625,12 @@ struct State {
   std::map<int, unsigned> geFramesByCpu;
   u64 gePinAsked = 0, gePinRefused = 0;
   int gePinError = 0;
+  //the app's placement of the two (PHOBOS_GE_PLACE), and the frames it placed both
+  bool gePlace = false;
+  #if defined(__linux__)
+  phobos_placement::Placement placement;
+  #endif
+  u64 placedFrames = 0;
   //the system
   std::string cpuset, cgroup, kernel, android, model, soc, harden;
   long long paranoid = -1000;
@@ -634,6 +645,11 @@ inline auto state() -> State& {
 
 inline auto pinFrame(State& s) -> void {
   #if defined(__linux__)
+  if(s.gePlace && s.placement.place()) {
+    s.placedFrames++;
+    s.geTid = s.placement.geTid;
+    return;
+  }
   if(s.target.empty()) return;
   s.pinAsked++;
   if(int error = setAffinity(s.target)) s.pinRefused++, s.pinError = error;
@@ -646,7 +662,7 @@ inline auto pinFrame(State& s) -> void {
 inline auto geFrame(State& s) -> void {
   #if defined(__linux__)
   if(!s.geTid) return;
-  if(!s.gePin.empty()) {
+  if(!s.gePin.empty() && !(s.gePlace && s.placement.geCore >= 0)) {
     s.gePinAsked++;
     if(int error = setAffinity(s.gePin, s.geTid)) s.gePinRefused++, s.gePinError = error;
   }
@@ -688,6 +704,8 @@ inline auto begin() -> void {
   s.pinMode = environment("PHOBOS_PIN", "app");
   #if defined(__linux__)
   s.affinityBefore = affinity();
+  s.gePlace = environment("PHOBOS_GE_PLACE", "0") == "1";
+  if(s.gePlace) s.placement.start();  //(the cores it may run on, before the pinning below narrows them)
   errno = 0;
   s.niceBefore = getpriority(PRIO_PROCESS, 0);
   if(s.pinMode != "none") {
@@ -715,7 +733,9 @@ inline auto begin() -> void {
   s.gePin = parseCpus(environment("PHOBOS_GE_PIN", ""));
   s.geTid = geThreadId();
   if(s.geTid) s.geAffinityBegin = affinityOf(s.geTid);
-  if(s.geTid && !s.gePin.empty()) s.gePinAsked++, setAffinity(s.gePin, s.geTid);
+  if(s.geTid && !s.gePin.empty() && !(s.gePlace && s.placement.geCore >= 0)) {
+    s.gePinAsked++, setAffinity(s.gePin, s.geTid);
+  }
   #endif
 
   s.clocksBegin = policyClocks(s.cpuList);
@@ -937,6 +957,17 @@ inline auto print() -> void {
     std::printf("; kept to %s at the end (%s at the start)\n", cpuList(s.geAffinityEnd).c_str(),
                 cpuList(s.geAffinityBegin).c_str());
   }
+  #if defined(__linux__)
+  if(s.gePlace) {
+    auto& p = s.placement;
+    std::printf("measure ge placement: cores ranked %s (of %s); both placed %llu of %u frames",
+                cpuList(p.cores).c_str(), cpuList(p.allowed).c_str(), s.placedFrames, s.frames);
+    if(p.geCore >= 0) {
+      std::printf(", the GE's thread last on cpu%d and the emulation thread on cpu%d", p.geCore, p.emulationCore);
+    }
+    std::printf(" (%llu cores refused)\n", p.refused);
+  }
+  #endif
   if(!r.clocks.empty()) {
     std::string clocks;
     for(auto& [cpu, clock] : r.clocks) {
@@ -1068,6 +1099,19 @@ inline auto writeJson(State& s) -> void {
     }
     out += "}},\n";
   }
+  out += "  \"ge placement\": ";
+  #if defined(__linux__)
+  if(s.gePlace) {
+    auto& p = s.placement;
+    out += "{\"cores\": " + list(p.cores) + ", \"allowed\": " + list(p.allowed) + ", \"placed frames\": " +
+           std::to_string(s.placedFrames) + ", \"ge core\": " + std::to_string(p.geCore) + ", \"emulation core\": " +
+           std::to_string(p.emulationCore) + ", \"refused\": " + std::to_string(p.refused) + "},\n";
+  } else {
+    out += "null,\n";
+  }
+  #else
+  out += "null,\n";
+  #endif
   out += "  \"window\": {\"frames\": " + std::to_string(s.frames) + ", \"seconds\": " + number(r.window) +
          ", \"frames a second\": " + number(r.fps) + "},\n";
   out += "  \"emulation thread\": {\"tid\": " + std::to_string(s.tid) + ", \"cpu seconds\": " + number(r.threadCpu) +

@@ -137,6 +137,9 @@ namespace ares {
   // Whether the PSP's pictures are drawn on a thread of their own, alongside the game's work (its core's "GE Thread",
   // as a game starts): 0 Off, 1 On.
   auto setPspGraphicsOverlap(s32 mode) -> void;
+  // With it On, on a phone whose cores aren't alike: its thread on the fastest core and the emulation thread on the
+  // next (GeThreadPlacement.hpp), each frame; off by default.
+  auto setPspThreadPlacement(bool enabled) -> void;
   // What the PSP's core has to tell the user, once (its Vulkan renderer couldn't start, or stopped): taken, and put
   // in the log; empty if nothing.
   auto takePspNotice() -> std::string;

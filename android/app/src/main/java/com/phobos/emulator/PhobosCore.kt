@@ -105,6 +105,8 @@ object PhobosCore {
     external fun setPspResolution(scale: Int)
     /** Whether the PSP's pictures are drawn alongside its own work (the core's "GE Thread", as a game starts): [PspGraphicsOverlap]. */
     external fun setPspGraphicsOverlap(mode: Int)
+    /** With it on, on a phone whose cores aren't alike: its drawing thread on the fastest core, the game's on the next. */
+    external fun setPspThreadPlacement(enabled: Boolean)
     /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */
     external fun takePspNotice(): String
     /** The number of the PSP's system dialog waiting for the player (util/PspDialogs.kt); 0 for none. */

@@ -699,6 +699,11 @@ Java_com_phobos_emulator_PhobosCore_setPspGraphicsOverlap(JNIEnv* env, jobject, 
     ares::setPspGraphicsOverlap((s32)mode);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspThreadPlacement(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setPspThreadPlacement(enabled == JNI_TRUE);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_phobos_emulator_PhobosCore_takePspNotice(JNIEnv* env, jobject) {
     return env->NewStringUTF(ares::takePspNotice().c_str());

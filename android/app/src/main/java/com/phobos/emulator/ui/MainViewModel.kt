@@ -586,6 +586,11 @@ class MainViewModel(
         settingsStore.setPspGraphicsOverlap(mode)
         PhobosCore.setPspGraphicsOverlap(PspGraphicsOverlap.forCore(mode))
     }
+    /** With it On, on a phone whose cores aren't alike, where its two threads run (each frame): off by default. */
+    fun setPspThreadPlacement(enabled: Boolean) = viewModelScope.launch {
+        settingsStore.setPspThreadPlacement(enabled)
+        PhobosCore.setPspThreadPlacement(enabled)
+    }
     /** What a controller's right stick does in a PSP game: [PspRightStick], read by every stick move. */
     fun setPspRightStick(choice: PspRightStick) = viewModelScope.launch { settingsStore.setPspRightStick(choice) }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
@@ -1966,6 +1971,7 @@ class MainViewModel(
             PhobosCore.setPspRenderer(PspRenderer.forCore(settings.value.pspRenderer))
             PhobosCore.setPspResolution(PspResolution.forCore(settings.value.pspResolution))
             PhobosCore.setPspGraphicsOverlap(PspGraphicsOverlap.forCore(settings.value.pspGraphicsOverlap))
+            PhobosCore.setPspThreadPlacement(settings.value.pspThreadPlacement)
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -3049,6 +3055,8 @@ class MainViewModel(
             PhobosCore.setPspResolution(pspStart.resolution)
             // Whether its pictures are drawn alongside its own work, the core's "GE Thread" as the game starts.
             PhobosCore.setPspGraphicsOverlap(pspStart.graphicsOverlap)
+            // And where that thread and the game's run, on a phone whose cores aren't alike (each frame).
+            PhobosCore.setPspThreadPlacement(currentSettings.pspThreadPlacement)
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.
             val pspFonts = PspFonts.folder(context.filesDir)
