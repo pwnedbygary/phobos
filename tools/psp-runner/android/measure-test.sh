@@ -73,18 +73,19 @@ for pin in 0 none; do
   echo "PHOBOS_PIN=$pin:"
   grep -E '^measure (window|emulation|cpus|pinning|counter|threads)' "$SCRATCH/out.txt" | sed 's/^/  /'
 done
-#The app's placement (PHOBOS_GE_PLACE): with two cores or more ranked by capacity, every frame the GE's thread (the
-#helper, named so) on the fastest and this thread on the next, and left there; with fewer (a VM with no capacities
-#or clocks), nothing placed, and the app's pinning as without it.
+#The app's placement (PHOBOS_GE_PLACE): with two cores or more ranked by capacity, before every frame (91 times for
+#90) the GE's thread (the helper, named so) on the fastest and this thread on the next, and left there; with fewer (a
+#VM with no capacities or clocks), nothing placed, and the app's pinning as without it.
 if [[ $(uname -s) == Linux ]]; then
   TEST_GE_THREAD=1 PHOBOS_GE_PLACE=1 PHOBOS_MEASURE_JSON="$JSON" "$SCRATCH/test" > "$SCRATCH/out.txt"
   grep -q '^measure ge placement: ' "$SCRATCH/out.txt" || fail "no placement line"
+  jq -e '."ge placement".asked == 91' "$JSON" > /dev/null || fail "placement not asked before every frame"
   if jq -e '."ge placement".cores | length >= 2' "$JSON" > /dev/null; then
-    jq -e '."ge placement" as $p | $p."placed frames" == 90 and $p."ge core" == $p.cores[0] and
+    jq -e '."ge placement" as $p | $p.placed == 91 and $p."ge core" == $p.cores[0] and
            $p."emulation core" == $p.cores[1] and ."ge thread"."affinity at end" == [$p.cores[0]] and
            .pin."affinity at end" == [$p.cores[1]]' "$JSON" > /dev/null || fail "not placed"
   else
-    jq -e '."ge placement"."placed frames" == 0' "$JSON" > /dev/null || fail "placed without cores ranked"
+    jq -e '."ge placement".placed == 0' "$JSON" > /dev/null || fail "placed without cores ranked"
   fi
   echo "PHOBOS_GE_PLACE=1: $(grep '^measure ge placement' "$SCRATCH/out.txt")"
 fi

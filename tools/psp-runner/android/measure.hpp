@@ -625,12 +625,13 @@ struct State {
   std::map<int, unsigned> geFramesByCpu;
   u64 gePinAsked = 0, gePinRefused = 0;
   int gePinError = 0;
-  //the app's placement of the two (PHOBOS_GE_PLACE), and the frames it placed both
+  //the app's placement of the two (PHOBOS_GE_PLACE): asked as the pinning is (before each frame's run), and how often
+  //both were placed
   bool gePlace = false;
   #if defined(__linux__)
   phobos_placement::Placement placement;
   #endif
-  u64 placedFrames = 0;
+  u64 placeAsked = 0, placed = 0;
   //the system
   std::string cpuset, cgroup, kernel, android, model, soc, harden;
   long long paranoid = -1000;
@@ -645,8 +646,9 @@ inline auto state() -> State& {
 
 inline auto pinFrame(State& s) -> void {
   #if defined(__linux__)
+  if(s.gePlace) s.placeAsked++;
   if(s.gePlace && s.placement.place()) {
-    s.placedFrames++;
+    s.placed++;
     s.geTid = s.placement.geTid;
     return;
   }
@@ -960,8 +962,8 @@ inline auto print() -> void {
   #if defined(__linux__)
   if(s.gePlace) {
     auto& p = s.placement;
-    std::printf("measure ge placement: cores ranked %s (of %s); both placed %llu of %u frames",
-                cpuList(p.cores).c_str(), cpuList(p.allowed).c_str(), s.placedFrames, s.frames);
+    std::printf("measure ge placement: cores ranked %s (of %s); both placed %llu of the %llu times asked",
+                cpuList(p.cores).c_str(), cpuList(p.allowed).c_str(), s.placed, s.placeAsked);
     if(p.geCore >= 0) {
       std::printf(", the GE's thread last on cpu%d and the emulation thread on cpu%d", p.geCore, p.emulationCore);
     }
@@ -1103,9 +1105,10 @@ inline auto writeJson(State& s) -> void {
   #if defined(__linux__)
   if(s.gePlace) {
     auto& p = s.placement;
-    out += "{\"cores\": " + list(p.cores) + ", \"allowed\": " + list(p.allowed) + ", \"placed frames\": " +
-           std::to_string(s.placedFrames) + ", \"ge core\": " + std::to_string(p.geCore) + ", \"emulation core\": " +
-           std::to_string(p.emulationCore) + ", \"refused\": " + std::to_string(p.refused) + "},\n";
+    out += "{\"cores\": " + list(p.cores) + ", \"allowed\": " + list(p.allowed) + ", \"asked\": " +
+           std::to_string(s.placeAsked) + ", \"placed\": " + std::to_string(s.placed) + ", \"ge core\": " +
+           std::to_string(p.geCore) + ", \"emulation core\": " + std::to_string(p.emulationCore) + ", \"refused\": " +
+           std::to_string(p.refused) + "},\n";
   } else {
     out += "null,\n";
   }
