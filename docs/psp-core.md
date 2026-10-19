@@ -18864,11 +18864,12 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
   owes is at its most there, or no more than before the first: so it is where it falls and then rises at most along the
   turns (each of them all instructions: a spin turn makes no waits). It does so for turns of one stretch each (one
   syscall), and for turns of any number moving no lines, with the window's time the same kind throughout (its cycles
-  passed or the CPU's time, `geContendBound()`); with lines in the window or the turns' other turns aren't skipped, and
-  with none the window owes nothing. The review found the first version counting no skipped turn's lines, exact only
-  while turns moved none; the test it asked for (the GE's looks polled, each turn reading an uncached word or three
-  lines one set can't hold, `tests/psp/spins.cpp`) then found the window's sums, floats, differing in their last bits
-  from the turns': hence the whole counts.
+  passed or the CPU's time, `geContendBound()`). So with lines in the window or the turns, no other turns are skipped:
+  none that make more than one syscall each and move lines, none over which the window's time would change kind. With no
+  lines in either, the window owes nothing, and neither refusal applies. The review found the first version counting no
+  skipped turn's lines, exact only while turns moved none; the test it asked for (the GE's looks polled, each turn
+  reading an uncached word or three lines one set can't hold, `tests/psp/spins.cpp`) then found the window's sums,
+  floats, differing in their last bits from the turns': hence the whole counts.
 
 ### The fit (`tools/psp-measure/contention11.py`)
 
@@ -18886,8 +18887,8 @@ part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPC
   its traffic): `InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40; the arithmetic and
   cached reads 14 to 23% over, the slowed streaming 12 to 47% under.
 - **In the core** (`contention11.py --core`: the core's own run of rounds 10 and 10b against the PSP's): round 10's 680
-  pairs, the core's slowdowns within 5.7% of the PSP's at the median (15.5% with the term held at none), 93% within 25%
-  (list E1, all NOPs, slowed only once a run's last words counted as reads of RAM: x1.24 beside streaming, the PSP's
+  pairs, the core's slowdowns within 5.7% of the PSP's at the median (15.5% with the term held at none), 94.0% within
+  25% (list E1, all NOPs, slowed only once a run's last words counted as reads of RAM: x1.24 beside streaming, the PSP's
   x1.28); round 10b's 144, 1.0%. Polling (three ways) x1.00 (the PSP 0.96 to 1.06); writing before the list x1.00 (1.00
   to 1.07); a writer beside it once: list A x1.91 (2.02), C x1.00 (1.00), D x1.33 (1.28), E2 x1.69 (1.36), H x1.17
   (1.28), I x1.13 (1.07).
