@@ -5,7 +5,7 @@
 thread_local bool GE::onGeThread = false;
 
 GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
-  words.reserve(WordsMost);
+  control.handTexture.known = false;  //(its pages are this machine's memory's)
   versions = std::make_unique<GeVersions>(&GE::hostPage, &control.memory);
   render.versions = versions.get();
   render.reporting = this;
@@ -60,18 +60,6 @@ auto GeThread::append(Kind kind, u32 size) -> u8* {
   return at + sizeof(header);
 }
 
-//(a list word as run() read it, at its address, or ~0 for one from no list (the kernel's): runs of words one after
-//another kept as a run)
-auto GeThread::word(u32 word, u32 address) -> void {
-  if(words.size() == WordsMost) flushWords();
-  if(wordRuns.empty() || address == ~0u || wordRuns.back().first == ~0u ||
-     ((wordRuns.back().first + wordRuns.back().second * 4) & 0x0fff'ffff) != address) {
-    wordRuns.push_back({address, 0});
-  }
-  wordRuns.back().second++;
-  words.push_back(word);
-}
-
 auto GeThread::publish() -> void {
   ring.publish();
   if(fuzz == Fuzz::None) return;
@@ -81,17 +69,13 @@ auto GeThread::publish() -> void {
 }
 
 auto GeThread::flushWords() -> void {
-  if(words.empty()) return;
-  u32 count = words.size(), runCount = wordRuns.size();
-  u8* at = append(Kind::Words, sizeof(u32) + runCount * 2 * sizeof(u32) + count * sizeof(u32));
+  if(!wordCount) return;
+  u8* at = append(Kind::Words, sizeof(u32) + runCount * sizeof(WordRun) + wordCount * sizeof(u32));
   std::memcpy(at, &runCount, sizeof(u32));
-  for(u32 n = 0; n < runCount; n++) {
-    u32 run[2] = {wordRuns[n].first, wordRuns[n].second};
-    std::memcpy(at + sizeof(u32) + n * sizeof(run), run, sizeof(run));
-  }
-  std::memcpy(at + sizeof(u32) + runCount * 2 * sizeof(u32), words.data(), count * sizeof(u32));
+  std::memcpy(at + sizeof(u32), wordRuns.data(), runCount * sizeof(WordRun));
+  std::memcpy(at + sizeof(u32) + runCount * sizeof(WordRun), words.data(), wordCount * sizeof(u32));
   publish();
-  words.clear(), wordRuns.clear();
+  wordCount = runCount = 0, nextWordAt = ~0u;
 }
 
 //(a PRIM's or curved surface's record: its word, addresses and copies; one too big for the ring is drawn by the
@@ -199,8 +183,18 @@ auto GeThread::protect(u32 address, u32 size) -> void {
   if(!control.memory.pagesOf(address, size, first, last)) return;
   u64 passed = done.load(std::memory_order_acquire);
   for(u32 page = first; page <= last && page < textureUntil.size(); page++) {
-    if(textureUntil[page] > passed && !control.memory.watched[page]) control.memory.watch(page * Memory::PageSize, 1);
+    if(textureNewest(page) > passed && !control.memory.watched[page]) control.memory.watch(page * Memory::PageSize, 1);
   }
+}
+
+auto GeThread::textureRead(u32 first, u32 last, u64 at) -> void {
+  if(first != textureFirst || last != textureLast) {
+    for(u32 page = textureFirst; page <= textureLast && page < textureUntil.size(); page++) {
+      textureUntil[page] = std::max(textureUntil[page], textureAt);
+    }
+    textureFirst = first, textureLast = last;
+  }
+  textureAt = at;
 }
 
 //(checking: the VRAM bytes written since a record that went before them, with their place, for the render GE's model)
@@ -248,7 +242,7 @@ auto GeThread::gpuBusy(u32 address, u32 size) -> bool {
     u32 run = copy & 1 ? std::min(end - at, 32 - at % 32) : end - at;
     u32 offset = copy & 1 ? Memory::vramOffset(copy, at) : at;
     for(u32 page = offset >> 12; page <= (offset + run - 1) >> 12; page++) {
-      if(model.gpu.pageNewest[page] > model.finishKnown) return true;
+      if(model.gpu.newestOn(page) > model.finishKnown) return true;
     }
     at += run;
   }
@@ -479,8 +473,8 @@ NALL_NOINLINE auto GeThread::listWord(u32 address) -> bool {
     //thousands of times a frame, unchanged)
     CleanPage seen{address >> 12, 0, 0, model.dirtyings, model.staleDepth, model.scaled};
     for(u32 page = first >> 12; page <= last >> 12; page++) {
-      seen.gpu = std::max(seen.gpu, model.gpu.pageNewest[page]);
-      seen.software = std::max(seen.software, model.software.pageNewest[page]);
+      seen.gpu = std::max(seen.gpu, model.gpu.newestOn(page));
+      seen.software = std::max(seen.software, model.software.newestOn(page));
     }
     auto& known = cleanPages[seen.page % cleanPages.size()];
     if(seen == known) return true;
@@ -491,7 +485,7 @@ NALL_NOINLINE auto GeThread::listWord(u32 address) -> bool {
   //(each word of such a page looked at alone: eight share a piece, kept once all its bytes are clean, as a rectangle's
   //edge may fall inside it)
   bool onePiece = first >> 5 == last >> 5;
-  CleanPage piece{first >> 5, model.gpu.pageNewest[first >> 12], model.software.pageNewest[first >> 12],
+  CleanPage piece{first >> 5, model.gpu.newestOn(first >> 12), model.software.newestOn(first >> 12),
                   model.dirtyings, model.staleDepth, model.scaled};
   if(onePiece && piece == cleanPiece) return false;
   if(model.dirty(first, last)) waitFor(drawnFirst(address, 4));
@@ -1058,22 +1052,24 @@ auto GE::handPrimitive(u32 word, u32 count, bool patching) -> void {
   u32 vertexAt = vertexAddress, indexAt = indexAddress;
   GeThread::Copies copies;
   copyVertices(count, format, copies, handCopies);
-  if(commands[TextureMappingEnable] & 1) {
-    Sampler texture = sampler();
-    u32 low, high;
-    textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
-    if(high > low) memory.watch(low, high - low);
+  bool textured = commands[TextureMappingEnable] & 1;
+  auto& texture = handTexture;
+  if(textured) {
+    u32 words[5] = {commands[TextureFormat], commands[TextureAddress0], commands[TextureBufferWidth0],
+                    commands[TextureSize0], commands[TextureMode]};
+    if(!texture.known || std::memcmp(words, texture.words, sizeof(words))) {
+      Sampler sampled = sampler();
+      textureBytes(sampled, std::min<u32>(sampled.height, 512), texture.low, texture.high);
+      texture.paged = texture.high > texture.low &&
+                      memory.pagesOf(texture.low, texture.high - texture.low, texture.first, texture.last);
+      std::memcpy(texture.words, words, sizeof(words)), texture.known = true;
+    }
+    if(texture.high > texture.low) memory.watch(texture.low, texture.high - texture.low);
   }
   bool hardware = thread->hardware;
   u64 at = thread->nextPlace();
-  if(commands[TextureMappingEnable] & 1) {  //(the texture's pages: their stores heard of till the render GE passes it)
-    Sampler texture = sampler();
-    u32 low, high, first, last;
-    textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
-    if(high > low && memory.pagesOf(low, high - low, first, last)) {
-      for(u32 page = first; page <= last && page < thread->textureUntil.size(); page++) thread->textureUntil[page] = at;
-    }
-  }
+  //(the texture's pages: their stores heard of till the render GE passes it)
+  if(textured && texture.paged) thread->textureRead(texture.first, texture.last, at);
   bool certain = modelPrimitive(thread->model, word, vertexAt, indexAt, copies, handCopies.data(), hardware, at);
   thread->primitive(word, running ? listWordAt : ~0u, vertexAt, indexAt, hardware, certain, copies,
                     handCopies.data());

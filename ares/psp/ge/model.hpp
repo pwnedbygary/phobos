@@ -89,14 +89,21 @@ struct GeModel {
 
   //Rectangles, each with the newest place of a PRIM it's the rectangle of: the last Kept distinct ones as they are
   //(found by the pages they reach), older ones painted into the 32-byte pieces they reach (the newest place of any).
+  //The newest is kept apart, grown to cover the next while that's the same target's (address, row width and a pixel's
+  //bytes), and put with the others (place()) before anything looks at them (settle()): one rectangle, with the newest
+  //place, for a run of PRIMs into one target, where Super Monkey Ball's thousands each went through the slots. Bigger
+  //than the PRIMs' own, it's dirty where they may not be, never clean where they're dirty.
   struct Rects {
     static constexpr u32 Kept = 32;
     struct Slot { Rect rect; u64 at = 0, used = 0; bool on = false; };
     std::vector<u64> painted = std::vector<u64>(Pieces, 0);
     std::array<Slot, Kept> slots{};
     std::array<u32, Pages> pageSlots{};  //(the slots reaching each page, a bit each)
-    std::array<u64, Pages> pageNewest{};  //(the newest place of any rectangle reaching each page)
+    std::array<u64, Pages> pageNewest{};  //(the newest place of any rectangle reaching each page; newestOn())
     u64 uses = 0;
+    Rect pending;
+    u64 pendingAt = 0;
+    bool pendingOn = false;
     //(row by row, each piece a row reaches any byte of: Super Monkey Ball's thousands of rectangles a frame, each
     //painted through every piece of its span as reaches() found it, spent a seventh of the control pass there)
     auto paint(const Slot& slot) -> void {
@@ -104,6 +111,25 @@ struct GeModel {
     }
     auto add(const Rect& rect, u64 at) -> void {
       if(rect.empty()) return;
+      if(pendingOn && rect.address == pending.address && rect.rowBytes == pending.rowBytes &&
+         rect.bytes == pending.bytes) {
+        pending.left = std::min(pending.left, rect.left), pending.top = std::min(pending.top, rect.top);
+        pending.right = std::max(pending.right, rect.right), pending.bottom = std::max(pending.bottom, rect.bottom);
+        pendingAt = at;
+        return;
+      }
+      settle();
+      pending = rect, pendingAt = at, pendingOn = true;
+    }
+    //(the pending rectangle put with the others, by whatever looks: what's dirty is the same either way)
+    auto settle() const -> void {
+      if(!pendingOn) return;
+      auto& self = const_cast<Rects&>(*this);
+      self.pendingOn = false;
+      self.place(pending, pendingAt);
+    }
+    auto newestOn(u32 page) const -> u64 { settle(); return pageNewest[page]; }
+    auto place(const Rect& rect, u64 at) -> void {
       uses++;
       rect.pages([&](u32 page) { pageNewest[page] = std::max(pageNewest[page], at); });
       for(auto& slot : slots) {
@@ -124,6 +150,7 @@ struct GeModel {
     }
     //The newest place of a rectangle reaching byte (0: none).
     auto newest(u32 byte) const -> u64 {
+      settle();
       u64 at = painted[byte >> 5];
       for(u32 bits = pageSlots[byte >> 12]; bits; bits &= bits - 1) {
         auto& slot = slots[__builtin_ctz(bits)];
@@ -133,6 +160,7 @@ struct GeModel {
     }
     //Whether a rectangle newer than floor reaches any of the piece's bytes first to last.
     auto newerThan(u32 first, u32 last, u64 floor) const -> bool {
+      settle();
       if(pageNewest[first >> 12] <= floor) return false;
       if(painted[first >> 5] > floor) {
         //(painted pieces are those an older rectangle reached some byte of: taken as all of them)
@@ -146,7 +174,7 @@ struct GeModel {
     }
     auto clear() -> void {
       std::fill(painted.begin(), painted.end(), 0);
-      slots = {}, pageSlots = {}, pageNewest = {}, uses = 0;
+      slots = {}, pageSlots = {}, pageNewest = {}, uses = 0, pendingOn = false;
     }
   };
 
@@ -258,7 +286,7 @@ struct GeModel {
   auto dirty(u32 first, u32 last) const -> bool {
     for(u32 page = first >> 12; page <= last >> 12; page++) {
       u32 block = page >> 2;
-      bool gpuMay = gpu.pageNewest[page] > finishKnown, softwareMay = software.pageNewest[page] > drawnKnown;
+      bool gpuMay = gpu.newestOn(page) > finishKnown, softwareMay = software.newestOn(page) > drawnKnown;
       bool depthMay = false, putMay = false;
       for(auto& point : putPoints) {
         if(point.at <= passed || !point.covers[block]) continue;
@@ -311,7 +339,7 @@ struct GeModel {
   //Whether a page may be busy in the GE thread's memory now (drawn on the GPU since the last finish reported, or by
   //software not yet reported drawn): an access to it needs its record, for today's checks there.
   auto busy(u32 page) const -> bool {
-    return gpu.pageNewest[page] > finishKnown || software.pageNewest[page] > drawnKnown;
+    return gpu.newestOn(page) > finishKnown || software.newestOn(page) > drawnKnown;
   }
 
   auto clear() -> void {

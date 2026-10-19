@@ -3551,8 +3551,9 @@ static auto geThreadListPages() -> void {
     thread.model.finishKnown = Late;
     CHECK(thread.listWord(Word), true);
     state(s.ge, 3, false, 0, 1), primitive(s, Late + 1);
+    CHECK(thread.listWord(Word), true);  //(its rectangle put apart from the next's, which would cover the word's page)
     state(s.ge, 3, false, 500, 501), primitive(s, Late + 2);  //(its hull from row 0 to row 502)
-    CHECK(thread.model.gpu.pageNewest[0x80], Late);  //(neither reaches the word's page)
+    CHECK(thread.model.gpu.newestOn(0x80), Late);  //(neither reaches the word's page)
     CHECK(thread.listWord(Word), false);
   }
   for(bool scale : {false, true}) {  //the depth moves turned off under a put point; the scale raised under a hull

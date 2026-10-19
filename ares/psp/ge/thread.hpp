@@ -80,7 +80,16 @@ struct GeThread : Memory::Writer {
   //(the emulation thread's) Records appended in the stream's order; words wait in a buffer until the next record or
   //a drain. Each returns its place where it's asked for: the record's serial. nextPlace(): the next record's, the
   //words before it handed over first (a PRIM's, which the model takes before its record goes).
-  auto word(u32 word, u32 address) -> void;
+  //(a list word as run() read it, at its address, or ~0 for one from no list (the kernel's): runs of words one after
+  //another kept as a run. In the list's loop for every word: Super Monkey Ball's spent a fourteenth of the emulation
+  //thread there, called and growing vectors)
+  auto word(u32 word, u32 address) -> void {
+    if(wordCount == WordsMost) flushWords();
+    if(address == ~0u || address != nextWordAt) wordRuns[runCount++] = {address, 0};
+    wordRuns[runCount - 1].count++;
+    nextWordAt = address == ~0u ? ~0u : (address + 4) & 0x0fff'ffff;
+    words[wordCount++] = word;
+  }
   auto nextPlace() -> u64 { flushWords(); return serial + 1; }
   auto primitive(u32 word, u32 wordAddress, u32 vertexAddress, u32 indexAddress, bool hardware, bool certain,
                  const Copies& copies, const u8* bytes) -> u64;
@@ -196,8 +205,16 @@ struct GeThread : Memory::Writer {
   u64 writePlace = 0;  //(the record of the write under way, where it went first)
   //(each page's newest PRIM handed over whose texture is in it, as Memory::watched numbers pages: a store there unwatches
   //it, as ever, but while the render GE hasn't passed that PRIM, which may still decode from it, it's watched again,
-  //so that later stores go on being heard of, their old bytes kept: protect())
+  //so that later stores go on being heard of, their old bytes kept: protect(). The latest texture's pages are kept
+  //apart, a range and its newest PRIM, put into each page's as another texture comes: Super Monkey Ball's PRIMs, one
+  //texture after another, each went through all its texture's pages)
   std::vector<u64> textureUntil = std::vector<u64>(512_MiB / Memory::PageSize, 0);
+  u32 textureFirst = 1, textureLast = 0;
+  u64 textureAt = 0;
+  auto textureRead(u32 first, u32 last, u64 at) -> void;
+  auto textureNewest(u32 page) const -> u64 {
+    return page >= textureFirst && page <= textureLast ? std::max(textureUntil[page], textureAt) : textureUntil[page];
+  }
   auto protect(u32 address, u32 size) -> void;
   std::vector<std::pair<u32, u32>> written;  //(checking: the VRAM bytes of the write under way, for its record)
 
@@ -216,8 +233,11 @@ private:
   auto listWordDrawn(u32 address) -> void;  //(the render GE: run()'s drawnFirst() for a list word, replayed)
 
   RecordRing ring;
-  std::vector<u32> words;
-  std::vector<std::pair<u32, u32>> wordRuns;  //(the emulation thread's: each run's first address and count)
+  //(the emulation thread's: the words, and each run's first address and count; where the last run goes on, or ~0)
+  struct WordRun { u32 first, count; };
+  std::array<u32, WordsMost> words;
+  std::array<WordRun, WordsMost> wordRuns;
+  u32 wordCount = 0, runCount = 0, nextWordAt = ~0u;
   u32 undrawn = ~0u;  //(the render GE's: run()'s page found with nothing drawn over it, as run() keeps it)
   std::vector<std::string> notes;
   u64 serial = 0;                     //(the emulation thread's) records appended
