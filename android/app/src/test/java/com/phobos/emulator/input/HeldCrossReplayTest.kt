@@ -43,6 +43,7 @@ class HeldCrossReplayTest {
             return true
         }
         override fun stopFastForward() {}
+        override fun frameAdvanceHeld(held: Boolean) {}
     }
     private val gameKeys = GameKeys(screen)
 
@@ -207,22 +208,23 @@ class HeldCrossReplayTest {
         key(BUTTON_SELECT, down = false)
         hotkeysRun.clear()
 
-        // With Cross held, the same presses run nothing: R1, Square and the D-pad are the game's, and Cross stays.
+        // With Cross held, the same presses run nothing: their extra key means no exact match, and
+        // the action keys are held back while the modifier is down. Cross stays.
         val from = pushes.size
         key(BUTTON_A, down = true)
         key(BUTTON_SELECT, down = true)
         key(BUTTON_R1, down = true)
-        assertEquals(Input.R1, GameInputState.buttons and Input.R1)
+        assertEquals(0, GameInputState.buttons and Input.R1)
         key(BUTTON_R1, down = false)
         key(BUTTON_SELECT, down = false)
         key(BUTTON_MODE, down = true)
         key(BUTTON_X, down = true)
-        assertEquals(Input.X, GameInputState.buttons and Input.X)
+        assertEquals(0, GameInputState.buttons and Input.X)
         key(BUTTON_X, down = false)
         key(BUTTON_MODE, down = false)
         key(BUTTON_SELECT, down = true)
         move(hatX = 1f)
-        assertEquals(Input.RIGHT, GameInputState.buttons and Input.RIGHT)
+        assertEquals(0, GameInputState.buttons and Input.RIGHT)
         move()
         key(BUTTON_SELECT, down = false)
         assertTrue("ran $hotkeysRun", hotkeysRun.isEmpty())
@@ -304,15 +306,6 @@ class HeldCrossReplayTest {
             1 shl 12 to "k:106", 1 shl 13 to "k:107", 1 shl 14 to "k:109", 1 shl 15 to "k:108",
             1 shl 17 to "a:1:0", 1 shl 18 to "a:1:1", 1 shl 19 to "a:0:0", 1 shl 20 to "a:0:1",
             1 shl 21 to "a:14:0", 1 shl 22 to "a:14:1", 1 shl 23 to "a:11:0", 1 shl 24 to "a:11:1",
-        )
-
-        /** SettingsStore's default hotkeys (Z and C, which the RP6 hasn't). */
-        val DEFAULT_HOTKEYS = mapOf(
-            "save" to listOf(101, 103), "load" to listOf(101, 102), "inc_slot" to listOf(101, 22),
-            "dec_slot" to listOf(101, 21), "pause" to listOf(101, 96), "reset" to listOf(101, 109, 108),
-            "reload" to listOf(101, 99), "quit" to listOf(101, 97), "screenshot" to listOf(101, 107),
-            "mute" to listOf(101, 100), "ff_toggle" to listOf(101, 105), "analog_toggle" to listOf(98),
-            "keyboard" to listOf(101, 104), "library" to listOf(101, 98),
         )
 
         /** Combos an RP6 owner might set without Z or C, on Select and the Xbox button. */

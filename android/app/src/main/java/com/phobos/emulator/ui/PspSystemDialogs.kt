@@ -68,8 +68,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.phobos.emulator.PhobosCore
 import com.phobos.emulator.input.ActiveControls
 import com.phobos.emulator.input.HotkeyAction
+import com.phobos.emulator.input.HotkeyTracker
 import com.phobos.emulator.input.InputBindings
-import com.phobos.emulator.input.matchingHotkeys
 import com.phobos.emulator.util.PSP_INPUT_URL
 import com.phobos.emulator.util.PspDialogAnswer
 import com.phobos.emulator.util.PspDialogRequest
@@ -150,7 +150,7 @@ private fun pspKey(event: KeyEvent, request: PspDialogRequest, bindings: InputBi
 
 /** A dialog's keys held (for the pause hotkey's combination), and the focus a controller's keys need to reach it. */
 private class PspDialogInput {
-    val held = mutableSetOf<Int>()
+    val hotkeys = HotkeyTracker()
     val focus = FocusRequester()
     var focused by mutableStateOf(false)
 }
@@ -167,9 +167,22 @@ private fun Modifier.pspKeys(request: PspDialogRequest, keys: PspDialogKeys, inp
         .onPreviewKeyEvent { event ->
             val code = event.nativeKeyEvent.keyCode
             val down = event.type == KeyEventType.KeyDown
-            if (down) input.held += code else if (event.type == KeyEventType.KeyUp) input.held -= code
-            if (down && HotkeyAction.PAUSE in matchingHotkeys(keys.controls.hotkeys, input.held)) {
-                input.held.clear()
+            val up = event.type == KeyEventType.KeyUp
+            val hotkeys = keys.controls.hotkeys
+            // A press completes the pause combo, a release a pause tap (Mode alone, by default).
+            val pauses = when {
+                down && event.nativeKeyEvent.repeatCount == 0 -> {
+                    input.hotkeys.press(hotkeys, code)
+                    input.hotkeys.completions(hotkeys)
+                }
+                up -> {
+                    input.hotkeys.release(code)
+                    input.hotkeys.taps(hotkeys)
+                }
+                else -> emptyList()
+            }
+            if (HotkeyAction.PAUSE in pauses) {
+                input.hotkeys.reset()
                 keys.onPause()
                 return@onPreviewKeyEvent true
             }

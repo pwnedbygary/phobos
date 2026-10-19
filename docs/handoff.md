@@ -35,6 +35,182 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Android hotkeys: a combo of as many keys as the player can hold, its first key held back from the game, Mode (Home or Guide) leading the defaults and pausing when tapped, every button and axis bindable, a conflict asked about before it overwrites — 2026-10-19
+
+Branch `improved-hotkeys`, from master `08801ab60`. The Android half of ares #2212 ("enhanced hotkey bindings") and the
+hotkey issues that share its surface (#1191 frame advance, #1726 N64 controller pak, #1577 keep the screen awake, #1698
+direct state slots). Not in this change: up to three bindings per action (the next pull request); the desktop half with
+its focus pause (#2513), unfocused-input guard (#2365) and Shift+Tab fix (#1018) (the ones after it); and slow motion
+(#424), which waits for its pacing/audio measurement. Device checks are **not** done: no device was attached to this
+machine (see Checks).
+- **What the old scheme was**: a combo was a set of Android keycodes that had to match the keys held exactly
+  (`matchingHotkeys`), and every key of it also reached the game. The defaults assumed a Z button (`KEYCODE_BUTTON_Z`,
+  101) and a C key (98), which many pads do not have, so on an RP6 the Save/Load/Pause defaults did nothing. A combo
+  could not contain an axis-only trigger (the capture took the hat D-pad and the key events, never the trigger axes),
+  and there was no conflict check at all: binding a combo another action already had simply ran both.
+- **The rules now** (`input/Hotkeys.kt`):
+  - A combo is any number of keys, in capture order, matched against the keys held **exactly**.
+  - The **first key captured leads the combo**. It is never sent to the game, and the combo's other keys are held back
+    from the game while it is down; pressed alone, they still reach the game. It must be pressed **before** the combo's
+    other keys, so a key already down when it arrives is the game's and does not complete a combo. This removes the old
+    prefix leak (Z reaching the game while Z + R1 was being pressed) without delaying ordinary game buttons.
+  - A one-key binding whose key leads longer combos is a **tap** (`isTapCombo`): it fires when its key is let go with
+    nothing else pressed meanwhile, so Mode alone pauses while Mode + R1 saves. Any other one-key binding fires on its
+    press. Only a press completes a combo (`HotkeyTracker.completions`) and a release only a tap: a combo still held
+    doesn't fire again when another key or direction is let go, and a button a pad reports both as a key and as a hat
+    or axis is pressed once.
+  - Every key the framework delivers can be bound, and so can the triggers, the sticks and the hat: a trigger reported
+    only as an axis joins as its L2/R2 key, a stick direction (X/Y, Z/RZ or RX/RY) as an axis token (a negative number,
+    `HotkeyTokens`), the hat D-pad as its D-pad keys. An axis token is pressed past half travel and let go under 0.4, as
+    the button axes are, so a trigger resting near halfway doesn't press it over and over. A stick direction counts only
+    when some binding uses it, so moving a stick doesn't stop combos from matching; one used as a first key holds back
+    the button, not the analog value.
+  - A binding that would collide is asked about first: the same set, a combo that contains or is contained by another,
+    or a key that leads one combo and is an action key of another. When one of them is the same combo, the question is
+    "The selected hotkey combo is already bound to \<function\>, would you like to overwrite?", with any that only
+    overlap named after it (`hotkeyConflictMessage`). A tap and the combos its key leads don't collide, unless the tap
+    is a hold action (fast-forward hold, frame advance), which can't wait for its key's release. Overwriting unbinds the
+    other actions at the same level (an inherited binding gets an empty override there), in one write.
+- **Defaults** (`DEFAULT_HOTKEYS`): Mode tapped pauses; Mode + R1 saves, + L1 loads, + D-pad right/left change slot,
+  + X reloads, + R3 takes a screenshot, + A mutes, + R2 toggles fast forward, + L3 is frame advance, + D-pad down cycles
+  the N64 pak, + D-pad up toggles PS1 analog, + L2 the on-screen keyboard, + Y the Library. Select and every other button
+  stay the game's. Reset, Quit, fast-forward hold and the direct slots are unbound. A pad that doesn't report Mode needs
+  its hotkeys bound again; the Hotkeys page says so when no connected controller reports one (`InputDevice.hasKeys`).
+- **Keys reach the game's hotkeys from the window** (`input/WindowKeys.kt`, `MainActivity.kt`): while a game is on
+  screen, the activity's window callback hands every key to the game screen's `GameKeys`, whichever view has focus;
+  behind the Library it watches for the Library hotkey and takes only the key that completes it (a Library bound as a
+  tap holds its key back until the release says whether it was one). The repeats and release of a key whose press
+  went to the game, or that the Library hotkey took, go the same way, so a game closed by a reload (Mode + X) or
+  swapped away with keys down still gets them let go of; without that, a reload left Mode and X held in the game's
+  hotkeys and the next X alone reloaded again (the review's critical finding, below). Before, the window ran its own
+  Library tracker ahead of the game and took that combo's first key, so with every default starting with the same key
+  no other combo could complete in a game (found reading the code; never seen on a device). The content view's key
+  fallback and the screen's `onPreviewKeyEvent` hook are gone, the window covering both. Game keys no longer go
+  through Compose's focus dispatch first, so a key event Compose drops during a focus invalidation (the held-Cross
+  entry below) can't be lost before the game gets it. `InputLog` no longer writes "game" or "fallback" lines.
+- **Holds** (`input/GameKeys.kt`): fast-forward hold and frame advance start when a press completes their combo and
+  last while all of its keys stay held, from buttons, the hat or axes alike; letting go of a key never starts one, and
+  neither does a tap. Before, a combo ending on an axis-only R2 started fast forward and never stopped it, and
+  fast-forward hold couldn't start from the hat at all.
+- **Frame advance** (`ui/EmulatorScreen.kt`, `MainViewModel.startFrameStep`): pressed in play or from the pause menu, it
+  stops the game without the menu, so the picture stays (a small badge says how to carry on); each press runs one
+  frame, holding runs one every 100 ms after 300 ms, and the buttons held go into those frames. The press's frame is
+  the action's, not the hold's (`GameKeys` runs the action as the combo completes, and the screen launches the frame
+  once the event is in), so a press let go of before the screen next draws, as quick taps can be while a frame runs,
+  still gets its frame. Focus moves to the game screen before the menu closes, so the menu leaving with focus in it
+  doesn't take the screen's focus and with it the combo held (`GameKeys.onFocusChanged`; derived from Compose clearing
+  focus with a removed node, not seen on a device). Pause opens the menu as usual and its Resume carries on; leaving
+  the app while frame stepping comes back paused, on the menu. Key repeats no longer drive it.
+- **A controller going away** (`MainActivity.kt`): an `InputManager.InputDeviceListener` forgets the keys held and lets
+  go of every button when a device is removed, so a first key held as the pad dropped doesn't keep holding the game's
+  buttons back.
+- **The Hotkeys page** (`ui/ControllerPages.kt`): the conflict dialog names hidden slot actions properly; slot rows show
+  whenever one is bound; collisions already there (after an upgrade, say) are listed; a row whose first key is also a
+  game button says so; the Mode warning is checked again as controllers connect and disconnect; All consoles has
+  "Reset hotkeys to the defaults" (`SettingsStore.clearHotkeys`).
+- **Also**: the N64 controller pak cycles (None, Rumble, Controller) with a toast; direct Save/Load Slot 1–9 actions sit
+  behind the page's toggle; the emulator screen keeps the screen awake (`FLAG_KEEP_SCREEN_ON`); the capture window is
+  700 ms of quiet; the PSP system dialogs' pause hotkey takes the Mode tap.
+- **Files**: `input/Hotkeys.kt` (the tracker, taps, the tokens, the defaults, the conflict rules and question),
+  `input/WindowKeys.kt` (new: the window's keys, each one's release following its press), `input/GameKeys.kt` (the
+  first-key rule, taps, the holds), `input/GameInputState.kt` (the axis tokens, the held-back D-pad and axis bits),
+  `input/ControlCapture.kt` (the axis capture and its hysteresis, the shorter window), `input/InputLog.kt` (its
+  description), `data/SettingsStore.kt` (the defaults, the batch writes, the reset), `ui/MainViewModel.kt` (the
+  overwrite write, the game's keys for the window, frame step and the app leaving during it, the reset),
+  `ui/ControllerPages.kt` (the dialog, the warnings, the slot rows, the labels), `ui/EmulatorScreen.kt` (the actions,
+  frame step, the keep-awake), `MainActivity.kt` (the window's keys, the device listener) and `ui/PspSystemDialogs.kt`
+  (the pause tap). Tests: `HotkeyComboTest` (new), `HotkeyRoutingTest` (new), `HeldCrossReplayTest`.
+- **Checks** (this machine, JDK 17.0.20.1, Gradle 9.6.0 from the wrapper, Android SDK at `/opt/android-sdk`, NDK
+  28.2.13676358): `./gradlew :app:testLegacyDebugUnitTest --rerun :app:testModernDebugUnitTest --rerun
+  :app:assembleLegacyDebug --continue` in `android/`, after the code fixes, ran 415 tests in each flavor with 0
+  failures (52 result files each; `HotkeyComboTest` 19, `HotkeyRoutingTest` 17, `HeldCrossReplayTest` 6). Each fix's
+  test fails without it, the file then restored and its SHA-256 checked: the first snapshot's `WindowKeys` back fails
+  the reload test (X taken from the game) and both Library tap tests; the tracker's checks for a key already held taken
+  out fail the three key-and-axis tests; holds started from what's held rather than a press fail the release test; no
+  hysteresis fails the trigger-near-halfway test; and `GameKeys` not running Frame Advance's action on the press fails
+  both frame advance tests (a comment in `GameKeys.kt` was rewrapped after that run). Earlier, with the old window
+  behaviour put back into `WindowKeys`, 3 of the then 8 routing tests failed, the routing one among them.
+  `:app:assembleLegacyDebug` repackaged `app-legacy-debug.apk` (33,947,184 bytes, SHA-256
+  `7e67524d429ea4b183db1c5a274df97452b8cc1f9a666c08976b646e6dae534e`), an incremental build: the third review found
+  2 of its 11 dex files changed from the dex files and libraries the second review kept from the round-two APK
+  (`classes4.dex`, with `EmulatorScreen`; `classes8.dex`, with `GameKeys` and `WindowKeys`) and its native libraries
+  not (`mergeLegacyDebugNativeLibs` up to date, CMake's build having nothing to do). The third review's forced
+  rebuild of the same sources then replaced it at the same path: 32,565,895 bytes, SHA-256
+  `eb1163147dfcbbcd9c050b57c5c0968076eff4b3899ed0f0a10219dc5feba317`. Of the two APKs' 11 dex files and 9 native
+  libraries only `classes4.dex` differs, and only in Compose's stability code: 22 methods, in the classes compiled
+  from `EmulatorScreen.kt`, `PspSystemDialogs.kt` and `ControllerPages.kt` and in four of
+  `AppUpdateState`'s seven subclasses (those holding an `AppUpdate`), where the incremental build has 20
+  more `Composer.changed()` call sites and 39 more `$stable` reads; probably a Compose incremental-compile
+  artefact. A hash names one build, not the sources, so the device pass records the hash of the APK it installs.
+  `scripts/build-replit.sh` was not used: this worktree has no `.local/android-sdk`. The
+  nested submodule `thirdparty/libadrenotools/lib/linkernsbypass` was missing and was checked out before the first
+  APK build. **No device check**: `adb devices` lists none, so the RP6 pass is still to do: Mode reaching the app,
+  Select reaching NES, SNES and PS1 games, combos firing in a game, a Mode tap pausing, an axis-only trigger hold, a
+  trigger or D-pad reported both ways firing once (and that trigger pressed again as a key while its axis is still
+  past 0.4), frame advance with the picture shown, held from the pause menu and tapped quickly (a frame a tap; a
+  second tap within one redraw may get a repeat sooner than the usual 300 ms after its frame), an app switch while
+  frame stepping, a reload (Mode + X) leaving no key held, the pak cycle, the screen staying awake, a controller
+  dropped mid-combo, and a pad with no key layout file (triggers on Z/RZ or RX/RY).
+- **Limits**: the desktop shell is untouched; the defaults changed for players who never bound a hotkey (explicit
+  bindings are kept, and a Z-based one keeps Z as its first key); a pad whose Home or Guide button the system keeps, or
+  that has none, needs a rebind; the conflict rules are cautious: a key leading one combo and ending another can't make
+  either misfire, with exact matching and the first key pressed first, but is still asked about; a tap has no time limit;
+  frame advance still runs the core on the main thread, as before; the analog value of a stick direction used as a
+  hotkey key isn't held back; Mode held on through the swap to the Library isn't known behind it, so it is pressed
+  again to come back; a hold action bound as a tap (only possible across levels, a game's one-key hold under longer
+  combos from all consoles) never fires, and the page lists it as a collision; a trigger reported both as a key and as
+  an axis, pressed again as a key while its axis is still past 0.4, doesn't complete its combo again (its token was
+  never let go); a pad with no key layout file that reports its triggers on Z/RZ or RX/RY rests them at -1, so a stick
+  direction token there could read as held (button capture assumes the same); the focus fix for frame advance from the
+  menu, frame stepping through an app switch and the screen launching each press's frame have no host test (Compose
+  focus, the ViewModel's lifecycle, the screen's coroutine; `GameKeys` running the action is tested), so they wait for
+  the device pass.
+- **Review**: an independent read-only review (a subagent) of the first snapshot (diff SHA-256
+  `8105cfb22107c3daf48dc503b80cd1d776df903071a02ab72e0d6d2bcea2c252`): NEEDS CHANGES, one Critical, two Majors and five
+  Minors, all taken. The Critical: a reload (Mode + X) closes the game before its keys are let go, and the window then
+  sent their releases elsewhere, so the game's hotkeys kept Mode and X held (X alone reloaded again, A muted, a Mode
+  tap didn't pause); each key's release now follows its press. The Majors: a button a pad reports both as a key and as
+  a hat or axis ran its combo twice (Mode + R2 toggled fast forward on and off at once); and frame advance from the
+  pause menu stopped after one frame, the menu taking focus with it as it closed. The Minors: a hold could start on a
+  release (now only on a press); frame stepping resumed the game after an app switch; axis tokens had no hysteresis
+  (a trigger near halfway toggled fast forward three times in one hold); the "already bound" question showed only when
+  there was a single conflict; and some claims here and in comments went further than the code (fixed above; the
+  unused `matchingHotkeys` is gone). Of its suggestions: stale comments fixed, the Mode warning made live, a Library
+  tap's press held back with its release, and button capture's stick axes put back as they were (RX/RY are the
+  hotkeys' only). The two left are the limits above (Mode through the swap; a hold bound as a tap). The second review,
+  of the fixed snapshot (diff SHA-256 `edfe6c01e60a0fdcc3aaae23aa23c74c969d9d988fbd6ebd7e1b24fe1d218a02`): NEEDS
+  CHANGES, one Minor: the implementation plan said each of the first round's findings had a test that fails without
+  its fix, but the menu focus fix and the app-switch fix have none; corrected. It re-ran both suites and the build,
+  confirmed every first-round fix, the first snapshot's `WindowKeys` failing the new reload test, with 16 tests of its
+  own run from outside the tree. Its suggestions taken: `WindowKeys` and this entry say which keys' releases follow
+  their press (those that went to the game or that the Library hotkey took); the plan says "unbinds the other
+  actions"; each Frame Advance press runs its frame however soon it is let go (a press and release within one frame
+  ran none, the screen never seeing the hold); and the two pad behaviours it saw are in the limits and the device pass.
+  The third review, of the delta to the round-three snapshot (diff SHA-256
+  `ccd8067ab68ae9b48f69eecd2713190eaa1d8780b2efac57c6b23bab33a5bd23`, delta SHA-256
+  `a2dff408257c2d779b174899a5e1a3fdd9bfd535cd32f04b1b2f2289d9388999`): NEEDS CHANGES, two Minors in the docs alone
+  and no code finding: the plan said a test fails without each press's frame, but the test covers only `GameKeys`
+  asking for it (the screen running the frame has none); and the checks said all 11 dex files of the APK changed,
+  where 2 did. Both corrected. It recomputed the snapshot and the delta, re-ran both suites and a forced rebuild (415
+  tests each, 0 failures) and ran 11 frame-advance tests of its own from outside the tree. Its suggestions taken:
+  "each code fix" in the plan; the trigger pressed again past 0.4 and a quick second tap in the device pass; the note
+  on the APK's hash above. Left, as the earlier snapshots had it: `startFrameStep` saying whether it started, so that
+  a press's frame launched after the game unloads skips the native call. The fourth review, of the delta to the
+  round-four snapshot (diff SHA-256 `0a519adee78cd4bc93b17ad4f9b9485972e75675fc040b9c5738621f08c06471`, delta SHA-256
+  `2a195b78ae13ce546c5261ac08cc532cc238d2817f7cea241bb90fc76a2d7695`): NEEDS CHANGES, one Minor in these notes alone:
+  they gave the forced rebuild's difference as an extra `Composer.changed()` call in `EmulatorScreen()`, where
+  Compose's stability code differs in 22 methods; corrected. It recomputed the snapshot and the delta, compared the
+  APKs' dex files and libraries and re-ran both suites (415 tests each, 0 failures). Its four suggestions, all on
+  wording, are taken. The fifth review, of the delta to the round-five snapshot (diff SHA-256
+  `eed3bbfe28d16931e23b6deec7ea44ca793885cc0cec6d574da6600b4d9e2f7a`, delta SHA-256
+  `89a239eca8cbeef04bf5838b1b7137952a48397fda73e5c55474bf8e71425849`): NEEDS CHANGES, one Minor in these notes alone:
+  they spoke of `AppUpdateState`'s four subclasses, where it has seven and the four that differ are those holding an
+  `AppUpdate`; corrected. It recomputed the snapshot and the delta and checked every claim the delta adds or rewords;
+  the delta being docs only, it ran no build. Its one suggestion, "call sites" for "calls", is taken.
+- **Next**: up to three bindings per action (with keyboard defaults beside the controller's), then the desktop hotkey
+  system and its window behaviour, per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull
+  request.
+
 ## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in), the gate against the captures by the whole frame, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters

@@ -151,13 +151,13 @@ class ControlCapture(private val scope: CoroutineScope) {
                 if (binding != null) finish(now, CapturePolicy.pairedKeys(binding)) { onButton(binding) }
                 else if (deflectedAxes.isNotEmpty()) keepWaiting()
             }
-            // Hotkeys match a hat D-pad as the D-pad keys (GameInputState.hotkeyKeys), held like any
-            // key the capture took. Once a combo has keys, only a new one restarts its timer.
+            // Hotkeys match a hat D-pad as the D-pad keys and every other axis as a token, held like
+            // any key the capture took. Once a combo has keys, only a new one restarts its timer.
             is Target.Hotkey -> {
-                val hat = CapturePolicy.hatKeys(axisValue)
-                if (hat.isNotEmpty()) {
-                    heldKeys += hat
-                    addToCombo(hat)
+                val keys = CapturePolicy.hotkeyCaptureTokens(axisValue)
+                if (keys.isNotEmpty()) {
+                    heldKeys += keys
+                    addToCombo(keys)
                 } else if (_combo.value.isEmpty() && deflectedAxes.isNotEmpty()) keepWaiting()
             }
         }
@@ -178,7 +178,7 @@ class ControlCapture(private val scope: CoroutineScope) {
         /** With no input for this long the capture ends and the old binding stays. */
         const val IDLE_TIMEOUT_MS = 5_000L
         /** A combo is done once no key has joined it for this long. */
-        const val COMBO_SETTLE_MS = 1_000L
+        const val COMBO_SETTLE_MS = 700L
         private const val ECHO_MS = 250L
         private val PASS_THROUGH_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
     }
@@ -188,7 +188,13 @@ class ControlCapture(private val scope: CoroutineScope) {
 object CapturePolicy {
     private const val AXIS_THRESHOLD = 0.4f
     private const val HAT_THRESHOLD = 0.5f
+    // A hotkey axis token is pressed past HOTKEY_AXIS_PRESS and let go under HOTKEY_AXIS_RELEASE, as the button axes
+    // are (GameInputState), so an axis resting near the threshold can't press it over and over.
+    private const val HOTKEY_AXIS_PRESS = 0.5f
+    private const val HOTKEY_AXIS_RELEASE = 0.4f
     private val STICK_AXES = setOf(MotionEvent.AXIS_X, MotionEvent.AXIS_Y, MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ)
+    /** The stick axes a hotkey can use: [STICK_AXES] and the right stick's RX/RY, which some pads report instead. */
+    private val HOTKEY_STICK_AXES = STICK_AXES + setOf(MotionEvent.AXIS_RX, MotionEvent.AXIS_RY)
     private val DPAD_KEYS = KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_RIGHT
     private val ALL_AXES = (0 until 64).toSet()
 
@@ -210,6 +216,31 @@ object CapturePolicy {
 
     /** The axes past the threshold; a resting stick's jitter isn't. */
     fun deflectedAxes(axisValue: (Int) -> Float): Set<Int> = stillHeld(ALL_AXES, axisValue)
+
+    /**
+     * Hotkey tokens for axes that are not delivered as keys: trigger keycodes and stick directions. A token in [held]
+     * stays until its axis is back under the release threshold; a new one needs the press threshold.
+     */
+    fun hotkeyAxisTokens(axisValue: (Int) -> Float, held: Set<Int> = emptySet()): List<Int> {
+        val tokens = mutableListOf<Int>()
+        fun press(token: Int, value: Float) {
+            if (token !in tokens && value > if (token in held) HOTKEY_AXIS_RELEASE else HOTKEY_AXIS_PRESS) tokens += token
+        }
+        // Triggers rest at 0 and go to 1 (InputDevice normalizes them).
+        press(KeyEvent.KEYCODE_BUTTON_L2, axisValue(MotionEvent.AXIS_LTRIGGER))
+        press(KeyEvent.KEYCODE_BUTTON_L2, axisValue(MotionEvent.AXIS_BRAKE))
+        press(KeyEvent.KEYCODE_BUTTON_R2, axisValue(MotionEvent.AXIS_RTRIGGER))
+        press(KeyEvent.KEYCODE_BUTTON_R2, axisValue(MotionEvent.AXIS_GAS))
+        for (axis in HOTKEY_STICK_AXES) {
+            val value = axisValue(axis)
+            press(HotkeyTokens.axis(axis, positive = true), value)
+            press(HotkeyTokens.axis(axis, positive = false), -value)
+        }
+        return tokens
+    }
+
+    /** What a hotkey capture takes from a joystick move: hat D-pad keys plus [hotkeyAxisTokens]. */
+    fun hotkeyCaptureTokens(axisValue: (Int) -> Float): List<Int> = hatKeys(axisValue) + hotkeyAxisTokens(axisValue)
 
     /** Which of [axes] are still past the threshold. */
     fun stillHeld(axes: Set<Int>, axisValue: (Int) -> Float): Set<Int> = axes.filterTo(mutableSetOf()) { abs(axisValue(it)) > AXIS_THRESHOLD }

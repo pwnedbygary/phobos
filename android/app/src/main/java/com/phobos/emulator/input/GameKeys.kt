@@ -7,10 +7,12 @@ import androidx.compose.ui.focus.FocusState
 val VOLUME_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
 
 /**
- * The game screen's controller keys: its key handler, its hat listener and its focus, as EmulatorScreen runs them (and
- * the JVM tests, which replay the RP6's events through this). Hotkeys come first, then the buttons a key is bound to.
+ * The game screen's controller keys: its key handler, its hat listener and its focus, as EmulatorScreen and the
+ * activity's window run them (and the JVM tests, which replay the RP6's events through this). The window hands it
+ * every key while the game is on screen, whichever view has focus. Hotkeys come first, then the buttons a key is bound
+ * to.
  */
-class GameKeys(private val screen: Screen) {
+class GameKeys(private val screen: Screen) : KeyHandler {
     /** What the game screen tells its keys, asked at each key. */
     interface Screen {
         fun controls(): ActiveControls
@@ -21,24 +23,35 @@ class GameKeys(private val screen: Screen) {
         /** The ZX keyboard key a controller button is being bound to, or null. */
         fun zxKeyToBind(): String?
         fun bindZxKey(key: String, bit: Int)
-        /** Runs [action]; false when it doesn't apply to this system. */
+        /**
+         * Runs [action]; false when it doesn't apply to this system. Fast-forward hold starts this way, and each
+         * press of Frame Advance runs its frame.
+         */
         fun hotkey(action: String): Boolean
         fun stopFastForward()
+        /** The Frame Advance combo went down (true) or was let go (false): what repeats frames after its press's. */
+        fun frameAdvanceHeld(held: Boolean)
     }
 
-    /** The keys held, for hotkey combos; a hat D-pad's directions are GameInputState.hotkeyKeys. */
-    private var pressedKeys = setOf<Int>()
+    private val tracker = HotkeyTracker()
+    private var fastForwardHeld = false
+    private var frameAdvanceHeld = false
 
-    /** Forgets the keys held, re-arming hotkey combos: as the game pauses or a PSP dialog opens. */
+    /**
+     * Forgets the keys held, re-arming hotkey combos and letting go of the hold actions: as the game pauses, a PSP
+     * dialog opens or a controller goes away.
+     */
     fun forgetPressedKeys() {
-        pressedKeys = emptySet()
+        tracker.reset()
+        GameInputState.consumedHotkeyKeys = emptySet()
+        endHolds()
     }
 
-    /** A key event from the screen's onPreviewKeyEvent ([down]: KeyEventType.KeyDown); true when it's taken. */
-    fun onKey(keyCode: Int, down: Boolean, repeatCount: Int): Boolean {
+    /** A key event ([down]: a key press, repeats included); true when it's taken. */
+    override fun onKey(keyCode: Int, down: Boolean, repeatCount: Int): Boolean {
         // Leave volume keys to the system, and every key to the layout editors.
         if (keyCode in VOLUME_KEYS || screen.editing()) return false
-        // Paused: let key repeats drive focus navigation in the pause menu.
+        // A held key's repeats: taken while the game runs, focus navigation in the pause menu.
         if (repeatCount > 0) return !screen.paused()
 
         // ZX CUSTOM rebinding captures the next controller button.
@@ -51,24 +64,25 @@ class GameKeys(private val screen: Screen) {
             }
         }
 
-        pressedKeys = if (down) pressedKeys + keyCode else pressedKeys - keyCode
+        val hotkeys = screen.controls().hotkeys
+        // The hat and the axes may have changed since the last key: reconcile them first, so a
+        // combo never matches a direction that is no longer held.
+        tracker.syncExternal(hotkeys, GameInputState.hotkeyKeys)
+        var consumed = if (down) tracker.press(hotkeys, keyCode) else tracker.release(keyCode)
+        GameInputState.consumedHotkeyKeys = tracker.consumedTokens
+        GameInputState.applyHotkeyConsumption()
 
-        // Hotkeys match on keys plus hat D-pad directions (GameInputState.hotkeyKeys),
-        // so combos like Z + D-pad Right work on controllers with a hat D-pad.
-        val controls = screen.controls()
-        var consumed = false
-        if (down) {
-            for (action in matchingHotkeys(controls.hotkeys, pressedKeys + GameInputState.hotkeyKeys)) {
-                if (screen.hotkey(action)) consumed = true
-            }
-        } else if (!screen.fastForwardToggled() && controls.hotkeys[HotkeyAction.FAST_FORWARD_HOLD]?.contains(keyCode) == true) {
-            screen.stopFastForward()
+        // A press completes combos, each once however its keys arrive; a release completes only a tap.
+        val completed = tracker.completions(hotkeys)
+        for (action in completed + tracker.taps(hotkeys)) {
+            if (action !in HotkeyAction.HOLDS && screen.hotkey(action)) consumed = true
         }
+        updateHolds(hotkeys, completed)
         if (consumed) return true
         // Paused: mapped buttons navigate the menu (BUTTON_A falls back to DPAD_CENTER).
         if (screen.paused()) return false
 
-        val bits = InputBindings.of(controls.mappings).bitsForKey(keyCode)
+        val bits = InputBindings.of(screen.controls().mappings).bitsForKey(keyCode)
         if (bits != 0) {
             GameInputState.setButton(bits, down)
             return true
@@ -77,20 +91,61 @@ class GameKeys(private val screen: Screen) {
     }
 
     /**
-     * The hat moved (GameInputState.onHotkeyKeysChanged). Controllers that report the D-pad as a hat send motion
-     * events, not keys, so combos that include a D-pad direction are re-checked then. Hold-to-fast-forward needs a
-     * key release and is not supported from the hat.
+     * The hat or an axis changed (GameInputState.onHotkeyKeysChanged). Controllers that report the
+     * D-pad as a hat and sticks/triggers as axes send motion events, not keys, so combos that use
+     * them are re-checked when the held set changes: a press can complete one, a release a tap.
      */
     fun onHatChanged() {
         val hotkeys = screen.controls().hotkeys
-        for (action in matchingHotkeys(hotkeys, pressedKeys + GameInputState.hotkeyKeys)) {
-            if (action != HotkeyAction.FAST_FORWARD_HOLD && comboUsesDpad(hotkeys[action].orEmpty())) screen.hotkey(action)
+        tracker.syncExternal(hotkeys, GameInputState.hotkeyKeys)
+        GameInputState.consumedHotkeyKeys = tracker.consumedTokens
+        GameInputState.applyHotkeyConsumption()
+        val completed = tracker.completions(hotkeys)
+        for (action in completed + tracker.taps(hotkeys)) {
+            if (action !in HotkeyAction.HOLDS) screen.hotkey(action)
+        }
+        updateHolds(hotkeys, completed)
+    }
+
+    /**
+     * A hold action starts when a press completes its combo ([completed]) and lasts while every key of it stays held,
+     * other keys or not. A tap can't start one: it comes as its key is let go.
+     */
+    private fun updateHolds(hotkeys: Map<String, List<Int>>, completed: List<String>) {
+        val fastForward = holds(HotkeyAction.FAST_FORWARD_HOLD, fastForwardHeld, hotkeys, completed)
+        if (fastForward != fastForwardHeld) {
+            fastForwardHeld = fastForward
+            if (fastForward) screen.hotkey(HotkeyAction.FAST_FORWARD_HOLD) else if (!screen.fastForwardToggled()) screen.stopFastForward()
+        }
+        val frameAdvance = holds(HotkeyAction.FRAME_ADVANCE, frameAdvanceHeld, hotkeys, completed)
+        if (frameAdvance != frameAdvanceHeld) {
+            frameAdvanceHeld = frameAdvance
+            screen.frameAdvanceHeld(frameAdvance)
+            // The press runs its frame as an action, not as the hold, so a press let go of at once still runs one.
+            if (frameAdvance) screen.hotkey(HotkeyAction.FRAME_ADVANCE)
+        }
+    }
+
+    private fun holds(action: String, held: Boolean, hotkeys: Map<String, List<Int>>, completed: List<String>): Boolean =
+        if (held) tracker.holding(hotkeys[action].orEmpty()) else action in completed
+
+    private fun endHolds() {
+        if (fastForwardHeld) {
+            fastForwardHeld = false
+            if (!screen.fastForwardToggled()) screen.stopFastForward()
+        }
+        if (frameAdvanceHeld) {
+            frameAdvanceHeld = false
+            screen.frameAdvanceHeld(false)
         }
     }
 
     /** The screen's focus changed: every button is let go of once neither it nor anything in it has focus. */
     fun onFocusChanged(focus: FocusState) {
         InputLog.note { "game focus $focus" }
-        if (!focus.hasFocus) GameInputState.releaseAllButtons()
+        if (!focus.hasFocus) {
+            forgetPressedKeys()
+            GameInputState.releaseAllButtons()
+        }
     }
 }

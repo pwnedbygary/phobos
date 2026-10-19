@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.input.ControlOverrides
+import com.phobos.emulator.input.DEFAULT_HOTKEYS
 import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.input.ScopedKeys
 import com.phobos.emulator.ui.hud.HudConfig
@@ -502,27 +503,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             }
         }
 
-        val defaultHotkeys = mapOf<String, List<Int>>(
-            // Keycodes: 96=A 97=B 98=C 99=X 100=Y 101=Z 102=L1 103=R1 104=L2
-            // 105=R2 106=THUMBL 107=THUMBR 108=START 109=SELECT 21/22=DPAD L/R
-            // Defaults mirror the developer's device config (Z-button based).
-            "ff_hold" to emptyList(),              // unbound
-            "save" to listOf(101, 103),            // Z + R1
-            "load" to listOf(101, 102),            // Z + L1
-            "inc_slot" to listOf(101, 22),         // Z + DPAD_RIGHT
-            "dec_slot" to listOf(101, 21),         // Z + DPAD_LEFT
-            "pause" to listOf(101, 96),            // Z + A
-            "reset" to listOf(101, 109, 108),      // Z + SELECT + START
-            "reload" to listOf(101, 99),           // Z + X
-            "quit" to listOf(101, 97),             // Z + B
-            "screenshot" to listOf(101, 107),      // Z + THUMBR
-            "mute" to listOf(101, 100),            // Z + Y
-            "ff_toggle" to listOf(101, 105),       // Z + R2
-            "analog_toggle" to listOf(98),         // C
-            "keyboard" to listOf(101, 104),        // Z + L2
-            "library" to listOf(101, 98)           // Z + C: swap to library (pause) / back to game (resume)
-        )
-        val finalHotkeys = defaultHotkeys.toMutableMap()
+        val finalHotkeys = DEFAULT_HOTKEYS.toMutableMap()
         // Explicit user bindings (or explicit unbind = empty combo) take
         // precedence over defaults. An empty combo REMOVES the default so the
         // hotkey is genuinely unbound.
@@ -940,6 +921,16 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     }
     suspend fun setHotkey(action: String, combo: List<Int>) = dataStore.edit { it[stringPreferencesKey(HOTKEYS_PREFIX + action)] = combo.joinToString(",") }
 
+    /** Several global hotkeys in one edit: a binding, or empty to unbind. */
+    suspend fun setHotkeys(combos: Map<String, List<Int>>) = dataStore.edit { p ->
+        combos.forEach { (action, combo) -> p[stringPreferencesKey(HOTKEYS_PREFIX + action)] = combo.joinToString(",") }
+    }
+
+    /** Every global hotkey back to its default: the player's own bindings and unbindings go. */
+    suspend fun clearHotkeys() = dataStore.edit { p ->
+        p.asMap().keys.filter { it.name.startsWith(HOTKEYS_PREFIX) }.forEach { p.remove(it) }
+    }
+
     /** A console's or game's binding changes in one edit: a binding, "" to unbind, null to inherit. */
     suspend fun setScopedMappings(scope: String, changes: Map<Int, String?>) = dataStore.edit { p ->
         changes.forEach { (bit, binding) ->
@@ -951,6 +942,13 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setScopedHotkey(scope: String, action: String, combo: List<Int>?) = dataStore.edit { p ->
         val key = stringPreferencesKey(ScopedKeys.hotkey(scope, action))
         if (combo == null) p.remove(key) else p[key] = combo.joinToString(",")
+    }
+    /** Several console or game hotkeys in one edit: a combo, empty to unbind, null to inherit. */
+    suspend fun setScopedHotkeys(scope: String, combos: Map<String, List<Int>?>) = dataStore.edit { p ->
+        combos.forEach { (action, combo) ->
+            val key = stringPreferencesKey(ScopedKeys.hotkey(scope, action))
+            if (combo == null) p.remove(key) else p[key] = combo.joinToString(",")
+        }
     }
     /** Every button binding [scope] changes, back to inheriting. */
     suspend fun clearScopedMappings(scope: String) = dataStore.edit { p ->

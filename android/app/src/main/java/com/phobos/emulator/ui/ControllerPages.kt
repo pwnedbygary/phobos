@@ -1,5 +1,7 @@
 package com.phobos.emulator.ui
 
+import android.hardware.input.InputManager
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -42,19 +44,28 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.PhobosCore
 import com.phobos.emulator.input.ControlCapture
 import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.Controls
+import com.phobos.emulator.input.DEFAULT_HOTKEYS
 import com.phobos.emulator.input.HotkeyAction
+import com.phobos.emulator.input.HotkeyConflict
+import com.phobos.emulator.input.HotkeyTokens
+import com.phobos.emulator.input.bindingTokens
+import com.phobos.emulator.input.existingHotkeyConflicts
+import com.phobos.emulator.input.hotkeyConflictMessage
+import com.phobos.emulator.input.hotkeyConflicts
 import com.phobos.emulator.ui.theme.pillShape
 
 // The Buttons and Hotkeys pages, shared by Settings (Controller Mapping, Hotkeys) and the pause
@@ -103,10 +114,19 @@ val HOTKEY_ACTIONS = listOf(
     "Capture Screenshot" to HotkeyAction.SCREENSHOT,
     "Mute Audio" to HotkeyAction.MUTE,
     "Frame Advance" to HotkeyAction.FRAME_ADVANCE,
+    "Cycle N64 Controller Pak" to HotkeyAction.N64_PAK,
     "Toggle PS1 Analog" to HotkeyAction.PS1_ANALOG_TOGGLE,
     "Toggle On-Screen Keyboard" to HotkeyAction.KEYBOARD,
     "Swap to Library" to HotkeyAction.LIBRARY,
 )
+
+/** Direct slot bindings, hidden until the page's toggle is on. */
+val DIRECT_SLOT_HOTKEY_ACTIONS = (1..9).flatMap { slot ->
+    listOf(
+        "Save State: Slot $slot" to "${HotkeyAction.SAVE_SLOT_PREFIX}$slot",
+        "Load State: Slot $slot" to "${HotkeyAction.LOAD_SLOT_PREFIX}$slot",
+    )
+}
 
 enum class ControllerPage(val title: String) { BUTTONS("Buttons"), HOTKEYS("Hotkeys") }
 
@@ -142,7 +162,13 @@ fun keyLabel(keyCode: Int): String {
     }
 }
 
-fun comboLabel(combo: List<Int>): String = combo.joinToString(" + ", transform = ::keyLabel)
+/** A hotkey token as the rows show it: a key's label, or an axis direction's. */
+fun hotkeyTokenLabel(token: Int): String {
+    val axis = HotkeyTokens.axisOf(token) ?: return keyLabel(token)
+    return bindingLabel("a:${axis.first}:${if (axis.second) 1 else 0}")
+}
+
+fun comboLabel(combo: List<Int>): String = combo.joinToString(" + ", transform = ::hotkeyTokenLabel)
 
 /** A stored binding as the rows show it: "L1", "D-pad up", "Left stick right". */
 fun bindingLabel(binding: String): String {
@@ -241,21 +267,85 @@ fun ControllerHotkeysList(
     val global = settings.hotkeys
     val overrides = settings.controlOverrides
     val resolved = remember(global, overrides, level) { Controls.hotkeys(level, global, overrides) }
+    // What the level's button bindings hold, for the rows whose first key is also a game button.
+    val gameTokens = remember(settings.inputMappings, overrides, level) {
+        Controls.mappings(level, settings.inputMappings, overrides).values.flatMap(::bindingTokens).toSet()
+    }
+    val collisions = remember(resolved) { existingHotkeyConflicts(resolved) }
+    // Controllers come and go while the page is open: the Mode check is made again when they do.
+    val context = LocalContext.current
+    var padsChanged by remember { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        val inputManager = context.getSystemService(InputManager::class.java)
+        val listener = object : InputManager.InputDeviceListener {
+            override fun onInputDeviceAdded(deviceId: Int) { padsChanged++ }
+            override fun onInputDeviceRemoved(deviceId: Int) { padsChanged++ }
+            override fun onInputDeviceChanged(deviceId: Int) { padsChanged++ }
+        }
+        inputManager.registerInputDeviceListener(listener, null)
+        onDispose { inputManager.unregisterInputDeviceListener(listener) }
+    }
+    val modeMissing = remember(resolved, padsChanged) {
+        resolved.values.any { it.firstOrNull() == KeyEvent.KEYCODE_BUTTON_MODE } && !connectedPadHasModeButton()
+    }
     val capture = viewModel.controlCapture
     var confirmUnbindPause by remember { mutableStateOf(false) }
+    var showSlotHotkeys by remember { mutableStateOf(false) }
+    var pendingConflict by remember { mutableStateOf<PendingHotkey?>(null) }
+    // Bound slot rows always show; the rest wait for the toggle.
+    val slotsBound = HotkeyAction.DIRECT_SLOTS.any { !resolved[it].isNullOrEmpty() }
+    val actions = if (showSlotHotkeys || slotsBound) HOTKEY_ACTIONS + DIRECT_SLOT_HOTKEY_ACTIONS else HOTKEY_ACTIONS
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = listPadding(inMenu), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         header?.let { item { it() } }
-        item { ControlsHint("${level.hint()} Select a hotkey, then hold its buttons together.", inMenu) }
+        item {
+            ControlsHint(
+                "${level.hint()} Select a hotkey, then hold its keys together. Its first key starts it and is held back " +
+                    "from the game; a key alone that starts other hotkeys acts when tapped.",
+                inMenu,
+            )
+        }
+        if (modeMissing) {
+            item {
+                ControlsWarning(
+                    "No controller here reports a Mode (Home or Guide) button, which starts the default hotkeys: " +
+                        "bind them to keys your controller has.",
+                    inMenu,
+                )
+            }
+        }
+        if (collisions.isNotEmpty()) {
+            item {
+                val pairs = collisions.joinToString("; ") { (a, b) -> "${hotkeyName(a)} and ${hotkeyName(b)}" }
+                ControlsWarning("These hotkeys collide: $pairs. Bind one of each pair again.", inMenu)
+            }
+        }
+        if (!slotsBound) {
+            item {
+                TextButton(onClick = { showSlotHotkeys = !showSlotHotkeys }) {
+                    Text(if (showSlotHotkeys) "Hide direct slot hotkeys" else "Show direct slot hotkeys (1–9)")
+                }
+            }
+        }
         item {
             ControlsCard(inMenu) {
-                HOTKEY_ACTIONS.forEach { (name, action) ->
+                actions.forEach { (name, action) ->
                     val combo = resolved[action].orEmpty()
+                    val sharesGameButton = combo.firstOrNull()?.let { it in gameTokens } == true
                     ControlRow(
                         title = name,
                         overline = null,
                         value = if (combo.isEmpty()) "Not bound" else comboLabel(combo),
-                        source = sourceLabel(level, Controls.hotkeySource(level, action, global, overrides)),
-                        onCapture = { capture.captureHotkey(action, name) { viewModel.bindHotkey(level, action, it) } },
+                        source = listOfNotNull(
+                            sourceLabel(level, Controls.hotkeySource(level, action, global, overrides)),
+                            "its first key is also a game button".takeIf { sharesGameButton },
+                        ).joinToString(" · ").ifEmpty { null },
+                        onCapture = {
+                            capture.captureHotkey(action, name) { combo ->
+                                val conflicts = hotkeyConflicts(resolved, action, combo)
+                                if (conflicts.isEmpty()) viewModel.bindHotkey(level, action, combo)
+                                else pendingConflict = PendingHotkey(level, action, combo, conflicts)
+                            }
+                        },
                         onUnbind = if (combo.isEmpty()) null else ({
                             if (action == HotkeyAction.PAUSE) confirmUnbindPause = true else viewModel.bindHotkey(level, action, emptyList())
                         }),
@@ -264,7 +354,9 @@ fun ControllerHotkeysList(
                 }
             }
         }
-        if (level != ControlLevel.AllConsoles) {
+        if (level == ControlLevel.AllConsoles) {
+            item { ResetLevelButton("Reset hotkeys to the defaults", enabled = global != DEFAULT_HOTKEYS) { viewModel.resetHotkeysToDefaults() } }
+        } else {
             item { ResetLevelButton("Reset ${level.possessive()} hotkeys", enabled = overrides.hasHotkeys(level)) { viewModel.inheritAllHotkeys(level) } }
         }
     }
@@ -279,6 +371,38 @@ fun ControllerHotkeysList(
             dismissButton = { TextButton(onClick = { confirmUnbindPause = false }) { Text("Cancel") } },
         )
     }
+    pendingConflict?.let { pending ->
+        PhobosAlertDialog(
+            onDismissRequest = { pendingConflict = null },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = inMenu); Text("Hotkey already bound") },
+            text = { Text(hotkeyConflictMessage(pending.conflicts, ::hotkeyName)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingConflict = null
+                    viewModel.bindHotkey(pending.level, pending.action, pending.combo, pending.conflicts.map { it.action })
+                }) { Text("Overwrite") }
+            },
+            dismissButton = { TextButton(onClick = { pendingConflict = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+private data class PendingHotkey(
+    val level: ControlLevel,
+    val action: String,
+    val combo: List<Int>,
+    val conflicts: List<HotkeyConflict>,
+)
+
+/** An action's name as the Hotkeys page shows it, the direct slots' included. */
+fun hotkeyName(action: String): String =
+    (HOTKEY_ACTIONS + DIRECT_SLOT_HOTKEY_ACTIONS).firstOrNull { it.second == action }?.first ?: action
+
+/** Whether a connected controller reports a Mode (Home or Guide) button; true with none connected, as nothing says otherwise yet. */
+private fun connectedPadHasModeButton(): Boolean {
+    val pads = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
+        .filter { device -> (device.sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD }
+    return pads.isEmpty() || pads.any { it.hasKeys(KeyEvent.KEYCODE_BUTTON_MODE)[0] }
 }
 
 private fun ControlLevel.possessive(): String = when (this) {
@@ -296,6 +420,14 @@ private fun ControlsHint(text: String, inMenu: Boolean) {
     val modifier = Modifier.padding(horizontal = if (inMenu) 4.dp else 16.dp, vertical = 8.dp)
     if (inMenu) Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier)
     else BackdropText(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier)
+}
+
+@Composable
+private fun ControlsWarning(text: String, inMenu: Boolean) {
+    val modifier = Modifier.padding(horizontal = if (inMenu) 4.dp else 16.dp, vertical = 4.dp)
+    val color = MaterialTheme.colorScheme.error
+    if (inMenu) Text(text, style = MaterialTheme.typography.bodyMedium, color = color, modifier = modifier)
+    else BackdropText(text, style = MaterialTheme.typography.bodyMedium, color = color, modifier = modifier)
 }
 
 @Composable
@@ -386,7 +518,7 @@ fun CaptureOverlay(capture: ControlCapture) {
                     Spacer(Modifier.height(8.dp))
                 }
                 Text(
-                    if (hotkey) "Hold all the buttons together, then let go" else "Press a button or move a stick",
+                    if (hotkey) "Press the combo's first key, then hold the rest with it. The first key is held back from the game." else "Press a button or move a stick",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
