@@ -35,7 +35,7 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8 and 9, behind the option "GE Timing" (off by default), the gate against the captures by list and by frame, a SIGNAL's interrupt at its time — 2026-10-18
+## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8, 9 and 10, behind the option "GE Timing" (off by default), the gate against the captures by list and by frame, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
 `dd63f4ffb` (#266, #267), `230c0a731` (#268), `fe3deab82` (#272, the GE thread; #271, the display latch; #273),
@@ -43,35 +43,37 @@ Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a0147
 the gate passes. docs/psp-core.md, part 106, has the evidence (part 76, the first model's fit, is here too). Clean
 room: our code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 34 (#271 took 33; 18
 bytes, and the GE's pipeline: 28 and 16 a queued item; "Fast" 46 in all).
-- **The model** (`GE::Cost`, `GE::Pipe`): the front end (words, PRIMs, vertices at 0.513 a byte with a floor of 5.02,
-  lights, cuts) hands each primitive, transfer and palette load to the back end (rows, pixels, texels) through an
-  83-entry queue; the texture cache keeps the texels fetched since the last TEX_FLUSH (a box in whole fetches, 8 KiB),
-  a primitive paying for what it reads outside it; rows read wide past 140 texels (270 indices), a triangle's share
-  1 − (140/W)²; the pipeline is carried through stall updates and SIGNALs.
-- **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6, 8 and 9, 2,832 timed lists, 5.0% at the
-  median (72% within 10%, 93% within 25%), its own fixed point; ten cases the model's texels can't follow (perspective,
-  turned, a big mipmap) shown as checks; `measured8` tests rounds 8 and 9 in the core.
+- **The model** (`GE::Cost`, `GE::Pipe`): the front end (words, PRIMs, vertices at 0.512 a byte with a floor of 5.02,
+  lights and their shine by kind, cuts) hands each primitive, transfer and palette load to the back end (rows, pixels,
+  texels) through an 83-entry queue; the texture cache keeps the texels fetched since the last TEX_FLUSH (a box in whole
+  fetches, 8 KiB), a primitive paying for what it reads outside it; rows read wide past 140 texels (270 indices), a
+  triangle's share 1 − (140/W)² (into 16-bit, 0.489 of the rest too); CLUT32 fetches at rates of their own; the pipeline
+  is carried through stall updates and SIGNALs. The CPU beside the GE: round 10's slopes measured, the term held at none
+  (the emulated CPU can't tell a game waiting without syscalls from one working).
+- **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6, 8, 9 and 10, 3,373 timed lists, 5.0% at the
+  median (70% within 10%, 90% within 25%), its own fixed point after three passes; 253 lists that moved more than 5%
+  between the owner's two sessions held out (`--again`: placement, round 10's time-anchors2); the cases the model's
+  texels can't follow (perspective, turned, mipmaps) shown as checks; `measured8` tests rounds 8 and 9 in the core.
 - **"Fast"** is master's bit for bit (the refit touches the PSP's paths alone; checks below) and pays 0.19 to 0.56% on
   Vulkan-fast for "PSP" (the template-per-timing follow-up would take that away).
 - **The GE thread** (part 109): "PSP" keeps the GE on the emulation thread (`System::threadGE()`); a design for a
   threaded "PSP" is in part 106 (not built).
 - **The gate** (`tools/psp-ge-profile/decoder/gate.py`, the owner's 18 captures, lists paired by their place in the
-  frame, each list and each frame): frames 6 of 8 within 15%, none too slow; lists 9 of 15, the worst too slow
-  Activision Hits' menu's second list (+56%, CLUT32 triangles); too fast Super Monkey Ball (−30%) and the copyright
-  screen (−22%). Ghost of Sparta's menu passes (−10.8%); what's left there and in Super Monkey Ball fits the CPU
-  beside the GE (the CPU timing's project). The merge stays held.
+  frame, each list and each frame): frames 7 of 8 within 15%, none more than 2.2% too slow; lists 10 of 15. Too fast:
+  Super Monkey Ball (−29.6%: the CPU beside the GE). Too slow: Activision Hits' menu's second list (+48.5%: its 60
+  sprites shrinking a VRAM picture, untimed) and third (+26.7%: triangles magnifying a RAM texture into 16-bit,
+  untimed). The copyright screen −5.8% and the menu's first list −10.6% now pass. The merge stays held.
 - **Checks**: tests/psp sanitized, 616 groups, 0 failures with the GE thread on (off: all but `measured6`'s textured
   fill, its bound since set to 3% and passed); the ares tests 361 checks, 0 failed; `test_geprof.py` 24 tests; the fit
   reproduced from a runner built from the tree; "Fast" against master on eight scenes, Software and Vulkan-fast: 16 of
   16 the same, every frame and the states (46 zero bytes put in).
-- **Ready for round 10** (PR #278, part 112): `ge-fit.py` reads its records (checked against the core's own run),
-  `contention10.py` fits the CPU beside the GE to its time-contention, and the model holds round 10's terms where they
-  change nothing (shine by light kind, CLUT32's fetches, triangles' rows into 16-bit, the contention term, its kernel
-  part not built till fitted): rounds 6 to 10 in this runner byte for byte as before, the gate's profiles too, "Fast"
-  the same.
-- **Not yet**: fitting round 10 (perspective, turned and mipmapped triangles, CLUT32, wide triangles into 16-bit, a
-  light's shine by kind, 8-texel CLUT8 strips, the CPU beside the GE); "Fast"'s templates per timing; the CPU's own
-  timing (its own project); fixed-point charges before any default change.
+- **Round 10's refit** (PR #278's files, part 112): "ge time" and the measured groups pass with the new clocks
+  (measured8's bounds restated: the refit trades a little of rounds 8 and 9 for round 10); "Fast" the same as the last
+  head on four scenes, Software and Vulkan-fast. A round 10b (the refit's agent's SPECS-10b) would time the menu's
+  second and third lists' cases; `measured10` waits for #278's files and its program (`tests/psp/programs`).
+- **Not yet**: the CPU beside the GE (the CPU's RAM traffic, from the CPU core); perspective, turned and mipmapped
+  triangles; bilinear filtering's cost; narrow CLUT strips from VRAM; "Fast"'s templates per timing; fixed-point
+  charges before any default change.
 
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 

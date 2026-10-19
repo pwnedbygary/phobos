@@ -15,9 +15,12 @@ address (time-lists' and time-lists2's cases 2 and 3) are left out; time-anchors
 again, on rounds 9's and 10's days) and the cases OUTSIDE names are checks, not fitted: their misses are shown apart.
 Round 10's time-contention and time-contention2 time each list alone and beside a CPU thread: the cases with no list
 (a pattern alone) have none to match, those with a thread are the CPU's beside the GE (CONTENDED: contention10.py's,
-not this fit's), and those with the CPU idle are fitted as any other.
+not this fit's), and those with the CPU idle are fitted as any other. With --again, the PSP's results of the same
+rounds on another day: a list whose time there is further than MOVED (5%, and more than TICKS microseconds: not the
+timer's own steps) from PSP_RESULTS' is a check, not fitted (where the program's build moved its arrays, a texture's
+place moves its time: round 10's time-anchors2).
 
-usage: ge-fit.py PSP_RESULTS TERMS OURS [TERMS OURS ...] [--fix TERM=VALUE,...] [--show N] [--untie]
+usage: ge-fit.py PSP_RESULTS TERMS OURS [TERMS OURS ...] [--fix TERM=VALUE,...] [--show N] [--again PSP2]
 prints each term's fitted value (GE::Cost's names), the median miss by test, and the furthest lists"""
 import os
 import statistics
@@ -43,26 +46,7 @@ OUTSIDE |= {("time-mipmaps", c) for c in (1, 2, 3, 4, 5, 8, 9, 10, 12, 13, 14, 1
 #(4 streaming patterns alone, then the lists alone and beside each): whether a case has a list, and a thread beside it
 CONTENTION = {"time-contention": (17, 18), "time-contention2": (4, 5)}
 
-
-#The terms round 10 is to fit (part 106's refit plan), held to the ones they split till it is (--untie frees them): a
-#spotlight a point light's, a point light's shine a directional light's, CLUT32's fetches the other formats', and none
-#more for one light shining or for triangles' rows into 16-bit; so the fit of rounds 6, 8 and 9 is GE::Cost as it is.
-TIES = {"SpotLight": "PointLight", "PointShine": "DirectionalShine"}
-TIES.update({"Clut32FetchByte[%d]" % k: "FetchByte[%d]" % k for k in range(4)})
-HELD = {"OneShine", "TriangleWide16"}
-
-
-def tied(side, untie):
-    """a run's counts with the terms held as TIES and HELD say, unless untie"""
-    if untie:
-        return side
-    out = {}
-    for k, v in side.items():
-        if k in HELD:
-            continue
-        k = TIES.get(k, k)
-        out[k] = out.get(k, 0) + v
-    return out
+MOVED, TICKS = 0.05, 4
 
 
 def listed(test, case):
@@ -129,7 +113,7 @@ def lists(path):
     return tests
 
 
-def load(psp, pairs, untie=False):
+def load(psp, pairs, again=None):
     recs = []
     for terms, ours in pairs:
         for test, groups in lists(terms).items():
@@ -143,6 +127,8 @@ def load(psp, pairs, untie=False):
                 continue
             #(the PSP reads its CPU's clock back as 221 at 333/222/166 and 265 at 266/133, where Phobos says 222, 266)
             theirs = {(c, s, cpu, bus): runs for c, s, cpu, bus, runs in records(os.path.join(psp, test + ".bin"))}
+            other = os.path.join(again, test + ".bin") if again else ""
+            twice = {(c, s, cpu, bus): runs for c, s, cpu, bus, runs in records(other)} if os.path.exists(other) else {}
             at = 0
             for c, s, cpu, bus, runs in mine:
                 group = groups[at + len(runs) - 1]  #(the last run: the cache as a run finds it)
@@ -154,10 +140,13 @@ def load(psp, pairs, untie=False):
                 t = median_time(psp_runs) if psp_runs else None
                 if t is None or t <= 0 or not group[0]:
                     continue
-                sides = [(tied({k[2:]: v for k, v in run.items() if k.startswith("F.")}, untie),
-                          tied({k[2:]: v for k, v in run.items() if k.startswith("B.")}, untie)) for run in group[0]]
+                again_runs = twice.get((c, s, read, bus)) or twice.get((c, s, cpu, bus))
+                t2 = median_time(again_runs) if again_runs else None
+                moved = bool(t2) and abs(t2 / t - 1) > MOVED and abs(t2 - t) > TICKS
+                sides = [({k[2:]: v for k, v in run.items() if k.startswith("F.")},
+                          {k[2:]: v for k, v in run.items() if k.startswith("B.")}) for run in group[0]]
                 recs.append({"key": (test, c, s, cpu, bus), "y": t * bus, "lists": group[1], "runs": sides,
-                             "check": test in CHECKS or (test, c) in OUTSIDE})
+                             "check": test in CHECKS or (test, c) in OUTSIDE or moved, "moved": moved})
     return recs
 
 
@@ -230,7 +219,7 @@ def fit(recs, fixed):
 
 
 def main(argv):
-    fixed, show, args, untie = {}, 0, [], False
+    fixed, show, args, again = {}, 0, [], None
     i = 0
     while i < len(argv):
         if argv[i] == "--fix":
@@ -240,15 +229,22 @@ def main(argv):
             i += 2
         elif argv[i] == "--show":
             show, i = int(argv[i + 1]), i + 2
-        elif argv[i] == "--untie":
-            untie, i = True, i + 1
+        elif argv[i] == "--again":
+            again, i = argv[i + 1], i + 2
         else:
             args.append(argv[i])
             i += 1
     if len(args) < 3 or len(args) % 2 == 0:
         print(__doc__)
         return 2
-    recs = load(args[0], list(zip(args[1::2], args[2::2])), untie)
+    recs = load(args[0], list(zip(args[1::2], args[2::2])), again)
+    held = {}
+    for r in recs:
+        if r["moved"] and not (r["key"][0] in CHECKS or (r["key"][0], r["key"][1]) in OUTSIDE):
+            held[r["key"][0]] = held.get(r["key"][0], 0) + 1
+    if again:
+        print("  moved more than %.0f%% on the other day, held out: %s" % (100 * MOVED, ", ".join(
+            "%s %d" % kv for kv in sorted(held.items())) or "none"))
     checks = [r for r in recs if r["check"]]
     recs = [r for r in recs if not r["check"]]
     coef = fit(recs, fixed)

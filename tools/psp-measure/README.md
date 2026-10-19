@@ -404,24 +404,28 @@ python3 tools/psp-measure/ge-terms.py /tmp/terms
 (cd /tmp/terms && tools/psp-runner/build.sh)     # its last line names the runner
 ```
 
-Then the program's rounds 9, 8 and 6 in that runner with the GE timing "PSP", each with its terms written to a
-file: `EBOOT.PBP` (`make` here, with round 9) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
-chosen with presses (round 9 the first line, round 8 the second, round 6 the fourth), each run's `results/ge` kept
-beside its terms, the stick emptied between runs:
+Then the program's rounds 10, 9, 8 and 6 in that runner with the GE timing "PSP", each with its terms written to a
+file: `EBOOT.PBP` (`make` here, with round 10) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
+chosen with presses (round 10 the first line, round 9 the second, round 8 the third, round 6 the fifth), each run's
+`results/ge` kept beside its terms, the stick emptied between runs:
 
 ```
-PHOBOS_GE_TERMS=r9.txt RUNNER STICK/PSP/GAME/PSPMEASURE/EBOOT.PBP --memory-stick STICK --ge-timing psp \
-  --frames 15000 --press 60:Cross,66:Cross! --start-time 1791290096                       # then keep results/ge as ours9
-PHOBOS_GE_TERMS=r8.txt ... --press 60:Down,66:Down!,80:Cross,86:Cross! ...                       # as ours8
-PHOBOS_GE_TERMS=r6.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Cross,126:Cross! ...
-python3 tools/psp-measure/ge-fit.py PSP_RESULTS r9.txt ours9 r8.txt ours8 r6.txt ours6
+PHOBOS_GE_TERMS=r10.txt RUNNER STICK/PSP/GAME/PSPMEASURE/EBOOT.PBP --memory-stick STICK --ge-timing psp \
+  --frames 30000 --press 60:Cross,66:Cross! --start-time 1791290096                     # then keep results/ge as ours10
+PHOBOS_GE_TERMS=r9.txt ... --press 60:Down,66:Down!,80:Cross,86:Cross! ...                       # as ours9
+PHOBOS_GE_TERMS=r8.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Cross,106:Cross! ...    # as ours8
+PHOBOS_GE_TERMS=r6.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Down,126:Down!,\
+  140:Cross,146:Cross! ...                                                                         # as ours6
+python3 tools/psp-measure/ge-fit.py PSP_RESULTS r10.txt ours10 r9.txt ours9 r8.txt ours8 r6.txt ours6 --again PSP_AGAIN
 ```
 
-`PSP_RESULTS` holds the PSP's files of the three rounds (`tests/psp/measurements/ge-round6`, `ge-round8` and
-`ge-round9` unpacked into one folder). `ge-fit.py` prints each term's clocks under `GE::Cost`'s names, then how far
-the fitted model misses each test's lists (and round 9's `time-anchors`, round 8's cases again, as a check it doesn't
-fit); part 106 has the command that gave the clocks in `ge.hpp` (and the terms it holds fixed). Round 10 (`make` here,
-its menu's first line; rounds 9, 8 and 6 one line further down) adds `r10.txt ours10` to the command; its terms the
-model holds to others till it's fitted are freed with `--untie`, and `contention10.py PSP_RESULTS r10.txt ours10`
-reads its time-contention: each list's slowdown beside each CPU pattern, each pattern's RAM traffic, and the GE's
-contention by kind of read fitted to them (`GE::Cost::Contention`).
+`PSP_RESULTS` holds the PSP's files of the four rounds (`tests/psp/measurements/ge-round6`, `ge-round8`, `ge-round9`
+and round 10's unpacked into one folder), `PSP_AGAIN` the owner's runs of the earlier rounds again on round 10's
+evening: a list that moved more than 5% between the two (and more than 4 microseconds) is held out as a check, as
+where the program's arrays moved and a texture's place with them. Round 10's program (`make` here) has round 10 on
+its menu's first line, rounds 9, 8 and 6 one line further down each. `ge-fit.py` prints each term's clocks under
+`GE::Cost`'s names, then how far the fitted model misses each test's lists (and the checks: `time-anchors` and
+`time-anchors2`, round 8's cases again, the cases outside the model, the lists held out); part 106 has the command that
+gave the clocks in `ge.hpp`. `contention10.py PSP_RESULTS r10.txt ours10` reads round 10's time-contention: each
+list's slowdown beside each CPU pattern, each pattern's RAM traffic, and the GE's contention by kind of read fitted to
+them (`GE::Cost::Contention`).

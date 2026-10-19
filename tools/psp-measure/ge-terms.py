@@ -81,13 +81,15 @@ edit("ares/psp/ge/draw.cpp", '''      clocks = (c.fetched ? 0 : Cost::FetchFixed
 edit("ares/psp/ge/draw.cpp", '''  if(t.format >= 8) return wide * Cost::CompressedByte;''',
      '''  if(t.format >= 8) return geterms::add("B", "CompressedByte", wide), wide * Cost::CompressedByte;''')
 edit("ares/psp/ge/draw.cpp", '''  return (1 - rowsWide) * narrow * narrowRate + rowsWide * wide * Cost::TexelByte[indices][from][1];''',
-     '''  if(!sprite && distinct > threshold && look.pixel.format != 3) {  //(the clocks a whole TriangleWide16 moves)
+     '''  f64 counted = rowsWide;  //(the rows as a TriangleWide16 of 0 splits them: the term itself carries the rest)
+  if(!sprite && distinct > threshold && look.pixel.format != 3) {  //(the clocks a whole TriangleWide16 moves)
     f64 split = (threshold / distinct) * (threshold / distinct);
     geterms::add("B", "TriangleWide16", split * (wide * Cost::TexelByte[indices][from][1] - narrow * narrowRate));
+    counted = 1 - split;
   }
-  if(sprite) geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 0u}), (1 - rowsWide) * narrow);
-  else geterms::add("B", geterms::indexed("TriangleTexelByte", {indices ? 1u : 0u, from}), (1 - rowsWide) * narrow);
-  geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 1u}), rowsWide * wide);
+  if(sprite) geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 0u}), (1 - counted) * narrow);
+  else geterms::add("B", geterms::indexed("TriangleTexelByte", {indices ? 1u : 0u, from}), (1 - counted) * narrow);
+  geterms::add("B", geterms::indexed("TexelByte", {indices ? 1u : 0u, from, 1u}), counted * wide);
   return (1 - rowsWide) * narrow * narrowRate + rowsWide * wide * Cost::TexelByte[indices][from][1];''')
 edit("ares/psp/ge/draw.cpp", '''    if(physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow) back += share * Cost::RamShare;''',
      '''    if(physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow) back += share * Cost::RamShare,
