@@ -9,7 +9,7 @@
 
 //make SMOKE=1 builds a quick version for trying the program in an emulator before a PSP runs it (PPSSPP's
 //PPSSPPHeadless, which has no buttons to press): it runs round 3's VFPU and FPU tests (the big ones cut short by
-//Shrink, a shift), the FPU probes and the GE's rounds 2 to 10 straight away, and leaves when done. Its results say
+//Shrink, a shift), the FPU probes and the GE's rounds 2 to 10b straight away, and leaves when done. Its results say
 //nothing about a PSP.
 #ifdef SMOKE
 enum { Smoke = 1, Shrink = 8 };
@@ -57,7 +57,8 @@ int geRound(int round);    //2: the GE's first tests and the controller's timing
                            //parts 29's and 33's; 5: what part 48 left open; 6: what parts 60 and 64 left open;
                            //7: anti-aliased lines (part 78); 8: the GE's time again, and the CPU's (part 107); 9:
                            //triangles, texture loads, vertex formats, time-lists again (part 110); 10: CLUT32,
-                           //16-bit targets, perspective, mipmaps, lights, the CPU beside the GE (part 112)
+                           //16-bit targets, perspective, mipmaps, lights, the CPU beside the GE (part 112); 11:
+                           //round 10b, the CPU polling, before and beside, and placement (part 112)
 void geEnd(void);          //lets the GE go before the program leaves
 //The GE taken to have stalled on the test `out` is running, `look` (the call that looked: sceGeDrawSync(1) or
 //sceGeListSync(id, 1)) still giving `state` after `waited` microseconds: noted in its <name>.stalled with what its

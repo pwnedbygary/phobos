@@ -17727,6 +17727,37 @@ For #269's agent (1fd9133c) to fit; no model change here.
   case.
 
 
+### Round 10b: polling, before and beside, and placement
+
+A top-up the owner runs the same night, as #269's agent specified it for the refit
+(`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-10b-1fd9133c.md`): the two CPU patterns that came after round 10
+was built, and placement as a case of its own. Its own menu line (the first: "Round 10b: the CPU polling, before and
+beside; placement"), its own files and `manifest10b.txt` (nothing of round 10's touched), round 10's framework and
+safety. From this build on the arrays the GE reads (`big`, `bytes8`, `palette`, `timed`, `texture`, `texture16`,
+`contendRegion`) are on 1 KiB boundaries, so its swizzled RAM textures don't carry round 10's 7%.
+
+- **`time-contention3`** (48 cases): round 10's time-contention (`runContention10`, its thread above the program's
+  priority released after the enqueue) with six of its lists (A wide RAM texels, C untextured, D vertices, E2 Super
+  Monkey Ball's lists, H its small trilinear strips, I Ghost of Sparta's kind) at the same sizes, against six patterns:
+  polling, a turn being `sceKernelPollSema` on a semaphore nothing signals, `sceGeListSync(the list, 1)` or
+  `sceGeDrawSync(1)`, each with `sceKernelGetSystemTimeLow` (busy, but in the cache's or the kernel's; the deadline
+  looked at every turn); 1 MiB written (16384 lines) by the program before it queues the list at once, the same with
+  `sceKernelDcacheWritebackAll` between (the dirty lines landed before the GE starts), and by the thread once beside the
+  list, then stopping. Each pattern alone first (the polls for 10 ms, the writes once), then each list alone and beside
+  each, as time-contention's layout (the first list's case 6, rows of 7). The writes before a list give 16384 and their
+  microseconds in the thread's words' place.
+- **`time-placement`** (14): round 8's time-strips 37 strips (RAM 8888 512x512 swizzled, 32 wide) with the texture 0,
+  16, 32, 64, 96, 128 and 512 bytes past a 1 KiB boundary; not swizzled at 0 and 64; RAM CLUT8 512x256 swizzled at 0 and
+  64; a 1 KiB palette loaded before each 32x32 sprite (round 9's time-loads 45) at 0 and 64; and time-clut32's tiles
+  once over from a CLUT32 texture swizzled in RAM (the spec's optional line: no round had it).
+- About half a minute of the GE's time at 222/111 and 333/166, 9,000 or so runs; about 30 KB. The same safety as round
+  10's: new names, the clocks put back after each test, every GE wait 5 s with the reset, the thread's own 5 s deadline
+  (and the writer's 16384 lines), its writes written back and invalidated after each run.
+- "psp measure" runs round 10b after round 10 (every menu line one further down) and checks its two files
+  (time-contention3 180 records, time-placement 56) and `manifest10b.txt`, the thread's turns where it ran and none
+  where it didn't, and the writes before a list their 16384.
+
+
 ### Checks
 
 - The program builds without a warning (`-Wall`) with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0) and

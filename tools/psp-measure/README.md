@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-10) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-10b) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 10b: the CPU polling, before and beside; placement (30 KB)
    - Round 10: the GE's triangles, lights, the CPU beside it (0.2 MB)
    - Round 9: the GE's triangles, textures, vertices (about 0.1 MB)
    - Round 8: the GE's time again, and the CPU's (about 1 MB)
@@ -81,7 +82,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `main.c` | The menu, starting afresh, and leaving. |
 | `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
-| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8, 9 and 10 (round 10's with a thread reading and writing memory beside the GE). Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
+| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8, 9, 10 and 10b (round 10's and 10b's with a thread reading and writing memory beside the GE). Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
 | `cpu.c` | Round 8's tests of the CPU alone: its loops in assembly (memory's in C), memory, system and driver calls, the clocks granted. Its waits for the GE are timed as `ge.c`'s are, sharing its reset (`geReset`). |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
@@ -386,14 +387,23 @@ Round 10 takes about two minutes, three at most (its lists about 70 seconds of t
 rates, the runs' own overhead and building the lists the rest); it changes the clocks as round 8 does. The owner
 ran it on the evening of 2026-10-18; part 112 says what it showed.
 
+Round 10b (about 30 KB, `manifest10b.txt`) tops round 10 up the same night, as #269's agent specified it:
+`time-contention3`, six of round 10's GE lists alone and beside a CPU polling through system calls (`sceKernelPollSema`,
+`sceGeListSync`, `sceGeDrawSync`, each with `sceKernelGetSystemTimeLow`) or writing 1 MiB before the list is queued
+(with and without the cache written back) or once beside it; and `time-placement`, one swizzled RAM texture at offsets
+from 0 to 512 bytes past a 1 KiB boundary, controls not swizzled and CLUT8, a palette at two offsets, and CLUT32
+swizzled in RAM. From round 10b on the arrays the GE reads are on 1 KiB boundaries (round 10's build had them 64 bytes
+off a 128-byte one: part 112). About half a minute.
+
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its menu as
 a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4 again over
-counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, round 10, leaving), and
-checks every file is written (that the stall check got past its stall, and the timing records of rounds 6, 8, 9 and 10
-are whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder, and for round
-6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a closer look):
+counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, round 10, round 10b,
+leaving), and checks every file is written (that the stall check got past its stall, and the timing records of rounds 6,
+8, 9, 10 and 10b are whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder,
+and for round 6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a
+closer look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs

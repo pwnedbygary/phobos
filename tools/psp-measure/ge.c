@@ -53,8 +53,8 @@ enum { Target = 0x100000, Depth = 0x180000, Stride = 512 };
 #define VRAM16 ((volatile unsigned short*)0x44000000)
 
 static unsigned int __attribute__((aligned(16))) list[262144];
-static unsigned int __attribute__((aligned(16))) texture[256 * 256];
-static unsigned short __attribute__((aligned(16))) texture16[256 * 256];
+static unsigned int __attribute__((aligned(1024))) texture[256 * 256];  //(1 KiB boundaries since round 10b: part 112)
+static unsigned short __attribute__((aligned(1024))) texture16[256 * 256];
 static unsigned int pixels[256 * 256];
 
 //The vertices the tests draw with, in through mode (positions are pixels): 16-bit texture coordinates and
@@ -2388,13 +2388,13 @@ static void round5(void) {
 //the reciprocal's chords, what PATCH_CULL_ENABLE does, patch divisions past 64 along v, the driver's statuses
 
 //Vertices too many for a list (2 MiB): lit points, cells, the timing tests' primitives, a block transfer's RAM.
-static unsigned int __attribute__((aligned(64))) big[524288];
+static unsigned int __attribute__((aligned(1024))) big[524288];
 //A list to time, built with GU_SEND or word by word (through the uncached copy of RAM, as GU writes its lists).
-static unsigned int __attribute__((aligned(64))) timed[262144];
+static unsigned int __attribute__((aligned(1024))) timed[262144];
 #define TIMED ((unsigned int*)((unsigned int)timed | 0x40000000))
 //Texels of the timing tests' CLUT4, CLUT8 and DXT textures, and a palette of 256 8888 colors.
-static unsigned char __attribute__((aligned(64))) bytes8[256 * 256];
-static unsigned int __attribute__((aligned(64))) palette[256];
+static unsigned char __attribute__((aligned(1024))) bytes8[256 * 256];
+static unsigned int __attribute__((aligned(1024))) palette[256];
 //VRAM the text and the target leave free: 256 KiB for a texture, a transfer's source, vertices.
 enum { Spare = 0xc0000 };
 
@@ -5752,6 +5752,7 @@ static const TimedCase clut32Cases[] = {
   {"one pass, bilinear", "layers", 2, {1, 2}},
   TRIANGLE_WIDTHS("VRAM, CLUT32 512x512 not swizzled, into 8888 over 512x256"),
 };
+static void drawTiles(const TileCase* t, int layers);
 static void buildClut32(int c, int layers) {
   if(c >= 15) {
     timedList(GU_PSM_8888);
@@ -5760,8 +5761,11 @@ static void buildClut32(int c, int layers) {
     sceGuFinish();
     return;
   }
+  drawTiles(&tiles10[c], layers);
+}
+//The tiles of a TileCase (time-clut32's, time-placement's), layers times, in a list of their own.
+static void drawTiles(const TileCase* t, int layers) {
   static const short sides[3][2] = {{32, 34}, {16, 17}, {64, 68}};
-  const TileCase* t = &tiles10[c];
   int w = sides[t->side][0], h = sides[t->side][1], columns = (480 + w - 1) / w, rows = 272 / h;
   int each = t->sprites ? 2 : 4, count = columns * rows;
   void* texels = t->vram ? VRAM_TEXTURE : (void*)big;
@@ -6140,13 +6144,15 @@ static void buildNarrow(int c, int layers) {
 //skinned by 3 bones, lit by 3 directional lights, over CLUT4 and CLUT8 64x64 and 128x128 textures (RAM, swizzled) in
 //turn, a new one with its palette every 45 strips, bilinear, depth tested, into 8888.
 //time-contention2: the streaming reads (flat out and slowed) at 333/222/166 MHz, the bus apart from the CPU.
-static unsigned int __attribute__((aligned(64))) contendRegion[262144];
+static unsigned int __attribute__((aligned(1024))) contendRegion[262144];
 #define FREE_VRAM_CPU ((volatile unsigned int*)0x041c0000)  //(VRAM's last 256 KiB, through the CPU's cache)
 enum {
   NoThread, Arithmetic, CachedReads, Streaming, Streaming2, Streaming4, Streaming8, Writing, Writing4, Copying,
-  Chasing, Uncached, VramReads, VramWrites, Mix16, Mix64, Mix256, Mix1024, Patterns
+  Chasing, Uncached, VramReads, VramWrites, Mix16, Mix64, Mix256, Mix1024,
+  PollSema, PollListSync, PollDrawSync, WritesBefore, WritesSettled, WritesBesideOnce, Patterns  //(round 10b's)
 };
-static SceUID contendGo = -1;
+static SceUID contendGo = -1, contendNever = -1;  //(contendNever: a semaphore nothing signals, for PollSema)
+static int contendList;                           //the list PollListSync looks at
 static volatile int contendQuit;
 static volatile unsigned int contendTurns, contendBegan, contendEnded;
 static unsigned int contendLimit, contendSlow[Patterns];
@@ -6192,6 +6198,10 @@ static unsigned int contendTurn(int pattern, unsigned int n, unsigned int* rando
   case Uncached: return line10((volatile unsigned int*)((unsigned int)(region + (n & 16383) * 16) | 0x40000000));
   case VramReads: return line10((volatile unsigned int*)FREE_VRAM_CPU + (n & 4095) * 16);
   case VramWrites: writeLine10((volatile unsigned int*)FREE_VRAM_CPU + (n & 4095) * 16, n); return 0;
+  case PollSema: sceKernelPollSema(contendNever, 1); return sceKernelGetSystemTimeLow();
+  case PollListSync: sceGeListSync(contendList, 1); return sceKernelGetSystemTimeLow();
+  case PollDrawSync: sceGeDrawSync(1); return sceKernelGetSystemTimeLow();
+  case WritesBefore: case WritesSettled: case WritesBesideOnce: writeLine10(region + (n & 16383) * 16, n); return 0;
   default: {  //Mix16 to Mix1024: 12 additions, 2 reads and 2 writes at random words of the set
     unsigned int mask = (pattern == Mix16 ? 16384 : pattern == Mix64 ? 65536 : pattern == Mix256 ? 262144 : 1048576) / 4
                         - 1, r = *random, a, b, sum;
@@ -6210,10 +6220,10 @@ static int contendingThread(SceSize length, void* argument) {
   if(sceKernelWaitSema(contendGo, 1, &timeout) < 0 || contendQuit) return 0;
   unsigned int began = sceKernelGetSystemTimeLow(), now = began, n = 0, sum = 0, random = (unsigned int)contendRegion;
   int pattern = contendPattern;
-  unsigned int mask = pattern == Copying ? 0 : pattern == Uncached ? 3 : pattern >= Streaming && pattern <= Writing4
-                      ? 7 : 63;
+  unsigned int mask = pattern == Copying || pattern >= PollSema ? 0 : pattern == Uncached ? 3
+                      : pattern >= Streaming && pattern <= Writing4 ? 7 : 63;
   contendBegan = began;
-  while(!finished) {
+  while(pattern == WritesBesideOnce ? n < 16384 : !finished) {  //(WritesBesideOnce: 1 MiB once, whatever the GE)
     sum += contendTurn(pattern, n++, &random);
     if(!(n & mask)) {
       now = sceKernelGetSystemTimeLow();
@@ -6387,8 +6397,20 @@ static int runContention10(int c, int size, const char* what, unsigned int* time
     times[2] = times[3] = 0;
     return ran;
   }
+  if(k->pattern == WritesBefore || k->pattern == WritesSettled) {  //this thread's 1 MiB, then the list at once
+    unsigned int began = sceKernelGetSystemTimeLow();
+    for(unsigned int n = 0; n < 16384; n++) writeLine10(contendRegion + n * 16, n);
+    if(k->pattern == WritesSettled) sceKernelDcacheWritebackAll();
+    unsigned int wrote = sceKernelGetSystemTimeLow() - began;
+    int ran = k->ge ? runTimed(what, times) : 1;
+    if(!k->ge) times[0] = wrote, times[1] = 0;
+    sceKernelDcacheWritebackInvalidateAll();
+    times[2] = 16384, times[3] = wrote;
+    return ran;
+  }
   times[2] = times[3] = 0;
   if(contendGo < 0) contendGo = sceKernelCreateSema("contend", 0, 0, 1, 0);
+  if(contendNever < 0) contendNever = sceKernelCreateSema("never", 0, 0, 1, 0);
   int priority = sceKernelGetThreadCurrentPriority() - 1;
   SceUID thread = contendGo < 0 ? -1 : sceKernelCreateThread("contending", contendingThread, priority, 0x2000, 0, 0);
   if(thread < 0) return k->ge ? runTimed(what, times) : 1;
@@ -6406,6 +6428,7 @@ static int runContention10(int c, int size, const char* what, unsigned int* time
     int queued = sceGeListEnQueue(TIMED, 0, timingCallbacks, 0);
     unsigned int after = sceKernelGetSystemTimeLow(), now = after;
     if(queued < 0) contendQuit = 1;
+    contendList = queued;
     sceKernelSignalSema(contendGo, 1);  //(the thread runs from here till the list is done, then this one)
     if(queued < 0) {
       refused(queued, what);
@@ -6507,6 +6530,157 @@ static void round10(void) {
 #undef CASES
 }
 
+//---- round 10b: a top-up to round 10, as #269's agent specified it for the refit (docs/psp-core.md, part 112): the CPU
+//polling through system calls beside the GE, and its work before the list against beside it (time-contention3); and
+//placement as a case of its own (time-placement). From round 10b on the arrays the GE reads are on 1 KiB boundaries
+//(round 10's build had them 64 bytes off a 128-byte boundary, which made swizzled RAM textures 7% dearer).
+
+//-- the CPU polling, before and beside (time-contention3): round 10's time-contention as it is (runContention10, its
+//thread released after the enqueue), six of its lists (A, C, D, E2, H, I) at the same sizes, with round 10's
+//spec's patterns 11 and 12, which came after round 10 was built: polling, a turn being sceKernelPollSema on a semaphore
+//nothing signals, sceGeListSync(the list, 1) or sceGeDrawSync(1), and sceKernelGetSystemTimeLow (busy, but the cache's
+//or the kernel's); 1 MiB written (16384 lines over contendRegion) by this thread before the list is queued at once,
+//the same with sceKernelDcacheWritebackAll between (the dirty lines landed before the GE starts), and by the thread
+//once beside the list, then stopping. Each pattern alone first (the polls for 10 ms, the writes once), then each list
+//alone and beside each. A run's four words as time-contention's (the writes before: 16384 and their microseconds).
+#define PATTERNS10B(ge)                                                                                              \
+  {ge, PollSema}, {ge, PollListSync}, {ge, PollDrawSync}, {ge, WritesBefore}, {ge, WritesSettled},                   \
+  {ge, WritesBesideOnce}
+#define GE_ROW10B(ge) {ge, NoThread}, PATTERNS10B(ge)
+static const ContentionCase contentions3[] = {
+  PATTERNS10B(0), GE_ROW10B(1), GE_ROW10B(3), GE_ROW10B(4), GE_ROW10B(6), GE_ROW10B(9), GE_ROW10B(10),
+};
+#define PATTERN_NAMES10B(ge, unit, n, a, b)                                                                          \
+  {ge "; the CPU polling: sceKernelPollSema and sceKernelGetSystemTimeLow a turn", unit, n, {a, b}},                  \
+  {ge "; the CPU polling: sceGeListSync(the list, 1) and sceKernelGetSystemTimeLow a turn", unit, n, {a, b}},         \
+  {ge "; the CPU polling: sceGeDrawSync(1) and sceKernelGetSystemTimeLow a turn", unit, n, {a, b}},                   \
+  {ge "; the CPU writing 1 MiB (16384 lines) before the list is queued", unit, n, {a, b}},                            \
+  {ge "; the same, then sceKernelDcacheWritebackAll, before the list is queued", unit, n, {a, b}},                    \
+  {ge "; a thread writing 1 MiB once beside the list, then stopping", unit, n, {a, b}}
+#define GE_NAMES10B(ge, unit, a, b) {ge "; the CPU idle", unit, 2, {a, b}}, PATTERN_NAMES10B(ge, unit, 2, a, b)
+static const TimedCase contentionCases3[] = {
+  PATTERN_NAMES10B("the GE idle", "-", 1, 0, 0),
+  GE_NAMES10B("A: RAM 8888 512x512 swizzled, one sprite 512 wide over 512x128", "layers", 1, 2),
+  GE_NAMES10B("C: 512x256 without a texture", "layers", 8, 16),
+  GE_NAMES10B("D: culled triangles, 24-byte vertices from RAM", "triangles", 32768, 65536),
+  GE_NAMES10B("E2: Super Monkey Ball's lists", "passes", 2, 4),
+  GE_NAMES10B("H: the game's small strips (CLUT4 64x64, trilinear)", "triangles", 4096, 8192),
+  GE_NAMES10B("I: Ghost of Sparta's kind (skinned, lit strips)", "strips", 1125, 2250),
+};
+_Static_assert(sizeof(contentions3) / sizeof(contentions3[0]) ==
+               sizeof(contentionCases3) / sizeof(contentionCases3[0]), "a line for each case");
+
+//-- placement (time-placement): round 10 had a swizzled RAM texture 64 bytes off a 128-byte boundary cost 7% more
+//than on a 1 KiB boundary (time-anchors2), and its re-run of round 9 a 1 KiB palette from RAM 6 to 20% more. Here, from
+//a 1 KiB boundary (big's): round 8's time-strips 37 strips (RAM 8888 512x512 swizzled, 32 wide) with the texture 0,
+//16, 32, 64, 96, 128 and 512 bytes past it; the same not swizzled at 0 and 64; RAM CLUT8 512x256 swizzled at 0 and 64;
+//a palette of 256 colors (8888, 1 KiB) loaded before each 32x32 sprite (a CLUT8 32x32 texture set once: round 9's
+//time-loads 45), the palette 0 and 64 bytes past; and time-clut32's tiles once over from a CLUT32 texture swizzled in
+//RAM (round 10 had CLUT32 in RAM not swizzled, and in VRAM both ways), on the boundary.
+typedef struct { short what, psm, swizzled, offset; } PlacementCase;
+enum { PlacedStrips, PlacedPalettes, PlacedTiles };
+static const PlacementCase placements[] = {
+  {PlacedStrips, GU_PSM_8888, 1, 0}, {PlacedStrips, GU_PSM_8888, 1, 16}, {PlacedStrips, GU_PSM_8888, 1, 32},
+  {PlacedStrips, GU_PSM_8888, 1, 64}, {PlacedStrips, GU_PSM_8888, 1, 96}, {PlacedStrips, GU_PSM_8888, 1, 128},
+  {PlacedStrips, GU_PSM_8888, 1, 512}, {PlacedStrips, GU_PSM_8888, 0, 0}, {PlacedStrips, GU_PSM_8888, 0, 64},
+  {PlacedStrips, GU_PSM_T8, 1, 0}, {PlacedStrips, GU_PSM_T8, 1, 64}, {PlacedPalettes, GU_PSM_T8, 1, 0},
+  {PlacedPalettes, GU_PSM_T8, 1, 64}, {PlacedTiles, GU_PSM_T32, 1, 0},
+};
+static const TimedCase placementCases[] = {
+  {"RAM, 8888 512x512 swizzled, strips 32 wide (round 8's time-strips 37), the texture on a 1 KiB boundary", "layers",
+   2, {1, 2}},
+  {"the same, 16 bytes past it", "layers", 2, {1, 2}}, {"the same, 32 bytes past", "layers", 2, {1, 2}},
+  {"the same, 64 bytes past (round 10's place)", "layers", 2, {1, 2}}, {"the same, 96 bytes past", "layers", 2, {1, 2}},
+  {"the same, 128 bytes past", "layers", 2, {1, 2}}, {"the same, 512 bytes past", "layers", 2, {1, 2}},
+  {"RAM, 8888 512x512 not swizzled, strips 32 wide, on the boundary", "layers", 2, {1, 2}},
+  {"the same, 64 bytes past", "layers", 2, {1, 2}},
+  {"RAM, CLUT8 512x256 swizzled, strips 32 wide, on the boundary", "layers", 2, {1, 2}},
+  {"the same, 64 bytes past", "layers", 2, {1, 2}},
+  {"CLUT8 32x32 set once, a palette of 256 colors (8888, 1 KiB) loaded before each sprite, the palette on the boundary",
+   "sprites", 2, {64, 256}},
+  {"the same, the palette 64 bytes past", "sprites", 2, {64, 256}},
+  {"time-clut32's tiles once over (32x34, 3D, nearest, into 5650) from a CLUT32 512x512 texture swizzled in RAM",
+   "layers", 2, {1, 2}},
+};
+_Static_assert(sizeof(placements) / sizeof(placements[0]) == sizeof(placementCases) / sizeof(placementCases[0]),
+               "a line for each case");
+static void buildPlacement(int c, int size) {
+  const PlacementCase* p = &placements[c];
+  unsigned char* boundary = (unsigned char*)(((unsigned int)big + 1023) & ~1023u);
+  if(p->what == PlacedTiles) {
+    static const TileCase tiles = {GU_PSM_T32, 1, 0, 1, 0, GU_PSM_5650};
+    drawTiles(&tiles, size);
+    return;
+  }
+  unsigned int* colors = (unsigned int*)(boundary + 1572864 + p->offset);  //(1.5 MiB in: past every texture here)
+  if(p->what == PlacedPalettes) {
+    memcpy(colors, palette, sizeof(palette));
+    sceKernelDcacheWritebackAll();
+  }
+  timedList(GU_PSM_8888);
+  if(p->what == PlacedStrips) {
+    texture8(p->psm, p->swizzled, 512, p->psm == GU_PSM_T8 ? 256 : 512, boundary + p->offset, 0);
+    for(int layer = 0; layer < size; layer++) spriteStrips(0, 0, 512, 256, 32, 0, 0, 1);
+  } else {
+    texture8(GU_PSM_T8, 1, 32, 32, boundary, 0);
+    for(int k = 0; k < size; k++) {
+      sceGuClutLoad(32, colors);
+      float x = (k & 15) * 32, y = (k >> 4 & 7) * 32;
+      timedSprite(x, y, x + 32, y + 32, 0, 0, 32, 32, 0xffffffff);
+    }
+  }
+  sceGuFinish();
+}
+
+static void writeManifest10b(void) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/manifest10b.txt", folder);
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return;
+  static const char text[] =
+    "psp-measure's GE tests, round 10b (tools/psp-measure/ge.c in Phobos says what each test draws and runs;\n"
+    "docs/psp-core.md, part 112, what each is for). Records of words as round 8's (manifest8.txt): case, size, CPU\n"
+    "MHz << 16 | bus MHz (as scePower gave them back), repeats | values << 16, then per run `values` words: times in\n"
+    "microseconds from just before sceGeListEnQueue to the finish callback and to sceGeListEnQueue's return;\n"
+    "time-contention3 two more as round 10's time-contention, a thread's turns of its pattern and their time (the\n"
+    "writes before the list: 16384 and their microseconds; the GE idle: the first time is the pattern's own); "
+    "0xffffffff\n"
+    "for a run not finished (see <name>.stalled). All run at 222/111 and 333/166 MHz; the clocks as found are put "
+    "back\n"
+    "after each. The arrays the GE reads are on 1 KiB boundaries. The cases (test case: what; size):\n";
+  sceIoWrite(file, text, sizeof(text) - 1);
+  static const struct { const char* test; const TimedCase* cases; int count; } tests[] = {
+    {"time-contention3", contentionCases3, sizeof(contentionCases3) / sizeof(contentionCases3[0])},
+    {"time-placement", placementCases, sizeof(placementCases) / sizeof(placementCases[0])},
+  };
+  char line[320];
+  for(unsigned int t = 0; t < sizeof(tests) / sizeof(tests[0]); t++) {
+    for(int c = 0; c < tests[t].count; c++) {
+      int length = snprintf(line, sizeof(line), "%s %d: %s; %s\n", tests[t].test, c, tests[t].cases[c].name,
+                            tests[t].cases[c].unit);
+      sceIoWrite(file, line, length < (int)sizeof(line) ? length : (int)sizeof(line) - 1);
+    }
+  }
+  static const char end[] =
+    "<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).\n"
+    "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
+  sceIoWrite(file, end, sizeof(end) - 1);
+  sceIoClose(file);
+}
+
+static void round10b(void) {
+  foundCpu = scePowerGetCpuClockFrequencyInt();
+  foundBus = scePowerGetBusClockFrequencyInt();
+  foundPll = foundCpu > 2 * foundBus ? foundCpu : 2 * foundBus;  //(as round 6 reads them)
+  writeManifest10b();
+  prepareTexels();
+#define CASES(table) table, sizeof(table) / sizeof(table[0])
+  contending = contentions3, contendClocks = 0;
+  timeCases8("time-contention3", CASES(contentionCases3), 4, 4, AtTwo, buildContention10, runContention10);
+  timeCases8("time-placement", CASES(placementCases), 8, 2, AtTwo, buildPlacement, 0);
+#undef CASES
+}
+
 //---- the rounds
 
 static int guReady;  //whether sceGuInit has set the GE up: once, on the first round, kept until geEnd
@@ -6580,9 +6754,9 @@ static void round2(void) {
   controllerTiming("controller-timing");
 }
 
-//A round of the GE's tests (2 to 10) into results/ge. Returns 0 if something couldn't be written.
+//A round of the GE's tests (2 to 10, and 11 for round 10b) into results/ge. Returns 0 if something couldn't be written.
 int geRound(int round) {
-  if(round < 2 || round > 10) return 1;
+  if(round < 2 || round > 11) return 1;
   if(!guReady) {
     sceGuInit();
     guReady = 1;
@@ -6597,7 +6771,8 @@ int geRound(int round) {
   else if(round == 7) round7();
   else if(round == 8) round8();
   else if(round == 9) round9();
-  else round10();
+  else if(round == 10) round10();
+  else round10b();
   return !failed;
 }
 

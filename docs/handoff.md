@@ -75,6 +75,11 @@ docs/psp-core.md, part 112.
   cost (10.3 against 2.2); narrow strips cost by 16-byte units; the CPU's RAM traffic slows the GE's RAM reads by kind
   (Super Monkey Ball's lists ×1.38 beside streaming reads, ×1.54 beside a game's mix; wide texels ×1.85 to 3.2; VRAM
   work not at all).
+- **Round 10b** (part 112), for the owner the same night: `time-contention3` (the spec's patterns 11 and 12: polling
+  through system calls, 1 MiB written before the enqueue with and without a writeback, and once beside the list, against
+  six of round 10's lists) and `time-placement` (one swizzled RAM texture 0 to 512 bytes past a 1 KiB boundary,
+  controls, a palette at two offsets, CLUT32 swizzled in RAM); its own menu line (the first) and `manifest10b.txt`; the
+  program's arrays on 1 KiB boundaries from this build on. About half a minute.
 - **Next**: #269's agent refits with round 10 (no model change here); round 10's files
   (`tests/psp/measurements/ge-round10`) and the re-runs of rounds 2 to 9 (`ge-reruns-round10`) are in the repository
   with the owner's go-ahead (2026-10-18; `development-process.md`); round 10b adds the spec's polling (11) and

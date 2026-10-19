@@ -135,6 +135,9 @@ static const TimingFile8 timingFiles10[] = {
   {"time-widetri", 72, 8, 2, 3}, {"time-perspective", 192, 8, 2, 3}, {"time-mipmaps", 88, 8, 2, 3},
   {"time-vram8", 240, 8, 2, 3}, {"time-contention", 754, 4, 4, 3}, {"time-contention2", 104, 4, 4, 4},
 };
+//Round 10b's: time-contention3 6 cases at 1 size and 42 at 2, four values a run as time-contention's; time-placement 14
+//at 2.
+static const TimingFile8 timingFiles10b[] = {{"time-contention3", 180, 4, 4, 3}, {"time-placement", 56, 8, 2, 3}};
 static constexpr u32 ClockAttempts8 = 13;
 struct TimingRecord { u32 test, size, clocks, repeats, values; std::vector<u32> times; };
 //The records, or none if the words don't make whole records.
@@ -299,8 +302,9 @@ static const char* probeFiles[] = {
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
 enum : u32 {
-  GeRound10Line = 0, GeRound9Line = 1, GeRound8Line = 2, GeRound7Line = 3, GeRound6Line = 4, GeRound5Line = 5,
-  GeRound4Line = 6, GeRound3Line = 8, ProbesLine = 9, GeRound2Line = 11, AfreshLine = 13, LeaveLine = 14
+  GeRound10bLine = 0, GeRound10Line = 1, GeRound9Line = 2, GeRound8Line = 3, GeRound7Line = 4, GeRound6Line = 5,
+  GeRound5Line = 6, GeRound4Line = 7, GeRound3Line = 9, ProbesLine = 10, GeRound2Line = 12, AfreshLine = 14,
+  LeaveLine = 15
 };
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
@@ -512,8 +516,14 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 40000, exists(results / "time-contention2.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
+  //round 10b, its placement last
+  move(m, GeRound10Line, GeRound10bLine);
+  press(m, Cross);
+  CHECK(waitFor(m, 20000, exists(results / "time-placement.bin")), true);
+  press(m, Cross);
+  onlyStallCheckStalled();
   //leaving
-  move(m, GeRound10Line, LeaveLine);
+  move(m, GeRound10bLine, LeaveLine);
   press(m, Cross);
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
@@ -671,10 +681,12 @@ static auto pspMeasure() -> void {
   for(auto& file : timingFiles9) timedFile(file);
   CHECK(std::filesystem::exists(results / "manifest9.txt"), true);
   for(auto& file : timingFiles10) timedFile(file);
-  //time-contention's and time-contention2's thread: turns and their time where it ran (but beside a list the core
-  //finished before the thread's first turn: culled triangles, NOPs and copies take none of its time), none where it
-  //didn't (each GE list's first case)
-  for(auto [name, first, row] : {std::tuple{"time-contention", 17u, 18u}, std::tuple{"time-contention2", 4u, 5u}}) {
+  for(auto& file : timingFiles10b) timedFile(file);
+  //time-contention's, time-contention2's and time-contention3's thread: turns and their time where it ran (but beside
+  //a list the core finished before the thread's first turn: culled triangles, NOPs and copies take none of its time),
+  //none where it didn't (each GE list's first case); time-contention3's writes before a list, 16384 and their time
+  for(auto [name, first, row] : {std::tuple{"time-contention", 17u, 18u}, std::tuple{"time-contention2", 4u, 5u},
+                                 std::tuple{"time-contention3", 6u, 7u}}) {
     bool counted = true;
     for(auto& record : timingRecords(readWords(results / (std::string(name) + ".bin")))) {
       bool idle = record.test >= first && (record.test - first) % row == 0;
@@ -686,6 +698,7 @@ static auto pspMeasure() -> void {
     CHECK(counted, true);
   }
   CHECK(std::filesystem::exists(results / "manifest10.txt"), true);
+  CHECK(std::filesystem::exists(results / "manifest10b.txt"), true);
   //cpu-clocks: an attempt a record (1 run of 4 words: what the call gave back, the CPU's and the bus's MHz after, the
   //loop's time), each from 222/111 or 333/166; the first, 333/333/166, granted
   auto attempts = timingRecords(readWords(results / "cpu-clocks.bin"));
