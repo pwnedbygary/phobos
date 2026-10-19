@@ -5721,7 +5721,9 @@ static void buildLights10(int c, int count) {
 //last column 32 wide); one pass reading an 8888 buffer just filled in the list (480x272, no texture: RenderedAt), and
 //the same fill before tiles reading VRAM's first megabyte; bilinear. Then round 9's strips as triangles over the
 //target's 512x256 from the CLUT32 texture (round 8's time-strips had it in sprites).
-enum { RenderedAt = 0x150000 };  //(VRAM past the 5650 target: its 272 rows of 512 run into Depth's place, unused)
+//VRAM past the 5650 target: an 8888 480x272 buffer there (rows of 512) runs through Depth's place, unused here, and
+//96 KiB into VRAM's last 256 KiB (the contention thread's, at another time).
+enum { RenderedAt = 0x150000 };
 typedef struct { short psm, swizzled, vram, passes, loads, target, sprites, side, rendered, linear; } TileCase;
 static const TileCase tiles10[] = {
   {GU_PSM_T32, 0, 1, 3, 1, GU_PSM_5650}, {GU_PSM_T32, 0, 1, 1, 0, GU_PSM_5650}, {GU_PSM_8888, 0, 1, 1, 0, GU_PSM_5650},
@@ -6127,14 +6129,14 @@ static void buildNarrow(int c, int layers) {
 //Patience: it never holds the PSP longer), counting its turns; this thread waits in the meantime, then for the GE as
 //runTimed does. Each run's four words: the GE's time to its finish callback and sceGeListEnQueue's return (alone: the
 //thread's 10 ms and 0), the thread's turns and their time in microseconds (0 and 0 without it).
-//The patterns (contendRegion, 1 MiB the GE doesn't read; FREE_VRAM, VRAM's last 256 KiB): arithmetic alone (64 adds
-//a turn); a line's 16 words read from 8 KiB (the data cache's hits); a line's 16 words read streaming over 1 MiB (a
-//miss each), flat out and slowed by an empty loop between lines to a half, a quarter and an eighth of that (the loop's
-//turns measured as each test's clocks are set, contendSlow); a line's 16 words written streaming over 1 MiB (write
-//backs), flat out and a quarter; 64 KiB copied (memcpy) a turn over it; a step of a chain of pointers 64 bytes apart
-//over it (a miss at a time); 16 words read through the uncached mirror; a line's 16 words read and written in VRAM;
-//a game's mix, 12 additions and 2 reads and 2 writes a turn (a quarter of its instructions) at random words of 16,
-//64 and 256 KiB and 1 MiB.
+//The patterns (contendRegion, 1 MiB the GE doesn't read; FREE_VRAM_CPU, VRAM's last 256 KiB, which only time-clut32's
+//filled buffer touches, at another time): arithmetic alone (64 adds a turn); a line's 16 words read from 8 KiB (the
+//data cache's hits); a line's 16 words read streaming over 1 MiB (a miss each), flat out and slowed by an empty loop
+//between lines to a half, a quarter and an eighth of that (the loop's turns measured as each test's clocks are set,
+//contendSlow); a line's 16 words written streaming over 1 MiB (write backs), flat out and a quarter; 64 KiB copied
+//(memcpy) a turn over it; a step of a chain of pointers 64 bytes apart over it (a miss at a time); 16 words read
+//through the uncached mirror; a line's 16 words read and written in VRAM; a game's mix, 12 additions and 2 reads and 2
+//writes a turn (a quarter of its instructions) at random words of 16, 64 and 256 KiB and 1 MiB.
 //The GE's lists: A an 8888 512x512 texture (RAM, swizzled) in one sprite 512 wide over 512x128 a layer (wide reads);
 //B the same in VRAM; C 512x256 without a texture; D a strip of culled triangles, 24-byte vertices (16-bit texture
 //coordinates and normals, float positions) from RAM; E1 NOPs; E2 Super Monkey Ball's CALLed lists (round 8's

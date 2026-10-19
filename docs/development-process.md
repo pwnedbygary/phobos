@@ -84,6 +84,8 @@ are excluded; copying the portable template elsewhere requires explicit adoption
   (`tests/psp/measurements/ge-round10`, packed with xz), for the same reason.
   Authorized by the owner on 2026-10-18: the re-runs of rounds 2 to 9 in round 10's session on the same PSP
   (`tests/psp/measurements/ge-reruns-round10`, packed with xz), for the same reason.
+  Authorized by the owner on 2026-10-18: round 10b's GE measurements from the same PSP
+  (`tests/psp/measurements/ge-round10b`, packed with xz), for the same reason.
   Do not uninstall or clear app data to run a comparison.
 
 See [coordinator prompt](coordinator-prompt.md),

@@ -58,7 +58,8 @@ docs/psp-core.md, part 112.
   most.
 - **Safety**: new names only; the clocks put back after each test; every GE wait 5 s with the reset path; the contention
   thread (above the program's priority, as the spec asks) stops at the finish callback's flag, its 10 ms alone, or 5 s
-  whatever happens; its memory its own (1 MiB, and VRAM's last 256 KiB), written back and invalidated after each run.
+  whatever happens; its memory a 1 MiB array of its own and VRAM's last 256 KiB (time-clut32's filled buffer runs into
+  it, at another time), written back and invalidated after each run.
 - **Test**: "psp measure" runs round 10 after round 9 and checks every record; `tests/psp/programs/pspmeasure.elf`
   rebuilt.
 - **Results** (the owner's PSP, 2026-10-18 evening, every earlier round again after it; part 112): placement first: this
@@ -79,11 +80,14 @@ docs/psp-core.md, part 112.
   through system calls, 1 MiB written before the enqueue with and without a writeback, and once beside the list, against
   six of round 10's lists) and `time-placement` (one swizzled RAM texture 0 to 512 bytes past a 1 KiB boundary,
   controls, a palette at two offsets, CLUT32 swizzled in RAM); its own menu line (the first) and `manifest10b.txt`; the
-  program's arrays on 1 KiB boundaries from this build on. About half a minute.
-- **Next**: #269's agent refits with round 10 (no model change here); round 10's files
-  (`tests/psp/measurements/ge-round10`) and the re-runs of rounds 2 to 9 (`ge-reruns-round10`) are in the repository
-  with the owner's go-ahead (2026-10-18; `development-process.md`); round 10b adds the spec's polling (11) and
-  before-or-beside (12) patterns and placement as a case.
+  program's arrays on 1 KiB boundaries from this build on. About half a minute. He ran it the same night
+  (`tests/psp/measurements/ge-round10b`, part 112): polling doesn't slow the GE (×0.97 to 1.03), nor 1 MiB written just
+  before the list (×0.99 to 1.05); a writer beside it slows it by its rate (wide RAM texels ×2.0 to 2.1, Super Monkey
+  Ball's lists ×1.36, its small strips ×1.27); a swizzled texture or palette off a 128-byte boundary costs 5 to 8%, a
+  multiple of 128 off 1 KiB 1.5 to 2%, unswizzled nothing; CLUT32 swizzled in RAM 2.42 clocks a pixel.
+- **Next**: #269's agent refits with rounds 10 and 10b (no model change here); round 10's files
+  (`tests/psp/measurements/ge-round10`), the re-runs of rounds 2 to 9 (`ge-reruns-round10`) and round 10b's
+  (`ge-round10b`) are in the repository with the owner's go-ahead (2026-10-18; `development-process.md`).
 
 ## PSP measure, round 9: triangles reading narrow textures, a texture's loads, vertex formats, time-lists again — 2026-10-18
 

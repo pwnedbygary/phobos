@@ -61,11 +61,22 @@ files, the GE's timed lists laid out as `manifest10.txt` describes (round 8's re
 `time-contention2`'s runs two words longer, a thread's turns and their time): `time-anchors2`, `time-lights`,
 `time-clut32`, `time-widetri`, `time-perspective`, `time-mipmaps`, `time-vram8`, `time-contention` and
 `time-contention2`, at 222/111 and 333/166 MHz, `time-contention2` at 333/222/166; nothing stalled. He ran `d435eb2bd`'s
-`pspmeasure.elf` (its EBOOT `31364afe…`), the one in `tests/psp/programs`. That build put its RAM textures and palette
-64 bytes off a 128-byte boundary, which makes swizzled RAM textures about 7% dearer than an aligned place: part 112 says
-so with what each test is for and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 160 KB as 36 KB);
-`SHA256SUMS` holds the unpacked files' sums (and the manifest's). No test reads them yet: they're for the GE timing's
-fit (#269).
+`pspmeasure.elf` (its EBOOT `31364afe…`). The one in `tests/psp/programs` is round 10b's (`2578e331a`'s, `06c5de46…`),
+which draws round 10's lists the same way but for where its arrays sit: on 1 KiB boundaries, where `d435eb2bd`'s put the
+RAM textures and palette 64 bytes off a 128-byte boundary, which made swizzled RAM textures about 7% dearer (by
+time-placement the committed build's would come out 6 to 7% cheaper). Part 112 says so with what each test is for and
+what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 160 KB as 36 KB); `SHA256SUMS` holds the unpacked files'
+sums (and the manifest's). No test reads them yet: they're for the GE timing's fit (#269).
+
+## `ge-round10b/`
+
+Round 10b, the same program's top-up (its menu's first line since, "Round 10b: the CPU polling, before and beside;
+placement"), run on the same PSP on the night of 2026-10-18 (pulled at 20:23): 3 files, `time-contention3` and
+`time-placement` laid out as `manifest10b.txt` describes (round 10's records; `time-contention3`'s runs two words
+longer, as `time-contention`'s), at 222/111 and 333/166 MHz; nothing stalled. He ran `2578e331a`'s `pspmeasure.elf` (its
+EBOOT `6fa4ca80…`), the one in `tests/psp/programs`, its arrays on 1 KiB boundaries. Part 112 says what each test is for
+and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 19 KB as 4.5 KB); `SHA256SUMS` holds the unpacked
+files' sums (and the manifest's). No test reads them yet: they're for the GE timing's fit (#269).
 
 ## `ge-reruns-round10/`
 

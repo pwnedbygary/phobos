@@ -17550,8 +17550,9 @@ Every test is round 8's kind (`timeCases8`: each list queued alone, timed to its
   goes on). The contention thread runs at a priority above the program's own (nothing of the program's runs between a
   list's start and its finish), started before the list is queued but waiting on a semaphore until it is, and stops
   itself at the finish callback's flag, at its 10 ms alone, or at 5 seconds whatever happens: it can't hold the PSP. Its
-  memory is a 1 MiB array of its own and VRAM's last 256 KiB (which no GE test uses); what it wrote through the cache is
-  written back and invalidated after each run, so no line of it lands later on anything else.
+  memory is a 1 MiB array of its own and VRAM's last 256 KiB (which time-clut32's filled buffer runs 96 KiB into, at
+  another time); what it wrote through the cache is written back and invalidated after each run, so no line of it lands
+  later on anything else.
 - The owner: copy `EBOOT.PBP` over the old one in `PSP/GAME/PSPMEASURE`, keeping `results/`; ARK's clock settings at
   Auto; the charger in; the GE profiler plugin off (it times the same lists); run "Round 10" (the menu's first line);
   send `results/ge` back.
@@ -17611,12 +17612,12 @@ times the bus's MHz) at 222/111 unless said; 333/166 agrees within a few percent
   - Point lights and spotlights cost the same: 10.8 to 11.0 a light-vertex diffuse, at any count; with their shine 21.9
     for one light and 19.0 each for 2 to 4. Fall-off ((1, 0, 0), (1, 0.5, 0.25), (0.145, 0, 0.145)) and a spot's
     exponent and cutoff (4 and 0.5, the game's 21.1 and 0.925) change nothing (within 0.1%).
-  - Directional lights' shine: with every light register directional, each shining light adds 0.8 to 1.0 (4 shining
-    16.2), at powers 1, 8 and 64 alike, whichever lights shine (only 0, only 3, 0 and 1). But a lone directional light
-    whose disabled lights 1 to 3 the previous list left as spotlights costs 20.8 more with its shine (at powers 1 and
-    64, and round 8's case 22 again: 32.2), and 5.0 more without it (this test's first case at 333/166, after the drawn
-    cases' spotlights): round 8's "20.7 for one directional light with its shine" was that state, not the shine or its
-    power.
+  - Directional lights' shine: with every light register directional, a shining light adds 0.8 to 0.95 among four (4
+    shining 16.2), two lights both shining 1.1 together, at powers 1, 8 and 64 alike, whichever lights shine (only 0,
+    only 3, 0 and 1). But a lone directional light whose disabled lights 1 to 3 the previous list left as spotlights
+    costs 20.8 more with its shine (at powers 1 and 64, and round 8's case 22 again: 32.2), and 5.0 more without it
+    (this test's first case at 333/166, after the drawn cases' spotlights): round 8's "20.7 for one directional light
+    with its shine" was that state, not the shine or its power.
   - The game's mixes: its two spots shining 49.4 (as lightsOn's spots), with a directional light shining too 51.4
     (+2.0), the three not shining 34.2; skinned (2 weights, 8-bit) the same as not (49.4). Drawn as the game draws them
     (strips of 9 vertices, 16x20-pixel triangles, CLUT4 bilinear, the depth and alpha tests): 2,538 bus clocks a strip
@@ -17665,8 +17666,8 @@ times the bus's MHz) at 222/111 unless said; 333/166 agrees within a few percent
 - **Narrow strips** (`time-vram8`): a strip's row costs by the 16-byte units it touches. VRAM CLUT8 not swizzled,
   sprites: 2.67, 1.54, 1.47, 0.91 and 1.06 clocks a pixel at 4, 8, 12, 16 and 24 texels (a row 10.7, 12.3, 17.7, 14.5,
   25.4: 16 wide the cheapest); CLUT4 0.80 down to 0.60 (32 texels a unit); swizzled VRAM 28 to 37% cheaper (CLUT4 15 to
-  19%); triangles 1.5 to 1.8 times the sprites at these widths. Round 8's case 21 again 1.54. The −50% case (8 wide)
-  pays a whole unit's row for half its texels.
+  19%); triangles 1.5 to 1.8 times the sprites at these widths in VRAM CLUT8 (VRAM CLUT4 1.3 to 1.7, RAM CLUT8 1.1 to
+  1.3). Round 8's case 21 again 1.54. The −50% case (8 wide) pays a whole unit's row for half its texels.
 - **The CPU beside the GE** (`time-contention`, `time-contention2`), the GE's time beside each pattern against alone
   (the larger size):
   - CPU work without RAM traffic (arithmetic, the data cache's hits) doesn't slow the GE (×0.97 to 1.01). RAM traffic
@@ -17717,16 +17718,6 @@ For #269's agent (1fd9133c) to fit; no model change here.
   placements move RAM reads by up to 26% either way. A fit across rounds should take each run's places into account, or
   weight the cases that don't read RAM.
 
-### Not yet (a round 10b, if one comes)
-
-- The spec's CPU patterns 11 and 12, added at 18:36 after this build: a polling loop (sceKernelPollSema and
-  sceKernelGetSystemTimeLow in a loop, and sceGeListSync(id, 1) in one), busy but hitting the cache, as Activision Hits'
-  menu keeps its CPU; and the CPU's 1 MiB of writes before the list is queued against the same writes beside it.
-- Placement as a variable of its own: textures, palettes, vertices and lists at each offset from a 128-byte to a 4 KiB
-  boundary, and the CPU's and the GE's streams at chosen relative places; the light registers' left-over kinds as a
-  case.
-
-
 ### Round 10b: polling, before and beside, and placement
 
 A top-up the owner runs the same night, as #269's agent specified it for the refit
@@ -17758,6 +17749,48 @@ safety. From this build on the arrays the GE reads (`big`, `bytes8`, `palette`, 
   where it didn't, and the writes before a list their 16384.
 
 
+### Round 10b's results (the owner's run, 2026-10-18 night)
+
+The owner ran round 10b (EBOOT `6fa4ca80…`, `2578e331a`'s program) the same night; the coordinator pulled it at 20:23
+(`~/phobos-work/scratch/psp-ge-profile/results-r10b`: `time-contention3.bin`, `time-placement.bin`, `manifest10b.txt`,
+each one's sha256 the device's), nothing stalled, every run finished, 180 and 56 records as the tables give. Decoded
+here (`r10.py`); #278's review decoded it too and agrees with every figure below.
+
+- **Polling doesn't slow the GE.** Beside each of the six lists, at both sizes and clocks, a CPU polling through
+  `sceKernelPollSema`, `sceGeListSync(the list, 1)` or `sceGeDrawSync(1)` (each turn with `sceKernelGetSystemTimeLow`
+  and the deadline's look: 2.6 to 3.5 µs a turn at 222/111) leaves the list ×0.97 to 1.03 of its time alone: a polling
+  CPU's busy time isn't RAM traffic.
+- **Nor does work before the list.** 1 MiB written by the program (9.1 ms at 222/111, 6.0 at 333/166) just before it
+  queues the list leaves the list ×0.99 to 1.05 (the 1.05 the small strips' smaller size), with the cache written back
+  first ×1.00 to 1.03: the dirty lines landing late cost little, and only the work beside the GE counts.
+- **Beside it, once: the writer outran every list.** The thread looked at the clock each turn (a system call), so it
+  wrote 0.64 lines a microsecond at 222/111 and 0.94 at 333/166 (alone it reached its 10 ms at 6,376 and 9,347 lines);
+  its megabyte would take about 26 and 17 ms, longer than every list, so it overlapped each one whole: a writer at about
+  half round 10's flat-out writes' rate (1.21 and 1.80 lines a microsecond). Beside it wide RAM texels took ×2.00 to
+  2.14 (round 10: ×2.74 flat out, ×1.48 at a quarter), Super Monkey Ball's lists ×1.36 to 1.37, vertices ×1.30 to 1.33,
+  its small strips ×1.27 to 1.28, Ghost of Sparta's kind ×1.07, untextured ×1.00: the slowdown by the writer's rate, as
+  round 10 found. A burst over part of a list, the spec's f, is still to be measured.
+- **Placement** (one layer of round 8's time-strips 37 strips, against the texture on a 1 KiB boundary: 2,163.5 µs,
+  within 0.4% of round 10's own case on one): 16, 32, 64 and 96 bytes past cost 6.7, 6.4, 5.6 and 7.3% more at 222/111
+  (7.4 to 7.7% at 333/166), 128 and 512 past 2.1 and 1.5% (1.75 and 1.4%): an offset that isn't a multiple of 128 bytes
+  costs 6 to 8%, a multiple of 128 off a 1 KiB boundary 1.5 to 2%. Not swizzled, 64 past costs nothing (−0.03%, −0.18%);
+  swizzled CLUT8 64 past 5.1% (5.9%); a 1 KiB palette 64 past 5.7% (5.3%: 526 against 498 clocks a sprite). CLUT32
+  swizzled in RAM, the tiles once over: 2,841 µs, 2.42 clocks a pixel (VRAM not swizzled 1.74, RAM not swizzled 8.91).
+- **For the refit**: polling costs the GE nothing (`PollInstructions` as assumed); no term for work before the enqueue;
+  the slowdown goes by the CPU's traffic beside the GE (round 10b's writer agrees with round 10's slowed writes); and a
+  placement term for swizzled textures and palettes, by their base's offset (off 128 bytes 6 to 8% for texels, 5 to 6%
+  for palettes; a multiple of 128 off 1 KiB 1.5 to 2%), which games' allocations decide.
+
+### Not yet
+
+- A burst of CPU work over part of a list (the spec's f): round 10b's writer outran every list, its clock looked at each
+  turn; a burst shorter than the list (the clock looked at every 64 lines) would measure it.
+- Placement of what else the GE and the CPU read: vertices, lists, and the two streams at chosen relative places (round
+  10's re-runs moved RAM-to-RAM transfers 26% and the unswizzled `texture`'s cases 9 to 14% by where the arrays sat).
+- The light registers' left-over kinds as a case of their own (a lone directional light shining after spotlights costs
+  20.8 more a vertex).
+
+
 ### Checks
 
 - The program builds without a warning (`-Wall`) with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0) and
@@ -17772,6 +17805,10 @@ safety. From this build on the arrays the GE reads (`big`, `bytes8`, `palette`, 
   light strips none and the drawn ones theirs.
 - GitHub's checks on `a45449713`: all 13 jobs passed (the 3 release jobs skipped); the PSP system tests 610 groups, 0
   failures, 1 skipped, "pass psp measure".
+- GitHub's checks on `2578e331a` (round 10b's program, with round 10's measurements committed before it): all 13 jobs
+  passed (the 3 release jobs skipped); the PSP system tests 610 groups, 0 failures, 1 skipped, "pass psp measure".
+- Round 10b's results: the owner's three files match the device's sums; `ge-round10b` packs them (19 KB of records as
+  4.5 KB), each unpacking to the device's bytes.
 - The results: the owner's 227 files match the device's sums; round 10's nine and the re-runs of rounds 2 to 9 are
   packed for `tests/psp/measurements` (`ge-round10`: 160 KB of records as 36 KB; `ge-reruns-round10`: 44 MB as 3.6 MB),
   each file unpacking to the device's bytes; committed with the owner's go-ahead of 2026-10-18 (19:21: "I dont mind the
@@ -17781,5 +17818,5 @@ safety. From this build on the arrays the GE reads (`big`, `bytes8`, `palette`, 
 
 `~/phobos-work/scratch/psp-ge-profile/round10/`: `SPECS-1fd9133c.md` (the cases as #269's agent specified them),
 `build/` (the program as tested), `EBOOT.PBP` and its sha256, `measure-r10.log` (the local test), `r10.py` (the decoder
-the results above came from); `results-r10/` (the owner's run as the coordinator pulled it, with the device's sums).
-Nothing was run on the RP6.
+the results above came from); `results-r10/` and `results-r10b/` (the owner's runs as the coordinator pulled them, with
+the device's sums). Nothing was run on the RP6.

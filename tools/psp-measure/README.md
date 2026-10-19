@@ -393,7 +393,7 @@ Round 10b (about 30 KB, `manifest10b.txt`) tops round 10 up the same night, as #
 (with and without the cache written back) or once beside it; and `time-placement`, one swizzled RAM texture at offsets
 from 0 to 512 bytes past a 1 KiB boundary, controls not swizzled and CLUT8, a palette at two offsets, and CLUT32
 swizzled in RAM. From round 10b on the arrays the GE reads are on 1 KiB boundaries (round 10's build had them 64 bytes
-off a 128-byte one: part 112). About half a minute.
+off a 128-byte one: part 112). About half a minute. The owner ran it the same night; part 112 says what it showed.
 
 ### How the GE's comparison works
 

@@ -31,9 +31,10 @@ image (`ghcr.io/pspdev/pspdev@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afd
 source as it was rebuilds to the earlier file byte for byte), again that day with round 9 (part 110), and again with
 round 9's fix round (`cpu.c`'s waits for the GE timed: part 110), and again that day with round 10 (part 112) and with
 round 10b (part 112), each with the same release, the rest left as they were. They hold no Sony code, no game and no
-firmware. Their parts come from: - Phobos's own sources (the programs in `tools/psp-test-programs` and
-`tools/psp-measure`); - pspsdk, the free PSP SDK, including its GU samples (pspsdk's BSD-style license; see the pspsdk
-sources); - newlib, pspdev's C library (BSD-style licenses; see the newlib sources).
+firmware. Their parts come from:
+- Phobos's own sources (the programs in `tools/psp-test-programs` and `tools/psp-measure`);
+- pspsdk, the free PSP SDK, including its GU samples (pspsdk's BSD-style license; see the pspsdk sources);
+- newlib, pspdev's C library (BSD-style licenses; see the newlib sources).
 
 ## Rebuilding them
 
