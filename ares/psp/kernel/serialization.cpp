@@ -1163,6 +1163,40 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(pipe.front >= 0 && pipe.back >= 0 && pipe.entries >= 0);
     }
   }
+  //with the PSP's timing, the CPU beside the GE (geContend()): the GE's busy window so far and the part of a cycle
+  //still to push, the lines the CPU's caches hold (Allegrex::Cache) and the counts they made that the window hasn't
+  //seen yet, and the list's clocks so far that read RAM, by kind, and all of them (layout 35 on: an older state's
+  //window starts afresh, with the caches empty)
+  auto& data = cpu.dataCache;
+  auto& code = cpu.instructionCache;
+  if(s.reading() && stateLayout < 35) {
+    geWindow = {}, geContendCarry = 0;
+    for(auto* cache : {&data, &code}) {
+      for(u32 set : range(Allegrex::Cache::Sets)) cache->recent[set] = cache->older[set] = Allegrex::Cache::Empty;
+    }
+    geCacheSeen[0] = data.fills, geCacheSeen[1] = data.writebacks, geCacheSeen[2] = data.uncached;
+    geCacheSeen[3] = code.fills;
+    for(auto& clocks : ge.ramClocks) clocks = 0;
+    ge.allClocks = 0;
+  } else {
+    s(geWindow.passed), s(geWindow.instructions), s(geWindow.lines), s(geWindow.stalls), s(geWindow.pushed);
+    s(geContendCarry);
+    s(data.recent), s(data.older), s(code.recent), s(code.older);
+    u64 unseen[4] = {data.fills - geCacheSeen[0], data.writebacks - geCacheSeen[1], data.uncached - geCacheSeen[2],
+                     code.fills - geCacheSeen[3]};
+    if(geDoneAt <= cycles) for(auto& count : unseen) count = 0;  //(the GE idle: seen afresh as it gets busy)
+    s(unseen);
+    if(s.reading()) {
+      geCacheSeen[0] = data.fills - unseen[0], geCacheSeen[1] = data.writebacks - unseen[1];
+      geCacheSeen[2] = data.uncached - unseen[2], geCacheSeen[3] = code.fills - unseen[3];
+    }
+    s(ge.ramClocks), s(ge.allClocks);
+    auto counted = [](f64 value) { return std::isfinite(value) && value >= 0; };
+    check(counted(geWindow.passed) && counted(geWindow.instructions) && counted(geWindow.lines));
+    check(counted(geWindow.stalls) && counted(geWindow.pushed) && geWindow.pushed <= geWindow.passed);
+    check(counted(geContendCarry) && geContendCarry < 1 && counted(ge.allClocks));
+    for(f64 clocks : ge.ramClocks) check(counted(clocks));
+  }
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue
     //and geEnded() take it out of there); one never queued is free; a completed one is either (it leaves the queue

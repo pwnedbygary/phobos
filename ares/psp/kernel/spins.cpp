@@ -181,6 +181,7 @@ auto Kernel::spinSkip() -> void {
   counted += skipped;
   cpu.instructionsRun += skipped;
   spun += turns;
+  if(gePspTiming) geContend(cycles - skipped, cycles, skipped);  //(the turns' own accesses go uncounted)
 }
 
 //One turn on the shadow from the CPU as it is, after the anchor's call: true if it comes back to the anchor with every

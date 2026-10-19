@@ -1121,13 +1121,20 @@ struct Kernel {
                             //GE waiting there (geRun())
   u64 gePipeAt = 0;         //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
                             //a list's, from one of its runs to the next)
-  //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended
-  //alone, and not saved till then): the GE's busy window so far, its cycles passed and those the CPU worked beside
-  //it, the push still owed (a part of a cycle), and the instructions of the CPU's stretch under way.
-  f64 geWindowPassed = 0, geWindowWorked = 0, geContendCarry = 0;
-  u64 geStretch = 0;
-  auto geContend(u64 from, u64 to, bool worked) -> void;
-  auto geStretchEnded(u64 instructions, bool ended) -> void;
+  //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended):
+  //the GE's busy window so far (its cycles passed, the CPU's instructions in them, the lines its caches moved as
+  //GE::Cost weighs them and their stalls, in the PSP's CPU cycles, and the cycles it has pushed the GE back), the part
+  //of a cycle still to push, and the CPU's caches' counts as last seen (Allegrex::Cache: the data cache's lines read
+  //in, written back and uncached accesses, the instruction cache's lines read in). Then, for the runner's report alone
+  //(not saved), the cycles the GE was busy beside the CPU since power on and the lines moved in them.
+  struct GeWindow {
+    f64 passed = 0, instructions = 0, lines = 0, stalls = 0, pushed = 0;
+  } geWindow;
+  f64 geContendCarry = 0;
+  u64 geCacheSeen[4] = {};
+  f64 geBusyCycles = 0, geBusyLines = 0;
+  auto geContend(u64 from, u64 to, u64 instructions) -> void;
+  auto geSeeCaches() -> void;
   //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
   //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
   //takes for it as it's handed over, and geDoneAt is a lower bound of the synchronous GE's till none is left
@@ -2166,7 +2173,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 34;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 35;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

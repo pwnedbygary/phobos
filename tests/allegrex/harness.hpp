@@ -268,7 +268,7 @@ inline int skippedGroups = 0;
 //meant not required), which checkRequired() fails.
 inline const std::vector<std::string> capabilities = {"vulkan", "vulkan-fast", "vulkan-transforms", "vulkan-palettes",
   "vulkan-moves", "vulkan-reads", "vulkan-unordered-reads", "vulkan-2x", "vulkan-3x", "vulkan-stencil-export",
-  "vulkan-depth-clamp", "programs", "ge-round3", "ge-round6", "ge-round8", "ge-round9", "ge-round10"};
+  "vulkan-depth-clamp", "programs", "ge-round3", "ge-round6", "ge-round8", "ge-round9", "ge-round10", "ge-round10b"};
 
 inline auto requiredList() -> std::vector<std::string> {
   std::vector<std::string> names;

@@ -18774,3 +18774,189 @@ here (`r10.py`); #278's review decoded it too and agrees with every figure below
 `build/` (the program as tested), `EBOOT.PBP` and its sha256, `measure-r10.log` (the local test), `r10.py` (the decoder
 the results above came from); `results-r10/` and `results-r10b/` (the owner's runs as the coordinator pulled them, with
 the device's sums). Nothing was run on the RP6.
+
+## Part 113: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%)
+
+On branch `cursor/psp-cpu-traffic-2b67` (draft PR), from master `08801ab60` (#269, part 106: the PSP's GE timing the
+default). The goal set for it: by the whole frame, Super Monkey Ball within 15% of the owner's capture and its exception
+gone from `gate.py`, no other judged scene worse than today and none more than 15% too slow. Part 106 held the CPU
+beside the GE at none: its term needed the CPU's traffic with RAM, and the emulated CPU can't tell a game waiting
+without syscalls (Activision Hits' menu) from one working. This part counts that traffic the way a PSP's CPU makes it,
+through models of its two caches, and slows the GE by the lines they move while it draws. Super Monkey Ball's frame goes
+from −29.6% to −20.6%: its exception stays, with a limit (−21%) so it can't get worse unseen. Two decisions are the
+owner's (below, "Not yet"). Sources: the owner's rounds 8 (cpu-memory, cpu-contention: part 107), 10 (time-contention:
+part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPCSP. Save states: layout 35.
+
+### The CPU's caches (`Allegrex::Cache`, cpu/cache.cpp; recompiler.cpp, recompiler-memory.cpp)
+
+- **What they are.** A data cache and an instruction cache, each 16 KiB of 64-byte lines in 128 sets of two ways, the
+  least recently used replaced. Round 8's cpu-memory gives the size and the line (a chain of pointers 64 bytes apart
+  takes 5 cycles a step within 16 KiB, 74 over 32 KiB); the ways aren't measured (two, as a MIPS core of its kind has).
+  A data line's key is its address's bits 6–31, so a cached mirror's lines and an uncached mirror's never meet; a store
+  marks its line dirty. Loads and stores that miss read their line in (the PSP's streaming writes take 183.5 cycles a
+  line, its reads 164: a write reads its line first).
+- **What's counted**: data lines read in from RAM, dirty ones written back to it, accesses to RAM through an uncached
+  mirror (each one), and instruction lines read in. VRAM's and the scratchpad's lines are held like RAM's but not
+  counted: telling them apart as compiled code runs would cost what the look itself costs.
+- **Where.** Only compiled code looks, and only in blocks compiled for a system started with the PSP's timing
+  (`System::power()` turns the caches on with it): "Fast" compiles none of it, its code master's. A load or store looks
+  its line up in its set's most recently used way, inline after the alignment test (seven host instructions), the rest
+  out of line (`dataCacheMiss()`: the other way, a miss, a write-back). An instruction line is looked up as a block
+  starts and wherever its code reaches a line's first word: on ARM64 three instructions for code in RAM (`codeKey()`'s
+  keys fit a compare's immediate), the rest out of line (`instructionCacheMiss()`). A block going on to itself goes back
+  past its first line's look (`lineHeld`): nothing can have replaced that line in between, so the look would only hit.
+  The interpreter's instructions and accesses aren't counted, nor those the recompiler leaves to it (misaligned,
+  hardware's, stores to compiled code), nor a delay slot's line.
+- **What it counts in the gate's scenes** (lines a frame, the PSP's timing): Super Monkey Ball 8,218 data lines read in,
+  3,033 written back, 1,206 uncached accesses, 3,439 instruction lines; Killzone 9,047, 2,529, 2,885, 9,354; Ghost of
+  Sparta 4,657, 2,068, 1,829, 5,924; Chains of Olympus 3,187, 1,422, 1,873, 4,625; Army of Two 5,400, 2,036, 13,240,
+  5,637; Activision Hits' menu 3,517, 1,196, 3,564, 1,372. The GE is busy 98 to 100% of the time in all but Army of Two's
+  (79%) and the copyright screen's (45%): the games queue their next frame's list while the GE draws.
+
+### The CPU beside the GE (`Kernel::geContend()`, kernel/ge.cpp; `GE::Cost`)
+
+- **The window.** From the GE getting busy to its being idle, each stretch of the CPU's (to a syscall, a go's end, an
+  idle wait, a spin skipped) adds its cycles passed while the GE was busy, its instructions, the lines its caches moved
+  (`WritebackLine` of one a line written back, `UncachedLine` an uncached access) and their stalls in the PSP's CPU
+  cycles. The CPU's work before a list costs it nothing: the window starts afresh when the GE is idle, the caches' counts
+  seen again as it gets busy (`geSeeCaches()`: `geOwe()`, and `geTime()` for a stalled list going on).
+- **The traffic.** u = lines / max(passed, T), as a share of a thread streaming RAM flat out (`StreamLines`, 1/164.4 a
+  CPU cycle: round 10's streaming at 222 and 333 MHz alike); T, the PSP's CPU's time for the window's instructions and
+  stalls (`InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40), spreads a burst of the
+  emulated CPU's (which runs several times a PSP's speed) over the time a PSP's would take.
+- **The slowdown.** slow = sum(`Contention[kind]` x the kind's share of the list's clocks so far) x u, the kinds the
+  GE's reads of RAM: the front end's vertices and list words (a run's last words too: `pipeStop()`), the back end's
+  texels from RAM, transfers' reads. The window owes passed x slow / (1 + slow); what it hasn't pushed of that moves the
+  GE's pipeline back (`gePipeAt`, which its times count from, so the list's next run keeps it; `geDoneAt`, `geReachAt`).
+  A line so costs the GE its share once: over a long window, `Contention` x share x the line's streaming time, never
+  more (the window's push P(W) = aW / (W + a), a that cost). The first version pushed slow / (1 + slow) of every cycle
+  passed, the window's average u falling only as 1/W after a burst, so a burst cost the GE again and again (a·ln W):
+  Super Monkey Ball, a burst of the CPU's work then a wait, came out at −14.5%. The writer test caught it.
+- **What doesn't slow it**: polling through syscalls (a loop waiting on a cached word moves no lines), arithmetic, the
+  cache's own hits, the CPU's work before a list. As round 10b's PSP has it.
+
+### The fit (`tools/psp-measure/contention11.py`)
+
+- **Each pattern's traffic a turn, as the model counts it**: streaming reads and the chain a line read in; streaming
+  writes a line read in and one written back; copies 2048 read in (each line written is read in first) and 1024 written
+  back; uncached reads 16 uncached accesses; the mixes two random lines of their set, each missing as often as a set past
+  16 KiB does over two ways (1 − 16 KiB / its size) and written back in turn; the rest none.
+- **Fitted together over both clocks' 680 list-pattern pairs**: `Contention` vertices 0.34, words 0.27, texels 1.16,
+  transfers 0.57, `WritebackLine` 0, `UncachedLine` 0.2: the median miss 5.3% (round 10's own fit, its traffic counted
+  four lines a mix's turn, one a write's and a line for 16 uncached words, 8.4%). The mixes' slowdowns, about the same
+  whatever their write-backs, hold `WritebackLine` at 0; a saturating form (u / (1 + βu)) fits no better (5.2%). Its
+  worst: list A beside the writers and copies (−45%: their alternating rows, which a line count can't see?) and list H,
+  Super Monkey Ball's small trilinear strips (−19%).
+- **The CPU's pace**, from round 10's patterns alone (the PSP's cycles a turn against the core's instructions for it and
+  its traffic): `InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40; the arithmetic and
+  cached reads 14 to 23% over, the slowed streaming 12 to 47% under.
+- **In the core** (`contention11.py --core`: the core's own run of rounds 10 and 10b against the PSP's): round 10's 680
+  pairs, the core's slowdowns within 5.7% of the PSP's at the median (15.5% with the term held at none), 93% within 25%
+  (list E1, all NOPs, slowed only once a run's last words counted as reads of RAM: x1.24 beside streaming, the PSP's
+  x1.28); round 10b's 144, 1.0%. Polling (three ways) x1.00 (the PSP 0.96 to 1.06); writing before the list x1.00 (1.00 to
+  1.07); a writer beside it once: list A x1.91 (2.02), C x1.00 (1.00), D x1.33 (1.28), E2 x1.69 (1.36), H x1.17 (1.28), I
+  x1.13 (1.07).
+
+### The gate
+
+The gate scenes' profiles made with this branch's runner as part 106's (900 frames from each state, the profile from
+frame 301; the copyright screen 360 from frame 1), `gate.py` against the owner's captures. Master's (`08801ab60`) beside
+it:
+
+| Scene | Capture | List | PSP | Master | Against the PSP | This branch | Against the PSP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Chains of Olympus, difficulty menu | UCUS98653-5 | frame (1 list) | 27.60 ms | 26.21 ms | −5.0% | 27.67 ms | +0.3% |
+| Ghost of Sparta, main menu | UCUS98737-1 | frame (1 list) | 29.62 ms | 27.52 ms | −7.1% | 28.95 ms | −2.3% |
+| Super Monkey Ball Adventure, Story Mode | ULES00364-1 | frame (1 list) | 23.64 ms | 16.64 ms | −29.6% | 18.76 ms | −20.6% (excepted) |
+| Killzone, the courtyard | UCUS98646-1 | 1 of 2 | 24.31 ms | 21.15 ms | −13.0% | 21.79 ms | −10.4% |
+| | | 2 of 2 | 1.72 ms | 1.67 ms | −2.9% | 1.67 ms | −2.9% |
+| | | frame | 26.03 ms | 22.82 ms | −12.3% | 23.46 ms | −9.9% |
+| Killzone, the courtyard | UCUS98646-r9-1 | 1 of 2 | 23.89 ms | 21.15 ms | −11.5% | 21.79 ms | −8.8% |
+| | | 2 of 2 | 1.72 ms | 1.67 ms | −3.0% | 1.67 ms | −3.0% |
+| | | frame | 25.61 ms | 22.82 ms | −10.9% | 23.46 ms | −8.4% |
+| Activision Hits Remixed, 3D main menu | ULUS10186-menu | 1 of 3 | 21.20 ms | 18.95 ms | −10.6% | 20.28 ms | −4.4% |
+| | | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | 5.17 ms | +48.5% |
+| | | 3 of 3 | 5.40 ms | 6.85 ms | +26.7% | 6.88 ms | +27.2% |
+| | | frame | 30.30 ms | 30.97 ms | +2.2% | 32.32 ms | +6.7% |
+| Activision Hits Remixed, 3D main menu, idle | ULUS10186-r9-1 | 1 of 3 | 21.25 ms | 18.95 ms | −10.8% | 20.28 ms | −4.6% |
+| | | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | 5.17 ms | +48.5% |
+| | | 3 of 3 | 5.47 ms | 6.85 ms | +25.1% | 6.88 ms | +25.6% |
+| | | frame | 30.39 ms | 30.97 ms | +1.9% | 32.32 ms | +6.4% |
+| Activision Hits Remixed, copyright screen | ULUS10186-boot2 | 1 of 2 | 0.96 ms | 0.90 ms | −7.3% | 0.90 ms | −7.2% |
+| | | 2 of 2 | 8.14 ms | 7.68 ms | −5.7% | 7.68 ms | −5.7% |
+| | | frame | 9.10 ms | 8.57 ms | −5.8% | 8.57 ms | −5.8% |
+
+Frames judged: 8, all within 15% but Super Monkey Ball's (excepted), none too slow by more than 6.7%; the median miss
+6.5% (master's 7.0%). Lists reported: 10 of 15 within 15% (master's 10). Five of the eight frames move closer to the
+PSP's; Activision Hits' copyright screen doesn't move; its menu's frame moves away (+2.2% to +6.7%, the idle capture
++1.9% to +6.4%), its first list closer (−10.6% to −4.4%) but its second and third as they were, too slow by 48.5% and
+27% (the CPU barely touches them). Its frame matched only by the first list's shortfall making up for the others' excess.
+
+- **Super Monkey Ball** keeps its exception (`gate.py`'s `EXCEPTED`, now with a limit: −21%, past which it fails). Its
+  rest points at the GE's side: round 10's list H, the small trilinear strips modelled on its own (CLUT4 mipmaps), is
+  predicted about 16% short beside any of the CPU's patterns; the model has it reading RAM for 37% of its clocks (its
+  vertices 32%, its words 5%, its texels 0.6%: its little textures stay in the texture cache), and the PSP slows it as
+  if it read more. List E2, its CALLed lists, comes out over (x1.69 beside the writer against the PSP's x1.36).
+
+### The host cost
+
+(below, after the measurements)
+
+### Save states: layout 35
+
+A state keeps the window (cycles passed, instructions, lines, stalls, the cycles pushed), the part of a cycle still to
+push, both caches' tags (2 KiB), the counts the window hasn't seen (none while the GE is idle) and the list's clocks by
+kind: 2,168 bytes more than layout 34, all in one place. An older state loads with the caches empty and the window
+afresh. A state saved while the CPU writes beside a list carries on in another machine exactly as in the one it came
+from (the test). "Fast" keeps the same bytes (the caches empty, the window afresh): its state is layout 34's with them
+put in.
+
+### Tests
+
+- **ge time, the PSP's: the CPU's caches**: a loop reading 64 KiB reads in 1,024 lines; 16 KiB twice reads its 256
+  once; 32 KiB twice every line each time (1,024); storing over 32 KiB reads in 512 and writes back 256; 1 KiB read
+  through an uncached mirror counts 256 uncached accesses and reads in nothing; a loop polling a function and a word reads
+  in that word's line alone; 32 KiB of straight code run twice reads in its 512 lines each time; "Fast" counts nothing.
+- **the CPU beside the GE**: a list textured from RAM takes as long with the CPU polling beside it, and after the CPU has
+  written 1 MiB before it, as alone (within 0.2%); with the CPU writing 1 MiB beside it, over 10% longer, and untextured
+  sprites under 3% longer (five times less).
+- **the CPU beside the GE, by its rule**: the push of a stretch by the rule's sum, at 222/111; a stretch with nothing in
+  it before and after the CPU's time has passed; ten million cycles more bring the window's push to within 2% of the
+  lines' cost and never past it; a stretch running past the GE's end counts its share; one after it starts the window
+  afresh.
+- **a state saved with the CPU beside the GE** (above); the system test's refused layouts (36 now) and loaded ones (27,
+  28 and 31 to 34).
+- **measured rounds 10 and 10b: the CPU beside the GE** (`measured8`): the core's own run of the two rounds' contention
+  tests against the PSP's files. Round 10's 680 pairs, half within 7%, nine in ten within 25%; round 10b's 144, half
+  within 1.5%: beside a CPU polling or writing before the list within 8%, beside a writer the untextured list within 1%,
+  the RAM-textured one within 10% (30% at twice its length: see "Not yet"). CI requires round 10b's files now
+  (`ge-round10b`).
+- `gate.py`'s tests: the exception passes the way it was accepted within its limit, fails past it and the other way.
+
+### Checks
+
+- "Fast" against master (`--ge-timing fast` both sides; Vulkan fast and Software, six gate scenes, 300 frames): every
+  frame's picture and VRAM and the RAM after, the same; each state master's with layout 35's bytes put in, at one place.
+
+### Not yet
+
+- **The owner's two decisions**: whether Activision Hits' menu frame moving from +2.2% to +6.7% (its first list now
+  nearly right, its others as they were) is acceptable; and whether round 10c should time list H's kind (small strips of
+  a CLUT4 mipmapped texture, trilinear) beside the CPU's streaming, taken apart (no mipmaps, nearest, untextured), to
+  find what the GE reads there that its clocks don't show.
+- The kernel's cache calls (`sceKernelDcacheWritebackRange` and its kin) and the `cache` instruction change nothing in
+  the model: a PSP's would write lines back and make them miss again.
+- The CPU's traffic with VRAM (round 10's VRAM patterns slow VRAM-textured and untextured lists 1.5 to 2.4 times) isn't
+  counted: no gate scene shows it yet.
+- The CPU slowed beside the GE (round 10: its turns up to seven times as long beside a list of vertices) isn't counted:
+  the model times the CPU's work as if alone, so a burst ends early. A writer of 1 MiB beside list A at twice its length
+  slows it x1.56 here and x2.0 on the PSP, whose writer, slowed itself, goes on writing as long as the list.
+- Spins without syscalls (Activision Hits' screens) pay a data look every turn: the spin skip's widening (a pull request
+  of its own) takes them.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/refit/`: `contention11-a.txt` (the fit), `core/` (the core's rounds 10 and 10b),
+`gate-final3.txt`, `scenes/final3-*` (the gate's profiles), `bench/runs/` (the cost runs), `dcbuild.sh`,
+`termbuilds.sh`, `builds4.sh`, `contend-core.sh`, `bench/polls.sh`, `bench/final-checks.sh`; NOTES.md's entry of
+2026-10-19 01:37.

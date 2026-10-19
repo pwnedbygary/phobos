@@ -1,18 +1,21 @@
-//Rounds 8, 9 and 10 of tools/psp-measure against the owner's PSP (docs/psp-core.md, parts 107, 110, 112 and 106):
-//their GE timing files as this core writes them (measure.cpp's round8Files(), round9Files() and round10Files(): the
-//measuring program run in the core with the option "GE Timing" "PSP") beside the PSP's own
-//(tests/psp/measurements/ge-round8, ge-round9 and ge-round10, which run-tests.sh unpacks into PSP_GE_ROUND8, 9 and 10):
-//each timed list's middle finish time here and on the PSP.
+//Rounds 8, 9, 10 and 10b of tools/psp-measure against the owner's PSP (docs/psp-core.md, parts 107, 110, 112, 106 and
+//113): their GE timing files as this core writes them (measure.cpp's round8Files() to round10bFiles(): the measuring
+//program run in the core with the option "GE Timing" "PSP") beside the PSP's own (tests/psp/measurements/ge-round8 to
+//ge-round10b, which run-tests.sh unpacks into PSP_GE_ROUND8, 9, 10 and 10b): each timed list's middle finish time here
+//and on the PSP.
 #include "kernel-machine.hpp"
 
 #include <cstdlib>
 #include <fstream>
+#include <map>
+#include <tuple>
 
 namespace allegrex_test::psp {
 
 auto round8Files() -> std::filesystem::path;
 auto round9Files() -> std::filesystem::path;
 auto round10Files() -> std::filesystem::path;
+auto round10bFiles() -> std::filesystem::path;
 
 namespace {
 
@@ -24,6 +27,7 @@ struct Round {
 const Round Round8{"PSP_GE_ROUND8", "ge-round8", round8Files};
 const Round Round9{"PSP_GE_ROUND9", "ge-round9", round9Files};
 const Round Round10{"PSP_GE_ROUND10", "ge-round10", round10Files};
+const Round Round10b{"PSP_GE_ROUND10b", "ge-round10b", round10bFiles};
 
 auto words(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
@@ -97,7 +101,7 @@ const Outside outside[] = {
 };
 //Round 10's lists beside a CPU thread (time-contention's 17 patterns alone, then ten lists, each alone and beside each
 //pattern; time-contention2's 4 and 5): the patterns alone have no list to match and the lists with a thread beside
-//them are contention10.py's (the term held at none: part 106); those with the CPU idle are fitted as any other.
+//them are measuredContention10()'s (the CPU beside the GE: part 113); those with the CPU idle are fitted as any other.
 struct Contended { const char* test; u32 first, row; };
 const Contended contended[] = {{"time-contention", 17, 18}, {"time-contention2", 4, 5}};
 
@@ -219,11 +223,67 @@ auto measuredTime10() -> void {
   CHECK(*std::max_element(errors.begin(), errors.end()) < 0.65, true);
 }
 
+//Each list's time beside each of the CPU's patterns over its time alone, by its record's case, size and clock (a
+//contention file's records: the patterns alone first, then a row for each list, alone and beside each pattern).
+auto slowdowns(const std::vector<u32>& w, u32 first, u32 row) -> std::map<std::tuple<u32, u32, u32>, f64> {
+  std::map<std::tuple<u32, u32, u32>, f64> alone, out;
+  auto records = timed(w);
+  for(auto& r : records) if(r.test >= first && (r.test - first) % row == 0) alone[{r.test, r.size, r.bus}] = r.middle;
+  for(auto& r : records) {
+    if(r.test < first || (r.test - first) % row == 0 || !(r.middle > 0)) continue;
+    auto base = alone.find({r.test - (r.test - first) % row, r.size, r.bus});
+    if(base != alone.end() && base->second > 0) out[{r.test, r.size, r.bus}] = r.middle / base->second;
+  }
+  return out;
+}
+
+//Rounds 10 and 10b's lists beside the CPU's patterns (part 113: the CPU's caches counted, the GE slowed by the lines
+//they move): each list's slowdown here against the PSP's. Round 10's 680 (ten lists beside 17 patterns, two sizes at
+//both clocks): half within 7%, nine in ten within 25%. Round 10b's 144: half within 1.5%; beside a CPU polling three
+//ways, writing before the list, or writing and settling, within 8% (the PSP's 0.96 to 1.07, here none); beside a
+//writer of 1 MiB once, the untextured list within 1% (none either side), the RAM-textured one within 10% (x1.91 here,
+//x2.02 and x2.12 there) and, twice as long, within 30% (x1.56; x2.00 and x2.13 there: the writer, slowed beside the GE
+//itself, still writes as the PSP's longer list goes on, which the model's CPU time doesn't count).
+auto measuredContention10() -> void {
+  auto pairs = [](const std::vector<u32>& core, const std::vector<u32>& psp, u32 first, u32 row) {
+    std::vector<std::pair<std::tuple<u32, u32, u32>, f64>> misses;  //(each pair's key and the core's over the PSP's)
+    auto here = slowdowns(core, first, row);
+    for(auto& [key, slowdown] : slowdowns(psp, first, row)) {
+      if(auto found = here.find(key); found != here.end()) misses.push_back({key, found->second / slowdown - 1});
+    }
+    return misses;
+  };
+  auto core = ours(Round10, "time-contention");
+  if(!core.empty()) {
+    std::vector<f64> errors;
+    for(auto& [key, miss] : pairs(core, theirs(Round10, "time-contention"), 17, 18)) errors.push_back(std::abs(miss));
+    CHECK(errors.size(), 680u);
+    if(!errors.empty()) {
+      CHECK(median(errors) <= 0.07, true);
+      CHECK(within(errors, 0.25) >= 0.9, true);
+    }
+  }
+  core = ours(Round10b, "time-contention3");
+  if(core.empty()) return;
+  std::vector<f64> errors;
+  for(auto& [key, miss] : pairs(core, theirs(Round10b, "time-contention3"), 6, 7)) {
+    auto [test, size, bus] = key;
+    u32 list = (test - 6) / 7, pattern = (test - 6) % 7;
+    errors.push_back(std::abs(miss));
+    f64 bound = pattern <= 5 ? 0.08 : list == 1 ? 0.01 : list == 0 ? (size == 1 ? 0.10 : 0.30) : 1.0;
+    if(std::abs(miss) > bound) std::printf("  time-contention3 case %u size %u: %+.1f%%\n", test, size, miss * 100);
+    CHECK(std::abs(miss) <= bound, true);
+  }
+  CHECK(errors.size(), 144u);
+  if(!errors.empty()) CHECK(median(errors) <= 0.015, true);
+}
+
 }
 
 auto measured8Tests() -> Tests {
   return {{"measured round 8 GE time", measuredTime8}, {"measured round 9 GE time", measuredTime9},
-          {"measured round 10 GE time", measuredTime10}};
+          {"measured round 10 GE time", measuredTime10},
+          {"measured rounds 10 and 10b: the CPU beside the GE", measuredContention10}};
 }
 
 }
