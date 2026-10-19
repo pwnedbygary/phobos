@@ -1131,7 +1131,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   else s(geReachAt), s(geSignalDue);
   //with the PSP's timing, the list's pipeline as its last run left it (GE::Pipe, Kernel::geResume()): when its times
   //count from, when its front end and its back end will be done, and the items its queue holds, each's entries and
-  //when it's drawn (layout 34 on: an older state's list runs on from an empty pipeline)
+  //when it's drawn (layout 34 on: an older state's list runs on from an empty pipeline). A state from a build whose
+  //queue held more (GE::Cost::Queue is measured and refits move it; Pipe::Room) keeps the newest items this build's
+  //holds, the oldest dropped as if drawn: it loads, and the list runs on.
   if(s.reading() && stateLayout < 34) {
     gePipeAt = 0, ge.pipeStart();
   } else {
@@ -1139,18 +1141,25 @@ auto Kernel::serialize(serializer& s) -> bool {
     u32 count = pipe.count;
     s(gePipeAt), s(pipe.front), s(pipe.back), s(count);
     if(s.reading()) {
-      check(count <= GE::Pipe::Room);
-      count = std::min(count, GE::Pipe::Room);
-      pipe.first = 0, pipe.count = count, pipe.entries = 0;
+      pipe.first = 0, pipe.count = 0, pipe.entries = 0;
       pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
     }
+    auto dropOldest = [&] {
+      pipe.entries -= pipe.items[pipe.first].entries;
+      pipe.first = (pipe.first + 1) % GE::Pipe::Room, pipe.count--;
+    };
     for(u32 n = 0; n < count; n++) {  //(through locals: GCC's -O3 takes the ring's index for past its end)
       GE::Pipe::Item item{};
       if(!s.reading()) item = pipe.items[(pipe.first + n) % GE::Pipe::Room];
       s(item.entries), s(item.done);
-      if(s.reading()) pipe.items[n % GE::Pipe::Room] = item, pipe.entries += item.entries;  //(n: count is at most Room)
+      if(!s.reading()) continue;
+      if(pipe.count == GE::Pipe::Room) dropOldest();
+      pipe.items[(pipe.first + pipe.count) % GE::Pipe::Room] = item, pipe.count++, pipe.entries += item.entries;
     }
-    if(s.reading()) check(pipe.front >= 0 && pipe.back >= 0 && pipe.entries >= 0 && pipe.entries <= GE::Cost::Queue);
+    if(s.reading()) {
+      while(pipe.count && pipe.entries > GE::Cost::Queue) dropOldest();
+      check(pipe.front >= 0 && pipe.back >= 0 && pipe.entries >= 0);
+    }
   }
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue

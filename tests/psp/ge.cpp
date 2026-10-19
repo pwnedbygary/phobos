@@ -2749,6 +2749,29 @@ static auto geTime() -> void {
 //each sprite's 3 words, PRIM and vertices: 4200.742 clocks), the drawing to 58142; given in parts, as late as the last
 //stall update lets the front end get there (a part a sprite: as that update's call returns, 17950 cycles in), the
 //drawing to 58628. Before, a run's end emptied the queue, and a list given in parts had its SIGNAL at its drawing's end.
+//A state saved with the PSP's timing by a build whose GE queue held more than this one's (GE::Cost::Queue is measured,
+//and a refit may lower it): it loads, keeping the newest items this build's queue holds, the oldest dropped as if
+//drawn, rather than being refused. Here a queue of 100 items of an entry each, done a clock apart.
+static auto geTimeStateFromBiggerQueue() -> void {
+  KernelMachine m;
+  m.kernel.gePspTiming = true;
+  m.system.threadGE(false);
+  auto& pipe = m.system.ge.pipe;
+  for(u32 n = 0; n < 100; n++) pipe.items[n] = {1, f64(1000 + n)};
+  pipe.first = 0, pipe.count = 100, pipe.entries = 100;
+  auto state = saveState(m);
+  KernelMachine fresh;
+  fresh.kernel.gePspTiming = true;
+  fresh.system.threadGE(false);
+  CHECK(loadState(fresh, state), true);
+  auto& kept = fresh.system.ge.pipe;
+  CHECK(kept.count, u32(GE::Cost::Queue));
+  CHECK(kept.entries == GE::Cost::Queue, true);
+  CHECK(kept.items[kept.first].done == 1000 + 100 - GE::Cost::Queue, true);  //the oldest kept
+  CHECK(kept.items[(kept.first + kept.count - 1) % GE::Pipe::Room].done == 1099, true);  //the newest
+  CHECK(roundTrip(fresh), true);  //(and as this build's own state from there on)
+}
+
 static auto geTimeSignalAcrossRuns() -> void {
   u64 reaches[3] = {}, dones[3] = {};
   for(u32 parts : {0u, 1u, 24u}) {
@@ -4509,6 +4532,7 @@ auto geTests() -> Tests {
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time, the PSP's", geTimePsp},
     {"ge time, the PSP's: a SIGNAL's lead through stall updates", geTimeSignalAcrossRuns},
+    {"ge time, the PSP's: a state from a bigger queue", geTimeStateFromBiggerQueue},
     {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions}, {"ge profile", geProfile},
     {"ge profile: calls whose callbacks run in them", geProfileCallbacks},
