@@ -1303,19 +1303,22 @@ auto Kernel::goThreaded(u64 end) -> void {
   u64 first = std::min(end - cycles, std::max<u64>(1, untilNextEvent()));
   if(geBounded) geLimit.before = 0, geLimit.cap = end - cycles, geLimits.push_back(geLimit);
   else goExact = first;
-  u64 ran = cpu.run(first);
-  cycles += ran - counted;
+  u64 ran = cpu.run(first), tail = ran - counted;  //(tail: since the CPU last called the system, or the run began)
+  cycles += tail;
   counted = ran;
   while(!geLimits.empty() && !cpu.scc.halted && !exec.pending && !exited) {
     for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
     geLimits.clear(), geFolded.clear();
     u64 at = goOffset + ran;
     if(goExact <= at) break;
+    //(the CPU's stretch goes on into the next run, as in the one go: GE::Cost::Contended)
+    if constexpr(GE::Cost::Contended) if(gePspTiming) geStretch += tail;
     goOffset = at, counted = 0;
-    ran = cpu.run(goExact - at);
-    cycles += ran - counted;
+    ran = cpu.run(goExact - at), tail = ran - counted;
+    cycles += tail;
     counted = ran;
   }
+  if constexpr(GE::Cost::Contended) if(gePspTiming) geStretchEnded(tail, tail >= GE::Cost::PollInstructions);
   geLimits.clear(), geFolded.clear();
   going = false;
 }

@@ -356,7 +356,6 @@ auto round6Files() -> std::filesystem::path {
   KernelMachine m;
   m.system.recompiler.enabled = true;
   m.kernel.gePspTiming = true;  //(the GE timed as the PSP's: measured6.cpp's GE time and driver statuses)
-  m.system.threadGE(false);     //(and so on the emulation thread: System::threadGE())
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
   bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
@@ -385,7 +384,6 @@ static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* 
   KernelMachine m;
   m.system.recompiler.enabled = true;
   m.kernel.gePspTiming = true;
-  m.system.threadGE(false);
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
   bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);

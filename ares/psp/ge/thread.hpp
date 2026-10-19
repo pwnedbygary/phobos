@@ -66,8 +66,11 @@ struct GeThread : Memory::Writer {
     Copy,        //its copy or fill: the same, for copyIn()'s (Memory::copyChecks())
     Transfer,    //TRANSFER_START's copy, the kernel GE's: the place of its rows' writes, for transfer()'s checks
                  //(GE::transferChecks())
-    RunStart,    //a kick: the render GE defers its primitives into batches
-    RunEnd,      //its end: what's batched drawn, a hardware renderer's work submitted (or finished, unguarded)
+    RunStart,    //a kick: the render GE defers its primitives into batches; with the PSP's timing, the GE's pipeline
+                 //moved on to the kick (Kernel::geResume()): whether it was, and by how many clocks
+    RunEnd,      //its end: what's batched drawn, a hardware renderer's work submitted (or finished, unguarded); the
+                 //run's words, the front end's last work (GE::pipeStop())
+    Owe,         //with the PSP's timing, a list starting: its own clocks, the pipeline begun afresh (Kernel::geOwe())
     State,       //the GE's state put back whole (sceGeRestoreContext's): commands, matrices and their indices (GE::State)
     Frame,       //a frame's end (System::run()): what the screen shows then (Frame), its picture taken here (frameEnd)
   };
@@ -93,6 +96,17 @@ struct GeThread : Memory::Writer {
     nextWordAt = address == ~0u ? ~0u : (address + 4) & 0x0fff'ffff;
     words[wordCount++] = word;
   }
+  //(with the PSP's timing, the control pass's own work for the GE's front end, which the render GE's pipeline takes
+  //after the word it came with, the last handed over: a JUMP taken, a CALL, a RET, GE::pipeFront(); vertices, a
+  //bounding box's, to be shared out among the next PRIM's primitives, GE::oweVertices())
+  auto front(f64 clocks, bool vertices = false) -> void {
+    marks.push_back({(wordCount - 1) | (vertices ? VerticesMark : 0), clocks});
+  }
+  static constexpr u32 VerticesMark = 0x8000'0000;  //(a mark's word's top bit: vertices' work)
+  //(with the PSP's timing, the run about to start: the GE's pipeline moved on to it by clocks, Kernel::geResume())
+  auto resume(f64 clocks) -> void { shifting = true, shift = clocks; }
+  //(with the PSP's timing, a list starting: its own clocks, the pipeline begun afresh, Kernel::geOwe())
+  auto owe(f64 clocks) -> void;
   auto nextPlace() -> u64 { flushStores(), flushWords(); return serial + 1; }
   //A PRIM's or curved surface's record, made where it goes, with the words waiting before it in it: its place
   //(primitivePlace(), given its copies' size), then the record begun (primitiveBegin(): where its copies' bytes go),
@@ -108,7 +122,7 @@ struct GeThread : Memory::Writer {
   auto read(u32 address, u32 size, bool loading) -> u64;
   auto write(u32 address, u32 size, Kind kind, u64 cx) -> u64;
   auto runStart() -> void;
-  auto runEnd() -> void;
+  auto runEnd(u64 words) -> void;  //(words: the run's, run()'s count)
   auto state(const GE& from) -> void;
   auto note(const std::string& text) -> void { notes.push_back(text); }  //(the render GE's, told as it drains)
   //A frame's end: the frame buffer the screen shows then and how it's laid out, as the emulation thread has the
@@ -128,8 +142,14 @@ struct GeThread : Memory::Writer {
   auto frameBytes(const Frame& frame, const std::function<auto (const u8* vram) -> void>& use) -> void;
   //What each run's primitives owe a PSP's GE (GE::owedPixels, owedPrimitives, which Kernel::geTime() folds), runs
   //numbered from 1 as they're handed over (runStart()): published by the GE thread as each ends, and the one under
-  //way's counts so far after each of its PRIMs, for the emulation thread's clock (kernel/ge.cpp).
-  struct Owed { u64 pixels = 0, primitives = 0; };
+  //way's counts so far after each of its PRIMs, for the emulation thread's clock (kernel/ge.cpp). With the PSP's timing,
+  //its pipeline's clocks too, from when its times count (Kernel::gePipeAt): as the run ends, all of its work's
+  //(GE::pipeTime()) and its front end's (Pipe::front), which the kernel takes as Kernel::geTime() does; so far, the two
+  //ends' (the larger, and the front end's), which only grow as primitives join the pipeline, so that the times they
+  //give are no later than the run's will be.
+  //(and, with the CPU's work beside the GE counted, GE::Cost::Contended, the list's clocks so far that read RAM by
+  //kind, and all of them, as the run ends: GE::ramClocks, allClocks, for Kernel::geContend())
+  struct Owed { u64 pixels = 0, primitives = 0; f64 time = 0, front = 0; f64 ramClocks[4] = {}, allClocks = 0; };
   //(the runs whose counts it keeps: the emulation thread folds the oldest before it hands over more than that many
   //not folded, Kernel::geTime(), and waits past that many not ended)
   static constexpr u32 RunsKept = 4096;
@@ -251,7 +271,7 @@ private:
   auto flushWords() -> void;
   auto flushStores() -> void;
   auto addStore(u32 address, u32 size) -> void;
-  auto wordsBytes() const -> u32;  //(the words waiting, as a record holds them: their runs, then the words)
+  auto wordsBytes() const -> u32;  //(the words waiting, as a record holds them: their runs, the words, the marks)
   auto putWords(u8* at) -> void;   //(and put there, none left waiting)
   auto take() -> void;  //the thread's loop
   auto replay(const Header& header, const u8* data) -> void;
@@ -269,6 +289,13 @@ private:
   std::array<u32, WordsMost> words;
   std::array<WordRun, WordsMost> wordRuns;
   u32 wordCount = 0, runCount = 0, nextWordAt = ~0u;
+  //(and the control pass's front-end work among them: after which word, and its clocks; the run about to start's
+  //shift, with the PSP's timing: front(), resume())
+  struct Mark { u32 word; f64 clocks; };
+  std::vector<Mark> marks;
+  bool shifting = false;
+  f64 shift = 0;
+  u64 runWords = 0;  //(the render GE's: the run's words so far, as run() counts them, for its pipeline: GE::wordsRun)
   //(the emulation thread's: the stores waiting, as their record holds them after its count, and how many; the place
   //the versions were last freed as of)
   std::vector<u32> stores;
@@ -291,6 +318,7 @@ private:
   alignas(64) std::atomic<u64> framesEnded{0};  //(the GE thread's)
   alignas(64) std::atomic<u64> soFarVersion{0};
   std::atomic<u64> soFarRun{0}, soFarPixels{0}, soFarPrimitives{0};
+  std::atomic<f64> soFarTime{0}, soFarFront{0};
   auto publishSoFar() -> void;
   //(reports: the GE thread's, taken by the emulation thread; puts counts the put-backs, so that the 128 places are
   //taken only where one was made)

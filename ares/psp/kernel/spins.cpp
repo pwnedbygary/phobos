@@ -156,13 +156,28 @@ auto Kernel::spinSkip() -> void {
   //(in a go of the CPU's, whose limit and count these are; nothing else may come in meanwhile: no call into the
   //program waiting or running, no vertical blank's handlers)
   if(!going || interrupting || !current || current->status != Status::Running || !calls.empty() || vblankPending) return;
+  //(with the CPU's work beside the GE counted, the go's limit exactly, as the synchronous GE's go has it, where the GE
+  //thread's bound set it short: as many turns skipped, GE::Cost::Contended, below)
+  if constexpr(GE::Cost::Contended) if(ge.thread && !geLimits.empty()) {
+    for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
+    geLimits.clear(), geFolded.clear();
+    cpu.runLimit = goExact - goOffset;
+  }
   //the skipped turns' blocks all end before the go's limit: the last at the count the anchor's syscall ends on
   u64 room = cpu.runLimit > counted + 1 ? cpu.runLimit - counted - 1 : 0;
   if(room / spin.period <= SpinMargin) return;
   u64 turns = room / spin.period - SpinMargin, skipped = turns * spin.period;
   //a list's FINISH (or, with the PSP's GE timing, its SIGNAL) taken at the first system call once it's due: none comes
   //by within the turns skipped
-  if((geFinishDue && geBound() <= cycles + skipped) || (geSignalDue && geReachAt <= cycles + skipped)) return;
+  //(with the CPU's work beside the GE counted, the time exactly: skipped turns end no stretches of their own, run ones
+  //do, GE::Cost::Contended, so a skip must be the synchronous GE's; the GE thread waited for where the bound doesn't
+  //decide)
+  auto due = [&](u64 bound, const u64& at) {
+    if(bound > cycles + skipped) return false;
+    if constexpr(GE::Cost::Contended) geFold(true), bound = at;
+    return bound <= cycles + skipped;
+  };
+  if((geFinishDue && due(geBound(), geDoneAt)) || (geSignalDue && due(geReachBound(), geReachAt))) return;
   SpinShadow shadow{*this, memory};
   if(!spinProve(shadow) || shadow.period != spin.period) {
     spin.wait = std::min(spin.wait * 2 + SpinTurns, SpinWaitMost);

@@ -80,8 +80,8 @@ the runner refuses anything else):
 - `--ge-timing psp|fast` — the GE's time (the core's option "GE Timing"): `psp` (the default) as the
   owner's PSP took it over the same work (docs/psp-core.md part 106), `fast` by Sony's peak rates,
   which games' lists take a PSP 4 to 12 times longer than (part 103). The report names it; a
-  `--ge-profile` file made with `psp` carries its flag, and geprof.py says so. `--ge-thread on` takes
-  `--ge-timing fast` (the PSP's timing keeps the GE on the emulation thread, and the runner says so).
+  `--ge-profile` file made with `psp` carries its flag, and geprof.py says so. `--ge-thread on` works
+  with either: with `psp` the game's thread gets the GE's times as with the thread off (part 111).
 - `--pipeline-cache FILE` — the Vulkan renderer's pipelines kept in `FILE` between runs (the core's
   option "Pipeline Cache"), as the app keeps them: a second run starts with the first's, made at once.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and

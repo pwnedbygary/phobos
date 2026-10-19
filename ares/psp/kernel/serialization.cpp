@@ -1122,8 +1122,11 @@ auto Kernel::serialize(serializer& s) -> bool {
   else s(geDoneAt), s(geFinishDue);
   //the texels the GE's texture cache holds since the last TEX_FLUSH, for the PSP's GE timing (GE::texelClocks(); layout
   //34 on: none in older states)
-  if(s.reading() && stateLayout < 34) ge.texelCache = {};
-  else s(ge.texelCache.u0), s(ge.texelCache.v0), s(ge.texelCache.u1), s(ge.texelCache.v1), s(ge.texelCache.fetched);
+  //(with the GE on its thread, its timing the render GE's, drained: System::serialize(), restore())
+  GE& timed = ge.render ? *ge.render : ge;
+  if(s.reading() && stateLayout < 34) timed.texelCache = {};
+  else s(timed.texelCache.u0), s(timed.texelCache.v0), s(timed.texelCache.u1), s(timed.texelCache.v1),
+       s(timed.texelCache.fetched);
   //when the GE's front end will have got through what it was given, and whether, with the PSP's timing, the list it
   //runs has met a SIGNAL whose interrupt waits for that (layout 34 on: an older layout's were taken the moment the
   //GE met them)
@@ -1135,9 +1138,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   //queue held more (GE::Cost::Queue is measured and refits move it; Pipe::Room) keeps the newest items this build's
   //holds, the oldest dropped as if drawn: it loads, and the list runs on.
   if(s.reading() && stateLayout < 34) {
-    gePipeAt = 0, ge.pipeStart();
+    gePipeAt = 0, timed.pipeStart();
   } else {
-    auto& pipe = ge.pipe;
+    auto& pipe = timed.pipe;
     u32 count = pipe.count;
     s(gePipeAt), s(pipe.front), s(pipe.back), s(count);
     if(s.reading()) {

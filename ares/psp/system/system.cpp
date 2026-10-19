@@ -35,8 +35,8 @@ auto load(Node::System& node, string name) -> bool {
 //the player wait for its answer; without it (the default) they're answered at once, as they always were. "GE
 //Timing", "PSP" (the default, the owner's choice) for the GE to take the time the owner's PSP took over the same work
 //(docs/psp-core.md, part 106), or "Fast" for Sony's peak rates, which games' lists take a PSP 4 to 12 times longer
-//than (part 103); taken at the next power on (Kernel::geTime()). With "PSP" the GE stays on the emulation thread
-//whatever "GE Thread" says (threadGE()).
+//than (part 103); taken at the next power on (Kernel::geTime()). With "GE Thread" On, either way, the GE thread keeps
+//the GE's pipeline and the emulation thread its times (part 111, Kernel::GeRun).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -490,11 +490,10 @@ auto System::unloadNodes() -> void {
 //The GE on a thread of its own from now on, or not (option "GE Thread": ge/thread.hpp). On: the render GE takes the
 //kernel's GE's renderer, drawing threads and state, its memory sees memory's bytes, and VRAM's pages leave the CPU's
 //page table, so that every access to them goes through memory, whose drawer has the thread done first. Off: all of
-//that back, once the thread has drawn and put back everything handed to it. Never with the PSP's GE timing (option
-//"GE Timing" "PSP"): its pipeline takes each run's time as the run ends on the emulation thread (Kernel::geTime(),
-//geRun()'s SIGNAL), so the GE runs there, as with the thread off (docs/psp-core.md, part 106).
+//that back, once the thread has drawn and put back everything handed to it. The PSP's GE timing (option "GE Timing"
+//"PSP") goes along: the render GE keeps the list's pipeline while the thread runs, and the emulation thread the times
+//its runs take, from the clocks each gives back (docs/psp-core.md, part 111; Kernel::GeRun).
 auto System::threadGE(bool on) -> void {
-  if(kernel.gePspTiming) on = false;
   if(on == (bool)geThreading) return;
   auto vramPages = [&](bool out) {
     if(pageTable.empty()) return;
@@ -515,6 +514,9 @@ auto System::threadGE(bool on) -> void {
     renderGE.takeState(ge.stateOf());
     std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut)), renderGE.paletteChanged();
     renderGE.vertexAddress = ge.vertexAddress, renderGE.indexAddress = ge.indexAddress;
+    //(the GE's timing, the PSP's: the list's pipeline as its last run left it, and the texels the GE's cache holds,
+    //the render GE's from here on, as the GE thread's records move them)
+    renderGE.pipe = ge.pipe, renderGE.texelCache = ge.texelCache, renderGE.pspTiming = ge.pspTiming;
     renderGE.setThreads(threads), renderGE.setRenderer(renderer);
     geThreading = std::make_unique<GeThread>(ge, renderGE);
     geThreading->frameEnd = [this](const GeThread::Frame& frame) { frameEnded(frame); };
@@ -525,6 +527,7 @@ auto System::threadGE(bool on) -> void {
   } else {
     kernel.geFold(true);  //(the runs handed over counted: the kernel's clock needs the thread for them)
     geThreading->drain();
+    ge.pipe = renderGE.pipe, ge.texelCache = renderGE.texelCache;  //(the GE's timing back as the render GE left it)
     renderGE.settleAll();
     auto* renderer = renderGE.renderer;
     u32 threads = renderGE.drawing.threads;

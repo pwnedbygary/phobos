@@ -824,9 +824,9 @@ auto drawingThreads() -> void {
   PlayStationPortable::option("GE Threads", "0");
 }
 
-//The GE on a thread of its own and the PSP's GE timing (docs/psp-core.md, part 106): that timing takes each run's time
-//as the run ends on the emulation thread, so with "GE Timing" "PSP" the GE stays there whatever "GE Thread" says, the
-//thread never started, nor when asked for again (System::threadGE()); with "Fast", "GE Thread" On starts it.
+//The GE on a thread of its own and the PSP's GE timing (docs/psp-core.md, parts 106 and 111): the GE thread keeps the
+//GE's pipeline and the emulation thread its times (kernel.hpp's GeRun), so "GE Thread" On starts the thread with
+//either "GE Timing", and off and on again it keeps the list's pipeline (System::threadGE()).
 auto geThreadAndPspTiming() -> void {
   std::printf("the GE's thread and the PSP's GE timing\n");
   host.game.reset();
@@ -838,10 +838,15 @@ auto geThreadAndPspTiming() -> void {
     reports([&] {
       if(!CHECK(start(root), "the PSP starts, GE Thread On, GE Timing " + timing)) return;
       CHECK(psp.kernel.gePspTiming == pspTiming, "GE Timing " + timing + " taken");
-      CHECK((bool)psp.geThreading == !pspTiming && (psp.ge.thread != nullptr) == !pspTiming,
-            "GE Timing " + timing + ": the GE on its thread " + (pspTiming ? "refused" : "started"));
+      CHECK((bool)psp.geThreading && psp.ge.thread != nullptr, "GE Timing " + timing + ": the GE on its thread");
+      psp.geThreading->drain();
+      psp.renderGE.pipe.front = 123.5, psp.renderGE.pipe.back = 456.25;  //(a list's pipeline as a run left it)
+      psp.threadGE(false);
+      CHECK(psp.ge.pipe.front == 123.5 && psp.ge.pipe.back == 456.25, "GE Timing " + timing + ": the pipeline back");
       psp.threadGE(true);
-      CHECK((bool)psp.geThreading == !pspTiming, "GE Timing " + timing + ": the thread asked for again");
+      CHECK((bool)psp.geThreading, "GE Timing " + timing + ": the thread asked for again");
+      CHECK(psp.renderGE.pipe.front == 123.5 && psp.renderGE.pipe.back == 456.25,
+            "GE Timing " + timing + ": the pipeline the render GE's again");
       root->unload();
     });
   }

@@ -68,15 +68,30 @@ auto GeThread::publish() -> void {
   for(u64 now; (now = done.load(std::memory_order_acquire)) < serial;) done.wait(now, std::memory_order_acquire);
 }
 
+//(the marks after the words: how many, then each one's word and clocks, 12 bytes)
+static constexpr u32 MarkBytes = sizeof(u32) + sizeof(f64);
+
 auto GeThread::wordsBytes() const -> u32 {
-  return wordCount ? sizeof(u32) + runCount * sizeof(WordRun) + wordCount * sizeof(u32) : 0;
+  if(!wordCount) return 0;
+  return sizeof(u32) + runCount * sizeof(WordRun) + wordCount * sizeof(u32) + sizeof(u32) + marks.size() * MarkBytes;
 }
 
 auto GeThread::putWords(u8* at) -> void {
   std::memcpy(at, &runCount, sizeof(u32));
   std::memcpy(at + sizeof(u32), wordRuns.data(), runCount * sizeof(WordRun));
-  std::memcpy(at + sizeof(u32) + runCount * sizeof(WordRun), words.data(), wordCount * sizeof(u32));
+  at += sizeof(u32) + runCount * sizeof(WordRun);
+  std::memcpy(at, words.data(), wordCount * sizeof(u32));
+  at += wordCount * sizeof(u32);
+  u32 count = marks.size();
+  std::memcpy(at, &count, sizeof(u32));
+  at += sizeof(u32);
+  for(auto& mark : marks) {
+    std::memcpy(at, &mark.word, sizeof(u32));
+    std::memcpy(at + sizeof(u32), &mark.clocks, sizeof(f64));
+    at += MarkBytes;
+  }
   wordCount = runCount = 0, nextWordAt = ~0u;
+  marks.clear();
 }
 
 auto GeThread::flushWords() -> void {
@@ -149,6 +164,7 @@ auto GeThread::primitiveEnd(bool certain, const u8* bytes) -> void {
   if(b.wordAddress != ~0u) listWordDrawn(b.wordAddress);
   if(checking) render.modelPrimitive(replica, b.word, b.vertexAddress, b.indexAddress, b.copies, bytes, b.hardware,
                                      serial + 1);
+  runWords++;  //(in the run's count, for its pipeline, as the record would have been)
   render.replayPrimitive(b.word, b.vertexAddress, b.indexAddress, b.copies, bytes, b.word >> 24 != GE::Primitive);
   undrawn = ~0u;
 }
@@ -367,13 +383,23 @@ auto GeThread::runStart() -> void {
     Blocked holding{blocked};
     runsEnded.wait(ended, std::memory_order_acquire);
   }
-  append(Kind::RunStart, 0);
+  u32 head[2] = {control.pspTiming, shifting};
+  u8* at = append(Kind::RunStart, sizeof(head) + sizeof(f64));
+  std::memcpy(at, head, sizeof(head));
+  std::memcpy(at + sizeof(head), &shift, sizeof(f64));
+  publish();
+  shifting = false, shift = 0;
+}
+
+auto GeThread::runEnd(u64 words) -> void {
+  flushWords();
+  std::memcpy(append(Kind::RunEnd, sizeof(words)), &words, sizeof(words));
   publish();
 }
 
-auto GeThread::runEnd() -> void {
+auto GeThread::owe(f64 clocks) -> void {
   flushWords();
-  append(Kind::RunEnd, 0);
+  std::memcpy(append(Kind::Owe, sizeof(clocks)), &clocks, sizeof(clocks));
   publish();
 }
 
@@ -430,17 +456,21 @@ auto GeThread::owedSoFar(u64 run, Owed& owed) const -> bool {
   u64 at = soFarRun.load(std::memory_order_relaxed);
   owed.pixels = soFarPixels.load(std::memory_order_relaxed);
   owed.primitives = soFarPrimitives.load(std::memory_order_relaxed);
+  owed.time = soFarTime.load(std::memory_order_relaxed);
+  owed.front = soFarFront.load(std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_acquire);
   return at == run && soFarVersion.load(std::memory_order_relaxed) == before;
 }
 
-//(the GE thread's) the run under way's counts so far
+//(the GE thread's) the run under way's counts so far, and its pipeline's two ends (after its shift, as it starts)
 auto GeThread::publishSoFar() -> void {
   soFarVersion.fetch_add(1, std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_release);
   soFarRun.store(takenRuns, std::memory_order_relaxed);
   soFarPixels.store(render.owedPixels, std::memory_order_relaxed);
   soFarPrimitives.store(render.owedPrimitives, std::memory_order_relaxed);
+  soFarTime.store(std::max(render.pipe.front, render.pipe.back), std::memory_order_relaxed);
+  soFarFront.store(render.pipe.front, std::memory_order_relaxed);
   soFarVersion.fetch_add(1, std::memory_order_release);
 }
 
@@ -701,19 +731,45 @@ auto GeThread::listWordDrawn(u32 address) -> void {
   undrawn = render.undrawnPage(address) ? address >> 12 : ~0u;
 }
 
+//(each word counted in the run's, as run() counts it, and taken; a TRANSFER_START's time put in the pipeline as
+//transfer() puts it, and the control pass's front-end work after the word it came with, with the PSP's timing)
 auto GeThread::replayWords(const u8* data) -> void {
-  u32 runCount;
+  u32 runCount, count = 0;
   std::memcpy(&runCount, data, sizeof(u32));
-  const u8* word = data + sizeof(u32) + runCount * 2 * sizeof(u32);
   for(u32 n = 0; n < runCount; n++) {
     u32 run[2];
     std::memcpy(run, data + sizeof(u32) + n * sizeof(run), sizeof(run));
-    for(u32 k = 0; k < run[1]; k++, word += sizeof(u32)) {
+    count += run[1];
+  }
+  const u8* word = data + sizeof(u32) + runCount * 2 * sizeof(u32);
+  const u8* mark = word + count * sizeof(u32);
+  u32 marksLeft;
+  std::memcpy(&marksLeft, mark, sizeof(u32));
+  mark += sizeof(u32);
+  u32 index = 0;
+  for(u32 n = 0; n < runCount; n++) {
+    u32 run[2];
+    std::memcpy(run, data + sizeof(u32) + n * sizeof(run), sizeof(run));
+    for(u32 k = 0; k < run[1]; k++, word += sizeof(u32), index++) {
       u32 value;
       std::memcpy(&value, word, sizeof(u32));
       if(run[0] != ~0u) listWordDrawn((run[0] + k * 4) & 0x0fff'ffff);
+      runWords++;
       render.apply(value);
-      if(value >> 24 == GE::TransferStart) undrawn = ~0u;
+      if(value >> 24 == GE::TransferStart) {
+        undrawn = ~0u;
+        if(render.pspTiming) {
+          auto t = render.transferAsked();
+          render.oweTransfer(t.width, t.height, t.bytes, t.source, t.destination);
+        }
+      }
+      for(u32 at; marksLeft && (std::memcpy(&at, mark, sizeof(u32)), (at & ~VerticesMark) == index);
+          marksLeft--, mark += MarkBytes) {
+        f64 clocks;
+        std::memcpy(&clocks, mark + sizeof(u32), sizeof(f64));
+        if(!(at & VerticesMark)) render.pipeFront(clocks);
+        else if(render.pspTiming) render.pipe.vertices += clocks, render.ramRead(0, clocks);  //(as oweVertices())
+      }
     }
   }
 }
@@ -725,6 +781,7 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     u32 head[7];
     std::memcpy(head, data, sizeof(head));
     if(head[6]) replayWords(data + sizeof(head));  //(the words before it, which came in its record)
+    runWords++;
     Copies copies;
     std::memcpy(&copies, data + sizeof(head) + head[6], sizeof(Copies));
     const u8* bytes = data + sizeof(head) + head[6] + sizeof(Copies);
@@ -758,6 +815,7 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     u32 head[4];
     std::memcpy(head, data, sizeof(head));
     if(head[1] != ~0u) listWordDrawn(head[1]);
+    runWords++;
     render.replayClut(head[0], head[2], data + sizeof(head), head[3]);
     break;
   }
@@ -815,20 +873,47 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     }
     break;
   }
-  case Kind::RunStart:
+  case Kind::RunStart: {  //(with the PSP's timing, the pipeline moved on first, as Kernel::geResume() moves it)
+    u32 head[2];
+    f64 clocks;
+    std::memcpy(head, data, sizeof(head));
+    std::memcpy(&clocks, data + sizeof(head), sizeof(f64));
     takenRuns++;
+    render.pspTiming = head[0];
+    if(head[0] && head[1]) render.pipeShift(clocks);
+    runWords = 0, render.wordsRun = &runWords;
     render.owedPixels = render.owedPrimitives = 0;
     publishSoFar();
     undrawn = ~0u;
     render.runStart();
     break;
-  case Kind::RunEnd:
+  }
+  case Kind::RunEnd: {  //(the front end's last work, as Kernel::geTime() ends a run, and the pipeline's clocks kept)
+    u64 words;
+    std::memcpy(&words, data, sizeof(words));
     render.runEnd();
-    owedRuns[takenRuns % RunsKept] = {render.owedPixels, render.owedPrimitives};
+    if(checking && words != runWords) {
+      std::fprintf(stderr, "PSP GE thread: a run of %llu words counted %llu by the render GE, at record %llu\n",
+                   (unsigned long long)words, (unsigned long long)runWords, (unsigned long long)header.serial);
+      std::abort();
+    }
+    if(render.pspTiming) render.pipeStop(words);
+    render.wordsRun = nullptr;
+    owedRuns[takenRuns % RunsKept] = {render.owedPixels, render.owedPrimitives, render.pipeTime(), render.pipe.front,
+                                      {render.ramClocks[0], render.ramClocks[1], render.ramClocks[2], render.ramClocks[3]},
+                                      render.allClocks};
     render.owedPixels = render.owedPrimitives = 0;
     runsEnded.store(takenRuns, std::memory_order_release);
     runsEnded.notify_all();
     break;
+  }
+  case Kind::Owe: {  //(Kernel::geOwe()'s pipeline begun afresh, with the list's own clocks ahead of its words)
+    f64 clocks;
+    std::memcpy(&clocks, data, sizeof(clocks));
+    render.pipeStart();
+    render.pipe.front = clocks;
+    break;
+  }
   case Kind::State: {
     GE::State state;
     std::memcpy(&state, data, sizeof(state));
@@ -968,6 +1053,7 @@ auto GE::apply(u32 word) -> void {
   case ProjectionMatrixData:   data(projection, 16, projectionIndex); break;
   case TextureMatrixNumber:    textureIndex = argument & 0xf; break;
   case TextureMatrixData:      data(textureMatrix, 12, textureIndex); break;
+  case TextureFlush:           texelCache = {}; break;  //(the GE's time: its cache emptied, as run() empties it)
   }
 }
 
@@ -1006,6 +1092,7 @@ auto GE::replayPrimitive(u32 word, u32 vertexAt, u32 indexAt, const GeThread::Co
 //(the render GE) CLUT_LOAD from the palette's bytes the kernel's GE copied, after loadClut()'s drawnFirst().
 auto GE::replayClut(u32 word, u32 address, const u8* bytes, u32 size) -> void {
   commands[ClutLoad] = word;
+  if(pspTiming) pipeDrain(), pipeItem(Cost::PaletteLoad + size * Cost::PaletteByte, 1);  //(as loadClut() times it)
   drawnFirst(address, size);
   u8 before[sizeof(clut)];
   std::memcpy(before, clut, sizeof(clut));
@@ -1285,4 +1372,5 @@ auto GE::readCopiedVertices(u32 count, const VertexFormat& format) -> void {
   }
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
+  oweVertices(count, format);
 }

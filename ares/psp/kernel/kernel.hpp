@@ -1122,7 +1122,7 @@ struct Kernel {
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   bool gePspTiming = true;  //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", its default,
                             //geTime()); power() leaves it
-  u64 geReachAt = 0;        //when (cycles) a PSP's GE's front end would have got through what it was last given
+  mutable u64 geReachAt = 0;  //when (cycles) a PSP's GE's front end would have got through what it was last given
   bool geSignalDue = false; //with the PSP's timing, the list met a SIGNAL, its interrupt taken from geReachAt on, the
                             //GE waiting there (geRun())
   u64 gePipeAt = 0;         //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
@@ -1130,28 +1130,60 @@ struct Kernel {
   //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended
   //alone, and not saved till then): the GE's busy window so far, its cycles passed and those the CPU worked beside
   //it, the push still owed (a part of a cycle), and the instructions of the CPU's stretch under way.
-  f64 geWindowPassed = 0, geWindowWorked = 0, geContendCarry = 0;
+  mutable f64 geWindowPassed = 0, geWindowWorked = 0, geContendCarry = 0;
   u64 geStretch = 0;
   auto geContend(u64 from, u64 to, bool worked) -> void;
+  auto geContendNow(u64 from, u64 to, bool worked, bool signal) const -> void;  //(geContend()'s, a SIGNAL due or not)
   auto geStretchEnded(u64 instructions, bool ended) -> void;
+  //With the GE on its thread (GeRun, below), a stretch ended while runs handed over aren't folded yet: kept, with
+  //whether a SIGNAL was due then and the last run handed over before it, and taken in turn as geFold() folds that run,
+  //from the times the fold leaves, as the synchronous GE takes it after the run's geTime(); the list's clocks by kind,
+  //which the GE thread gives with each run, as the last folded left them (ge.ramClocks, allClocks, threaded).
+  //Each stretch numbered in turn (geStretches made so far), so that a go's limit worked out from the bound is worked out
+  //exactly from the times as they were when it was, the stretches after it left out (GeLimit::stretches).
+  struct GeStretch { u64 from, to; bool worked, signal; u64 run, number; };
+  mutable std::deque<GeStretch> geStretches;
+  mutable f64 geRamClocks[4] = {}, geAllClocks = 0;
+  u64 geStretchesMade = 0;
   //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
   //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
   //takes for it as it's handed over, and geDoneAt is a lower bound of the synchronous GE's till none is left
   //(geFold()). A time compared with it takes the bound where that decides (geBound(): with the run under way's counts
   //so far), else waits for the GE thread's counts (geReached()). Folded runs are kept (geFolded) while a go of the
   //CPU's has limits worked out from the bound, for run() to work out their exact values once it ends (GeLimit).
-  struct GeRun { u64 run, cycles; u32 bus; u64 pixels = 0, primitives = 0; };
+  //With the PSP's timing the GE thread keeps the GE's pipeline (its clocks: a list's start, each run's shift, words and
+  //primitives, as the synchronous GE's), and this thread its times in cycles: a run's are from when its pipeline's
+  //times count as it starts (pipeAt: geResume()'s, which this thread keeps) and the clocks the thread gives as it ends,
+  //as geTime() takes them; while it's under way, from the clocks it has got to so far, and its words, which only grow
+  //(geBound(), geReachBound()). A run's times needn't be later than the run's before (each starts from the queue as
+  //moved on, its cycles cut to whole ones), so the bound is the last run's.
+  struct GeRun {
+    u64 run, cycles;
+    u32 bus;
+    u64 pixels = 0, primitives = 0;
+    u64 pipeAt = 0, words = 0;   //(with the PSP's timing)
+    u64 doneAt = 0, reachAt = 0;  //(folded, with the PSP's timing: geDoneAt and geReachAt as it left them)
+    u64 stretch = ~0ull;          //(folded: ~0 the run itself; else the number of a stretch taken after it, GeStretch)
+  };
   mutable std::deque<GeRun> geRuns, geFolded;
   mutable u64 geFoldedRun = 0;  //the last run folded
   static auto geOwed(u64 pixels, u64 primitives, u32 bus) -> u64;
+  static auto geCycles(f64 clocks, u64 bus) -> u64;  //(the GE's clocks at the bus's MHz, as cycles: geTime()'s)
   auto geFold(bool wait, u64 through = ~0ull) const -> void;
   auto geBound() const -> u64;
+  auto geReachBound() const -> u64;  //(geReachAt's, with the PSP's timing)
   auto geReached() -> bool;
+  auto geReachReached() -> bool;     //(cycles at or past geReachAt, as geReached())
   auto geClearRuns() -> void;  //(geDoneAt set afresh: the runs before don't count)
   //A limit of the go's worked out from the bound: the go's instructions before it, the time then, the other events'
   //first, whether a FINISH was due, the cap the go's start puts on it, and the fold's state then (geFoldedRun, geDoneAt)
   //with the last run handed over; untilNextEvent() leaves its own in geLimit where it took the bound (geBounded).
-  struct GeLimit { u64 before, cycles, others, cap, foldedRun, foldedAt, run; bool due; };
+  //signal: a SIGNAL's, with the PSP's timing (geReachAt in place of geDoneAt); stretches: geStretchesMade then.
+  struct GeLimit {
+    u64 before, cycles, others, cap, foldedRun, foldedAt, run;
+    bool due, signal = false;
+    u64 stretches = 0;
+  };
   mutable bool geBounded = false;
   mutable GeLimit geLimit{};
   std::vector<GeLimit> geLimits;  //the go's limits from the bound, not yet worked out exactly

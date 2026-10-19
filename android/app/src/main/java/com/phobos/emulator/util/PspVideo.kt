@@ -86,8 +86,8 @@ object PspResolution {
  * everything the game sees are the same either way; whether On is faster depends on the game (it's slower in some that
  * write a lot to the PSP's video memory each frame). What On costs: each picture reaches the screen a frame later (at
  * a frame's end the screen shows the frame before, the next still being drawn), about 17 ms more at 60 frames a second
- * between pressing a button and seeing what it did. With "PSP GE timing" on (the default) it has no effect: the core
- * keeps the GE on the game's thread then.
+ * between pressing a button and seeing what it did. It works with either GE timing: with the PSP's (the default), the
+ * game's thread still gets the GE's times exactly as without the overlap.
  */
 object PspGraphicsOverlap {
     const val OFF = 0
@@ -103,8 +103,7 @@ object PspGraphicsOverlap {
 
     /** What each choice does, for Settings. */
     fun description(mode: Int): String = when (mode) {
-        ON -> "On draws them on a thread of their own while the game goes on: faster in some games, slower in others. " +
-            "No effect with PSP GE timing."
+        ON -> "On draws them on a thread of their own while the game goes on: faster in some games, slower in others."
         else -> "Off draws them in turn with the game's own work, as before."
     }
 

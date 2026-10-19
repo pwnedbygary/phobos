@@ -936,6 +936,7 @@ struct GE {
                     f64 entries, bool sprite = false) -> void;
   auto texelClocks(const Look& look, u64 pixels, f64 texels, const TexelsRead& box, bool sprite) -> f64;
   auto pipeDrain() -> void;  //draw.cpp
+  auto oweVertices(u32 count, const VertexFormat& format) -> void;  //(readVertices()'s vertices, as they come in)
   //The GE's reciprocal (draw.cpp's geReciprocal()), and one of its chords' start and slope, for the tests.
   static auto reciprocal(float x) -> float;
   static auto reciprocalChord(u32 chord) -> std::pair<s32, s32>;

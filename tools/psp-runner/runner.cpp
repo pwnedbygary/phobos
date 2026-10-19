@@ -28,8 +28,7 @@
 //                                them gives: on by default, off with --ge-profile unless given (so a profile counts
 //                                every poll, as the PSP's plugin records them)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
-//    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on (with
-//                                --ge-timing fast: the PSP's timing keeps the GE on the emulation thread)
+//    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on
 //    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
 //                                system's Vulkan loader; the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
@@ -649,10 +648,6 @@ auto main(int argc, char** argv) -> int {
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
   if(!geThread.empty()) PlayStationPortable::option("GE Thread", geThread == "on" || geThread == "On" ? "On" : "Off");
-  if(gePspTiming && (geThread == "on" || geThread == "On")) {
-    std::fprintf(stderr, "--ge-thread on: the PSP's GE timing keeps the GE on the emulation thread (--ge-timing fast "
-                         "for the thread)\n");
-  }
   //(the core's names, "Vulkan (accurate)" and "Vulkan (fast)", as one word each for a shell)
   if(renderer == "Vulkan-accurate") renderer = "Vulkan";
   if(renderer == "Vulkan-fast") renderer = "Vulkan (fast)";

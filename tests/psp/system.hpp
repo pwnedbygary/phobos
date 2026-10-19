@@ -98,6 +98,7 @@ struct System : Allegrex {
       renderGE.power();
       renderGE.takeState(ge.stateOf());
       std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut)), renderGE.paletteChanged();
+      renderGE.pipe = ge.pipe, renderGE.texelCache = ge.texelCache, renderGE.pspTiming = ge.pspTiming;
       renderGE.setThreads(threads), renderGE.setRenderer(renderer);
       geThreading = std::make_unique<GeThread>(ge, renderGE);
       geThreading->checking = true;  //(the value rule's check of every byte a finish or put-back changes: ge/thread.hpp)
@@ -109,6 +110,7 @@ struct System : Allegrex {
     } else {
       std::erase(threadedSystems, this);
       geThreading->drain();
+      ge.pipe = renderGE.pipe, ge.texelCache = renderGE.texelCache;
       renderGE.settleAll();
       auto* renderer = renderGE.renderer;
       u32 threads = renderGE.drawing.threads;
@@ -121,6 +123,13 @@ struct System : Allegrex {
       vramPages(false);
       ge.setThreads(threads), ge.setRenderer(renderer);
     }
+  }
+  //The GE whose pipeline and texture cache time the list, as states hold them (Kernel::serialize()): the render GE's
+  //with the GE on its thread, which is done first with what it was handed.
+  auto timedGE() -> GE& {
+    if(!geThreading) return ge;
+    geThreading->drain();
+    return renderGE;
   }
 
   auto read(u32 size, u32 address) -> u32 override { return memory.read(size, address); }

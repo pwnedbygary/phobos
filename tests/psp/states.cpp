@@ -1700,9 +1700,9 @@ static auto olderLayouts() -> void {
   m.kernel.geFinishDue = true;
   u32 geFinish = where(kernelState(), state);
   m.kernel.geFinishDue = false;
-  m.kernel.ge.texelCache.u0 = 1;
+  m.system.timedGE().texelCache.u0 = 1;
   u32 cached = where(kernelState(), state);
-  m.kernel.ge.texelCache.u0 = 0;
+  m.system.timedGE().texelCache.u0 = 0;
   m.kernel.dialog.error = 1;
   u32 dialogError = where(kernelState(), state);
   m.kernel.dialog.error = 0;
@@ -1775,8 +1775,8 @@ static auto olderLayouts() -> void {
     n.kernel.geDoneAt = 12345;
     n.kernel.audio.vaudio.effect = 3;
     n.kernel.display.nextFrameBuffer = 0x0400'0000, n.kernel.display.nextSet = true, n.kernel.display.nextAt = 99;
-    n.kernel.ge.texelCache = {8, 16, 24, 32, true}, n.kernel.geReachAt = 777, n.kernel.gePipeAt = 555;
-    n.kernel.ge.pipe.front = 3.0;
+    n.system.timedGE().texelCache = {8, 16, 24, 32, true}, n.kernel.geReachAt = 777, n.kernel.gePipeAt = 555;
+    n.system.timedGE().pipe.front = 3.0;
     n.kernel.stateLayout = layout;
     serializer s{bytes.data(), u32(bytes.size())};
     bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
