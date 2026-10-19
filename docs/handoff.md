@@ -95,6 +95,30 @@ pipeline: 28 and 16 a queued item; "Fast" 46 in all).
   "Fast"'s templates per timing; fixed-point charges (states across hosts and renderers carry on with the GE a few
   cycles apart); round 10 run once in CI's sanitized job for both its tests (the job's limit raised to 90 minutes).
 
+## PSP measure, round 10c: Super Monkey Ball's small strips beside the CPU taken apart, Activision Hits' menu's second and third lists — 2026-10-19
+
+Branch `cursor/psp-measure-round10c-2b67` (PR #280, draft), from master `08801ab60` (#269 and #278 merged);
+docs/psp-core.md, part 114.
+- **Why**: #279's model of the CPU's traffic (part 113) leaves Super Monkey Ball's rest on the GE's side: round 10's
+  list H (the game's small trilinear CLUT4 strips) comes out about 16% short beside the CPU, the model having it read
+  RAM for 37% of its clocks. #269's refit leaves Activision Hits' menu's second list +48.5% (60 sprites shrinking a
+  VRAM picture, charged 1.64 ms where the PSP leaves them 0.25) and its third +26.7% (triangles magnifying a RAM
+  texture into 5650); 1fd9133c specified both (`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-10c-1fd9133c.md`).
+- **What**: a new first menu line, round 10c (about 30 KB, `manifest10c.txt`): `time-contention4` (31: H as round 10
+  drew it, nearest within the level, bilinear and nearest without levels, untextured, its vertices in VRAM, untextured
+  with them there; each alone and beside streaming reads flat out and at a half and the game's mix over 256 KiB; each
+  pattern alone), `time-shrink` (9: the second list as logged, its sprites alone, nearest, 1:1, 4:1, the picture
+  swizzled in VRAM and from RAM, one sprite 240 wide), `time-magnify` (14: the third list as logged, 1:1 and 4 times,
+  into 8888, unblended, the texture 512x256, CLUT8; bilinear and nearest each), `time-gamestrips` (6: round 10's
+  game-style strips unlit, then nearest, no alpha test, no depth test, into 5650, untextured) and `time-anchors3` (7 of
+  round 10's cases). About half a minute on the PSP. Synthetic: nothing of a game's lists, textures or vertices.
+- **Safety**: round 10's and 10b's: new names only; the clocks put back after each test; every GE wait 5 s with the
+  reset path; the contention thread's own deadline, its lines written back and invalidated after each run; the arrays
+  on 1 KiB boundaries; H's VRAM vertices in VRAM's last 256 KiB, past the depth buffer.
+- **Test**: "psp measure" runs round 10c after round 10b and checks every record; `tests/psp/programs/pspmeasure.elf`
+  rebuilt (`b38077b4…`); the owner's EBOOT `243aa27d…` (`git archive 9bcaff348`, byte for byte).
+- **Next**: the owner's run; then what H's parts say for #279's model, and the two lists' cases for #269's refit.
+
 ## PSP measure, round 10: lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective, mipmaps, the CPU beside the GE — 2026-10-18
 
 Branch `cursor/psp-measure-round10-2b67` (PR #278, draft), from master `d428d91f9` (#276, part 110);

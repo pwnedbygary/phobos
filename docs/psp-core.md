@@ -18774,3 +18774,106 @@ here (`r10.py`); #278's review decoded it too and agrees with every figure below
 `build/` (the program as tested), `EBOOT.PBP` and its sha256, `measure-r10.log` (the local test), `r10.py` (the decoder
 the results above came from); `results-r10/` and `results-r10b/` (the owner's runs as the coordinator pulled them, with
 the device's sums). Nothing was run on the RP6.
+
+## Part 114: psp-measure round 10c — Super Monkey Ball's small strips beside the CPU taken apart, Activision Hits' menu's second and third lists, round 10's game-style strips taken apart
+
+On branch `cursor/psp-measure-round10c-2b67` (draft PR #280), from master `08801ab60` (#269, part 106: the PSP's GE
+timing the default, refitted with round 10; #278, part 112: rounds 10 and 10b). Round 10c of `tools/psp-measure`, for
+the owner's PSP (he said yes on 2026-10-19 and runs it that day). Part 111 is #277's and part 113 #279's (the CPU's
+traffic beside the GE, on `cursor/psp-cpu-traffic-2b67`). Synthetic, as rounds 10 and 10b: no game's lists, textures or
+vertices in the program, only the parameters the logs show. Nothing in the core changes: the program, its test, the
+test programs' copy of it. Clean room as part 107: our own code; pspsdk's headers and uOFW's reading of the driver; no
+PPSSPP or JPCSP.
+
+### What's still missed
+
+- **Super Monkey Ball's remaining gap.** #279's model of the CPU's traffic (part 113) leaves the story scene within its
+  exception's limit and points what's left at the GE's side: round 10's list H, the game's small trilinear strips
+  (time-mipmaps 14: a CLUT4 64x64 texture with 7 levels, 3D strips of 6 vertices tiling 512x256), comes out about 16%
+  short beside any of the CPU's patterns. The model has H reading RAM for 37% of its clocks (its vertices 32%, its words
+  5%, its texels 0.6%: the little textures stay in the texture cache), and the PSP slows it as if it read more: ×1.31
+  to 1.55 beside round 10's patterns, ×1.28 beside round 10b's writer (the model ×1.17).
+- **Activision Hits' menu's second list, +48.5% by #269's refit**: round 10's tiles (time-clut32 0, 3.23 ms of the
+  PSP's 3.48 for the whole list) and then 60 sprites shrinking an 8888 512x512 VRAM picture 2:1, bilinear, into an 8888
+  buffer: the refit charges the sprites 1.64 ms, where the PSP's list leaves them 0.22 to 0.25 (1fd9133c's
+  `SPECS-10c-1fd9133c.md`, in `~/phobos-work/scratch/psp-ge-profile/round10/`, its A).
+- **Its third list, +26.7%**: 63 3D strips of 4 vertices magnifying an 8888 256x512 RAM texture (swizzled) about 1.9
+  times, bilinear, blended, the alpha test on, into 5650. The refit reads a triangle's narrow rows wide into 16-bit
+  (from round 10's copyright pass), where part 112 reads that pass's miss as bilinear on wide reads; the nearest and
+  bilinear pair at each magnification decides between them (its B).
+- **Round 10's game-style strips** (time-lights 37 and 38): the same lit or not on the PSP, 2.1 times the refit's
+  pixels (its C, optional).
+
+### What round 10c measures
+
+Every test is round 8's kind (`timeCases8`: each list queued alone, timed to its finish callback, every run kept), at
+222/111 and 333/166 MHz, 8 runs a size unless said; `manifest10c.txt` lists every case. In the order they run:
+
+- **`time-contention4`** (31 cases): round 10's time-contention (`runContention10`: the thread above the program's
+  priority, released after the enqueue, stopping at the finish callback's flag or its deadline; a run's four words; 4
+  runs a size) with list H and six lists of its kind, at 4,096 and 8,192 triangles: H as round 10 drew it; nearest
+  within the level chosen (time-mipmaps 15); bilinear without levels (16); nearest without levels (17); untextured (the
+  same strips, vertices and depth test); H with its vertices in VRAM's last 256 KiB (written through the uncached
+  mirror); untextured with them there. Each alone and beside round 10's streaming reads over 1 MiB, flat out and at a
+  half, and its game's mix over 256 KiB (12 additions, 2 reads and 2 writes a turn at random words); each pattern alone
+  first (10 ms). time-contention's layout: the first list's case 3, rows of 4. What each list takes away (the levels'
+  blend, bilinear's four texels, the texels, the vertices' RAM reads) against how much less the CPU then slows it says
+  which of H's reads the PSP slows.
+- **`time-shrink`** (9): the menu's second list. The whole list as logged, in one list: time-clut32 0's tiles (15 x 8
+  of 32x34, three passes, 240 palette loads a layer, into 5650), then the 60 sprites: 2D, 10-byte vertices (16-bit
+  texture coordinates and positions), a draw of 2 vertices each, 15 x 4 sprites of 16x34 pixels over 240x136 of an 8888
+  buffer (VRAM's 0x150000), each over 32x68 texels of the picture (VRAM 8888 512x512, not swizzled, buffer width 512),
+  bilinear, not blended, no depth or alpha test; 1 and 2 layers. Then the sprites alone (1 and 4 layers); nearest; 1:1
+  (32x68 over 480x272); 4:1 (8x17 over 120x68); 2:1 from the picture swizzled in VRAM, and from RAM swizzled and not;
+  one sprite 240x136 over the 480x272 texels (rows 240 wide).
+- **`time-magnify`** (14): the menu's third list, bilinear and nearest each: as logged, 9 x 7 quads (3D strips of 4
+  vertices of 24 bytes) over 480x272 reading an 8888 256x512 RAM texture, swizzled, 256 texels over 480 pixels (×1.875
+  both ways), modulated, blended (source alpha, 1 − source alpha), the alpha test (greater than 0), into 5650; 1:1 and
+  4 times (8 x 8 quads over 256x256: 256 and 64 texels across); into 8888; neither blended nor alpha-tested; the texture
+  512x256; CLUT8 256x512 (time-widetri's palette). 1 and 4 layers, a layer every quad once. The log's 24 bytes have
+  16-bit texture coordinates; here they're floats (`FloatVertex`, 24 bytes too: 252 vertices a layer against about
+  130,000 pixels).
+- **`time-gamestrips`** (6): round 10's game-style strips unlit (time-lights 38: strips of 9 vertices of 12 bytes,
+  16x20-pixel triangles over a CLUT4 64x64 RAM texture swizzled, bilinear, modulated; the depth test passing and
+  writing; the alpha test; into 8888), then without one thing at a time: nearest; no alpha test; no depth test; into
+  5650; untextured; 256 and 1,024 strips.
+- **`time-anchors3`** (7, last): round 10's time-anchors2 6 (round 8's time-strips 37 on a 1 KiB boundary),
+  time-clut32 0, time-widetri 0, time-perspective 3, time-mipmaps 1, time-vram8 1 and time-lights 38, built by round
+  10's code at its sizes: this session against round 10's evening.
+
+### How it runs
+
+- About half a minute on the PSP: some 7 seconds of the GE's time by round 10's rates (H's lists beside the CPU, the
+  game-style strips and the lights anchor the most) and some 1,600 runs' own overhead; about 30 KB.
+- The same safety as rounds 10 and 10b: its own menu line (the first: "Round 10c: Monkey Ball's strips, Activision
+  Hits' lists (30 KB)"); new names in `results/ge` (`time-contention4`, `time-shrink`, `time-magnify`,
+  `time-gamestrips`, `time-anchors3`, `manifest10c.txt`), nothing earlier overwritten; the clocks put back after each
+  test; every GE wait 5 s with the reset; the thread's own deadline (5 s, 10 ms alone), its lines written back and
+  invalidated after each run; the program's arrays on 1 KiB boundaries. H's VRAM vertices (at most 240 KiB) sit in
+  VRAM's last 256 KiB, past the depth buffer; this round's thread patterns touch only their own 1 MiB in RAM.
+- The two functions round 10c reuses are callable within a list now (the small strips, `smallStrips10`, with a
+  texture or not and their vertices in RAM or VRAM; time-clut32's tiles, `tilesInto`, which `drawTiles` wraps): rounds
+  8 to 10b's lists are drawn as before.
+- The owner: copy `EBOOT.PBP` over the old one in `PSP/GAME/PSPMEASURE`, keeping `results/`; ARK's clock settings at
+  Auto; the charger in; the GE profiler plugin off; run "Round 10c" (the menu's first line); send `results/ge` back.
+
+### The test
+
+"psp measure" (tests/psp/measure.cpp) runs round 10c after round 10b, through the menu (every line one further down),
+and checks its five files as round 10b's: whole records, as many as the tables give (time-contention4 118,
+time-shrink 36, time-magnify 56, time-gamestrips 24, time-anchors3 28), each test's settings in turn, every run
+finished; the contention thread's turns and their time wherever it ran, and nothing where it didn't; and
+`manifest10c.txt`. measured8's groups run rounds 8, 9 and 10 from the new build as before (their lines one further
+down).
+
+### Checks
+
+- The program builds without a warning (`-Wall`) with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0);
+  a build from the committed source (`git archive 9bcaff348`) gives the committed `pspmeasure.elf` (`b38077b4…`) and the
+  owner's EBOOT (`243aa27d…`) byte for byte.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/round10c/`: `EBOOT.PBP` and its sha256, `build/` (the program as tested),
+`verify-9bcaff348/` (the rebuild from the commit), `measure-r10c.log` (the local test), `ours/` (the core's files from
+it), `pr-body.md`; the specs in `round10/` (`SPECS-10c-1fd9133c.md`). Nothing was run on the RP6.
