@@ -574,6 +574,7 @@ auto states(const fs::path& programs) -> void {
     return hash;
   };
   auto memoryHash = [&]() -> u64 {
+    psp.ge.drawer().settleAll();  //(VRAM read as it is, not through memory: the drawing threads done with it first)
     u64 hash = 1469598103934665603ull;
     for(u8 byte : psp.memory.ram) hash = (hash ^ byte) * 1099511628211ull;
     for(u8 byte : psp.memory.vram) hash = (hash ^ byte) * 1099511628211ull;

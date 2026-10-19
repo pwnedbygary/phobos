@@ -214,11 +214,13 @@ a PNG, the runner waits for the screen's own thread to present a new picture, th
 `frame-000030.png` (for frame 30). That thread takes the pictures a step behind the run and
 drops one it doesn't take in time, so on a busy host a PNG can be a frame or more older than its
 name; the report's `captures` say, for each, the frame that was running when its picture
-arrived. If no picture has come since the last PNG and none comes within 2 s (a screen that
-stopped presenting, a host too loaded to keep up), the PNG shows the last one presented, and the
-runner says so on standard error (`frame N: the screen presented no new picture in 2 s`) and
-counts it in the summary's `stale captures`; with no picture at all yet, there's no PNG (`frame
-N: the screen presented no picture in 2 s, so it has no PNG`), counted too.
+arrived. With `--ge-thread on`, whose pictures the screen shows a frame late, a PNG's frame and
+the one before it get their own pictures, so a PNG a frame older than its name shows that frame's
+picture, as with the thread off. If no picture has come since the last PNG and none comes within
+2 s (a screen that stopped presenting, a host too loaded to keep up), the PNG shows the last one
+presented, and the runner says so on standard error (`frame N: the screen presented no new
+picture in 2 s`) and counts it in the summary's `stale captures`; with no picture at all yet,
+there's no PNG (`frame N: the screen presented no picture in 2 s, so it has no PNG`), counted too.
 
 With `--report FILE`, the run is also written as JSON, `"report": "phobos-psp-runner 1"` (a
 later layout gets another number):

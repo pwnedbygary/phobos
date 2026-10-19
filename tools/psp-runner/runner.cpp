@@ -64,7 +64,9 @@
 //own thread to present a new picture (with a timeout), then writes it as a PNG named by the frame run. A PNG whose
 //wait ran out (no picture presented since the last PNG) shows the last one: the runner says so on standard error and
 //counts it. The screen's thread drops pictures it doesn't take in time, so on a busy host a PNG can be older than its
-//name: the report's captures give, for each, the frame that was running when its picture arrived. Captures (PNGs and
+//name: the report's captures give, for each, the frame that was running when its picture arrived. With the GE on its
+//thread (whose pictures the screen shows a frame late) a PNG's frame and the one before it get their own pictures, so
+//a PNG a frame older than its name shows that frame's own picture, as with the thread off. Captures (PNGs and
 //the save state) are in the frame loop's time; the summary gives the speed without them too where there were any.
 
 #include <psp/psp.hpp>
@@ -779,13 +781,16 @@ auto main(int argc, char** argv) -> int {
     }
     if(saveStateAt == frame) captured += std::chrono::steady_clock::now() - stateStarted;
     if(!geProfileFile.empty() && frame == geProfileFrom) psp.kernel.geProfileStart(geProfile);
-    //(a frame written as a PNG gets its own picture on the screen, the GE thread waited for where it takes them)
-    psp.exactFrame = host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame) > 0;
+    //(a frame written as a PNG gets its own picture on the screen, the GE thread waited for where it takes them; so
+    //does the frame before it, whose picture the PNG takes where the screen's thread hasn't presented its own yet,
+    //as it would be with the thread off)
+    auto png = [&](u32 at) { return host.pngEvery ? at % host.pngEvery == 0 : host.pngAt.count(at) > 0; };
+    psp.exactFrame = png(frame) || png(frame + 1);
     root->run();
     if(!geProfileFile.empty() && frame >= geProfileFrom && geProfileTo == frames && !psp.kernel.geProfile) {
       geProfileTo = frame;  //the program started again (Kernel::loadExec()), ending the profile
     }
-    if(host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame)) {
+    if(png(frame)) {
       auto pngStarted = std::chrono::steady_clock::now();
       auto deadline = pngStarted + std::chrono::seconds(2);
       while(true) {
