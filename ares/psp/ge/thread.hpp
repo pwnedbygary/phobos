@@ -168,6 +168,8 @@ struct GeThread : Memory::Writer {
   //and joined once it has come back from that one (exited()), its object kept till then (it may still use it).
   auto abandon() -> void;
   auto exited() const -> bool { return left.load(std::memory_order_acquire); }
+  //(abandoned, and not come back as the process ends) Not to be joined: its object is to be left to it, not freed.
+  auto letGo() -> void { thread.detach(); }
 
   //(the emulation thread's) The value rule (model.hpp). model: what the PRIMs handed over may change; hardware:
   //whether the render GE draws with a hardware renderer (its begin() taking PRIMs), as far as the emulation thread

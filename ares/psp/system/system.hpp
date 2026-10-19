@@ -87,6 +87,7 @@ struct System {
   auto speak() -> void;  //(the frame's sound to the speakers)
   auto load(Node::System& node, string name) -> bool;
   auto unload() -> void;
+  ~System();  //(the process ending with a GE thread unload() left stuck: not waited for)
   auto save() -> void;
   auto power(bool reset) -> void;
   auto serialize(bool synchronize) -> serializer;

@@ -401,15 +401,21 @@ auto System::unwedge(u32 milliseconds) -> bool {
     if(std::chrono::steady_clock::now() >= deadline) return false;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+  GeThread::unhook(memory);  //(memory's hooks call into the thread's object: off first, as threadGE() takes them)
   stuckGE.reset();
   renderGE.settleAll();
-  GeThread::unhook(memory);
   ge.render = nullptr, ge.thread = nullptr;
   renderGE.log = nullptr;
   renderGE.setRenderer(nullptr), renderGE.setThreads(1);
   renderMemory.unwatchAll();
   unloadMachine();
   return true;
+}
+
+//The process ending (the global system destroyed) with the GE thread still stuck where unload() left it: joining it
+//would hang the exit, so it's let go of, its object left to it, should it come back as the process goes.
+System::~System() {
+  if(stuckGE && !stuckGE->exited()) stuckGE->letGo(), (void)stuckGE.release();
 }
 
 auto wedged() -> bool {

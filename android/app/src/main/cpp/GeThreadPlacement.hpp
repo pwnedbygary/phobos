@@ -77,7 +77,20 @@ inline auto rankedCpus(const std::vector<int>& allowed) -> std::vector<int> {
   return {};
 }
 
-//The GE's own thread's ID, by the name the core gives it (ares/psp/ge/thread.cpp); 0 while there's none.
+//Whether this thread of the app's is the GE's own, by the name the core gives it (ares/psp/ge/thread.cpp).
+inline auto isGeThread(long tid) -> bool {
+  std::string path = "/proc/self/task/" + std::to_string(tid) + "/comm";
+  char name[32] = {};
+  if(FILE* file = std::fopen(path.c_str(), "r")) {
+    if(!std::fgets(name, sizeof(name), file)) name[0] = 0;
+    std::fclose(file);
+  }
+  std::string text = name;
+  while(!text.empty() && (text.back() == '\n' || text.back() == ' ')) text.pop_back();
+  return text == "psp-ge-thread";
+}
+
+//The GE's own thread's ID; 0 while there's none.
 inline auto geThreadId() -> long {
   long found = 0;
   if(DIR* folder = opendir("/proc/self/task")) {
@@ -85,15 +98,7 @@ inline auto geThreadId() -> long {
       char* end = nullptr;
       long tid = std::strtol(entry->d_name, &end, 10);
       if(end == entry->d_name || *end) continue;
-      std::string path = std::string("/proc/self/task/") + entry->d_name + "/comm";
-      char name[32] = {};
-      if(FILE* file = std::fopen(path.c_str(), "r")) {
-        if(!std::fgets(name, sizeof(name), file)) name[0] = 0;
-        std::fclose(file);
-      }
-      std::string text = name;
-      while(!text.empty() && (text.back() == '\n' || text.back() == ' ')) text.pop_back();
-      if(text == "psp-ge-thread") found = tid;
+      if(isGeThread(tid)) found = tid;
     }
     closedir(folder);
   }
@@ -124,12 +129,14 @@ struct Placement {
   }
   //Each frame, on the emulation thread: the GE's thread on the fastest core it may have, this thread on the next.
   //False where nothing could be placed (no GE thread, fewer than two ranked cores, or every core refused it): this
-  //thread then pinned as it would be without the placement. The GE's thread looked for again every 60 frames (one made
-  //as a game loads, or gone as it unloads).
+  //thread then pinned as it would be without the placement. The GE's thread looked for every 60 frames while there's
+  //none (one made as a game loads), and at once where the one found is gone or its ID is another thread's now (gone as
+  //a game unloads, or the option switched off and on).
   auto place() -> bool {
     geCore = emulationCore = -1;
     if(cores.size() < 2) return false;
-    if(frames++ % 60 == 0) geTid = geThreadId();
+    if(geTid && !isGeThread(geTid)) geTid = 0, frames = 0;
+    if(!geTid && frames++ % 60 == 0) geTid = geThreadId();
     if(!geTid) return false;
     for(int cpu : cores) {
       int error = pin(geTid, {cpu});
@@ -137,7 +144,7 @@ struct Placement {
         geCore = cpu;
         break;
       }
-      if(error == ESRCH) return geTid = 0, false;
+      if(error == ESRCH) return geTid = 0, frames = 0, false;
       refused++;
     }
     if(geCore < 0) return false;

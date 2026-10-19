@@ -245,6 +245,22 @@ jobs:
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report-release.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
+      # The GE thread's tests again with every test machine's GE on its thread (PHOBOS_TESTS_GE_THREAD=On, as the
+      # option "GE Thread" On): the thread's own groups, the GPU's with it, the GE's times (the PSP's timing's with
+      # the thread among them) and the measured rounds' GE time, the versions, the GE's looks polled. The objects the
+      # run above built, linked again.
+      - name: Run the GE thread's tests with the thread on
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PHOBOS_TESTS_MODE: release
+          PHOBOS_JOBS: 4
+          PSP_GPU_ON_CPU: 1
+          PHOBOS_TESTS_GE_THREAD: "On"
+          PHOBOS_TESTS_ONLY: "ge on its own thread|with the GE on its thread|ge time|GE time|ge versions|looks polled"
+          PHOBOS_TESTS_REQUIRE: vulkan, programs, ge-round6, ge-round8, ge-round9, ge-round10
+        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-on.log"
+
       - name: Keep the groups' results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -261,6 +277,9 @@ jobs:
           at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
           last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
           echo "- tests/psp, release build, at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+          last=$(tail -1 "$RUNNER_TEMP/suite-on.log" 2> /dev/null || true)
+          echo "- tests/psp, release build, the GE thread's tests with the thread on: ${last:-no output: they did not run}" \
+            >> "$GITHUB_STEP_SUMMARY"
 
   # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
   # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
