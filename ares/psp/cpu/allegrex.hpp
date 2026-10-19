@@ -74,18 +74,20 @@ struct Allegrex {
 
   //With the PSP's GE timing, the tags of the CPU's two caches, so its traffic with RAM can be counted (the GE's
   //contention with the CPU: Kernel::geContend(), docs/psp-core.md part 113): each 16 KiB of 64-byte lines (round 8's
-  //cpu-memory: a chain of pointers 64 bytes apart hits within 16 KiB and misses every step over 32 KiB), in 128 sets
-  //of two ways, the least recently used replaced (the ways aren't measured: two, as a MIPS core of its kind has). A
-  //data line's key is its address's bits 6-31, so a cached mirror's lines and an uncached mirror's never meet (an
-  //instruction line's, codeKey()); Dirty marks a data line a store has written since it came in. Compiled code looks a
-  //line up in its set's most recently used way (recompiler.cpp and recompiler-memory.cpp, in blocks compiled for a
-  //system started with the PSP's timing alone: "Fast" compiles none of it): the instructions' lines as a block starts
-  //and as its code crosses into the next line, and each load's or store's. The rest is dataCacheMiss()'s and
+  //cpu-memory: a chain of pointers 64 bytes apart hits within 16 KiB and misses every step over 32 KiB), in 128 sets of
+  //two ways, the least recently used replaced (the ways aren't measured: two, as a MIPS core of its kind has). A data
+  //line's key is its address's bits 6-31 (an instruction line's, codeKey()), so a cached mirror's lines and an uncached
+  //mirror's never meet, nor the two cached mirrors' (0x0000'0000 on and 0x8000'0000 on: the same memory's line can be
+  //held, and counted, twice); Dirty marks a data line a store has written since it came in. Compiled code looks a line
+  //up in its set's most recently used way (recompiler.cpp and recompiler-memory.cpp, in blocks compiled for a system
+  //started with the PSP's timing alone: "Fast" compiles none of it): the instructions' lines as a block starts and as
+  //its code crosses into the next line, and each load's or store's. The rest is dataCacheMiss()'s and
   //instructionCacheMiss()'s: the other way, else a miss, the line read in (counted where it's RAM's) and the line it
-  //replaces written back if dirty; an uncached access is counted as one of its own. The interpreter's instructions and
-  //accesses, and those the recompiler leaves to it (misaligned, hardware's, stores to compiled code, a delay slot's
-  //line), aren't counted. VRAM's and the scratchpad's lines are held like RAM's but not counted: telling them apart as
-  //compiled code runs would cost what the look itself costs.
+  //replaces written back if dirty; an uncached access is counted as one of its own. Hardware's accesses and stores to
+  //compiled code are looked up before they leave compiled code (hardware's addresses an uncached mirror's, not RAM's:
+  //not counted); a misaligned access leaves before the look, and a delay slot's line isn't looked up. The interpreter's
+  //instructions and accesses aren't counted at all. VRAM's and the scratchpad's lines are held like RAM's but not
+  //counted: telling them apart as compiled code runs would cost what the look itself costs.
   struct Cache {
     static constexpr u32 Sets = 128, Dirty = 0x8000'0000, Empty = 0x7fff'ffff;  //(no line's key is Empty)
     bool enabled = false;  //the system started with the PSP's GE timing (System::power())

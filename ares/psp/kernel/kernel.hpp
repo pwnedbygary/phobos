@@ -367,7 +367,15 @@ struct Kernel {
     u64 period = 0;          //the time between the last two
     u32 turns = 0;           //turns of that time in a row since
     u32 wait = 0;            //more to wait for after a proof that failed
+    //with the PSP's GE timing, the CPU's caches' counts (Allegrex::Cache: data lines read in, written back, uncached
+    //accesses, instruction lines read in) when the program was last there, and what the turn before moved; and the
+    //syscalls made by then (syscalls), and in the turn before
+    u64 counts[4] = {}, moved[4] = {};
+    u64 called = 0;
+    u32 calls = 0;
   } spin;
+  u64 syscalls = 0;  //made since power on (spins.cpp's turns count theirs; not saved)
+  auto spinCounts(u64 (&counts)[4]) const -> void;
   bool spins = true;   //(tests turn it off to compare)
   bool going = false;  //a go of the CPU's is under way (run()): its limit and count are what a skip works from
   u64 spun = 0;        //turns skipped
@@ -1128,26 +1136,29 @@ struct Kernel {
   mutable u64 gePipeAt = 0; //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
                             //a list's, from one of its runs to the next)
   //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended):
-  //the GE's busy window so far (its cycles passed, the CPU's instructions in them, the lines its caches moved as
-  //GE::Cost weighs them and their stalls, in the PSP's CPU cycles, and the cycles it has pushed the GE back), the part
-  //of a cycle still to push, and the CPU's caches' counts as last seen (Allegrex::Cache: the data cache's lines read
-  //in, written back and uncached accesses, the instruction cache's lines read in). Then, for the runner's report alone
-  //(not saved), the cycles the GE was busy beside the CPU since power on and the lines moved in them. (Mutable, as is
-  //gePipeAt: with the GE on its thread, geFold() takes the stretches that waited.)
+  //the GE's busy window so far, in whole counts, so that its sums come out the same however its stretches are grouped
+  //(a spin's skipped turns as one: spins.cpp): its cycles passed, the CPU's instructions in them, the lines its caches
+  //read in, wrote back and reached uncached, and the cycles it has pushed the GE back; and the CPU's caches' counts as
+  //last seen (Allegrex::Cache: the data cache's lines read in, written back and uncached accesses, the instruction
+  //cache's lines read in). Then, for the runner's report alone (not saved), the cycles the GE was busy beside the CPU
+  //since power on and the lines moved in them. (Mutable, as is gePipeAt: with the GE on its thread, geFold() takes the
+  //stretches that waited.)
   struct GeWindow {
-    f64 passed = 0, instructions = 0, lines = 0, stalls = 0, pushed = 0;
+    u64 passed = 0, instructions = 0, fills = 0, writebacks = 0, uncached = 0, pushed = 0;
   };
   mutable GeWindow geWindow;
-  mutable f64 geContendCarry = 0;
   mutable u64 geCacheSeen[4] = {};
   mutable f64 geBusyCycles = 0, geBusyLines = 0;
   auto geContend(u64 from, u64 to, u64 instructions) -> void;
   auto geContendThreaded(u64 from, u64 to, u64 instructions) -> void;
-  auto geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4]) const -> void;
+  auto geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4], bool signal) const -> void;
+  auto geContendDue(const GeWindow& window) const -> u64;
+  auto geContendBound(const GeWindow& window) const -> bool;
   auto geSeeCaches() -> void;
   auto geCacheCounts(u64 (&counts)[4]) const -> void;
   //With the GE on its thread (GeRun, below), a stretch ended while runs handed over aren't folded yet: kept, with its
-  //instructions, the caches' counts as it ended and the last run handed over before it, and taken in turn as geFold()
+  //instructions, the caches' counts as it ended, whether a SIGNAL was due then, and the last run handed over before
+  //it, and taken in turn as geFold()
   //folds that run, from the times the fold leaves, as the synchronous GE takes it after the run's geTime(); the list's
   //clocks by kind, which the GE thread gives with each run, as the last folded left them (in the kernel's GE's
   //ramClocks and allClocks, which draws nothing while the thread does). Each stretch numbered in turn (geStretches made
@@ -1156,6 +1167,7 @@ struct Kernel {
   struct GeStretch {
     u64 from, to, instructions;
     u64 caches[4] = {};
+    bool signal = false;
     u64 run = 0, number = 0;
   };
   mutable std::deque<GeStretch> geStretches;

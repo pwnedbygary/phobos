@@ -55,7 +55,9 @@ the runner refuses anything else):
 - `--save-state-at F FILE` — the machine's state at frame `F`, as a save-state file
 - `--load-state FILE` — start from a save-state file (the game booted, then the state
   loaded at once)
-- `--interpreter` — run the CPU's interpreter (the recompiler is the default)
+- `--interpreter` — run the CPU's interpreter (the recompiler is the default). With `--ge-timing psp` its loads,
+  stores and instructions aren't counted in the CPU's caches, so the GE takes less time beside it than beside the
+  recompiler, and a program's GE interrupts may come at other times (docs/psp-core.md, part 113)
 - `--spin-skip on|off` — skip through loops that only poll (docs/psp-core.md, parts 91 and 105), every
   register, byte and cycle as running them gives: on by default, off with `--ge-profile` unless
   given, so a profile counts every poll as the PSP's plugin records them; on and off, a run

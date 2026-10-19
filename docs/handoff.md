@@ -147,12 +147,25 @@ place; older layouts load with the caches empty).
   10's 680 list-pattern pairs within 5.7% at the median (15.5% with the term held at none); round 10b's 144 within 1.0%
   (polling and work before x1.00, a writer beside list A x1.91 against 2.02, beside the untextured list x1.00).
 - **The gate** (part 113's table, per frame and per list): Chains of Olympus −5.0% to +0.3%, Ghost of Sparta −7.1% to
-  −2.3%, Killzone −12.3% and −10.9% to −9.9% and −8.4%, Super Monkey Ball −29.6% to −20.6% (its exception kept, now with
+  −2.2%, Killzone −12.3% and −10.9% to −9.9% and −8.4%, Super Monkey Ball −29.6% to −20.6% (its exception kept, now with
   a limit, −21%), Activision Hits' copyright screen −5.8% as it was, its menu +2.2% and +1.9% to +6.7% and +6.4% (its
   first list −10.6% to −4.4%; the second and third, +48.5% and +27%, as they were). Lists 10 of 15 within 15%.
-- **Open, the owner's**: whether Activision Hits' menu frame moving away (+2.2% to +6.7%, the first list now nearly
-  right) is acceptable; and whether round 10c should time list H's kind (Super Monkey Ball's small trilinear CLUT4
-  strips, predicted about 16% short beside the CPU's patterns) taken apart, the rest of its gap.
+- **The owner's decisions** (2026-10-19, 11:08): Activision Hits' menu frame at +6.7% accepted; the host cost accepted;
+  merge after the review and checks; round 10c (draft PR #280, e15d2cff's) times list H's kind (Super Monkey Ball's
+  small trilinear CLUT4 strips, predicted about 16% short beside the CPU's patterns) taken apart, its refit to follow.
+- **The review** (18de2dd5 at `0c4baeb4f`: approve with should-fixes): "Fast" exact and free, the caches deterministic,
+  states mid-list carried on, fits and gate reproduced. Fixed: the spin skip counts each skipped turn's lines as the
+  turn before moved, and skips no turns the GE would finish part way through (test: the GE polled with a turn reading
+  an uncached word, or missing three lines; skip on and off the same); the window's sums are whole counts and its push
+  whole cycles, so a skip's one stretch adds up as its turns would (the floats' last bits differed), and with lines in
+  play no turns are skipped where the push could rise and fall within them (more than one syscall a turn, or the
+  window's time changing kind); a push moves `geReachAt` only with a SIGNAL due (as master did; `geTime()` works it
+  out otherwise). Documented: the interpreter isn't counted, so under the PSP's
+  timing `--interpreter` gives the GE other times than the recompiler (part 113, the runner's help). The cheap win
+  (the data look's add) doesn't apply: `Allegrex` starts with its vtable pointer.
+- **#277 lands after this** (b331a6e1 ports its threaded GE onto it): each stretch must keep its instructions and the
+  caches' four count deltas as it ends; the pushes must agree with the folds; states save the drawing GE's clocks by
+  kind; the measured rounds keep `KernelMachine::pspTiming()` (part 113, "Not yet").
 - **Host cost** (the emulation thread's instructions a frame on the Mac, the PSP's timing both sides; part 113's
   tables): the counting alone (master's emulation exactly) +5.8% (Super Monkey Ball) to +16.7% (Activision Hits'
   copyright screen) on the gate's scenes; on the library check's polling games from boot +0.8% (Dragon Ball Z) to +39.5%
@@ -162,8 +175,9 @@ place; older layouts load with the caches empty).
   compare, the kernel's sums skipped while the GE is idle; measured and left, skipping VRAM's and the scratchpad's
   looks (0 to 2.2% of them). The RP6 run (master against the branch, the scenes and Dante's Inferno, Burnout Dominator
   and Need for Speed: Shift) is the coordinator's: `smba-rp6.sh` in the runner-android scratch folder.
-- **Not yet**: the kernel's cache calls and the `cache` instruction; the CPU's traffic with VRAM; spins without syscalls
-  pay a data look a turn (the spin skip's widening, its own pull request).
+- **Not yet**: the kernel's cache calls and the `cache` instruction; the CPU's traffic with VRAM; the CPU slowed beside
+  the GE; the interpreter counted alike; spins without syscalls pay a data look a turn (the spin skip's widening, its
+  own pull request).
 
 ## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in), the gate against the captures by the whole frame, a SIGNAL's interrupt at its time — 2026-10-18
 
