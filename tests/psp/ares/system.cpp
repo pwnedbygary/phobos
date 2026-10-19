@@ -661,10 +661,10 @@ auto states(const fs::path& programs) -> void {
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
     //deactivated (part 37). Layouts 15 and 16 load with the message-dialog abort counters defaulted (part 42).
     //Each older layout is refused by its header, before anything is touched (even the compiled code, which any load
-    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 34,
-    //and takes it out of this list), and 35, past this one. 27, 28, 31, 32 and 33 (parts 87, 88, 82, 95 and 108)
-    //load.
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 35}) {
+    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 35,
+    //and takes it out of this list), and 36, past this one. 27, 28, 31, 32, 33 and 34 (parts 87, 88, 82, 95, 108 and
+    //106) load.
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 36}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};

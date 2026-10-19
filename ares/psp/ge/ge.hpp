@@ -849,18 +849,18 @@ struct GE {
     static constexpr u64 EnqueueCycles = 5200, StallCycles = 510;
     //The CPU beside the GE (Kernel::geContend()): a list's reads of RAM, of each kind [the front end's vertices, its
     //words, the back end's texels, transfers], make its work take 1 + Contention[kind] x that kind's share of its
-    //clocks x f as long, f the share of the time the CPU works beside it as a PSP's would: CpuScale times the emulated
-    //CPU's (the PSP's CPU takes 3.9 to 9.1 times as long a frame in the captures), at most all of it; a stretch of
-    //fewer than PollInstructions between syscalls is polling, not work (a loop waiting reads the cache). Round 8's
-    //cpu-contention: a thread streaming RAM beside the GE made its RAM-textured drawing 2.12 times as long; round 10's
-    //time-contention, by kind: vertices 0.20, words 0.16, texels 0.77, transfers 0.34 times the share for a thread
-    //streaming RAM flat out (contention10.py). None till the CPU's RAM traffic is known: the PSP's GE draws beside a
-    //CPU busy with arithmetic or the cache as fast as alone, and a game's CPU waiting without syscalls (Activision
-    //Hits' menu) looks to the emulated CPU as busy as one working (part 106): Contended false, the kernel's part not
-    //built.
-    static constexpr f64 Contention[4] = {0, 0, 0, 0};
-    static constexpr f64 CpuScale = 5;
-    static constexpr u64 PollInstructions = 300;
+    //clocks x u as long, u the CPU's traffic with RAM while the GE is busy as a share of a thread streaming RAM flat
+    //out's: the lines its caches move (Allegrex::Cache: each data or instruction line read in one, each written back
+    //WritebackLine of one, each uncached access UncachedLine) over the time a PSP's CPU would take for its
+    //instructions and their stalls (InstructionCycles an instruction, FillCycles a line read in, WritebackCycles a line
+    //written back, UncachedCycles an uncached access) or the time passed if longer, against streaming's StreamLines
+    //lines a CPU cycle. Round 8's cpu-contention: a thread streaming RAM beside the GE made its RAM-textured drawing
+    //2.12 times as long; round 10's time-contention and its patterns' pace, round 10b's polling, work before the list
+    //and a writer beside it (contention11.py, docs/psp-core.md part 113). The PSP's GE draws beside a CPU busy with
+    //arithmetic, the cache or polling as fast as alone: a loop waiting on a cached word moves no lines.
+    static constexpr f64 Contention[4] = {0.34, 0.27, 1.16, 0.57};
+    static constexpr f64 StreamLines = 1 / 164.4, WritebackLine = 0, UncachedLine = 0.2;
+    static constexpr f64 InstructionCycles = 1.41, FillCycles = 79, WritebackCycles = 9, UncachedCycles = 40;
     static constexpr bool Contended = Contention[0] > 0 || Contention[1] > 0 || Contention[2] > 0 || Contention[3] > 0;
   };
   //The list's clocks so far that read RAM, by Cost::Contention's kinds, and all of them (pipeStart() clears them; with
@@ -904,6 +904,7 @@ struct GE {
   //A run's end (words: run()'s count): the front end's work in hand, done; what it has handed on goes on being drawn,
   //into the list's next run (Kernel::geResume()).
   auto pipeStop(u64 words) -> void {
+    ramRead(1, f64(words - pipe.words) * Cost::Command);  //(the words read since the last item: a list of NOPs' all)
     pipe.front += pipe.pending + f64(words - pipe.words) * Cost::Command + pipe.vertices;
     pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
   }

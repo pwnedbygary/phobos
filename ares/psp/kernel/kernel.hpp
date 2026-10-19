@@ -1125,25 +1125,40 @@ struct Kernel {
   mutable u64 geReachAt = 0;  //when (cycles) a PSP's GE's front end would have got through what it was last given
   bool geSignalDue = false; //with the PSP's timing, the list met a SIGNAL, its interrupt taken from geReachAt on, the
                             //GE waiting there (geRun())
-  u64 gePipeAt = 0;         //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
+  mutable u64 gePipeAt = 0; //with the PSP's timing, when (cycles) the times of the GE's pipeline count from (GE::Pipe:
                             //a list's, from one of its runs to the next)
-  //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended
-  //alone, and not saved till then): the GE's busy window so far, its cycles passed and those the CPU worked beside
-  //it, the push still owed (a part of a cycle), and the instructions of the CPU's stretch under way.
-  mutable f64 geWindowPassed = 0, geWindowWorked = 0, geContendCarry = 0;
-  u64 geStretch = 0;
-  auto geContend(u64 from, u64 to, bool worked) -> void;
-  auto geContendNow(u64 from, u64 to, bool worked, bool signal) const -> void;  //(geContend()'s, a SIGNAL due or not)
-  auto geStretchEnded(u64 instructions, bool ended) -> void;
-  //With the GE on its thread (GeRun, below), a stretch ended while runs handed over aren't folded yet: kept, with
-  //whether a SIGNAL was due then and the last run handed over before it, and taken in turn as geFold() folds that run,
-  //from the times the fold leaves, as the synchronous GE takes it after the run's geTime(); the list's clocks by kind,
-  //which the GE thread gives with each run, as the last folded left them (ge.ramClocks, allClocks, threaded).
-  //Each stretch numbered in turn (geStretches made so far), so that a go's limit worked out from the bound is worked out
-  //exactly from the times as they were when it was, the stretches after it left out (GeLimit::stretches).
-  struct GeStretch { u64 from, to; bool worked, signal; u64 run, number; };
+  //With the PSP's timing, the CPU beside the GE (geContend(): GE::Cost::Contention; built with GE::Cost::Contended):
+  //the GE's busy window so far (its cycles passed, the CPU's instructions in them, the lines its caches moved as
+  //GE::Cost weighs them and their stalls, in the PSP's CPU cycles, and the cycles it has pushed the GE back), the part
+  //of a cycle still to push, and the CPU's caches' counts as last seen (Allegrex::Cache: the data cache's lines read
+  //in, written back and uncached accesses, the instruction cache's lines read in). Then, for the runner's report alone
+  //(not saved), the cycles the GE was busy beside the CPU since power on and the lines moved in them. (Mutable, as is
+  //gePipeAt: with the GE on its thread, geFold() takes the stretches that waited.)
+  struct GeWindow {
+    f64 passed = 0, instructions = 0, lines = 0, stalls = 0, pushed = 0;
+  };
+  mutable GeWindow geWindow;
+  mutable f64 geContendCarry = 0;
+  mutable u64 geCacheSeen[4] = {};
+  mutable f64 geBusyCycles = 0, geBusyLines = 0;
+  auto geContend(u64 from, u64 to, u64 instructions) -> void;
+  auto geContendThreaded(u64 from, u64 to, u64 instructions) -> void;
+  auto geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4]) const -> void;
+  auto geSeeCaches() -> void;
+  auto geCacheCounts(u64 (&counts)[4]) const -> void;
+  //With the GE on its thread (GeRun, below), a stretch ended while runs handed over aren't folded yet: kept, with its
+  //instructions, the caches' counts as it ended and the last run handed over before it, and taken in turn as geFold()
+  //folds that run, from the times the fold leaves, as the synchronous GE takes it after the run's geTime(); the list's
+  //clocks by kind, which the GE thread gives with each run, as the last folded left them (in the kernel's GE's
+  //ramClocks and allClocks, which draws nothing while the thread does). Each stretch numbered in turn (geStretches made
+  //so far), so that a go's limit worked out from the bound is worked out exactly from the times as they were when it
+  //was, the stretches after it left out (GeLimit::stretches).
+  struct GeStretch {
+    u64 from, to, instructions;
+    u64 caches[4] = {};
+    u64 run = 0, number = 0;
+  };
   mutable std::deque<GeStretch> geStretches;
-  mutable f64 geRamClocks[4] = {}, geAllClocks = 0;
   u64 geStretchesMade = 0;
   //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
   //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
@@ -1164,6 +1179,7 @@ struct Kernel {
     u64 pipeAt = 0, words = 0;   //(with the PSP's timing)
     u64 doneAt = 0, reachAt = 0;  //(folded, with the PSP's timing: geDoneAt and geReachAt as it left them)
     u64 stretch = ~0ull;          //(folded: ~0 the run itself; else the number of a stretch taken after it, GeStretch)
+    u64 caches[4] = {};           //(with the PSP's timing: the CPU's caches' counts as it ended, geCacheCounts())
   };
   mutable std::deque<GeRun> geRuns, geFolded;
   mutable u64 geFoldedRun = 0;  //the last run folded
@@ -1187,7 +1203,6 @@ struct Kernel {
   mutable bool geBounded = false;
   mutable GeLimit geLimit{};
   std::vector<GeLimit> geLimits;  //the go's limits from the bound, not yet worked out exactly
-  u64 goOffset = 0;               //the go's instructions run before the CPU's run under way (run(): a go's parts)
   u64 goExact = ~0ull;            //the least of the go's limits known exactly (in the go's instructions)
   auto geExactLimit(const GeLimit& limit) -> u64;
   auto geIndex(u32 id) const -> s32;
@@ -2204,7 +2219,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 34;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 35;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

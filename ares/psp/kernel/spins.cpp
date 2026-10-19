@@ -161,7 +161,7 @@ auto Kernel::spinSkip() -> void {
   if constexpr(GE::Cost::Contended) if(ge.thread && !geLimits.empty()) {
     for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
     geLimits.clear(), geFolded.clear();
-    cpu.runLimit = goExact - goOffset;
+    cpu.runLimit = goExact;
   }
   //the skipped turns' blocks all end before the go's limit: the last at the count the anchor's syscall ends on
   u64 room = cpu.runLimit > counted + 1 ? cpu.runLimit - counted - 1 : 0;
@@ -169,9 +169,9 @@ auto Kernel::spinSkip() -> void {
   u64 turns = room / spin.period - SpinMargin, skipped = turns * spin.period;
   //a list's FINISH (or, with the PSP's GE timing, its SIGNAL) taken at the first system call once it's due: none comes
   //by within the turns skipped
-  //(with the CPU's work beside the GE counted, the time exactly: skipped turns end no stretches of their own, run ones
-  //do, GE::Cost::Contended, so a skip must be the synchronous GE's; the GE thread waited for where the bound doesn't
-  //decide)
+  //(with the CPU's work beside the GE counted, the time exactly: skipped turns end one stretch for all of them, run
+  //ones one each, GE::Cost::Contended, so a skip must be the synchronous GE's; the GE thread waited for where the
+  //bound doesn't decide)
   auto due = [&](u64 bound, const u64& at) {
     if(bound > cycles + skipped) return false;
     if constexpr(GE::Cost::Contended) geFold(true), bound = at;
@@ -196,6 +196,7 @@ auto Kernel::spinSkip() -> void {
   counted += skipped;
   cpu.instructionsRun += skipped;
   spun += turns;
+  if(gePspTiming) geContend(cycles - skipped, cycles, skipped);  //(the turns' own accesses go uncounted)
 }
 
 //One turn on the shadow from the CPU as it is, after the anchor's call: true if it comes back to the anchor with every

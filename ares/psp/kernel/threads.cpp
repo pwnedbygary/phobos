@@ -343,7 +343,7 @@ auto Kernel::idle(u64 end) -> bool {
   if((geFinishDue || geSignalDue) && !geRuns.empty()) geFold(true);
   u64 from = cycles;
   cycles = std::min(end, cycles + untilNextEvent());
-  if constexpr(GE::Cost::Contended) if(gePspTiming) geContend(from, cycles, false);
+  if(gePspTiming) geContend(from, cycles, 0);
   events();
   return true;
 }

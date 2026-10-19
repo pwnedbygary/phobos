@@ -112,14 +112,10 @@ def shares(terms, ours, coef):
     return out
 
 
-def main(argv):
-    if len(argv) != 3:
-        print(__doc__)
-        return 2
-    psp, terms, ours = argv
-    grid = decode(os.path.join(psp, "time-contention.bin"), "time-contention")
+def coefficients():
+    """the model's terms: GE::Cost's as the source has them, or a ge-fit.py output's (GE_COEF)"""
     coef = {}
-    fit_out = os.environ.get("GE_COEF")  #(a ge-fit.py output's coefficients, else GE::Cost's as the source has them)
+    fit_out = os.environ.get("GE_COEF")
     source = open(os.path.join(HERE, "..", "..", "ares", "psp", "ge", "ge.hpp"), encoding="utf-8").read()
     import re
     import itertools
@@ -144,7 +140,16 @@ def main(argv):
             m = re.match(r"\s+([A-Za-z0-9\[\]]+)\s+(-?[0-9.]+)", line)
             if m and not line.startswith("  time-"):
                 coef[m.group(1)] = float(m.group(2))
-    rho = shares(terms, ours, coef)
+    return coef
+
+
+def main(argv):
+    if len(argv) != 3:
+        print(__doc__)
+        return 2
+    psp, terms, ours = argv
+    grid = decode(os.path.join(psp, "time-contention.bin"), "time-contention")
+    rho = shares(terms, ours, coefficients())
     for bus in sorted({k[3] for k in grid}):
         alone = {p: grid.get((0, p, 0, bus)) for p in range(1, 18)}
         stream = alone[3]

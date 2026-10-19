@@ -355,7 +355,7 @@ auto round6Files() -> std::filesystem::path {
   std::filesystem::create_directories(game);
   KernelMachine m;
   m.system.recompiler.enabled = true;
-  m.kernel.gePspTiming = true;  //(the GE timed as the PSP's: measured6.cpp's GE time and driver statuses)
+  m.pspTiming();  //(the GE timed as the PSP's: measured6.cpp's GE time and driver statuses)
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
   bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
@@ -369,9 +369,9 @@ auto round6Files() -> std::filesystem::path {
   return round6Kept->path;
 }
 
-//Rounds 8's, 9's and 10's GE timing files as this core writes them, for measured8.cpp's comparisons with the owner's
-//PSP, the same way: the program's round alone (line, its last file last, within frames) once, with the GE timed as the
-//PSP's.
+//Rounds 8's, 9's, 10's and 10b's GE timing files as this core writes them, for measured8.cpp's comparisons with the
+//owner's PSP, the same way: the program's round alone (line, its last file last, within frames) once, with the GE timed
+//as the PSP's.
 template<size_t N>
 static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* last, const TimingFile8 (&files)[N],
                        const char* manifest, u32 frames = 20000) -> std::filesystem::path {
@@ -383,7 +383,7 @@ static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* 
   std::filesystem::create_directories(game);
   KernelMachine m;
   m.system.recompiler.enabled = true;
-  m.kernel.gePspTiming = true;
+  m.pspTiming();
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
   bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
@@ -402,7 +402,7 @@ static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* 
   }
   return kept->path;
 }
-static std::unique_ptr<HostFolder> round8Kept, round9Kept, round10Kept;
+static std::unique_ptr<HostFolder> round8Kept, round9Kept, round10Kept, round10bKept;
 auto round8Files() -> std::filesystem::path {
   return timedRound(round8Kept, GeRound8Line, "cpu-clocks.bin", timingFiles8, "manifest8.txt");
 }
@@ -411,6 +411,9 @@ auto round9Files() -> std::filesystem::path {
 }
 auto round10Files() -> std::filesystem::path {  //(its CPU contention last, as long as "psp measure" gives it)
   return timedRound(round10Kept, GeRound10Line, "time-contention2.bin", timingFiles10, "manifest10.txt", 40000);
+}
+auto round10bFiles() -> std::filesystem::path {
+  return timedRound(round10bKept, GeRound10bLine, "time-placement.bin", timingFiles10b, "manifest10b.txt");
 }
 
 static auto pspMeasure() -> void {

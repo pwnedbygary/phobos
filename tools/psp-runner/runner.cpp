@@ -840,6 +840,7 @@ auto main(int argc, char** argv) -> int {
   if(psp.gpu) gpu = psp.gpu->statistics;
   u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
+  f64 geBusyCycles = psp.kernel.geBusyCycles, geBusyLines = psp.kernel.geBusyLines;  //(so too)
   //what ran, for the report, before unloading lets the renderer go
   std::string ranRenderer = psp.gpu ? (psp.gpu->fast ? "Vulkan (fast)" : "Vulkan") : "Software";
   std::string ranDevice = psp.gpu ? psp.gpu->backend->name() : "";
@@ -900,6 +901,13 @@ auto main(int argc, char** argv) -> int {
                 frames / std::max(elapsed - capturedSeconds, 1e-9));
   }
   if(staleCaptures) std::printf("stale captures: %u\n", staleCaptures);
+  if(auto& cache = psp.cpu.dataCache; cache.enabled && frames) {  //(the PSP's GE timing: Allegrex::Cache)
+    std::printf("caches: %.0f data lines a frame read in from RAM, %.0f written back, %.0f uncached accesses, %.0f "
+                "instruction lines read in; %.0f moved while the GE was busy, %.1f%% of the time\n",
+                double(cache.fills) / frames, double(cache.writebacks) / frames, double(cache.uncached) / frames,
+                double(psp.cpu.instructionCache.fills) / frames, geBusyLines / frames,
+                100 * geBusyCycles / (double(frames) * ares::PlayStationPortable::Kernel::VblankCycles));
+  }
   if(!geProfileFile.empty()) {
     std::printf("ge profile: %zu records, frames %u to %u%s (%.3f s of the PSP's time), %s\n", geProfile.records.size(),
                 geProfileFrom, geProfileTo, geProfileTo < frames ? ", where the program started again" : "",

@@ -34,6 +34,15 @@ struct KernelMachine {
     kernel.power();
   }
 
+  //The GE timed as the PSP's, as System::power() sets the option "GE Timing" "PSP": the kernel's timing, and the CPU's
+  //caches counted for the GE's time beside it (Allegrex::Cache); the GE on its thread or not as the machine has it
+  //(PHOBOS_TESTS_GE_THREAD: the same times either way). Before the program's code is compiled: blocks compiled before
+  //count nothing.
+  auto pspTiming() -> void {
+    kernel.gePspTiming = true;
+    system.dataCache.enabled = system.instructionCache.enabled = true;
+  }
+
   auto stub(const char* name) -> u32 {
     for(u32 n = 0; n < stubbed.size(); n++) if(stubbed[n] == name) return Stubs + n * 8;
     u32 address = Stubs + stubbed.size() * 8;

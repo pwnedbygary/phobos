@@ -520,9 +520,12 @@ auto System::threadGE(bool on) -> void {
     renderGE.takeState(ge.stateOf());
     std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut)), renderGE.paletteChanged();
     renderGE.vertexAddress = ge.vertexAddress, renderGE.indexAddress = ge.indexAddress;
-    //(the GE's timing, the PSP's: the list's pipeline as its last run left it, and the texels the GE's cache holds,
-    //the render GE's from here on, as the GE thread's records move them)
+    //(the GE's timing, the PSP's: the list's pipeline as its last run left it, the texels the GE's cache holds and
+    //the list's clocks by kind, the render GE's from here on, as the GE thread's records move them; the GE's clocks
+    //by kind a copy of them as the runs folded leave them, Kernel::geFold())
     renderGE.pipe = ge.pipe, renderGE.texelCache = ge.texelCache, renderGE.pspTiming = ge.pspTiming;
+    for(u32 kind : range(4)) renderGE.ramClocks[kind] = ge.ramClocks[kind];
+    renderGE.allClocks = ge.allClocks;
     renderGE.setThreads(threads), renderGE.setRenderer(renderer);
     geThreading = std::make_unique<GeThread>(ge, renderGE);
     geThreading->frameEnd = [this](const GeThread::Frame& frame) { frameEnded(frame); };
@@ -534,6 +537,8 @@ auto System::threadGE(bool on) -> void {
     kernel.geFold(true);  //(the runs handed over counted: the kernel's clock needs the thread for them)
     geThreading->drain();
     ge.pipe = renderGE.pipe, ge.texelCache = renderGE.texelCache;  //(the GE's timing back as the render GE left it)
+    for(u32 kind : range(4)) ge.ramClocks[kind] = renderGE.ramClocks[kind];
+    ge.allClocks = renderGE.allClocks;
     renderGE.settleAll();
     auto* renderer = renderGE.renderer;
     u32 threads = renderGE.drawing.threads;
@@ -619,6 +624,8 @@ auto System::power(bool reset) -> void {
   kernel.power();
   kernel.frontDialogs = dialogs;
   kernel.gePspTiming = gePspTiming;
+  cpu.dataCache.enabled = cpu.instructionCache.enabled = gePspTiming;  //(the CPU's traffic with RAM beside the GE:
+                                                                         //Allegrex::Cache)
   //The devices are the system's to give: the memory stick here, the disc in startProgram(); none left from the game
   //before.
   kernel.devices.clear();
@@ -760,15 +767,17 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
 //the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
-//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 34
-//since the PSP's GE timing keeps its state (part 106): the texels the GE's texture cache holds since a TEX_FLUSH,
-//when the GE's front end reaches a SIGNAL and whether one is due, and the list's pipeline (when its times count from,
+//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 35
+//since the PSP's GE timing keeps the CPU beside the GE (part 113): the lines the CPU's caches hold, the counts they made
+//that the GE's busy window hasn't seen yet, the window itself, the push it still owes and the list's clocks that read
+//RAM by kind; 34 since the PSP's GE timing keeps its state (part 106): the texels the GE's texture cache holds since a
+//TEX_FLUSH, when the GE's front end reaches a SIGNAL and whether one is due, and the list's pipeline (when its times count from,
 //when its front end and back end are done, its queue's items); 33 since the display keeps a frame buffer set for the next vertical blank,
 //shown from its start (part 108); 32
 //since an open memory stick file emptied as it was opened keeps the PSP's length of it and its host file's length,
 //the host file keeping the bytes past them until it's cut (part 95); 31 since the kernel keeps sceVaudio's hold on the
 //SRC channel, its buffers' format, effect and level control (part 82; 29 and 30 are skipped, other branches' layouts,
-//refused here: a branch with one of them landing after this renumbers its layout past 34 and updates
+//refused here: a branch with one of them landing after this renumbers its layout past 35 and updates
 //tests/psp/ares/system.cpp's list of refused versions); 28 since each module keeps the variables it imports, and the
 //address each holds now (part 88); 27 since a font holds the glyph it last read, and a
 //call may be reading one (part 87); 26 since the dialog keeps an aborted message's error and whether a list delete has
@@ -809,10 +818,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //list, 15 to 26 with no glyph held by a font nor being read into one, 15 to 27 with no module's imported variables
 //known (none linked, as those builds left them), 15 to 28 with sceVaudio holding nothing, 15 to 31 with no file
 //emptied as it was opened keeping its host file's bytes, 15 to 32 with no frame buffer waiting for a vertical blank,
-//and 15 to 33 with the GE's texture cache empty, no SIGNAL due and the PSP's GE timing's pipeline empty; 29 and
-//30 (other branches' layouts) and older layouts are refused.
+//15 to 33 with the GE's texture cache empty, no SIGNAL due and the PSP's GE timing's pipeline empty, and 15 to 34 with
+//the CPU's caches empty and the GE's busy window afresh; 29 and 30 (other branches' layouts) and older layouts are
+//refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 34;
+static constexpr u32 StateVersion = 35;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -822,14 +832,14 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28, 31 and
-//32 (the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent,
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28 and 31
+//to 34 (the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent,
 //sceJpeg not started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes
 //still to come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD
 //decryption set up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read
 //into one, no module's imported variables, sceVaudio holding nothing, no emptied file keeping its host file's bytes,
-//no texture in the GE's cache, as each layout lacks them): the owner's accuracy scenes were saved at 15 before part
-//42. Not 29 and 30, other branches' layouts.
+//no texture in the GE's cache, nothing in the CPU's caches, as each layout lacks them): the owner's accuracy scenes
+//were saved at 15 before part 42. Not 29 and 30, other branches' layouts.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

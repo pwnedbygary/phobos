@@ -112,6 +112,46 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   and Off against master); Auto with its handover both ways (design step 4), a stacked PR; the app's option once On
   beats Off on the RP6; Hot Wheels' remaining store cost.
 
+## PSP GE: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%) — 2026-10-19
+
+Branch `cursor/psp-cpu-traffic-2b67`, from master `08801ab60` (#269, part 106); draft PR #279. docs/psp-core.md, part
+113, has the evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: layout 35 (2,168 bytes more, at one
+place; older layouts load with the caches empty).
+- **The caches** (`Allegrex::Cache`): the PSP's CPU's data and instruction caches as tags (16 KiB each, 64-byte lines,
+  two ways, least recently used out), looked up by compiled code alone in blocks compiled for a system started with the
+  PSP's timing ("Fast" compiles none of it: its code master's): a load's or store's line in its set's most recent way
+  inline (seven instructions), an instruction's line as a block starts and at each line's first word (three on ARM64), a
+  block going on to itself skipping its own first line's look. Counted: RAM's lines read in, dirty ones written back,
+  uncached accesses, instruction lines.
+- **The term** (`Kernel::geContend()`, `GE::Cost`): over the GE's busy window, the lines moved as a share of a thread
+  streaming RAM flat out, over the longer of the time passed and the PSP's CPU's time for the window's instructions and
+  stalls, times round 10's slopes by the GE's kind of read (refitted with the model's own counts:
+  `tools/psp-measure/contention11.py`, vertices 0.34, words 0.27, texels 1.16, transfers 0.57, write-backs 0, an
+  uncached access 0.2 of a line); the window owes passed x slow / (1 + slow), each line costing the GE its share once.
+  The CPU's work before a list and polling cost it nothing. A first version charged a burst again in every later cycle
+  of the window (Super Monkey Ball looked like −14.5%); the writer test caught it.
+- **Against the PSP** (`contention11.py --core`, the core's own rounds 10 and 10b; `measured8`'s new group in CI): round
+  10's 680 list-pattern pairs within 5.7% at the median (15.5% with the term held at none); round 10b's 144 within 1.0%
+  (polling and work before x1.00, a writer beside list A x1.91 against 2.02, beside the untextured list x1.00).
+- **The gate** (part 113's table, per frame and per list): Chains of Olympus −5.0% to +0.3%, Ghost of Sparta −7.1% to
+  −2.3%, Killzone −12.3% and −10.9% to −9.9% and −8.4%, Super Monkey Ball −29.6% to −20.6% (its exception kept, now with
+  a limit, −21%), Activision Hits' copyright screen −5.8% as it was, its menu +2.2% and +1.9% to +6.7% and +6.4% (its
+  first list −10.6% to −4.4%; the second and third, +48.5% and +27%, as they were). Lists 10 of 15 within 15%.
+- **Open, the owner's**: whether Activision Hits' menu frame moving away (+2.2% to +6.7%, the first list now nearly
+  right) is acceptable; and whether round 10c should time list H's kind (Super Monkey Ball's small trilinear CLUT4
+  strips, predicted about 16% short beside the CPU's patterns) taken apart, the rest of its gap.
+- **Host cost** (the emulation thread's instructions a frame on the Mac, the PSP's timing both sides; part 113's
+  tables): the counting alone (master's emulation exactly) +5.8% (Super Monkey Ball) to +16.7% (Activision Hits'
+  copyright screen) on the gate's scenes; on the library check's polling games from boot +0.8% (Dragon Ball Z) to +39.5%
+  (Dante's Inferno, its loading streaming through memory). As players get it (the GE slowed too, so games wait and poll
+  differently): −4.2% to +16.8% on the scenes, −12.6% (Midnight Club) to +41.6% (Dante's Inferno) on the games. Cut: a
+  block going on to itself skipping its line's look (−4 to −6 points on the spinning scenes), ARM64's short instruction
+  compare, the kernel's sums skipped while the GE is idle; measured and left, skipping VRAM's and the scratchpad's
+  looks (0 to 2.2% of them). The RP6 run (master against the branch, the scenes and Dante's Inferno, Burnout Dominator
+  and Need for Speed: Shift) is the coordinator's: `smba-rp6.sh` in the runner-android scratch folder.
+- **Not yet**: the kernel's cache calls and the `cache` instruction; the CPU's traffic with VRAM; spins without syscalls
+  pay a data look a turn (the spin skip's widening, its own pull request).
+
 ## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in), the gate against the captures by the whole frame, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
@@ -134,7 +174,7 @@ pipeline: 28 and 16 a queued item; "Fast" 46 in all).
 - **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6, 8, 9 and 10, 3,373 timed lists, 5.0% at the
   median (70% within 10%, 90% within 25%), its own fixed point after three passes; 253 lists that moved more than 5%
   between the owner's two sessions held out (`--again`: placement, round 10's time-anchors2); the cases the model's
-  texels can't follow (perspective, turned, mipmaps) shown as checks; `measured8` tests rounds 8 and 9 in the core.
+  texels can't follow (perspective, turned, mipmaps) shown as checks; `measured8` tests rounds 8, 9 and 10 in the core.
 - **The default**: "PSP" wherever one is chosen (the core's option, any value but "Fast"; the kernel's flag; the app's
   setting and its native default; the runner's `--ge-timing`); the desktop builds take the core's. The app's text: the
   GE draws at the speed measured on a real PSP, so games pace close to a PSP's; "Fast" draws faster than a PSP. The

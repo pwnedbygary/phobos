@@ -1728,13 +1728,18 @@ static auto olderLayouts() -> void {
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd == truncation && truncation < truncationEnd && truncationEnd <= workingDirectory
               && workingDirectory < latched && latched + 13 <= geDone && geFinish == geDone + 8
-              && cached == geFinish + 1 && cached + 46 <= state.size();
+              && cached == geFinish + 1 && cached + 46 + 2168 <= state.size();
   CHECK(ordered, true);
   if(!ordered) return;
+  //Layouts before 35 have no CPU beside the GE: its window, the caches' tags, their counts unseen and the list's clocks
+  //by kind (2,168 bytes right after the GE's pipeline, after everything else changed here, so taken out of each older
+  //state first of all)
+  auto layout34 = state;
+  layout34.erase(layout34.begin() + cached + 46, layout34.begin() + cached + 46 + 2168);
   //Layouts before 34 have no texture cache's texels, front end's time, SIGNAL met nor pipeline (46 bytes with
   //its queue empty, right after the GE's time, after everything else changed here, so taken out of each older state
-  //first of all)
-  auto layout33 = state;
+  //next)
+  auto layout33 = layout34;
   layout33.erase(layout33.begin() + cached, layout33.begin() + cached + 46);
   //Layouts before 33 have no frame buffer set for the next vertical sync (13 bytes after the working folder and
   //before the GE's time, so taken out of each older state next, the GE's time moving back as much)
@@ -1785,6 +1790,8 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
+  CHECK(loads(34, layout34), true);
+  CHECK(loads(current, layout34), false);
   CHECK(loads(33, layout33), true);
   CHECK(loads(32, layout32), true);
   CHECK(loads(current, layout32), false);
@@ -1845,8 +1852,8 @@ static auto olderLayouts() -> void {
   CHECK(places[0] < places[1] && places[1] < latchedAt && latchedAt + 13 <= geAt, true);
   if(!(places[0] < places[1] && places[1] < latchedAt && latchedAt + 13 <= geAt)) return;
   //(the GE's time; its texture cache's texels, its front end's time, a SIGNAL met and its pipeline, the queue
-  //empty)
-  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 46);
+  //empty; the CPU beside it)
+  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 46 + 2168);
   twoFiles.erase(twoFiles.begin() + latchedAt, twoFiles.begin() + latchedAt + 13);
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption and lengths after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (truncationEnd - opened));
