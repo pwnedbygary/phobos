@@ -10324,8 +10324,8 @@ run), `lib-base` (the base's runs of the games that differ), `sheet-a*.png` (the
 
 (Brought into #269's branch as it was written on the unmerged branch `cursor/psp-round6-time-2b67` (`f12663c2d`), so the
 model #269 ports and refits (part 106) is described where its number says. The branch's own changes never merged: its
-state layout 28 and its model as the only timing. #269 puts the model behind the option "GE Timing", "Fast" by default,
-with layout 33; part 106 has what it changed since.)
+state layout 28 and its model as the only timing. #269 puts the model behind the option "GE Timing" (its default since
+2026-10-18, "Fast" the opt-in), with layout 34; part 106 has what it changed since.)
 
 On branch `cursor/psp-round6-time-2b67`, on part 75's (`cursor/psp-round6-fits-2b67`), with #221's branch
 (`cursor/psp-dialogs-2b67`, the dialogs, state layout 26) merged in. The time half of round 6 (part 75 is its pictures):
@@ -16934,25 +16934,27 @@ library's presses):
 them run); the review's runs, mutations and experiments in `~/phobos-work/scratch/review-268/`. Nothing was run on
 the RP6.
 
-## Part 106: the GE's time as the owner's PSP took it — its two ends and the queue between them, fitted to rounds 6, 8, 9 and 10, behind the option "GE Timing" (off by default); the gate against the owner's captures, list by list and frame by frame; a SIGNAL's interrupt at its time
+## Part 106: the GE's time as the owner's PSP took it — its two ends and the queue between them, fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in); the gate against the owner's captures, each scene by its whole frame; a SIGNAL's interrupt at its time
 
 On branch `cursor/psp-ge-time-2b67` (draft PR #269), from #266's branch (part 103, merged as `a014706e9`) on master
-`a8d5640f5` (part 101, #263), masters `dd63f4ffb` (parts 103 and 104, #266 and #267), `230c0a731` (part 105, #268)
-and `fe3deab82` (part 109, #272: the GE on a thread of its own; part 108, #271: the display's frame buffer for the
-next vertical sync; #273), `14e8065dc` (part 107, #270: round 8), `d428d91f9` (part 110, #276: round 9) and `46922a9d9`
-(part 112, #278: rounds 10 and 10b) merged in.
-The design the owner approved: the PSP's timing behind an option, off by default
-and switched in the app; on by default only once every captured scene is within 15%, none more than 15% too slow, and
-he holds this pull request until then. Sources: the owner's rounds 6, 8, 9 and 10 (parts 76, 107, 110 and 112; round
-10's evening ran rounds 2 to 9 again) and his captures (part 103, and Sunday's with round 9, part 110); uOFW's reading
-of the GE driver.
-Clean room: our own code; no PPSSPP or JPCSP. Save states: layout 34 (#271 took 33). The first version (part 76's
-model) was reviewed (changes needed: "Fast" paid for "PSP", a SIGNAL lost its lead at a stall update, and neither the
-refit nor the gate could be run again from the repository); the round after round 8 and that review merged
-master's GE thread, and this round refits the model with round 9 (the owner's "the refit with round 9": the texels
-fetched after a TEX_FLUSH, the wide rows, a vertex's floor, a palette's load) and pairs the gate's lists by their place
-in the frame; the round after (the owner's "the refit with round 10") fits round 10's lights by kind, CLUT32, the wide
-triangles into 16-bit and the CPU beside the GE, holding out the lists that moved between his two sessions.
+`a8d5640f5` (part 101, #263), masters `dd63f4ffb` (parts 103 and 104, #266 and #267), `230c0a731` (part 105, #268) and
+`fe3deab82` (part 109, #272: the GE on a thread of its own; part 108, #271: the display's frame buffer for the next
+vertical sync; #273), `14e8065dc` (part 107, #270: round 8), `d428d91f9` (part 110, #276: round 9) and `46922a9d9` (part
+112, #278: rounds 10 and 10b) merged in. The design the owner approved: the PSP's timing behind an option, off by
+default and switched in the app, on by default once every captured scene is within 15%, none more than 15% too slow. His
+decisions of 2026-10-18 (21:57 to 22:02): the PSP's timing becomes the default, "Fast" the opt-in ("the timing would be
+more accurate which is what I want this ethos to focus on"); each scene is judged by its whole frame (his bar since
+20:35), the lists reported; and Super Monkey Ball's frame (−29.6%, too fast) is a known exception for now, its fix (the
+CPU beside the GE) the next pull request's ("fixing SMBA is the priority even though we are moving on past it").
+Sources: the owner's rounds 6, 8, 9 and 10 (parts 76, 107, 110 and 112; round 10's evening ran rounds 2 to 9 again) and
+his captures (part 103, and Sunday's with round 9, part 110); uOFW's reading of the GE driver. Clean room: our own code;
+no PPSSPP or JPCSP. Save states: layout 34 (#271 took 33). The first version (part 76's model) was reviewed (changes
+needed: "Fast" paid for "PSP", a SIGNAL lost its lead at a stall update, and neither the refit nor the gate could be run
+again from the repository); the round after round 8 and that review merged master's GE thread, and this round refits the
+model with round 9 (the owner's "the refit with round 9": the texels fetched after a TEX_FLUSH, the wide rows, a
+vertex's floor, a palette's load) and pairs the gate's lists by their place in the frame; the round after (the owner's
+"the refit with round 10") fits round 10's lights by kind, CLUT32, the wide triangles into 16-bit and the CPU beside the
+GE, holding out the lists that moved between his two sessions.
 
 ### The model (`GE::Cost` and `GE::Pipe`, ge.hpp; draw.cpp; kernel/ge.cpp)
 
@@ -17076,23 +17078,31 @@ triangles into 16-bit and the CPU beside the GE, holding out the lists that move
 
 ### The option, and "Fast"'s cost
 
-- "GE Timing" (`gePspTiming`): "Fast", the default, is Sony's peaks as before, bit for bit; "PSP" is the model, in
-  doubles. The app: "PSP GE Timing" in Settings → Emulation and in the in-game PSP menu (Restart to Apply;
-  `PspStartSettings.geTiming`), taken as a game starts. The runner: `--ge-timing psp|fast`, in its report; a GE profile
-  made with `psp` carries flag 16 (Phobos's alone), which `geprof.py` reports.
+- "GE Timing" (`gePspTiming`): "PSP", the model, in doubles, is the default (the owner's decision of 2026-10-18,
+  21:57 to 22:02: "the timing would be more accurate which is what I want this ethos to focus on"); "Fast", the
+  opt-in, is Sony's peaks as before, bit for bit master's. A player who never touched the setting gets "PSP": the
+  core's option (`System::gePspTiming`, and any value but "Fast" is "PSP"), the kernel's own flag, the app's setting
+  ("PSP GE Timing", on, in Settings → Emulation and the in-game PSP menu; Restart to Apply;
+  `PspStartSettings.geTiming`; its text says the GE draws at the speed measured on a real PSP, so games pace close to
+  a PSP's, and that "Fast" draws faster than a PSP), the app's native default, and the runner (`--ge-timing psp|fast`,
+  psp unless given, in its report). The desktop builds don't offer the option: they take the core's. A GE profile made
+  with `psp` carries flag 16 (Phobos's alone), which `geprof.py` reports. The tests choose: the kernel test machine
+  ("Fast", master's, but where a test times the GE as the PSP's) and the ares system's checks ("Fast" after checking
+  the default is "PSP"; the GE thread's check tries both); the runner's test checks its default.
 - "Fast" no longer pays for "PSP": each drawing function tests the option once and makes master's own count
   (`owe()`), and the PSP's work is in functions of its own, out of line (`oweMeshTriangle()`, `owePlacedTriangle()`,
   `oweSprite()`); an untextured primitive skips the texels' arithmetic. The review had measured the first version's
   "Fast" at 4.5 to 7.7% more of the emulation thread's instructions a frame on Vulkan-fast (part 76's work for each
-  primitive, run under "Fast" too) and an out-of-line gate at about 0.5%. Now, against master `230c0a731` (the bench
-  runners, 300 frames on Vulkan-fast and 200 on Software, three rounds each, in turn): on Vulkan-fast 0.19% more
-  instructions a frame in Chains of Olympus (master's own spread 0.02%), 0.26% in Ghost of Sparta (0.09%) and 0.56%
-  in Super Monkey Ball (0.82%); on Software within master's spread (+0.18%, −0.16%, −0.08%, its spread 0.37 to
-  0.90%); the time a frame within the noise of a machine at a 1-minute load of 4 to 11. What's left on Vulkan-fast is
-  about 7 instructions a primitive: the option's test (a load and a branch) and, spread about, the drawing functions'
-  code round the out-of-line call (its ten arguments' set-up is all on the "PSP" side, but the compiler allocates and
-  inlines round it: the per-triangle function 268 instructions against master's 235, `primitive()` 135 against 84).
-  Each drawing function made a template for each timing, chosen once a PRIM, would take that away too.
+  primitive, run under "Fast" too, 210 to 220 instructions a primitive) and an out-of-line gate at about 0.5%. At
+  `af8028738` (round 10's refit), the review's second round measured "Fast" against master's runner at the merge base
+  (Vulkan-fast, late frames, 300 frames, both O3 with thin LTO): about **0.8% more instructions a frame**, Chains of
+  Olympus +0.75% (101.12 to 101.87 million; both sides' spread 0.04%), Ghost of Sparta +0.86% (298.42 to 301.00
+  million; spreads 0.07% and 0.04%), Super Monkey Ball +0.6% and +1.3% (too noisy at a load of 10 to 12 to read
+  closer): about 24 to 33 instructions a primitive, with no measurable change in the time a frame on the Mac (medians
+  −6% to +3%, noise). (Measured before the master merges and the refits, against `230c0a731`: 0.19% to 0.56%.) What's
+  left is the option's test and the drawing functions' code round the out-of-line call (its arguments' set-up is all on
+  the "PSP" side, but the compiler allocates and inlines round it). Each drawing function made a template for each
+  timing, chosen once a PRIM, would take that away: a named follow-up, now for the opt-in.
 - **With the GE on a thread of its own** (part 109's "GE Thread"): "Fast" is master's with the thread on too
   (`geTime()`'s threaded branch first, as master has it, the runs the thread counts folded as master folds them; the
   drawing paths' test of the option runs on the render GE, which "Fast" leaves at master's count). "PSP" keeps the GE
@@ -17101,7 +17111,9 @@ triangles into 16-bit and the CPU beside the GE, holding out the lists that move
   folded later, and its queue is carried from run to run. So "PSP" with "GE Thread" On is "PSP" with it Off, by
   construction (measured: Checks, below); a test ("the GE's thread and the PSP's GE timing",
   tests/psp/ares/system.cpp) has the system refuse the thread with "PSP", even when asked again, and start it with
-  "Fast", and the test machines that time the GE as the PSP's turn their thread off as the system would.
+  "Fast", and the test machines that time the GE as the PSP's turn their thread off as the system would. The system
+  refuses it without a word; the runner says so for `--ge-thread on` without `--ge-timing fast`, and the app doesn't
+  offer "GE Thread" yet (when it does, it should say the PSP's timing keeps the GE off it).
 - Save states: layout 34 (#271's display took 33) adds 18 bytes (the texels the GE's texture cache holds since its last
   TEX_FLUSH, a box and whether it has fetched, 9; when its front end reaches a SIGNAL, 8, and whether one is due, 1) and
   the pipeline: 28 more (when its times count from, the two ends' times, the queue's count) and 16 for each item queued.
@@ -17123,9 +17135,10 @@ triangles into 16-bit and the CPU beside the GE, holding out the lists that move
   as GU gives a list built as it's drawn, had its SIGNAL at its drawing's end (the review's experiment: 24 sprites of
   64x32 with a SIGNAL after them, at 333/166, the SIGNAL 22,049 cycles in given whole and 58,298, the drawing's end,
   given in parts). Now the pipeline is carried from run to run (`geResume()`), and the SIGNAL keeps its lead however
-  the list comes: given whole, 8,585 cycles in, the drawing going on to 58,347; as the sprites' part and then the
-  SIGNAL's, 9,071, the drawing to 58,833; a part for each sprite, as the last stall update's call returns, 17,950, the
-  drawing to 58,833 (the refit's clocks; the last version's were 8,440, 9,065 and 17,950, to 58,110 and 58,734).
+  the list comes: given whole, 8,426 cycles in, the drawing going on to 58,142; as the sprites' part and then the
+  SIGNAL's, 8,912, the drawing to 58,628; a part for each sprite, as the last stall update's call returns, 17,950, the
+  drawing to 58,628 (round 10's refit's clocks, as "ge time, the PSP's: a SIGNAL's lead through stall updates"
+  asserts).
 - With the display switching at the next vblank as a PSP's does (part 108, PR #271), Army of Two flips twice and
   waits for the vblank once a frame, as on the PSP: 30 fps while the GE takes up to about 32.6 ms a frame, 20 above.
 
@@ -17145,30 +17158,35 @@ the frames' totals the same way: Killzone's scene list and full-screen list are 
 Hits' menu's lists 1 to 3 of 3, its copyright screen's 1 and 2 of 2, the others one list a frame. How they're told
 apart, checked for Activision Hits' menu (the list the first gate took, +100%): the furthest GE address sampled in each
 place's list buffer is the same on the PSP and in Phobos (place 1 11,852 bytes, place 2 980, place 3 9,292), so the
-places pair the same lists. The table gives each place and the frame; the 15% bar is unchanged, and which measure judges
-is the owner's to say. Killzone is judged at `kz-gp`'s moment, the courtyard standing still (Friday's -1 and Sunday's
--1, which the owner confirmed: Sunday's repeats Friday's, 23.89 against 24.31 ms), its scene list and its full-screen
-list; the rest of its level (Friday's -2, Sunday's -2 to -5) is more demanding gameplay Phobos has no state of, shown as
-other moments as Ghost of Sparta's later scenes and Army of Two's are: there the PSP's scene list took 24.50 to 32.47
-ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like comparison, but the spread of the level).
+places pair the same lists. The table gives each place and the frame; the 15% bar is unchanged, and the owner's rule
+(2026-10-18, 20:35) judges each scene by its whole frame, within 15% of the PSP's either way, none more than 15% too
+slow, each list reported: `gate.py` exits 1 on a judged frame outside it, and passes a frame the owner has accepted as
+an exception the way he accepted it (`EXCEPTED`, with his words and the date: Super Monkey Ball's, too fast), failing it
+the other way. The capture of Activision Hits' copyright screen has 333/166 in its header, read before the game set its
+clocks (part 104): it ran at 222/111, as Phobos's run did, and the table says so beneath it. Killzone is judged at
+`kz-gp`'s moment, the courtyard standing still (Friday's -1 and Sunday's -1, which the owner confirmed: Sunday's repeats
+Friday's, 23.89 against 24.31 ms), its scene list and its full-screen list; the rest of its level (Friday's -2, Sunday's
+-2 to -5) is more demanding gameplay Phobos has no state of, shown as other moments as Ghost of Sparta's later scenes
+and Army of Two's are: there the PSP's scene list took 24.50 to 32.47 ms, 17 to 55% above Phobos's courtyard (20.95 ms)
+(not a like-for-like comparison, but the spread of the level).
 
 | Scene | Capture | List | PSP | Phobos, PSP timing | Against the PSP | 15% bar |
 | --- | --- | --- | --- | --- | --- | --- |
-| Chains of Olympus, difficulty menu | UCUS98653-5 | 1 of 1 | 27.60 ms (333/166) | 26.21 ms (333/166) | -5.0% | passes |
+| Chains of Olympus, difficulty menu | UCUS98653-5 | 1 of 1 | 27.60 ms (333/166) | 26.21 ms (333/166) | -5.0% | reported (passes) |
 |  |  | frame | 27.60 ms | 26.21 ms | -5.0% | passes |
-| Ghost of Sparta, main menu | UCUS98737-1 | 1 of 1 | 29.62 ms (333/166) | 27.52 ms (333/166) | -7.1% | passes |
+| Ghost of Sparta, main menu | UCUS98737-1 | 1 of 1 | 29.62 ms (333/166) | 27.52 ms (333/166) | -7.1% | reported (passes) |
 |  |  | frame | 29.62 ms | 27.52 ms | -7.1% | passes |
 | Ghost of Sparta, a later scene (another moment) | UCUS98737-2 | 1 of 1 | 32.93 ms (333/166) | 27.52 ms (333/166) | -16.4% | not judged (too fast) |
 |  |  | frame | 32.93 ms | 27.52 ms | -16.4% | not judged (too fast) |
 | Ghost of Sparta, a later scene (another moment) | UCUS98737-3 | 1 of 1 | 31.72 ms (333/166) | 27.52 ms (333/166) | -13.3% | not judged (passes) |
 |  |  | frame | 31.72 ms | 27.52 ms | -13.3% | not judged (passes) |
-| Super Monkey Ball Adventure, Story Mode | ULES00364-1 | 1 of 1 | 23.64 ms (222/111) | 16.64 ms (222/111) | -29.6% | too fast |
-|  |  | frame | 23.64 ms | 16.64 ms | -29.6% | too fast |
-| Killzone, the courtyard | UCUS98646-1 | 1 of 2 | 24.31 ms (222/111) | 21.15 ms (222/111) | -13.0% | passes |
-|  |  | 2 of 2 | 1.72 ms | 1.67 ms | -2.9% | passes |
+| Super Monkey Ball Adventure, Story Mode | ULES00364-1 | 1 of 1 | 23.64 ms (222/111) | 16.64 ms (222/111) | -29.6% | reported (too fast) |
+|  |  | frame | 23.64 ms | 16.64 ms | -29.6% | too fast (the owner's accepted exception) |
+| Killzone, the courtyard | UCUS98646-1 | 1 of 2 | 24.31 ms (222/111) | 21.15 ms (222/111) | -13.0% | reported (passes) |
+|  |  | 2 of 2 | 1.72 ms | 1.67 ms | -2.9% | reported (passes) |
 |  |  | frame | 26.03 ms | 22.82 ms | -12.3% | passes |
-| Killzone, the courtyard | UCUS98646-r9-1 | 1 of 2 | 23.89 ms (222/111) | 21.15 ms (222/111) | -11.5% | passes |
-|  |  | 2 of 2 | 1.72 ms | 1.67 ms | -3.0% | passes |
+| Killzone, the courtyard | UCUS98646-r9-1 | 1 of 2 | 23.89 ms (222/111) | 21.15 ms (222/111) | -11.5% | reported (passes) |
+|  |  | 2 of 2 | 1.72 ms | 1.67 ms | -3.0% | reported (passes) |
 |  |  | frame | 25.61 ms | 22.82 ms | -10.9% | passes |
 | Killzone, later in the level (another moment) | UCUS98646-2 | 1 of 2 | 27.30 ms (222/111) | 21.15 ms (222/111) | -22.5% | not judged (too fast) |
 |  |  | 2 of 2 | 1.72 ms | 1.67 ms | -3.0% | not judged (passes) |
@@ -17185,16 +17203,16 @@ ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like compariso
 | Killzone, 443 s in (another moment) | UCUS98646-r9-5 | 1 of 2 | 29.37 ms (222/111) | 21.15 ms (222/111) | -28.0% | not judged (too fast) |
 |  |  | 2 of 2 | 1.72 ms | 1.67 ms | -3.0% | not judged (passes) |
 |  |  | frame | 31.08 ms | 22.82 ms | -26.6% | not judged (too fast) |
-| Activision Hits Remixed, 3D main menu | ULUS10186-menu | 1 of 3 | 21.20 ms (222/111) | 18.95 ms (222/111) | -10.6% | passes |
-|  |  | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | too slow |
-|  |  | 3 of 3 | 5.40 ms | 6.85 ms | +26.7% | too slow |
+| Activision Hits Remixed, 3D main menu | ULUS10186-menu | 1 of 3 | 21.20 ms (222/111) | 18.95 ms (222/111) | -10.6% | reported (passes) |
+|  |  | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | reported (too slow) |
+|  |  | 3 of 3 | 5.40 ms | 6.85 ms | +26.7% | reported (too slow) |
 |  |  | frame | 30.30 ms | 30.97 ms | +2.2% | passes |
-| Activision Hits Remixed, 3D main menu, idle | ULUS10186-r9-1 | 1 of 3 | 21.25 ms (222/111) | 18.95 ms (222/111) | -10.8% | passes |
-|  |  | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | too slow |
-|  |  | 3 of 3 | 5.47 ms | 6.85 ms | +25.1% | too slow |
+| Activision Hits Remixed, 3D main menu, idle | ULUS10186-r9-1 | 1 of 3 | 21.25 ms (222/111) | 18.95 ms (222/111) | -10.8% | reported (passes) |
+|  |  | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | reported (too slow) |
+|  |  | 3 of 3 | 5.47 ms | 6.85 ms | +25.1% | reported (too slow) |
 |  |  | frame | 30.39 ms | 30.97 ms | +1.9% | passes |
-| Activision Hits Remixed, copyright screen | ULUS10186-boot2 | 1 of 2 | 0.96 ms (333/166) | 0.90 ms (222/111) | -7.3% | passes |
-|  |  | 2 of 2 | 8.14 ms | 7.68 ms | -5.7% | passes |
+| Activision Hits Remixed, copyright screen | ULUS10186-boot2 | 1 of 2 | 0.96 ms (333/166*) | 0.90 ms (222/111) | -7.3% | reported (passes) |
+|  |  | 2 of 2 | 8.14 ms | 7.68 ms | -5.7% | reported (passes) |
 |  |  | frame | 9.10 ms | 8.57 ms | -5.8% | passes |
 | Activision Hits Remixed, a first boot capture cut short | ULUS10186-boot1-cut | 1 of 2 | 0.96 ms (333/166) | 0.90 ms (222/111) | -7.3% | not judged (passes) |
 |  |  | 2 of 2 | 8.11 ms | 7.68 ms | -5.4% | not judged (passes) |
@@ -17204,11 +17222,14 @@ ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like compariso
 | Army of Two, gameplay (another moment) | ULUS10472-2 | 1 of 1 | 32.64 ms (222/111) | 25.05 ms (222/111) | -23.3% | not judged (too fast) |
 |  |  | frame | 32.64 ms | 25.05 ms | -23.3% | not judged (too fast) |
 
-- **The verdict: the gate still fails, and the merge stays held.** By the frame (each frame's lists added): 7 of the 8
-  judged frames within 15%, none more than 2.2% too slow; too fast, Super Monkey Ball (−29.6%). By the list: 10 of the
-  15 judged lists within 15%; too fast, Super Monkey Ball; too slow, Activision Hits' menu's second list (+48.5%
-  against both captures) and its third (+26.7% and +25.1%). Round 9's fit, by the same pairing: frames 6 of 8, lists 9
-  of 15.
+\* `ULUS10186-boot2`: the capture's header has 333/166, read before the game set its clocks; the copyright screen ran
+at 222/111 (part 104).
+
+- **The verdict: the gate passes by the owner's rule.** By the whole frame (each frame's lists added): 7 of the 8
+  judged frames within 15%, none more than 2.2% too slow; the eighth, Super Monkey Ball's (−29.6%, too fast), is his
+  accepted exception for now (`gate.py` exits 0). The lists, reported: 10 of 15 within 15%; too fast, Super Monkey
+  Ball; too slow, Activision Hits' menu's second list (+48.5% against both captures) and its third (+26.7% and
+  +25.1%), inside a frame within 2.2%. Round 9's fit, by the same pairing: frames 6 of 8, lists 9 of 15.
 - **What moved, and why** (each scene's terms, the refit's runner with `ge-terms.py`):
   - Activision Hits' copyright screen's second list −23.9% to −5.7% (the frame −22.2% to −5.8%): its two passes of
     triangles into 5650 now read 0.489 more of their narrow rows wide (round 10's time-widetri, the game's pass as
@@ -17275,17 +17296,37 @@ ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like compariso
 - "ge time, the PSP's": a list's start, the driver's own time, the two ends and the queue, stall updates, PAUSE, SYNC,
   a list queued at the head, `sceGeBreak` at a FINISH, states; a SIGNAL waiting for its time, a state keeping it,
   "Fast" going past it at once. "... a SIGNAL's lead through stall updates": the 24 sprites given whole, as one part,
-  and a part for each sprite, the SIGNAL each time with most of the drawing still ahead. Their machines turn the GE
-  thread off, as the system does with "PSP".
-- "the GE's thread and the PSP's GE timing" (tests/psp/ares/system.cpp): "GE Thread" On with "GE Timing" "PSP" leaves
-  the thread unstarted, asked for again too; with "Fast" it starts.
-- "ge profile": the header's flag 16 with each timing; the decoder's test of the same (`test_geprof.py`).
+  and a part for each sprite, the SIGNAL each time with most of the drawing still ahead. "... a state from a bigger
+  queue": a state saved with 100 single-entry items queued (as a build whose `GE::Cost::Queue` held 100 would save
+  one) loads, keeping this build's 83 newest, and round-trips from there (the loader once refused it: the review's
+  should-fix 4). Their machines turn the GE thread off, as the system does with "PSP".
+- "the GE timed as the PSP's by default" and "the GE's thread and the PSP's GE timing" (tests/psp/ares/system.cpp):
+  a system no front end has told otherwise times the GE as the PSP's; "GE Thread" On with "GE Timing" "PSP" leaves the
+  thread unstarted, asked for again too; with "Fast" it starts. The runner's test checks its report says "psp" when
+  `--ge-timing` isn't given.
+- "ge profile": the header's flag 16 with each timing; the decoder's test of the same (`test_geprof.py`); the gate's
+  verdict (`test_gate.py`: a frame within 15% either way passes, outside it fails, a list never fails it, the owner's
+  exception passes the way he accepted and fails the other way).
 - The layout tests (states.cpp, font.cpp) with layout 34's 46 bytes (a "Fast" machine's) and #271's layout 33: a
   master layout-33 state loads, the loader resetting this branch's fields; master's tests otherwise cover "Fast".
 
 ### Checks
 
-- The refit with round 10 (this round):
+- The default and the review's second round (this round):
+  - The fit from the tree alone (should-fix 3): a runner built from this tree with `ge-terms.py`, the committed program
+    (`tests/psp/programs/pspmeasure.elf`, round 10b's build: rounds 10, 9, 8 and 6 on its second, third, fourth and
+    sixth lines), the committed measurements unpacked and checked against their sums (`ge-round6`, `-round8`,
+    `-round9`, `-round10`; `ge-reruns-round10` for `--again`): part 106's command gives 3,373 lists, 5.0% at the median,
+    253 held out, and every term `GE::Cost` holds to three figures.
+  - "Fast", chosen explicitly (`--ge-timing fast`), against master's runner (`fe3deab82`: none of the files the
+    runner is built from changed since, #278 included): Chains of Olympus, Super Monkey Ball, Activision Hits' menu and
+    Killzone, Software and Vulkan-fast, 200 frames from each state: 8 of 8 the same, every frame's picture and VRAM and
+    the RAM after; each state master's with layout 34's 46 bytes put in, all 0.
+  - tests/psp (sanitized, `PHOBOS_TESTS_ONLY`): "ge time" 5 groups, the measured groups 11 and "ge profile" 3, 0
+    failures; the ares system's checks 362, 0 failed ("the GE timed as the PSP's by default" among them); the runner's
+    test (its report "psp" without `--ge-timing`); `test_gate.py` 5 tests and `test_geprof.py` 24; `gate.py` on the
+    refit's profiles exits 0. The rest of the suite, and the app's unit tests, are GitHub's checks.
+- The refit with round 10:
   - The fit reproduced: three passes to its fixed point (above), a runner built with `GE::Cost` as committed giving it
     back to three figures; `gate.py`'s table is that tree's plain runner's profiles.
   - "ge time" (4 groups) and the measured groups (10: rounds 6, 8 and 9), 0 failures, sanitized
@@ -17334,17 +17375,36 @@ ms, 17 to 55% above Phobos's courtyard (20.95 ms) (not a like-for-like compariso
   apart for a model of a row's texel span); bilinear filtering's cost; 4- to 8-texel CLUT strips from VRAM (round
   10's time-vram8, to −63%); round 10's game-style strips (2.1 times the model's pixels); and the judged lists left
   (the gate, above): a VRAM texture shrunk by sprites and triangles magnifying a wide RAM texture into 16-bit, which
-  no round has timed (the refit's agent's round 10b).
-- "Fast"'s last 0.2 to 0.6% on Vulkan-fast (the owner's item 6): each drawing function a template for each timing,
-  chosen once a PRIM, so "Fast" doesn't test the option a primitive. Not done in this round (it touches every
-  drawing function's signature and wants the exact checks against master again); a follow-up of its own.
-- Fixed-point charges in place of doubles, the design's step for determinism, before the default could change.
-- The CPU beside the GE: round 10 measures each kind of GE read's slope against the CPU's RAM traffic (the model,
-  above), and `Kernel::geContend()` carries the term, held at none. What it wants from the CPU is its RAM traffic
-  while the GE draws: a count of the CPU's loads and stores past its cache's reach, or at least of loops going round
-  the same few instructions without a syscall (a game waiting), which the CPU core would have to keep. That's the
-  CPU's timing, a project of its own; Super Monkey Ball (−30%) waits on it.
-- "PSP" with the GE on its thread: a design below, not built while "PSP" is for measuring.
+  no round has timed (the refit's agent's round 10c, optional now that the frame judges).
+- "Fast"'s last 0.8% of instructions on Vulkan-fast (the owner's item 6; the review's second round): each drawing
+  function a template for each timing, chosen once a PRIM, so "Fast" doesn't test the option a primitive. Not done in
+  this round (it touches every drawing function's signature and wants the exact checks against master again); a
+  follow-up of its own, now for the opt-in.
+- Fixed-point charges in place of doubles: "PSP" is deterministic on one host (the same inputs and renderer, the same
+  frames and states), but its charges are doubles, which hosts may round apart (FMA contraction on x86-64 against
+  arm64; `log2` choosing a mipmap level), and Software and Vulkan-fast charge a list a few cycles apart (Chains of
+  Olympus's `geDoneAt` at frame 100, 8,882,708,547 against 8,882,708,457: a 3D triangle's corners and texels come by
+  different paths, the GE's but for a float's rounding). A state carries on across hosts or renderers with the GE's
+  times a few cycles apart. The design's step for that, kept as a follow-up now that the owner made "PSP" the default.
+- **The CPU beside the GE (the next pull request: the owner's "fixing SMBA is the priority").** Round 10 measures each
+  kind of GE read's slope against the CPU's RAM traffic (the model, above), and round 10b that polling through
+  syscalls and work before the list cost the GE nothing, a writer beside it x1.27 to 2.14; `Kernel::geContend()`
+  carries the term, held at none. The design: the PSP's data cache as tags alone (16 KiB of 64-byte lines: round 8's
+  cpu-memory, a chain of pointers 5 cycles a step within 16 KiB, 74 over 32 KiB), counted in
+  `Recompiler::emitMemory()` (every compiled load and store goes through it) only in blocks compiled for a system
+  powered with "PSP", so "Fast" pays nothing and stays exact; over each window the GE is busy, the lines moved L and
+  instructions N give the PSP's CPU time T = N + 70 L (round 8: a miss about 70 cycles more than a hit) and its
+  traffic u = (L / max(window, T)) as a share of streaming's rate, which replaces CpuScale and PollInstructions. A loop
+  waiting on a cached variable (Activision Hits' menu) moves no lines however long it runs; Super Monkey Ball's work
+  would, by its PSP time about 57,000 lines a frame if its CPU's time beyond Phobos's were all misses (x1.27 to 1.34 on
+  its list: −29.6% to −11 or −6%). Calibrated by round 8's rates (streaming 98 cycles a line, writes 132, uncached
+  reads 41 a word) and round 10's 17 patterns run in the core; the cost to "PSP" about 6 to 8 host instructions a load
+  or store, 15 to 30% of the emulated CPU's time, to measure. About 10 to 15 hours' work.
+- Round 10 runs twice in CI's sanitized PSP job ("psp measure"'s run of the program and `measured8.cpp`'s with the GE
+  timed as the PSP's), which took the job to 45 of its 60 minutes (its limit is 90 now): running the round once for both
+  is a follow-up.
+- "PSP" with the GE on its thread: a design below, not built. With "PSP" the default, a game gets the GE thread
+  (part 109) only with "Fast" chosen; the app doesn't offer "GE Thread" yet.
 
 ### A threaded "PSP" (a design note; not built)
 

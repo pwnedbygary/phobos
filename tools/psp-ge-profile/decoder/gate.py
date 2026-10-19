@@ -6,17 +6,18 @@ are paired by their place in the frame: a frame is the lists queued between two 
 another buffer than the call before, or every call where a game keeps one buffer, as Killzone does: geprof.py's flips),
 a list's place its order among them; in the frames holding the scene's usual count of lists (the commonest), each
 place's median GE time over the window of whole seconds, the PSP's against Phobos's, and the median of the frames'
-totals the same way (Killzone's scene list and full-screen list are its places 1 and 2). A list or a frame passes
-within 15% of the PSP's; none may be more than 15% too slow (a model too slow makes a game run worse than a PSP); the
-table gives both measures, each list's and the frame's. Killzone is judged at kz-gp's moment, the courtyard standing
-still (Friday's -1 and Sunday's -1, the owner confirmed); captures of moments Phobos has no state of are shown, not
-judged.
+totals the same way (Killzone's scene list and full-screen list are its places 1 and 2). The owner's rule (2026-10-18,
+20:35): each judged scene is judged by its whole frame, which passes within 15% of the PSP's either way (none more than
+15% too slow: a model too slow makes a game run worse than a PSP); each list is reported, not judged. A frame the owner
+has accepted as an exception (EXCEPTED: his words, the date, and which way it may miss) is shown and doesn't fail the
+gate; any other judged frame outside the bar does. Killzone is judged at kz-gp's moment, the courtyard standing still
+(Friday's -1 and Sunday's -1, the owner confirmed); captures of moments Phobos has no state of are shown, not judged.
 
 Phobos's profiles: tools/psp-runner's --ge-timing psp --ge-profile NAME.bin over 900 frames from each scene's state,
 the profile from frame 301 (--ge-profile-from 301), ahr-legal's 360 frames from frame 1 (part 106 has the commands).
 
 usage: gate.py PROFILES_DIR [CAPTURES_DIR]   (PROFILES_DIR holds coo-diff.bin, gos-menu.bin, smba-story.bin,
-kz-gp.bin, ahr-menu.bin, ahr-legal.bin, a2-gp.bin; prints the table, and exits 1 if a judged list or frame fails)"""
+kz-gp.bin, ahr-menu.bin, ahr-legal.bin, a2-gp.bin; prints the table, and exits 1 if a judged frame fails)"""
 import bisect
 import lzma
 import os
@@ -55,6 +56,19 @@ ROWS = [
     ("Army of Two, gameplay (another moment)", "ULUS10472-1", (0, 10), "a2-gp", (0, 10), False),
     ("Army of Two, gameplay (another moment)", "ULUS10472-2", (0, 10), "a2-gp", (0, 10), False),
 ]
+#The owner's accepted exceptions: a judged scene's frame that may miss the bar one way without failing the gate, with
+#the reason, the date and his words. Any other miss of that frame (the other way) fails it.
+EXCEPTED = {
+    "ULES00364-1": ("too fast", "accepted by the owner on 2026-10-18 (21:57-22:02) as a known exception for now, the "
+                    "frame -29.6%: the CPU beside the GE, which the model holds at none till the CPU's RAM traffic is "
+                    "counted (part 106), the next pull request's (his words: \"fixing SMBA is the priority even though "
+                    "we are moving on past it\")"),
+}
+#Capture headers whose clocks aren't the scene's: read as the capture began, before the game set its own.
+CLOCKS_NOTE = {
+    "ULUS10186-boot2": "the capture's header has 333/166, read before the game set its clocks; the copyright screen "
+                       "ran at 222/111 (docs/psp-core.md, part 104)",
+}
 
 
 def load(path):
@@ -96,6 +110,17 @@ def verdict(miss):
     return "passes" if abs(miss) <= BAR else ("too slow" if miss > 0 else "too fast")
 
 
+def judged_frame(capture, miss):
+    """a judged frame's mark and whether it fails the gate: within the bar, or outside it the way the owner accepted
+    (EXCEPTED), it doesn't"""
+    mark = verdict(miss)
+    if mark == "passes":
+        return mark, False
+    if capture in EXCEPTED and EXCEPTED[capture][0] == mark:
+        return "%s (the owner's accepted exception)" % mark, False
+    return mark, True
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] in ("-h", "--help"):
@@ -105,7 +130,7 @@ def main(argv=None):
     captures = argv[1] if len(argv) > 1 else CAPTURES
     print("| Scene | Capture | List | PSP | Phobos, PSP timing | Against the PSP | 15% bar |")
     print("| --- | --- | --- | --- | --- | --- | --- |")
-    lists, framed, failed = [], [], False
+    lists, framed, failed, excepted, notes = [], [], False, [], []
     for what, capture, pwin, scene, owin, judge in ROWS:
         psp, pclock = frames(os.path.join(captures, capture + ".bin.xz"), pwin)
         ours, oclock = frames(os.path.join(profiles, scene + ".bin"), owin)
@@ -121,6 +146,9 @@ def main(argv=None):
         a = statistics.median(sum(f) for f in psp)
         b = statistics.median(sum(f) for f in ours) if ours else None
         rows.append(("frame", a, b))
+        if capture in CLOCKS_NOTE:
+            notes.append(CLOCKS_NOTE[capture])
+            pclock += "*" * len(notes)
         for n, (label, a, b) in enumerate(rows):
             miss = None if b is None else b / a - 1
             mark = "-"
@@ -128,18 +156,29 @@ def main(argv=None):
                 mark = verdict(miss)
                 if not judge:
                     mark = "not judged (%s)" % mark
+                elif label != "frame":
+                    lists.append(miss)
+                    mark = "reported (%s)" % mark
                 else:
-                    (framed if label == "frame" else lists).append(miss)
-                    failed |= abs(miss) > BAR
+                    framed.append(miss)
+                    mark, fails = judged_frame(capture, miss)
+                    failed |= fails
+                    if capture in EXCEPTED and not fails and abs(miss) > BAR:
+                        excepted.append("%s (%s, %+.1f%%): %s" % (what, capture, 100 * miss, EXCEPTED[capture][1]))
             print("| %s | %s | %s | %.2f ms%s | %s | %s | %s |" % (
                 what if n == 0 else "", capture if n == 0 else "", label, a, " (%s)" % pclock if n == 0 else "",
                 "-" if b is None else "%.2f ms%s" % (b, " (%s)" % oclock if n == 0 else ""),
                 "-" if miss is None else "%+.1f%%" % (100 * miss), mark))
-    for name, misses in (("lists", lists), ("frames", framed)):
+    for n, note in enumerate(notes):
+        print("%s %s" % ("*" * (n + 1), note))
+    for name, misses in (("lists (reported)", lists), ("frames (judged)", framed)):
         if misses:
-            print("judged %s: %d; within 15%%: %d; most too slow %+.0f%%; median miss %.1f%%" % (
+            print("%s: %d; within 15%%: %d; most too slow %+.0f%%; median miss %.1f%%" % (
                 name, len(misses), sum(abs(m) <= BAR for m in misses), 100 * max(misses),
                 100 * statistics.median(abs(m) for m in misses)))
+    for line in excepted:
+        print("excepted: " + line)
+    print("gate: %s (each judged scene by its whole frame)" % ("fails" if failed else "passes"))
     return 1 if failed else 0
 
 

@@ -133,7 +133,10 @@ jobs:
   system:
     name: PSP system tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # 90: sanitized, the suite took 45 of 60 minutes once round 10 ran twice (the measure test's run of the program
+    # and measured8.cpp's with the GE timed as the PSP's); running it once for both is a follow-up (docs/psp-core.md,
+    # part 106)
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4

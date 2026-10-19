@@ -442,7 +442,7 @@ vertical ramps); only VRAM's fourth copy reads the depth buffer in order. The fi
 
 ### The GE timing's fit
 
-`GE::Cost` (`ares/psp/ge/ge.hpp`), the clocks of the GE timing "PSP", is fitted to rounds 6, 8 and 9's timed lists
+`GE::Cost` (`ares/psp/ge/ge.hpp`), the clocks of the GE timing "PSP", is fitted to rounds 6, 8, 9 and 10's timed lists
 (docs/psp-core.md, part 106): `ge-terms.py` counts, for each run of the GE, what each of its terms multiplies, in a
 runner built from a patched copy of the source (the core itself carries no counting code), and `ge-fit.py` fits the
 clocks to the PSP's times. To fit them again:

@@ -67,8 +67,9 @@ the courtyard Friday's -1 is of) and `ULUS10186-r9-1` (Activision Hits' 3D menu 
 `ahr-menu` state). Each is the plugin's file as it wrote it (`profile.h`'s layout: the games' GE and display calls,
 interrupts and times, the disc ID, title and thread names; no game code or data), packed with xz (`xz -9e`);
 `SHA256SUMS` holds the unpacked files' sums. `tools/psp-ge-profile/decoder/gate.py` sets them beside Phobos's profiles
-of the same scenes with the GE timing "PSP" (the owner's bar: every list time within 15% of the PSP's, none more than
-15% too slow; part 106 has the table and how the profiles are made).
+of the same scenes with the GE timing "PSP" (the owner's bar since 2026-10-18: each judged scene's whole frame within
+15% of the PSP's, none more than 15% too slow, each list reported; Super Monkey Ball's frame, too fast, his accepted
+exception for now, in `gate.py`'s `EXCEPTED` with his words; part 106 has the table and how the profiles are made).
 
 ## `ge-round10/`
 
