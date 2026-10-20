@@ -1520,6 +1520,8 @@ static auto loadExec() -> void {
 //and that module's thread, run on. The module's import of the program's function reaches it till then, and goes back
 //to the kernel with it. A state saved while the program's module_stop runs carries on as the machine does.
 static auto programUnloadsItself() -> void {
+  FastTimed fastTimed;  //(n, on the interpreter, against m on either engine: with the PSP's timing the CPU's caches,
+                        //which a state holds, move in compiled code alone)
   HostFolder stick;
   put(stick, "LIVES.PRX", livesModule().build());
   constexpr u32 Path = KernelMachine::Strings + 0x800;

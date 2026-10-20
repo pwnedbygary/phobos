@@ -263,6 +263,28 @@ jobs:
           PHOBOS_TESTS_REQUIRE: vulkan, programs, ge-round6, ge-round8, ge-round9, ge-round10, ge-round10b, ge-round10c
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-on.log"
 
+      # The kernel's GE tests again with every test machine that doesn't choose its GE timing on the PSP's
+      # (PHOBOS_TESTS_GE_TIMING=PSP, as the option "GE Timing" has it by default; tests that pin "Fast"'s times keep
+      # it): the spin skip's groups and the GE's looks polled, the kernel's GE groups (their lists, callbacks, breaks
+      # and states, the GE thread's among them) and the sample programs, every result as with "Fast". "ge " also
+      # picks 12 groups that aren't the GE's (message pipes x5, the memory page table, dialogs front end: message
+      # aborted, desktop disc image files, two draw3d groups and two gpu groups): harmless breadth. Left out for
+      # time: the measured rounds' groups, and the GPU's that "ge " doesn't catch. The objects the first run built,
+      # linked again.
+      - name: Run the kernel's GE tests with the PSP's GE timing
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PHOBOS_TESTS_MODE: release
+          PHOBOS_JOBS: 4
+          PSP_GPU_ON_CPU: 1
+          PHOBOS_TESTS_GE_TIMING: PSP
+          PHOBOS_TESTS_ONLY: >-
+            spin|looks polled|ge |gu program|copy sample|blit sample|doublelist sample|clut sample|blend sample|cube
+            sample|celshading sample|envmap sample|curves on several threads
+          PHOBOS_TESTS_REQUIRE: vulkan, programs
+        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-psp-timing.log"
+
       - name: Keep the groups' results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -282,6 +304,9 @@ jobs:
           last=$(tail -1 "$RUNNER_TEMP/suite-on.log" 2> /dev/null || true)
           echo "- tests/psp, release build, the GE thread's tests with the thread on: ${last:-no output: they did not run}" \
             >> "$GITHUB_STEP_SUMMARY"
+          last=$(tail -1 "$RUNNER_TEMP/suite-psp-timing.log" 2> /dev/null || true)
+          echo "- tests/psp, release build, the kernel's GE tests with the PSP's GE timing:" \
+            "${last:-no output: they did not run}" >> "$GITHUB_STEP_SUMMARY"
 
   # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
   # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
