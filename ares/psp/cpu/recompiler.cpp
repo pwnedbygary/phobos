@@ -209,7 +209,12 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   enum class Next : u32 { Unknown, Known, Done } going = Next::Unknown;
   u32 next = 0;
 
+  blockStart = address, lineHeld = nullptr;
   while(true) {
+    if(self.instructionCache.enabled && (count == 0 || address % 64 == 0)) {
+      emitInstructionCache(address);
+      if(count == 0) lineHeld = sljit_emit_label(compiler);
+    }
     u32 instruction = self.read(Word, address);
     count++;
     bool lastInSection = address % SectionSize == SectionSize - 4;
@@ -414,6 +419,7 @@ auto Allegrex::Recompiler::addExits(u32 index) -> void {
     outOf[index].push_back(exit);
     auto& section = sections[(target & 0x1fff'ffff) / SectionSize];
     u8* body = section && section->mirror == target >> 29 ? section->bodies[target % SectionSize / 4] : nullptr;
+    if(body && lineHeld && target == blockStart) body = (u8*)sljit_get_label_addr(lineHeld);
     if(body) link(exit, body);
     else waiting[target].push_back(exit);
   }

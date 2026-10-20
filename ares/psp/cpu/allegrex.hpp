@@ -72,6 +72,40 @@ struct Allegrex {
   //without looking at its entry again (emitChainTo()); without this, it always looks.
   const u8* steady = nullptr;
 
+  //With the PSP's GE timing, the tags of the CPU's two caches, so its traffic with RAM can be counted (the GE's
+  //contention with the CPU: Kernel::geContend(), docs/psp-core.md part 113): each 16 KiB of 64-byte lines (round 8's
+  //cpu-memory: a chain of pointers 64 bytes apart hits within 16 KiB and misses every step over 32 KiB), in 128 sets of
+  //two ways, the least recently used replaced (the ways aren't measured: two, as a MIPS core of its kind has). A data
+  //line's key is its address's bits 6-31 (an instruction line's, codeKey()), so a cached mirror's lines and an uncached
+  //mirror's never meet, nor the two cached mirrors' (0x0000'0000 on and 0x8000'0000 on: the same memory's line can be
+  //held, and counted, twice); Dirty marks a data line a store has written since it came in. Compiled code looks a line
+  //up in its set's most recently used way (recompiler.cpp and recompiler-memory.cpp, in blocks compiled for a system
+  //started with the PSP's timing alone: "Fast" compiles none of it): the instructions' lines as a block starts and as
+  //its code crosses into the next line, and each load's or store's. The rest is dataCacheMiss()'s and
+  //instructionCacheMiss()'s: the other way, else a miss, the line read in (counted where it's RAM's) and the line it
+  //replaces written back if dirty; an uncached access is counted as one of its own. Hardware's accesses and stores to
+  //compiled code are looked up before they leave compiled code (hardware's addresses an uncached mirror's, not RAM's:
+  //not counted); a misaligned access leaves before the look, and a delay slot's line isn't looked up. The interpreter's
+  //instructions and accesses aren't counted at all. VRAM's and the scratchpad's lines are held like RAM's but not
+  //counted: telling them apart as compiled code runs would cost what the look itself costs.
+  struct Cache {
+    static constexpr u32 Sets = 128, Dirty = 0x8000'0000, Empty = 0x7fff'ffff;  //(no line's key is Empty)
+    bool enabled = false;  //the system started with the PSP's GE timing (System::power())
+    u32 recent[Sets];      //each set's most recently used way's key (| Dirty), and the other's
+    u32 older[Sets];
+    u64 fills = 0, writebacks = 0, uncached = 0;  //lines read in from RAM, dirty ones written back to it, and uncached
+                                                  //accesses to it, since the program started
+    Cache() { reset(); }
+    auto reset() -> void;
+    static auto ram(u32 address) -> bool { return (address & 0x1fff'ffff) >> 26 == 2; }  //(0x0800'0000 on, 64 MiB)
+    //An instruction line's key: its address's bits 13-31 (its set is its bits 6-12) less 0x4000, so the code a program
+    //runs in RAM (0x0800'0000 to 0x09ff'ffff) has keys under 4096, which an ARM64 compare takes as it is
+    //(emitInstructionCache()). Never Empty.
+    static auto codeKey(u32 address) -> u32 { return (address >> 13) - 0x4000; }
+  } dataCache, instructionCache;
+  auto dataCacheMiss(u32 address, u32 store) -> u32;  //cache.cpp: returns the address
+  auto instructionCacheMiss(u32 address) -> void;
+
   //Why the CPU stopped a program. The numbers are the ones MIPS uses in its Cause register.
   enum class Exception : u32 {
     AddressLoad         =  4,  //an instruction fetch or load from an address that isn't aligned to its size
@@ -557,6 +591,11 @@ struct Allegrex {
     std::unordered_map<u32, std::vector<u32>> waiting;  //by guest address: the exits to a block not compiled yet
     std::unordered_map<u32, std::vector<u32>> outOf;    //by section: its blocks' exits
     std::vector<std::pair<u32, sljit_label*>> linking;  //the exits of the block being compiled: targets and places
+    //The block being compiled's first address, and with the PSP's GE timing, its body past the look its first
+    //instruction's line takes in the instruction cache (emitInstructionCache()): where its exits going on to itself
+    //go, that line still the most recent of its set (no other code runs in between but by way of run()).
+    u32 blockStart = 0;
+    sljit_label* lineHeld = nullptr;
     auto emitLink(u32 target) -> void;
     auto addExits(u32 index) -> void;
     auto link(u32 exit, u8* body) -> void;
@@ -660,6 +699,8 @@ struct Allegrex {
     auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitMemory(u32 address, u32 instruction, u32 count, bool delaySlot, bool store, u32 alignment, s16 offset,
                     const std::function<void ()>& access) -> void;
+    auto emitDataCache(op_base base, bool store) -> void;
+    auto emitInstructionCache(u32 address) -> void;
 
     bool enabled = false;
     bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
