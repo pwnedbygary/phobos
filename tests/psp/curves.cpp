@@ -370,7 +370,7 @@ static auto curvesRound3() -> void {
     std::ifstream file(std::filesystem::path(results) / (std::string(name) + ".bin"), std::ios::binary);
     std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     std::vector<u32> words(bytes.size() / 4);
-    std::memcpy(words.data(), bytes.data(), words.size() * 4);
+    if(!words.empty()) std::memcpy(words.data(), bytes.data(), words.size() * 4);  //(memcpy: no null, even for 0 bytes)
     return words;
   };
   const float flat[4][4][2] = {

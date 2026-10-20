@@ -35,6 +35,49 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP tests: the measured rounds' groups report a missing round, and a missing file no longer ends a sanitized run — 2026-10-20
+
+Branch `cursor/psp-measured-skips-cachy`, from master `b48c0c68b` (#280's merge), master `f8f301347` (#283) merged
+in: #280's review suggestion S4. Tests and their README only; the core doesn't change, so docs/psp-core.md has no
+part for it.
+- **Why**: #280's independent review (claim (b)) found that neither measured8's four groups (rounds 8, 9, 10 and 10b)
+  nor "measured round 6 GE time" could report its skip. Each asked `ours()` for the core's file first and returned
+  when it came back empty, which it does without a word when the round's variable is unset or empty or the PSP's file
+  is missing; only `theirs()` reports. With the five rounds' variables empty and all five required, the review's run
+  gave "11 groups, 6 failures": measured6's other six groups failed and these five passed. CI's exposure was small
+  (`run-tests.sh` always unpacks the rounds and checks their sums).
+- **Found on the way**: a missing PSP file ended a sanitized run before any group could say so. The tests' readers
+  (`words()` in measured6.cpp and measured8.cpp, curves.cpp's round 3 `load`) gave `memcpy` an empty vector's null
+  pointer for 0 bytes, which UBSan takes as undefined; with `-fno-sanitize-recover=all` the program stopped there
+  ("measured round 6 lighting", measured6.cpp:24; "curves round 3", curves.cpp:373), never reaching the failure and
+  the skip their code means for a missing file.
+- **What**: the five ask `theirs()` first (measured8's `misses()` and `measuredContention10()`, measured6's
+  `measuredTime()`), as five of measured6's other six groups do; the sixth, the driver statuses, asks `ours()` first
+  but `theirs()` before it can return. `ours()`'s comment says why. The three readers copy only when there's
+  something to copy. With the files there, every group reads and checks the same.
+  `tests/psp/measurements/README.md` names `PSP_GE_ROUND10b` and `ge-round10b`, says what a missing round and a
+  missing file do now, and that round 10c's files have neither a variable nor a requirement (no test reads them).
+- **The other readers**, checked and left: measured6's other six groups (`theirs()` first; the driver statuses ask
+  both); "curves round 3" (a skip without `PSP_GE_RESULTS` or one of its five files, now that its reader doesn't end
+  the run); "psp measure" (a skip without `PSP_GE_RESULTS` or its `manifest3.txt`, a failure where required; a
+  picture missing from a round 3 folder is listed, as differences are; its reader has no `memcpy`).
+- **Test** (cachyOS x86-64, GCC 16.2.1, `PHOBOS_JOBS=2`; logs in `~/phobos-work/scratch/measured-skips/logs`): the CI
+  measure groups (`PSP_FFMPEG=0 PHOBOS_TESTS_ONLY=measure PHOBOS_TESTS_REQUIRE=programs,ge-round3,…,ge-round10b
+  tests/psp/run-tests.sh`), sanitized: 13 groups, 0 failures before and after, the output the same line for line;
+  release (`SANITIZE=-Wno-error=array-bounds`, for GCC 16's false warning at movies.cpp:52, not fixed here): 13
+  groups, 0 failures. Every check counted in a scratch copy whose `check()` counts (release): each group's count the
+  same before and after (round 6's GE time 1126; rounds 8, 9 and 10's 1243, 938 and 1834; rounds 10 and 10b's 151;
+  "curves round 3" 10; the other eight groups too). The rounds' variables unset or empty: before, these five passed
+  (all five rounds required: "11 groups, 6 failures", the review's output byte for byte; round 8, 9, 10 or 10b
+  required alone: no failure); after, all 11 groups skip, and fail where required (all five: 12 failures, rounds 10
+  and 10b's group once for each round; each round alone fails only its own groups: 7, 1, 1, 2 and 1). The variables
+  naming an empty folder: before, the sanitized run stopped in measured6's first group, and these five, run alone,
+  passed; after, sanitized and release, every group fails on the PSP's missing file (13 failures). "curves round 3"
+  with an empty folder: before, stopped; after, a skip, and 5 failures where required.
+- **Not run**: the rest of the PSP suite, tests/allegrex, tests/psp/ares, the runner and the app builds (CI's).
+- Independent review: PASS on `e17c27607`, read-only (`~/phobos-work/scratch/review-284/REVIEW.md`), no changes asked.
+  Its two wording nits are fixed after it (N1: measured6's `ours()` comment and the "What" bullet; N2: the PR body).
+
 ## CI: the GE profile decoder's tests on every change to them — 2026-10-19
 
 Branch `cursor/psp-ge-decoder-ci-cachy`, from master `d9bfbefb4` (#281). CI only, a non-blocking follow-up from
