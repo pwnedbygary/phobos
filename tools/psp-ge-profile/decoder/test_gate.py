@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """gate.py's verdict (docs/psp-core.md, parts 106 and 113): each judged scene by its whole frame, the owner's rule; a
-list is reported, never failing the gate; the owner's accepted exception passes the way he accepted, no further than
-its limit (Super Monkey Ball's, -21% since part 113), and fails the other way or past it.
+list is reported, never failing the gate; an accepted exception passes the way the owner accepted, no further than its
+limit, and fails the other way or past it (none is accepted now: the tests make one up, on Ghost of Sparta's frame;
+Super Monkey Ball's, gone since the refit, fails past the bar like any other).
 usage: python3 test_gate.py"""
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gate  # noqa: E402
+
+MADE_UP = {"UCUS98737-1": ("too fast", -0.21, "a made-up exception for the tests, 2026-10-20")}
 
 
 class Verdict(unittest.TestCase):
@@ -20,18 +24,24 @@ class Verdict(unittest.TestCase):
         self.assertEqual(gate.judged_frame("UCUS98653-5", 0.151), ("too slow", True))
         self.assertEqual(gate.judged_frame("UCUS98737-1", -0.2), ("too fast", True))
 
-    def test_the_owners_exception_passes_the_way_he_accepted(self):
-        mark, fails = gate.judged_frame("ULES00364-1", -0.206)
+    @mock.patch.dict(gate.EXCEPTED, MADE_UP)
+    def test_an_exception_passes_the_way_it_was_accepted(self):
+        mark, fails = gate.judged_frame("UCUS98737-1", -0.206)
         self.assertFalse(fails)
         self.assertIn("accepted exception", mark)
 
-    def test_the_exception_fails_past_its_limit(self):
-        mark, fails = gate.judged_frame("ULES00364-1", -0.296)
+    @mock.patch.dict(gate.EXCEPTED, MADE_UP)
+    def test_an_exception_fails_past_its_limit(self):
+        mark, fails = gate.judged_frame("UCUS98737-1", -0.296)
         self.assertTrue(fails)
         self.assertIn("limit", mark)
 
-    def test_the_exception_fails_the_other_way(self):
-        self.assertEqual(gate.judged_frame("ULES00364-1", 0.2), ("too slow", True))
+    @mock.patch.dict(gate.EXCEPTED, MADE_UP)
+    def test_an_exception_fails_the_other_way(self):
+        self.assertEqual(gate.judged_frame("UCUS98737-1", 0.2), ("too slow", True))
+
+    def test_super_monkey_balls_frame_has_no_exception(self):
+        self.assertEqual(gate.judged_frame("ULES00364-1", -0.206), ("too fast", True))
 
     def test_every_exception_names_a_judged_capture_a_way_and_a_limit(self):
         judged = {capture for _, capture, _, _, _, judge in gate.ROWS if judge}
