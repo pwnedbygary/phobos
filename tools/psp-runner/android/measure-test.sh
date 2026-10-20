@@ -15,6 +15,9 @@ cat > "$SCRATCH/test.cpp" << 'EOF'
 #include <atomic>
 #include <cmath>
 #include <thread>
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 int main() {
   int frames = std::getenv("TEST_FRAMES") ? std::atoi(std::getenv("TEST_FRAMES")) : 90;
   #if defined(__linux__)
@@ -29,8 +32,12 @@ int main() {
   #endif
   volatile double sink = 0, other = 0;
   std::atomic<bool> done{false};
-  //(a second thread, busy until the window's end, for the threads' times)
+  //(a second thread, busy until the window's end, for the threads' times; with TEST_GE_THREAD named as the PSP's GE
+  //thread is, for PHOBOS_GE_PLACE)
   std::thread helper([&] { while(!done) other = other + 1; });
+  #if defined(__linux__)
+  if(std::getenv("TEST_GE_THREAD")) pthread_setname_np(helper.native_handle(), "psp-ge-thread");
+  #endif
   phobos_measure::begin();
   for(int frame = 0; frame < frames; frame++) {
     for(int i = 0; i < 300'000; i++) sink = sink + std::sqrt(double(i));
@@ -66,6 +73,22 @@ for pin in 0 none; do
   echo "PHOBOS_PIN=$pin:"
   grep -E '^measure (window|emulation|cpus|pinning|counter|threads)' "$SCRATCH/out.txt" | sed 's/^/  /'
 done
+#The app's placement (PHOBOS_GE_PLACE): with two cores or more ranked by capacity, before every frame (91 times for
+#90) the GE's thread (the helper, named so) on the fastest and this thread on the next, and left there; with fewer (a
+#VM with no capacities or clocks), nothing placed, and the app's pinning as without it.
+if [[ $(uname -s) == Linux ]]; then
+  TEST_GE_THREAD=1 PHOBOS_GE_PLACE=1 PHOBOS_MEASURE_JSON="$JSON" "$SCRATCH/test" > "$SCRATCH/out.txt"
+  grep -q '^measure ge placement: ' "$SCRATCH/out.txt" || fail "no placement line"
+  jq -e '."ge placement".asked == 91' "$JSON" > /dev/null || fail "placement not asked before every frame"
+  if jq -e '."ge placement".cores | length >= 2' "$JSON" > /dev/null; then
+    jq -e '."ge placement" as $p | $p.placed == 91 and $p."ge core" == $p.cores[0] and
+           $p."emulation core" == $p.cores[1] and ."ge thread"."affinity at end" == [$p.cores[0]] and
+           .pin."affinity at end" == [$p.cores[1]]' "$JSON" > /dev/null || fail "not placed"
+  else
+    jq -e '."ge placement".placed == 0' "$JSON" > /dev/null || fail "placed without cores ranked"
+  fi
+  echo "PHOBOS_GE_PLACE=1: $(grep '^measure ge placement' "$SCRATCH/out.txt")"
+fi
 #An extra event counted for some of the time has its share (above 0, at most 1) and a total; one never counted has
 #neither, and the line says so.
 extras_said() {

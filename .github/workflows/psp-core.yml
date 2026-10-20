@@ -7,9 +7,10 @@ name: PSP Core Tests
 # (tools/psp-runner/build-android.sh). Their paths are what those builds compile or read: the core, nall, ares's
 # framework and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the
 # desktop's disc reader, the tests, and the files the PSP's tests share with the app's
-# (android/app/src/test/resources/psp-*: the dialogs' byte form, the keyboard's cases). The CPU's suite runs on an
-# ARM64 host too, and again built as the app's release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized
-# runs; the system's, built so, is a lane of its own.
+# (android/app/src/test/resources/psp-*: the dialogs' byte form, the keyboard's cases) and the runner with the app's
+# native code (android/app/src/main/cpp/GeThreadPlacement.hpp: where the PSP's two threads run). The CPU's suite runs
+# on an ARM64 host too, and again built as the app's release builds are (PHOBOS_TESTS_MODE=release), beside the
+# sanitized runs; the system's, built so, is a lane of its own.
 # A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
 # GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the run's summary
 # with the commit; the x86-64 Allegrex lane's sanitized run and both system lanes keep their groups' results (pass,
@@ -24,13 +25,13 @@ on:
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
              'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
-             'android/app/src/test/resources/psp-*',
+             'android/app/src/test/resources/psp-*', 'android/app/src/main/cpp/GeThreadPlacement.hpp',
              '.github/workflows/psp-core.yml' ]
   pull_request:
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
              'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
-             'android/app/src/test/resources/psp-*',
+             'android/app/src/test/resources/psp-*', 'android/app/src/main/cpp/GeThreadPlacement.hpp',
              '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
@@ -244,6 +245,24 @@ jobs:
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report-release.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
+      # The GE thread's tests again with every test machine's GE on its thread (PHOBOS_TESTS_GE_THREAD=On, as the
+      # option "GE Thread" On): the thread's own groups, the GPU's with it, the GE's times (the PSP's timing's with
+      # the thread among them) and the measured rounds' GE time, the CPU beside the GE (measured rounds 10 and 10b's
+      # among them), the versions, the GE's looks polled. The objects the run above built, linked again.
+      - name: Run the GE thread's tests with the thread on
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PHOBOS_TESTS_MODE: release
+          PHOBOS_JOBS: 4
+          PSP_GPU_ON_CPU: 1
+          PHOBOS_TESTS_GE_THREAD: "On"
+          PHOBOS_TESTS_ONLY: >-
+            ge on its own thread|with the GE on its thread|ge time|GE time|ge versions|looks polled|the CPU beside the
+            GE
+          PHOBOS_TESTS_REQUIRE: vulkan, programs, ge-round6, ge-round8, ge-round9, ge-round10, ge-round10b
+        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-on.log"
+
       - name: Keep the groups' results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -260,6 +279,9 @@ jobs:
           at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
           last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
           echo "- tests/psp, release build, at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+          last=$(tail -1 "$RUNNER_TEMP/suite-on.log" 2> /dev/null || true)
+          echo "- tests/psp, release build, the GE thread's tests with the thread on: ${last:-no output: they did not run}" \
+            >> "$GITHUB_STEP_SUMMARY"
 
   # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
   # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)

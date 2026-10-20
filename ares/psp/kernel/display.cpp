@@ -183,25 +183,38 @@ auto Kernel::sceDisplayGetVcount() -> void {
   result(vblanks);
 }
 
-//What the screen shows: display.width x display.height pixels (480x272) of the frame buffer the program set (for the
-//coming vertical sync, if it set one: presentedFrameBuffer()), as 8888
-//with red in the low byte and alpha 255 (the LCD has no alpha). 16-bit pixels widen by repeating each channel's top
-//bits. Black if the program hasn't set a frame buffer, or has turned the display off (a frame buffer of 0).
+//What the screen shows now: display.width x display.height pixels (480x272) of the frame buffer the program set (for
+//the coming vertical sync, if it set one: presentedFrameBuffer()), as it's laid out.
+auto Kernel::showing() const -> Shown {
+  return {presentedFrameBuffer(), display.bufferWidth, display.pixelFormat, display.width ? display.width : 480,
+          display.height ? display.height : 272};
+}
+
+//What the screen shows, as 8888 with red in the low byte and alpha 255 (the LCD has no alpha). 16-bit pixels widen
+//by repeating each channel's top bits. Black if the program hasn't set a frame buffer, or has turned the display off
+//(a frame buffer of 0).
 auto Kernel::picture(std::vector<u32>& pixels) -> void {
-  u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
+  picture(showing(), pixels, [&](u32 address, u32 size) -> const u8* { return memory.pointer(address, size); },
+          [&](u32 size, u32 address) { return memory.read(size, address); });
+}
+
+//(of what's shown, from its bytes wherever they are: row(address, size), a row's where they're all in one place
+//(nullptr where they aren't), else read(size, address) for each pixel's)
+auto Kernel::picture(const Shown& shown, std::vector<u32>& pixels,
+                     const std::function<auto (u32 address, u32 size) -> const u8*>& row,
+                     const std::function<auto (u32 size, u32 address) -> u32>& read) -> void {
+  u32 width = shown.width, height = shown.height;
   pixels.assign(width * height, 0xff00'0000);
-  u32 frameBuffer = presentedFrameBuffer();
-  if(!frameBuffer) return;
-  u32 format = display.pixelFormat & 3, bytes = format == 3 ? 4 : 2;
+  if(!shown.frameBuffer) return;
+  u32 format = shown.pixelFormat & 3, bytes = format == 3 ? 4 : 2;
   auto widen = [](u32 value, u32 bits) { return value << (8 - bits) | value >> (2 * bits - 8); };
   for(u32 y = 0; y < height; y++) {
-    //(a row's bytes straight from where they are when they're all in one place, else a pixel at a time)
-    u32 row = frameBuffer + y * display.bufferWidth * bytes;
-    const u8* bytesOf = memory.pointer(row, width * bytes);
+    u32 first = shown.frameBuffer + y * shown.bufferWidth * bytes;
+    const u8* bytesOf = row(first, width * bytes);
     for(u32 x = 0; x < width; x++) {
       u32 c, r, g, b;
       if(!bytesOf) {
-        c = memory.read(bytes, row + x * bytes);
+        c = read(bytes, first + x * bytes);
       } else {
         const u8* at = bytesOf + x * bytes;
         c = bytes == 4 ? at[0] | at[1] << 8 | at[2] << 16 | u32(at[3]) << 24 : at[0] | at[1] << 8;

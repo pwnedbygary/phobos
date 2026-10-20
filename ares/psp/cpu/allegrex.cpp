@@ -71,9 +71,10 @@ auto Allegrex::executeSyscall(u32 address, u32 instruction) -> u32 {
 
 //Runs at least the given number of instructions, stopping early if the CPU halts, or once it reaches a runLimit a
 //syscall brought forward; returns how many ran. With the recompiler, whole blocks run at a time, so it may run a few
-//more than asked.
-auto Allegrex::run(u64 instructions) -> u64 {
-  instructionsRun = 0;
+//more than asked. (from: a run going on from where the last stopped, its count on from there: the GE thread's go,
+//Kernel::goThreaded())
+auto Allegrex::run(u64 instructions, u64 from) -> u64 {
+  instructionsRun = from;
   runLimit = instructions;
   while(instructionsRun < runLimit && !scc.halted) {
     if(recompiler.enabled) {

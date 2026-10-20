@@ -937,6 +937,7 @@ struct GE {
                     f64 entries, bool sprite = false) -> void;
   auto texelClocks(const Look& look, u64 pixels, f64 texels, const TexelsRead& box, bool sprite) -> f64;
   auto pipeDrain() -> void;  //draw.cpp
+  auto oweVertices(u32 count, const VertexFormat& format) -> void;  //(readVertices()'s vertices, as they come in)
   //The GE's reciprocal (draw.cpp's geReciprocal()), and one of its chords' start and slope, for the tests.
   static auto reciprocal(float x) -> float;
   static auto reciprocalChord(u32 chord) -> std::pair<s32, s32>;
@@ -973,13 +974,14 @@ struct GE {
   auto replayPrimitive(u32 word, u32 vertexAt, u32 indexAt, const GeThread::Copies& copies, const u8* bytes,
                        bool patching) -> void;
   auto replayClut(u32 word, u32 address, const u8* bytes, u32 size) -> void;
-  auto copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& copies, std::vector<u8>& bytes) -> void;
+  auto copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& copies) -> void;
+  auto copyRanges(const GeThread::Copies& copies, u8* to) -> void;
   auto handPrimitive(u32 word, u32 count, bool patching) -> void;
   auto handClut() -> void;
   auto readCopiedVertices(u32 count, const VertexFormat& format) -> void;
   auto handState() -> void;
   auto handSwitches() -> void;
-  std::vector<u8> handCopies;  //(the kernel's GE) a PRIM's copies as they're made
+  std::vector<u8> handCopies;  //(the kernel's GE) a PRIM's copies where its record is too big for the ring
   //(the kernel's GE) its state as the render GE has it once it has taken everything handed over: the words it ran are
   //handed over as they run, but its state set from outside (a context restored, a test's) goes as a whole (handState())
   State handedState{};

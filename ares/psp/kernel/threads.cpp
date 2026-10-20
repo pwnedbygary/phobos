@@ -290,9 +290,18 @@ auto Kernel::untilNextEvent() const -> u64 {
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
   }
-  //(with the PSP's GE timing, a SIGNAL met whose time is to come, the GE waiting there: never with runs on the GE's
-  //thread, nor with a FINISH due)
-  if(geSignalDue && geReachAt > cycles) next = std::min(next, geReachAt);
+  //(with the PSP's GE timing, a SIGNAL met whose time is to come, the GE waiting there, taken as a FINISH's below, the
+  //GE's thread's runs and all: never with a FINISH due)
+  if(geSignalDue) {
+    if(geRuns.empty()) {
+      if(geReachAt > cycles) next = std::min(next, geReachAt);
+    } else if(u64 bound = geReachBound(); bound < next) {
+      geBounded = true;
+      geLimit = {0, cycles, next, ~0ull, geFoldedRun, geReachAt, ge.thread ? ge.thread->runsHanded() : 0, true, true,
+                 geStretchesMade};
+      next = std::min(next, std::max(bound, cycles + 1));
+    }
+  }
   //(the GE's time, due already: taken once it may be. Where runs are still being counted on the GE's thread and its
   //bound doesn't put it past the rest, a time no later than it, the inputs left for run() to work out exactly: geLimit)
   if(geFinishDue) {
@@ -300,7 +309,8 @@ auto Kernel::untilNextEvent() const -> u64 {
       if(geDoneAt > cycles) next = std::min(next, geDoneAt);
     } else if(u64 bound = geBound(); bound < next) {
       geBounded = true;
-      geLimit = {0, cycles, next, ~0ull, geFoldedRun, geDoneAt, ge.thread ? ge.thread->runsHanded() : 0, true};
+      geLimit = {0, cycles, next, ~0ull, geFoldedRun, geDoneAt, ge.thread ? ge.thread->runsHanded() : 0, true, false,
+                 geStretchesMade};
       next = std::min(next, std::max(bound, cycles + 1));
     }
   }
@@ -330,7 +340,7 @@ auto Kernel::idle(u64 end) -> bool {
     return false;
   }
   //(the GE's exact time, where it may be the next thing: ge/thread.hpp)
-  if(geFinishDue && !geRuns.empty()) geFold(true);
+  if((geFinishDue || geSignalDue) && !geRuns.empty()) geFold(true);
   u64 from = cycles;
   cycles = std::min(end, cycles + untilNextEvent());
   if(gePspTiming) geContend(from, cycles, 0);

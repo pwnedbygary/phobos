@@ -82,8 +82,8 @@ the runner refuses anything else):
 - `--ge-timing psp|fast` — the GE's time (the core's option "GE Timing"): `psp` (the default) as the
   owner's PSP took it over the same work (docs/psp-core.md part 106), `fast` by Sony's peak rates,
   which games' lists take a PSP 4 to 12 times longer than (part 103). The report names it; a
-  `--ge-profile` file made with `psp` carries its flag, and geprof.py says so. `--ge-thread on` takes
-  `--ge-timing fast` (the PSP's timing keeps the GE on the emulation thread, and the runner says so).
+  `--ge-profile` file made with `psp` carries its flag, and geprof.py says so. `--ge-thread on` works
+  with either: with `psp` the game's thread gets the GE's times as with the thread off (part 111).
 - `--pipeline-cache FILE` — the Vulkan renderer's pipelines kept in `FILE` between runs (the core's
   option "Pipeline Cache"), as the app keeps them: a second run starts with the first's, made at once.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and
@@ -216,11 +216,13 @@ a PNG, the runner waits for the screen's own thread to present a new picture, th
 `frame-000030.png` (for frame 30). That thread takes the pictures a step behind the run and
 drops one it doesn't take in time, so on a busy host a PNG can be a frame or more older than its
 name; the report's `captures` say, for each, the frame that was running when its picture
-arrived. If no picture has come since the last PNG and none comes within 2 s (a screen that
-stopped presenting, a host too loaded to keep up), the PNG shows the last one presented, and the
-runner says so on standard error (`frame N: the screen presented no new picture in 2 s`) and
-counts it in the summary's `stale captures`; with no picture at all yet, there's no PNG (`frame
-N: the screen presented no picture in 2 s, so it has no PNG`), counted too.
+arrived. With `--ge-thread on`, whose pictures the screen shows a frame late, a PNG's frame and
+the one before it get their own pictures, so a PNG a frame older than its name shows that frame's
+picture, as with the thread off. If no picture has come since the last PNG and none comes within
+2 s (a screen that stopped presenting, a host too loaded to keep up), the PNG shows the last one
+presented, and the runner says so on standard error (`frame N: the screen presented no new
+picture in 2 s`) and counts it in the summary's `stale captures`; with no picture at all yet,
+there's no PNG (`frame N: the screen presented no picture in 2 s, so it has no PNG`), counted too.
 
 With `--report FILE`, the run is also written as JSON, `"report": "phobos-psp-runner 1"` (a
 later layout gets another number):

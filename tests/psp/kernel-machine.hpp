@@ -34,13 +34,13 @@ struct KernelMachine {
     kernel.power();
   }
 
-  //The GE timed as the PSP's, as System::power() sets the option "GE Timing" "PSP": the kernel's timing, the CPU's
-  //caches counted for the GE's time beside it (Allegrex::Cache), and the GE on the emulation thread
-  //(System::threadGE()). Before the program's code is compiled: blocks compiled before count nothing.
+  //The GE timed as the PSP's, as System::power() sets the option "GE Timing" "PSP": the kernel's timing, and the CPU's
+  //caches counted for the GE's time beside it (Allegrex::Cache); the GE on its thread or not as the machine has it
+  //(PHOBOS_TESTS_GE_THREAD: the same times either way). Before the program's code is compiled: blocks compiled before
+  //count nothing.
   auto pspTiming() -> void {
     kernel.gePspTiming = true;
     system.dataCache.enabled = system.instructionCache.enabled = true;
-    system.threadGE(false);
   }
 
   auto stub(const char* name) -> u32 {

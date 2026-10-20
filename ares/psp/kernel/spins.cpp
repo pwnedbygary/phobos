@@ -168,13 +168,28 @@ auto Kernel::spinSkip() -> void {
   //(in a go of the CPU's, whose limit and count these are; nothing else may come in meanwhile: no call into the
   //program waiting or running, no vertical blank's handlers)
   if(!going || interrupting || !current || current->status != Status::Running || !calls.empty() || vblankPending) return;
+  //(with the CPU's work beside the GE counted, the go's limit exactly, as the synchronous GE's go has it, where the GE
+  //thread's bound set it short: as many turns skipped, GE::Cost::Contended, below)
+  if constexpr(GE::Cost::Contended) if(ge.thread && !geLimits.empty()) {
+    for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
+    geLimits.clear(), geFolded.clear();
+    cpu.runLimit = goExact;
+  }
   //the skipped turns' blocks all end before the go's limit: the last at the count the anchor's syscall ends on
   u64 room = cpu.runLimit > counted + 1 ? cpu.runLimit - counted - 1 : 0;
   if(room / spin.period <= SpinMargin) return;
   u64 turns = room / spin.period - SpinMargin, skipped = turns * spin.period;
   //a list's FINISH (or, with the PSP's GE timing, its SIGNAL) taken at the first system call once it's due: none comes
   //by within the turns skipped
-  if((geFinishDue && geBound() <= cycles + skipped) || (geSignalDue && geReachAt <= cycles + skipped)) return;
+  //(with the CPU's work beside the GE counted, the time exactly: skipped turns end one stretch for all of them, run
+  //ones one each, GE::Cost::Contended, so a skip must be the synchronous GE's; the GE thread waited for where the
+  //bound doesn't decide)
+  auto due = [&](u64 bound, const u64& at) {
+    if(bound > cycles + skipped) return false;
+    if constexpr(GE::Cost::Contended) geFold(true), bound = at;
+    return bound <= cycles + skipped;
+  };
+  if((geFinishDue && due(geBound(), geDoneAt)) || (geSignalDue && due(geReachBound(), geReachAt))) return;
   //With the PSP's GE timing, the GE busy for all of the turns or idle for all of them, not done part way: their one
   //stretch then adds to its busy window what theirs would (its sums whole counts). It pushes the GE back as far as
   //theirs would have by the last turn's end if the push the window owes (geContendDue()) is at its most there, or no
@@ -184,6 +199,7 @@ auto Kernel::spinSkip() -> void {
   //(geContendBound()). With no lines in the window nor the turns' the window owes nothing. And the last two turns run
   //moved the same lines with as many system calls (spinTurn()): each turn skipped moves what they did (below).
   if(gePspTiming && !spin.steady) return;
+  if(gePspTiming && ge.thread) geFold(true);  //(the window and the GE's time as the synchronous GE has them)
   if(gePspTiming && geDoneAt > cycles) {
     if(geDoneAt <= cycles + skipped) return;
     bool moving = spin.moved[0] || spin.moved[1] || spin.moved[2] || spin.moved[3];

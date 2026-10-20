@@ -519,14 +519,19 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
   }
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
-  //(the GE's time: vertices in a row come in at a byte a VertexByte, VertexFloor at least, each one through an index
-  //far slower, the work
-  //shared out among the PRIM's primitives: Cost, Pipe)
-  if(pspTiming) {
-    f64 each = format.size == 3 ? Cost::Vertex3 : std::max(Cost::VertexFloor, format.size * Cost::VertexByte);
-    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : count * each;
-    ramRead(0, format.indexFormat ? count * Cost::IndexedVertex : count * each);
-  }
+  oweVertices(count, format);
+}
+
+//(the GE's time: vertices in a row come in at a byte a VertexByte, VertexFloor at least, each one through an index far
+//slower, the work shared out among the PRIM's primitives: Cost, Pipe. Threaded, the control pass's, a bounding box's,
+//go to the render GE's pipeline after its word: thread.hpp)
+auto GE::oweVertices(u32 count, const VertexFormat& format) -> void {
+  if(!pspTiming) return;
+  f64 each = format.size == 3 ? Cost::Vertex3 : std::max(Cost::VertexFloor, format.size * Cost::VertexByte);
+  f64 work = format.indexFormat ? count * Cost::IndexedVertex : count * each;
+  if(thread) return thread->front(work, true);
+  pipe.vertices += work;
+  ramRead(0, work);
 }
 
 auto GE::primitive(u32 kind, u32 count) -> void {

@@ -46,6 +46,7 @@ import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.util.PspDrawingThreads
+import com.phobos.emulator.util.PspGraphicsOverlap
 import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspResolution
 import com.phobos.emulator.util.ZxTape
@@ -528,6 +529,18 @@ fun PspDrawingThreadsItem(current: Int, onSelect: (Int) -> Unit) {
         current = PspDrawingThreads.forCore(current),
         options = PspDrawingThreads.choices,
         label = PspDrawingThreads::label,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspGraphicsOverlapItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Graphics Overlap",
+        description = "Whether a PSP game's pictures are drawn on a thread of their own while the game goes on with the next frame. ${PspGraphicsOverlap.description(PspGraphicsOverlap.forCore(current))} With On, each picture reaches the screen a frame later: about 17 ms more between pressing a button and seeing what it did, at 60 frames a second. The pictures and everything the game sees are the same either way. Applies when a game starts.",
+        current = PspGraphicsOverlap.forCore(current),
+        options = PspGraphicsOverlap.choices,
+        label = PspGraphicsOverlap::label,
         onSelect = onSelect,
     )
 }

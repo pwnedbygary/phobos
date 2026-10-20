@@ -37,6 +37,24 @@ class PspVideoTest {
     }
 
     @Test
+    fun graphicsOverlapIsOffOrOnAsTheCoreTakesIt() {
+        assertEquals(listOf(0, 1), PspGraphicsOverlap.choices)
+        assertEquals(PspGraphicsOverlap.OFF, PspGraphicsOverlap.choices.first())
+        assertEquals("Off", PspGraphicsOverlap.label(PspGraphicsOverlap.OFF))
+        assertEquals("On", PspGraphicsOverlap.label(PspGraphicsOverlap.ON))
+        for (mode in PspGraphicsOverlap.choices) {
+            assertEquals(mode, PspGraphicsOverlap.forCore(mode))
+            assertTrue(PspGraphicsOverlap.description(mode).isNotEmpty())
+        }
+        assertEquals(PspGraphicsOverlap.OFF, PspGraphicsOverlap.forCore(2))  // Auto isn't offered yet
+        assertEquals(PspGraphicsOverlap.OFF, PspGraphicsOverlap.forCore(-1))
+        // the core's option "GE Thread"
+        assertEquals("Off", PspGraphicsOverlap.option(PspGraphicsOverlap.OFF))
+        assertEquals("On", PspGraphicsOverlap.option(PspGraphicsOverlap.ON))
+        assertEquals("Off", PspGraphicsOverlap.option(5))
+    }
+
+    @Test
     fun aGameStartedWithOtherSettingsRunsDifferently() {
         val software = PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0)
         assertTrue(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0)))
@@ -47,8 +65,15 @@ class PspVideoTest {
         val vulkan = PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0)
         assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 3, 0)))
         assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 2, 0)))
+        // Graphics overlap: another way to run, with any renderer.
+        val overlapped = PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)
+        assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0, graphicsOverlap = PspGraphicsOverlap.ON)))
+        assertFalse(vulkan.runsAs(overlapped))
+        assertTrue(overlapped.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)))
         // As the core is told them: a value from elsewhere is its default.
         assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO), PspStartSettings.of(7, 0, 3))
+        assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO, graphicsOverlap = PspGraphicsOverlap.OFF),
+            PspStartSettings.of(7, 0, 3, graphicsOverlap = 9))
         // The GE timed as a PSP's unless Fast is chosen, and a game started with the other timing runs differently.
         assertTrue(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0).geTiming)
         assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0, geTiming = false)))

@@ -131,7 +131,7 @@ struct Allegrex {
   auto instruction() -> void;
   auto execute(u32 address, u32 instruction) -> u32;
   auto executeSyscall(u32 address, u32 instruction) -> u32;
-  auto run(u64 instructions) -> u64;
+  auto run(u64 instructions, u64 from = 0) -> u64;
   //How many instructions the run under way has run so far, as its last block or instruction began. And how many it
   //runs in all: a syscall may bring that forward, to stop the run at something it made due sooner (a thread's wait
   //ending, a timer).

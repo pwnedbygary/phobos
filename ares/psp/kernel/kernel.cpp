@@ -1302,34 +1302,32 @@ auto Kernel::runUntilNextEvent() -> void {
 //waited for), a go that ended short goes on, the CPU run again from where it stopped with none of the loop's steps
 //between (its blocks end where they always do, and the interpreter's at its limit), as the go would have run on.
 auto Kernel::goThreaded(u64 end) -> void {
-  goOffset = 0, goExact = ~0ull, geLimits.clear(), geFolded.clear();
+  goExact = ~0ull, geLimits.clear(), geFolded.clear();
   geBounded = false;
   u64 first = std::min(end - cycles, std::max<u64>(1, untilNextEvent()));
   if(geBounded) geLimit.before = 0, geLimit.cap = end - cycles, geLimits.push_back(geLimit);
   else goExact = first;
   u64 ran = cpu.run(first);
-  cycles += ran - counted;
-  counted = ran;
   while(!geLimits.empty() && !cpu.scc.halted && !exec.pending && !exited) {
     for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
     geLimits.clear(), geFolded.clear();
-    u64 at = goOffset + ran;
-    if(goExact <= at) break;
-    goOffset = at, counted = 0;
-    ran = cpu.run(goExact - at);
-    cycles += ran - counted;
-    counted = ran;
+    if(goExact <= ran) break;
+    ran = cpu.run(goExact, ran);  //(its count the go's: the CPU's stretches, to its syscalls and its end, the one go's)
   }
   geLimits.clear(), geFolded.clear();
   going = false;
+  u64 tail = ran - counted;
+  cycles += tail;
+  if(gePspTiming) geContend(cycles - tail, cycles, tail);
+  counted = ran;
 }
 
 //(runUntilNextEvent()'s with the GE on its thread: its limits worked out from the bound kept for goThreaded())
 auto Kernel::runUntilNextEventThreaded() -> void {
   geBounded = false;
   u64 before = cpu.instructionsBefore(), limit = before + untilNextEvent();
-  if(going && geBounded) geLimit.before = goOffset + before, geLimit.cap = ~0ull, geLimits.push_back(geLimit);
-  else if(going) goExact = std::min(goExact, goOffset + limit);
+  if(going && geBounded) geLimit.before = before, geLimit.cap = ~0ull, geLimits.push_back(geLimit);
+  else if(going) goExact = std::min(goExact, limit);
   if(limit < cpu.runLimit) cpu.runLimit = limit;
 }
 

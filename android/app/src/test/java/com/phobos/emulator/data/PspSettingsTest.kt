@@ -68,9 +68,13 @@ class PspSettingsTest {
             assertEquals(0, defaults.pspRenderer)
             assertEquals(1, defaults.pspResolution)
             assertEquals(0, defaults.pspDrawingThreads)
+            assertEquals(0, defaults.pspGraphicsOverlap)  // Off till the owner decides
+            assertEquals(false, defaults.pspThreadPlacement)  // off by default, as the overlap
             store.setPspRenderer(2)
             store.setPspResolution(4)
             store.setPspDrawingThreads(6)
+            store.setPspGraphicsOverlap(1)
+            store.setPspThreadPlacement(true)
             store.setPspRightStick(PspRightStick.DPAD)
         }
         withStore { store, _ ->
@@ -78,6 +82,8 @@ class PspSettingsTest {
             assertEquals(2, saved.pspRenderer)
             assertEquals(4, saved.pspResolution)
             assertEquals(6, saved.pspDrawingThreads)
+            assertEquals(1, saved.pspGraphicsOverlap)
+            assertEquals(true, saved.pspThreadPlacement)
             assertEquals(PspRightStick.DPAD, saved.pspRightStick)
         }
     }

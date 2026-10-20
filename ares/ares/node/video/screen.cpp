@@ -193,6 +193,11 @@ auto Screen::setInterlace(bool interlaceField) -> void {
   _interlaceField = interlaceField;
 }
 
+auto Screen::setPassthrough(bool passthrough) -> void {
+  lock_guard<recursive_mutex> lock(_mutex);
+  _passthrough = passthrough;
+}
+
 auto Screen::attach(Node::Video::Sprite sprite) -> void {
   lock_guard<recursive_mutex> lock(_mutex);
   if(std::ranges::find(_sprites, sprite) != _sprites.end()) return;

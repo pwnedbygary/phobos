@@ -95,7 +95,7 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
       for(u32 block = 0; block < GeModel::Blocks; block++) {
         if(point.covers[block]) point.before[block] = model.gpuDepth[block];
       }
-      if(point.covers.any()) model.putPoints.push_back(point);
+      if(point.covers.any()) model.putPoints.push_back(point), model.dirtyings++;
       if(model.declares) declareBlocks(point.covers);
     }
   }
@@ -213,13 +213,15 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
         for(u32 block = 0; block < GeModel::Blocks; block++) {
           if(point.covers[block]) point.before[block] = model.gpuDepth[block];
         }
-        model.putPoints.push_back(point);
+        model.putPoints.push_back(point), model.dirtyings++;
         if(model.declares) declareBlocks(point.covers);
       }
       if(depthWrites) d.newestClass = certain ? mine : (d.newestClass == ~0u ? 0 : d.newestClass) | mine;
     }
-    for(u32 block = 0; block < GeModel::Blocks; block++) {
-      if(depthBlocks[block]) model.gpuDepth[block] = at;
+    if(depthBlocks.any()) {  //(none for most PRIMs: 128 looked at for each)
+      for(u32 block = 0; block < GeModel::Blocks; block++) {
+        if(depthBlocks[block]) model.gpuDepth[block] = at;
+      }
     }
     //above 1x, its target's hull of rectangles since the last finish, other targets' hulls in the pages its rows
     //reach merged in (begin()'s moves)
@@ -253,6 +255,7 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
         t->hullAt = std::max(t->hullAt, o.hullAt);
       }
       t->hullAt = std::max(t->hullAt, at);
+      model.dirtyings++;
     }
   }
   if(software && textured) {  //(its texture, which the software renderer may read from memory as it draws)
@@ -270,8 +273,10 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
     u64 low = u64(p.frameBuffer) + (u64(std::max(region.top, 0)) * p.stride + std::max(region.left, 0)) * bytesEach;
     u64 high = u64(p.frameBuffer) + (u64(region.bottom) * p.stride + std::max(region.right, 0) + 1) * bytesEach - 1;
     model.software.add(spanRect(low, high - low + 1), at);
-    for(u32 block = 0; block < GeModel::Blocks; block++) {
-      if(depthBlocks[block]) model.software.add(spanRect(u64(block) << 14, 0x4000), at);
+    if(depthBlocks.any()) {
+      for(u32 block = 0; block < GeModel::Blocks; block++) {
+        if(depthBlocks[block]) model.software.add(spanRect(u64(block) << 14, 0x4000), at);
+      }
     }
   }
   return certain;

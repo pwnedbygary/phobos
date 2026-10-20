@@ -1501,9 +1501,9 @@ static auto fontsGlyphStates() -> void {
   while(vaudio < now.size() && now[vaudio] == withVaudio[vaudio]) vaudio++;
   //(layout 34's: the GE's texture cache's texels, its front end's time, a SIGNAL met and its pipeline, the queue
   //empty: 46 bytes)
-  f.m.kernel.ge.texelCache.u0 = 1;
+  f.m.system.timedGE().texelCache.u0 = 1;
   auto withCached = kernelState(f.m);
-  f.m.kernel.ge.texelCache.u0 = 0;
+  f.m.system.timedGE().texelCache.u0 = 0;
   u32 cached = 0;
   while(cached < now.size() && now[cached] == withCached[cached]) cached++;
   f.m.kernel.display.nextFrameBuffer = 1;  //(layout 33's: a frame buffer set for the next vertical sync, 13 bytes)
@@ -1571,7 +1571,7 @@ static auto fontsGlyphStates() -> void {
   });
   vaudio = where([&](bool on) { p.kernel.audio.vaudio.reserved = on; });
   latched = where([&](bool on) { p.kernel.display.nextFrameBuffer = on; });
-  cached = where([&](bool on) { p.kernel.ge.texelCache.u0 = on; });
+  cached = where([&](bool on) { p.system.timedGE().texelCache.u0 = on; });
   CHECK(variables + 4 <= opening && opening < fields && fields + 32 <= now.size() && vaudio + 15 <= now.size(), true);
   if(!(variables + 4 <= opening && opening < fields && fields + 32 <= now.size() && vaudio + 15 <= now.size())) return;
   older = without(now, {{fields, 32}, {opening, 8}, {vaudio, 15}, {variables, 4}, {latched, 13}, {cached, 46},
