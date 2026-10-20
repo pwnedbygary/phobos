@@ -266,7 +266,9 @@ jobs:
       # The kernel's GE tests again with every test machine that doesn't choose its GE timing on the PSP's
       # (PHOBOS_TESTS_GE_TIMING=PSP, as the option "GE Timing" has it by default; tests that pin "Fast"'s times keep
       # it): the spin skip's groups and the GE's looks polled, the kernel's GE groups (their lists, callbacks, breaks
-      # and states, the GE thread's among them) and the sample programs, every result as with "Fast". Left out for
+      # and states, the GE thread's among them) and the sample programs, every result as with "Fast". "ge " also
+      # picks 12 groups that aren't the GE's (message pipes x5, the memory page table, dialogs front end: message
+      # aborted, desktop disc image files, two draw3d groups and two gpu groups): harmless breadth. Left out for
       # time: the measured rounds' groups, and the GPU's that "ge " doesn't catch. The objects the first run built,
       # linked again.
       - name: Run the kernel's GE tests with the PSP's GE timing

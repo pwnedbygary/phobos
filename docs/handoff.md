@@ -59,7 +59,7 @@ Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
   group (the GE thread's among them), the sample programs and the curves, 105 groups with the new test;
   `PHOBOS_TESTS_REQUIRE=vulkan, programs`. Left out for time: the six measured groups and three of the GPU's, which
   have a machine the switch moves too (a selection with them took 175 s here, against the step's 24). 26 s here; CI
-  takes 120 s for the GE thread's step, 104 s here, so about 30 s there.
+  took 35 s on `a0dd68a27`, where the GE thread's step took 186 s (120 s on master's last run, 104 s here).
 - **What the step catches** (gcov on a coverage build: `covbranch.txt`): it takes 18 branches the release lane (its
   suite and the GE thread's step) never takes. No mutation tried is caught by the step alone. (1) The spin skip's
   SIGNAL check dropped (ares/psp/kernel/spins.cpp:192): the step reaches it three times, in "the GE's looks polled
@@ -95,7 +95,7 @@ Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
   step's selection 105, 0 (26 s); the new test sanitized 1, 0, no sanitizer report; actionlint (master's two
   desktop.yml warnings only); `git diff --check`. All at niceness 5 through `pinned.sh`, two compiles at once.
 - **Not run** here: the rest of the sanitized suite, tests/allegrex, tests/psp/ares (CI's).
-- Independent review: not yet.
+- Independent review: PASS on `a0dd68a27`, read-only (`~/phobos-work/scratch/review-289/REVIEW.md`), no file changes.
 
 ## PSP measure: ge-terms.py applies to master again, its five places where #277 left them — tools only — 2026-10-20
 

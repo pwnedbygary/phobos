@@ -436,6 +436,8 @@ static auto runMain(KernelMachine& m, bool recompile, u32 gp = 0x0812'3456) -> v
 //an SDK after 2.00.10; 0 for one saying none, as gpu/signals recorded) and the global pointer the program had; the
 //program finds its result as it left it.
 static auto geCallbacks() -> void {
+  //with the PSP's timing the interpreter passes as well and only the recompiler fails, as a compiled block takes the
+  //FINISH, due just after sceGeListEnQueue returns, only at its end
   FastTimed fastTimed;  //(both callbacks before the program goes on: "Fast" gives the list no time)
   for(u32 version : {0x0606'0010u, 0u}) for(bool recompile : {false, true}) {
     KernelMachine m;
