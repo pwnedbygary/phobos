@@ -3047,6 +3047,7 @@ static auto geTimePspStateClocks() -> void {
     m->pspTiming();
     m->system.threadGE(threaded);
     m->system.recompiler.enabled = true;
+    m->kernel.startTime = 1'700'000'000ull * 1'000'000;  //(the date from a fixed time, not the host's: states compared)
     return m;
   };
   auto program = [&](KernelMachine& m) {
@@ -3420,6 +3421,7 @@ static auto geTimePspStretchSignalThreaded() -> void {
     m.pspTiming();
     m.system.threadGE(threaded);
     m.system.power(Callback);  //(the CPU's registers set as a power on sets them: the states are compared)
+    m.kernel.startTime = 1'700'000'000ull * 1'000'000;  //(and the date from a fixed time, not the host's)
     m.kernel.sdkVersion = 0x0606'0010;
     auto& k = m.kernel;
     Assembler callback{m, Callback};
