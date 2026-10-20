@@ -844,12 +844,15 @@ static auto spinsGeDrawingThreaded() -> void {
 //Every step's state the same with the skip on as off; on the recompiler, skips refused while the cap binds, then taken,
 //turns skipped by the thousand, and the instructions counted as run in place of the refused skips those of the turns
 //that ran till the next try (on the interpreter, whose accesses aren't counted, nothing is owed: its runs check that
-//the skips are exact). And beside sprites textured from RAM (both kinds' parts), main reading three lines each turn:
-//skipped as run, none refused.
+//the skips are exact). The same with the poll's go ended a few microseconds in by a thread woken (Event::Thread) or an
+//alarm's handler (Event::Alarm), either then running 3,002 instructions of its own: the refused skip the go's end cuts
+//short counted for its own turns alone. And beside sprites textured from RAM (both kinds' parts), main reading three
+//lines each turn: skipped as run, none refused.
 static auto spinsGeCapped() -> void {
   constexpr u32 Texture = 0x0900'0000, Lines = 0x0940'0000;
+  enum class Event : u32 { None, Thread, Alarm };
   u32 turn = 0;  //(the poll's instructions a turn: its loop's words and its function's stub's two, jr ra and syscall)
-  auto capped = [&turn](KernelMachine& m) {
+  auto capped = [&turn](Event event) { return [&turn, event](KernelMachine& m) {
     auto& memory = m.system.memory;
     for(u32 n = 0; n < 512 * 512; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
     u32 at = GeList;
@@ -877,13 +880,33 @@ static auto spinsGeCapped() -> void {
     for(u32 n = 0; n < 16; n++) main.put(lw(t1, s16(n * 64), s1));
     main.put(addiu(s1, s1, 1024)); main.put(addiu(s2, s2, -1));
     main.put(bne(s2, zero, branchTo(main, reads))); main.put(nop);
+    auto busy = [](Assembler& a) {  //(3,002 instructions: two, then a thousand turns of three)
+      a.li(t0, 1000);
+      u32 again = a.here();
+      a.put(addiu(t0, t0, -1)); a.put(bne(t0, zero, branchTo(a, again))); a.put(nop);
+    };
+    if(event == Event::Thread) {  //(woken in the poll's go, its delay 6 microseconds longer than main's; then it ends)
+      Assembler waker{m, 0x0880'3000};
+      waker.li(a0, 1806); waker.call("sceKernelDelayThread");
+      busy(waker);
+      waker.call("sceKernelExitDeleteThread");
+    }
+    if(event == Event::Alarm) {  //(woken 210 microseconds before main, it sets an alarm due TimerLead on, and ends)
+      Assembler waker{m, 0x0880'3000}, handler{m, 0x0880'3800};
+      waker.li(a0, 1590); waker.call("sceKernelDelayThread");
+      waker.li(a0, 1); waker.li(a1, handler.here()); waker.li(a2, 0); waker.call("sceKernelSetAlarm");
+      waker.call("sceKernelExitDeleteThread");
+      busy(handler);
+      handler.put(addu(v0, zero, zero)); handler.put(jr(ra)); handler.put(nop);  //(0: the alarm ends)
+    }
+    if(event != Event::None) startThread(main, m, "waker", 0x0880'3000);  //(it runs at once, to its delay)
     main.li(a0, 1800); main.call("sceKernelDelayThread");
     u32 poll = main.here();
     main.put(addu(a0, s0, zero)); main.li(a1, 1); main.call("sceGeListSync");
     main.put(bne(v0, zero, branchTo(main, poll))); main.put(nop);
     turn = (main.here() - poll) / 4 + 2;
     main.call("sceKernelExitGame");
-  };
+  }; };
   auto parts = [](KernelMachine& m) {
     geSprites(m, GeList, GeVertices, false, nullptr, true);
     Assembler main{m, 0x0880'1000};
@@ -898,14 +921,18 @@ static auto spinsGeCapped() -> void {
   };
   for(bool recompile : {false, true}) {
     u64 skipped = 0;
-    CHECK(bothWays(capped, recompile, 64, skipped, true), true);
-    if(skipped <= 1000) std::printf("  the cap's spin skipped %llu turns\n", (unsigned long long)skipped);
-    CHECK(skipped > 1000, true);
+    for(Event event : {Event::None, Event::Thread, Event::Alarm}) {
+      CHECK(bothWays(capped(event), recompile, 64, skipped, true), true);
+      if(skipped <= 1000) {
+        std::printf("  the cap's spin (event %u) skipped %llu turns\n", u32(event), (unsigned long long)skipped);
+      }
+      CHECK(skipped > 1000, true);
+    }
     CHECK(bothWays(parts, recompile, 32, skipped, true), true);
     if(skipped <= 1000) std::printf("  both parts' spin skipped %llu turns\n", (unsigned long long)skipped);
     CHECK(skipped > 1000, true);
   }
-  auto m = machine(capped, true, true, true);
+  auto m = machine(capped(Event::None), true, true, true);
   m->kernel.run(Step * 64);
   CHECK(m->kernel.exited, true);
   auto& k = m->kernel;
@@ -925,9 +952,34 @@ static auto spinsGeCapped() -> void {
                 (unsigned long long)k.geRefusedRun(), (unsigned long long)k.geSkipsRefused, turn);
   }
   CHECK(k.geRefusedRun(), k.geSkipsRefused * Kernel::SpinTurns * turn);
+  //With the go cut short. After the sleep the poll anchors at its first call, has its period at its second and tries a
+  //skip every SpinTurns turns from its sixth, so its j-th try's call comes 15 + 36j instructions into the go (6 before
+  //the first call, 9 a turn), with go - 16 - 36j instructions of room for the turns the skip would skip, the last
+  //SpinMargin of them kept to run. The thread's wake ends the go 1,992 instructions in (its delay 6 microseconds of 333
+  //cycles longer than main's, less the 6 instructions from its delay's call to main's); the alarm, 1,668 in (due
+  //TimerLead after the waker's call, 9 instructions into its go, which began 210 microseconds and 6 cycles before
+  //main's). So the last try in the go, the 54th or the 45th, has 32 instructions of room, 3 turns, and its skip would
+  //have run 1 turn; the next try would come after the go's end, and so after the event's 3,002 instructions, none of
+  //them the spin's. With every try till then refused, the instructions run in place of the refused skips are SpinTurns
+  //turns of the poll for each but that one, and 1 turn for it.
+  for(Event event : {Event::Thread, Event::Alarm}) {
+    m = machine(capped(event), true, true, true);
+    m->kernel.run(Step * 64);
+    CHECK(m->kernel.exited, true);
+    u64 tries = event == Event::Thread ? 54 : 45, refused = m->kernel.geSkipsRefused;
+    u64 expected = refused ? ((refused - 1) * Kernel::SpinTurns + 1) * turn : 0;
+    if(refused < tries || m->kernel.geRefusedRun() != expected) {
+      std::printf("  %s: %llu instructions run in place of %llu refused skips (%llu tries in the go), %u a turn\n",
+                  event == Event::Thread ? "a thread woken" : "an alarm's handler",
+                  (unsigned long long)m->kernel.geRefusedRun(), (unsigned long long)refused,
+                  (unsigned long long)tries, turn);
+    }
+    CHECK(refused >= tries, true);
+    CHECK(m->kernel.geRefusedRun(), expected);
+  }
   //On the interpreter, whose accesses aren't counted, the window owes nothing and no skip is refused: its runs above
   //check that the skips are exact, nothing of the cap.
-  m = machine(capped, false, true, true);
+  m = machine(capped(Event::None), false, true, true);
   m->kernel.run(Step * 64);
   CHECK(m->kernel.exited, true);
   CHECK(m->kernel.geCapped + m->kernel.geSkipsRefused, 0u);

@@ -385,7 +385,7 @@ struct Kernel {
   static constexpr u32 SpinTurns = 4, SpinLongest = 2048, SpinMargin = 2, SpinWaitMost = 4096;
   auto spinTurn() -> void;
   auto spinSkip() -> void;
-  auto spinRefused() -> void;
+  auto spinRefused(u64 skipped) -> void;
   auto spinRefusalsEnd() -> void;
   auto spinProve(SpinShadow& shadow) -> bool;
   auto spinCall(SpinShadow& shadow, u32 code) -> bool;
@@ -1147,10 +1147,11 @@ struct Kernel {
   //cache's lines read in). Then, for the runner's report alone (not saved), the cycles the GE was busy beside the CPU
   //since power on and the lines moved in them; the windows whose push has reached the cap (GE::Cost::Cap), each once
   //(GeWindow::capped); the spin skips refused because the cap binds at either end of the turns they would skip
-  //(spinRefused()) and the instructions run in their place, from each refusal till the next try or the spin's end,
-  //each once (from geRefusedFrom while geRefusing, by geInstructions' count; geRefusedRun() counts one still open to
-  //now); and the CPU's instructions since power on, every stretch's (geContend()). (Mutable, as is gePipeAt: with the
-  //GE on its thread, geFold() takes the stretches that waited.)
+  //(spinRefused()) and the instructions run in their place, from each refusal till the next try or the spin's end but
+  //no further than the turns that skip would have skipped, each once (from geRefusedFrom to at most geRefusedUntil
+  //while geRefusing, by geInstructions' count; geRefusedRun() counts one still open to now); and the CPU's
+  //instructions since power on, every stretch's (geContend()). (Mutable, as is gePipeAt: with the GE on its thread,
+  //geFold() takes the stretches that waited.)
   struct GeWindow {
     u64 passed = 0, instructions = 0, fills = 0, writebacks = 0, uncached = 0, pushed = 0;
     u64 capped = 0;  //(0 or 1; a word, not a bool, so that a window has no padding: tests compare two byte for byte)
@@ -1158,9 +1159,12 @@ struct Kernel {
   mutable GeWindow geWindow;
   mutable u64 geCacheSeen[4] = {};
   mutable f64 geBusyCycles = 0, geBusyLines = 0;
-  mutable u64 geCapped = 0, geSkipsRefused = 0, geRefusedInstructions = 0, geRefusedFrom = 0, geInstructions = 0;
+  mutable u64 geCapped = 0, geSkipsRefused = 0, geRefusedInstructions = 0, geRefusedFrom = 0, geRefusedUntil = 0;
+  mutable u64 geInstructions = 0;
   mutable bool geRefusing = false;
-  auto geRefusedRun() const -> u64 { return geRefusedInstructions + (geRefusing ? geInstructions - geRefusedFrom : 0); }
+  auto geRefusedRun() const -> u64 {
+    return geRefusedInstructions + (geRefusing ? std::min(geInstructions, geRefusedUntil) - geRefusedFrom : 0);
+  }
   auto geContend(u64 from, u64 to, u64 instructions) -> void;
   auto geContendThreaded(u64 from, u64 to, u64 instructions) -> void;
   auto geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4], bool signal, u32 cpu) const -> void;

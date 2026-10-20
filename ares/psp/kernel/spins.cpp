@@ -220,7 +220,7 @@ auto Kernel::spinSkip() -> void {
     end.uncached += turns * spin.moved[2];
     bool lines = moving || geWindow.fills || geWindow.writebacks || geWindow.uncached;
     if(lines && ((moving && spin.calls > 1) || geContendBound(geWindow) != geContendBound(end))) return;
-    if(lines && (geContendCapped(geWindow) || geContendCapped(end))) return spinRefused();
+    if(lines && (geContendCapped(geWindow) || geContendCapped(end))) return spinRefused(skipped);
   }
   SpinShadow shadow{*this, memory};
   if(!spinProve(shadow) || shadow.period != spin.period) {
@@ -255,15 +255,19 @@ auto Kernel::spinSkip() -> void {
 
 //A skip refused because the cap binds at either end of its turns (spinSkip()), for the runner's report: counted, and
 //the turns that run in its place counted from here, by geInstructions' count, till the next try or the spin's end
-//(spinRefusalsEnd()), each instruction once.
-auto Kernel::spinRefused() -> void {
+//(spinRefusalsEnd()), each instruction once, and no further than the turns it would have skipped (skipped, their
+//instructions: a turn's cycles are its instructions). A try with less room than the turns to the next try has no next
+//try in its go: what the go's end brings (an interrupt's handler, a thread woken) runs before the spin goes on, and
+//isn't the spin's.
+auto Kernel::spinRefused(u64 skipped) -> void {
   geSkipsRefused++;
-  if(!geRefusing) geRefusing = true, geRefusedFrom = geInstructions;
+  if(!geRefusing) geRefusing = true, geRefusedFrom = geInstructions, geRefusedUntil = geInstructions + skipped;
 }
 
-//The instructions run in place of a refused skip, from its refusal till now, into the report's count.
+//The instructions run in place of a refused skip, from its refusal till now or its own turns' end, into the report's
+//count.
 auto Kernel::spinRefusalsEnd() -> void {
-  if(geRefusing) geRefusedInstructions += geInstructions - geRefusedFrom, geRefusing = false;
+  if(geRefusing) geRefusedInstructions += std::min(geInstructions, geRefusedUntil) - geRefusedFrom, geRefusing = false;
 }
 
 //The CPU's caches' counts as they are (data lines read in, written back, uncached accesses, instruction lines read in).
