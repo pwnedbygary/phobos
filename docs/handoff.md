@@ -47,7 +47,8 @@ Branch `cursor/psp-ge-decoder-ci-cachy`, from master `d9bfbefb4` (#281). CI only
   don't have (`psp-config` for `build.mak`, and the SDK's headers, which `plugin.h` includes even with `-DHOST`).
 - **Checks**, here (Python 3.14.7): the job's command ran 30 tests, OK (skipped=1); with one assertion broken on
   purpose (not committed), FAILED (failures=1, skipped=1), exit 1; actionlint 1.7.12 with shellcheck 0.11.0, clean.
-  CI's run is in the pull request's body. Independent review: not yet.
+  CI's run is in the pull request's body. Review: PASS on `483d5b1cf`, independent and read-only, with wording
+  items in the PR body only.
 
 ## PSP measure, round 10c: Super Monkey Ball's small strips beside the CPU taken apart, Activision Hits' menu's second and third lists — 2026-10-19
 
