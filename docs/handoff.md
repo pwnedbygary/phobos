@@ -50,12 +50,16 @@ Branch `cursor/ci-checkout-node24-cachy`, from master `b398e86f7` (#285). CI onl
   runners); v6 keeps the token in a file under `$RUNNER_TEMP` that `.git/config` includes, not in `.git/config`
   itself: git on the runner still gets it, and only a Docker container action would need runner 2.329.0 for it (none
   here; the repository and its one submodule are public); v7 refuses fork pull requests' code under
-  `pull_request_target` and `workflow_run` (neither is used, and v4.4.0, what v4 is now, refuses it too). The pull
-  request's body has the evidence.
+  `pull_request_target` and `workflow_run` (neither is used, and v4.4.0, what v4 is now, refuses it too). The one
+  change the repo will see is on a tag push (the review below, section 4.3): v7 keeps the pushed annotated tag
+  annotated, where v4 fetched it by commit and made it lightweight (so build.txt's `git describe` gave
+  `v2.3.0-208-ga8d5640f` on v2.4.0's push, not `v2.4.0`), and checkout now fails if the tag moved or was deleted
+  after its push, where v4 built the pushed commit. The pull request's body has the evidence.
 - **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 on the seven workflows: only the two warnings master has
   (desktop.yml:189 SC2046, desktop.yml:249 SC2034); `git diff --check` and `git show --check` clean; the diff is the
   seven workflows and this file; no `actions/checkout@v4` left in `.github`. CI's runs go in the pull request's body.
-- Independent review: not yet.
+- Independent review: PASS on `0954b8800`, read-only (`~/phobos-work/scratch/review-286/REVIEW.md`); no file changes.
+  Its suggestion S1, the tag-push clause in "Why v7", was added after it.
 
 ## PSP GE: #277's entry after its review and library check; the GE profile's decoder files — docs only — 2026-10-20
 
