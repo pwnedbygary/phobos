@@ -226,9 +226,13 @@ private:
   bool frameStepping = false;
   bool frameAdvanceHeld = false;
   Uint64 frameStepNext = 0;
-  // The hotkeys in force (resolveHotkeys) and the keys held, matched against them.
+  // The game waiting while another window has the keyboard (Pause when unfocused; update).
+  bool focusPaused = false;
+  // The hotkeys in force (resolveHotkeys) and the keys held, matched against them, with the screen each was pressed on
+  // while the window had the keyboard (a tap runs only there).
   HotkeyMap hotkeys;
   HotkeyTracker hotkeyTracker;
+  std::map<HotkeyToken, Screen> pressedOn;
   // The Hotkeys page: its cursor, the action whose bindings are open, whether every direct slot's row shows, the binding
   // being captured, and a question waiting.
   int hotkeyCursor = 0;
@@ -297,6 +301,13 @@ auto Shell::run(int argc, char* argv[]) -> int {
       case SDL_EVENT_KEY_DOWN:
       case SDL_EVENT_KEY_UP: if (screen == before) handleKey(event.key); break;
       case SDL_EVENT_DROP_FILE: if (event.drop.data) open(event.drop.data); break;
+      case SDL_EVENT_WINDOW_FOCUS_LOST:
+        // A binding being captured keeps none of the keys that switched windows (Alt for Alt+Tab, say).
+        if (capture) {
+          capture.reset();
+          show("The window lost focus: the binding is unchanged");
+        }
+        break;
       default: break;
       }
     }
@@ -536,6 +547,8 @@ auto Shell::launch(const Game& entry) -> void {
   fastForward = fastForwardHeld = fastForwardApplied = false;
   ares::setFastForward(false);
   frameStepping = frameAdvanceHeld = false;
+  // Started running (setPause above); update pauses it again if another window has the keyboard.
+  focusPaused = false;
   muted = false;
   ares::setMuteAudio(false);
   suppressedButtons = previousButtons;
@@ -552,7 +565,7 @@ auto Shell::unloadGame() -> void {
   ares::unloadSystem();
   game.reset();
   screen = Screen::Library;
-  frameStepping = false;
+  frameStepping = focusPaused = false;
   endHolds();
   capture.reset();
   question.reset();
@@ -706,13 +719,26 @@ auto Shell::refreshHotkeys() -> void {
 auto Shell::hotkeysTakeKeys() const -> bool { return game && screen != Screen::Hotkeys; }
 
 // An event's keys go to the hotkeys (and to a binding being captured): a press can complete a combo, a release a tap,
-// and the hold actions last while theirs are held. The Hotkeys page runs none: its keys are its own.
+// and the hold actions last while theirs are held. The Hotkeys page runs none: its keys are its own. Nothing runs while
+// another window has the keyboard: a press comes then only as a click on the window (the keys go to that window, and
+// SDL holds back the pads' presses), releases still come (SDL's own as the window loses the keyboard included), and a
+// tap runs only on the screen its key was pressed on with the window having it.
 auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   auto changes = input.hotkeyChanges(event);
   if (changes.empty()) return;
+  bool focused = SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS;
+  bool tapHere = focused;
   for (auto [token, down] : changes) {
-    if (down) hotkeyTracker.press(hotkeys, token);
-    else hotkeyTracker.release(token);
+    if (down) {
+      hotkeyTracker.press(hotkeys, token);
+      if (focused) pressedOn[token] = screen;
+      else pressedOn.erase(token);
+    } else {
+      hotkeyTracker.release(token);
+      auto it = pressedOn.find(token);
+      tapHere = tapHere && it != pressedOn.end() && it->second == screen;
+      if (it != pressedOn.end()) pressedOn.erase(it);
+    }
     // Escape first cancels the capture (handleKey) rather than starting the combo.
     if (!capture || !down || (capture->combo.empty() && token == keyToken(SDL_SCANCODE_ESCAPE))) continue;
     if (std::find(capture->combo.begin(), capture->combo.end(), token) != capture->combo.end()) continue;
@@ -722,7 +748,8 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   auto completed = hotkeyTracker.completions(hotkeys);
   auto tapped = hotkeyTracker.taps(hotkeys);
   // A pad going away lets go of its buttons, which taps nothing.
-  if (event.type == SDL_EVENT_GAMEPAD_REMOVED) tapped.clear();
+  if (event.type == SDL_EVENT_GAMEPAD_REMOVED || !tapHere) tapped.clear();
+  if (!focused) completed.clear();
   if (screen == Screen::Hotkeys) return;
   for (auto& action : completed) {
     if (!isHotkeyHold(action)) runHotkey(action);
@@ -960,6 +987,9 @@ auto Shell::menuItems() -> std::vector<MenuItem> {
   }
   if (game->system == "PlayStation Portable") pspMenuItems(items);
   items.push_back({"Hotkeys", [this](int d) { if (d == 0) openHotkeys(); }});
+  bool pauseUnfocused = settings.flag("pauseWhenUnfocused", true);
+  items.push_back({"Pause when unfocused: " + onOff(pauseUnfocused),
+                   [this, pauseUnfocused](int) { settings.setFlag("pauseWhenUnfocused", !pauseUnfocused); }});
   items.push_back({"Fullscreen: " + onOff(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN), [this](int) { toggleFullscreen(); }});
   items.push_back({launchedWithGame ? "Quit" : "Quit to library", [this](int d) { if (d == 0) quitGame(); }});
   return items;
@@ -1092,8 +1122,29 @@ auto Shell::update() -> void {
   bool confirm = pressed(PadA) || pressed(PadStart);
   previousButtons = pad.buttons;
 
+  // Pause when unfocused: while another window has the keyboard the game waits, going on as this window gets it back.
+  bool focused = SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS;
+  bool unfocusedPause = game && screen == Screen::Playing && !frameStepping && !focused &&
+                        settings.flag("pauseWhenUnfocused", true);
+  if (unfocusedPause != focusPaused) {
+    focusPaused = unfocusedPause;
+    if (focusPaused) {
+      endHolds();
+      releaseKeys();
+      ares::setInput(0, 0, 0, 0, 0);
+      input.rumble(false);
+      ares::setPause(true);
+    } else if (screen == Screen::Playing && !frameStepping) {
+      // The buttons held now stay out until they're let go of, this frame's included.
+      suppressedButtons = previousButtons;
+      buttons &= ~suppressedButtons;
+      ares::setPause(false);
+    }
+  }
+
   switch (screen) {
   case Screen::Playing: {
+    if (focusPaused) return;
     // Select and Start together, and no other button, open the menu: the route a Steam Deck has, its Guide button being
     // Steam's. With another button down they're the game's (A, B, Select and Start reset many games).
     bool chord = buttons == (PadSelect | PadStart) && (pressed(PadSelect) || pressed(PadStart));
@@ -1194,9 +1245,12 @@ auto Shell::render() -> void {
   if (screen == Screen::Library) drawLibrary(width, height);
   if (screen == Screen::Menu) drawMenu(width, height);
   if (screen == Screen::Hotkeys) drawHotkeys(width, height);
-  if (screen == Screen::Playing && !ares::isFirstFrameRendered()) print(12, 12, "Loading " + game->title + "...", textColor);
-  if (screen == Screen::Playing && frameStepping) {
-    std::string badge = "Frame advance - pause for the menu";
+  bool badged = screen == Screen::Playing && (frameStepping || focusPaused);
+  if (screen == Screen::Playing && !badged && !ares::isFirstFrameRendered()) {
+    print(12, 12, "Loading " + game->title + "...", textColor);
+  }
+  if (badged) {
+    std::string badge = frameStepping ? "Frame advance - pause for the menu" : "Paused while unfocused";
     fill(8, 8, (badge.size() + 2) * glyph, 16, panelColor);
     print(16, 12, badge, textColor);
   }

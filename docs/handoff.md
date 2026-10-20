@@ -35,6 +35,104 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Desktop window: the game waiting while another window has the keyboard (a menu switch, on by default), no hotkey run by the clicks and releases that still come then, a tap only on the screen its key went down on, the screensaver held off by SDL as before — 2026-10-20
+
+Branch `improved-hotkeys`, on the desktop-hotkeys commit `f4e0b1b98` (the entry below). The fourth pull request of the
+hotkey plan: the desktop window's behaviour (#2513, #2365, and the screensaver, #1577 and #1368). Per-game hotkeys and
+the slow-motion measurement come after it. The code change is in `desktop/main.cpp` alone. Checked with the keyboard
+and the mouse on a virtual display with no window manager; **not** with a pad, a window manager, Wayland, Windows or
+macOS (see Checks).
+- **Pause when unfocused** (#2513; the menu's new switch of that name, `pauseWhenUnfocused` in settings.ini, on unless
+  switched off): while a game plays and another window has the keyboard, the game waits with its picture showing
+  ("Paused while unfocused"). The holds end, the keys held are let go of, the controller's input goes to nothing and
+  rumble stops, not renewed while it waits. It goes on when the window has the keyboard back, the buttons held then
+  staying out until they're let go of, that frame's included, as when a game starts. In the menu and on the Hotkeys
+  page the game is paused already, and frame advance's stopped game stays as it is; a game started while another
+  window has the keyboard (a file dropped on the window from a file manager, say) waits as soon as it starts, and the
+  badge (like frame advance's) takes the place of the "Loading" line rather than covering it. With the switch off the
+  game goes on, as before this change.
+- **What still comes while another window has the keyboard** (#2365): SDL sends such a window no keys (they go to the
+  window that has the keyboard) and no pad presses or axis moves away from the centre (`SDL_joystick.c`'s
+  `SDL_PrivateJoystickShouldIgnoreEvent`, unless `SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS`, which Phobos doesn't
+  set), and it lets go of the keys held as the window loses the keyboard. What still comes is a click on the window and
+  the releases, and now no hotkey runs on them: a press completes nothing while the window lacks the keyboard (Mouse 4
+  bound to Mute, clicked then, mutes nothing), and a tap runs only while the window has the keyboard, on the screen
+  its key went down on with the window having it then (`pressedOn`). So a key held as another window takes the
+  keyboard taps nothing as SDL lets it go (Left Shift, Reset's tap binding, held across the switch resets nothing), and
+  where Escape is a tap binding, Escape leaving the Hotkeys page no longer also taps as it's let go of in the menu it
+  went back to, which closed the menu and let the game go on (seen by the fourth review of the entry below).
+- **A binding still being captured** (its keys still coming: a capture settles 700 ms after its last new key) is
+  cancelled as the window loses the keyboard ("The window lost focus: the binding is unchanged"), so a switch made
+  within those 700 ms adds none of its keys (Alt for Alt+Tab) to the binding; a key held longer before the switch has
+  become the binding already (Limits).
+- **The screensaver** (#1577, #1368): nothing to change. SDL 3 disables the screensaver as its video starts unless
+  `SDL_HINT_VIDEO_ALLOW_SCREENSAVER` is set (`SDL_video.c:720-721` in SDL 3.2.30), and nothing in `desktop/` sets a
+  hint, so the desktop program held it off before this change too (derived), from start to quit, the library
+  included. Seen on this machine's KDE session, Phobos running on a virtual X display with the session's D-Bus: KDE's
+  power management lists an inhibition by "Phobos" for "Playing a game" (SDL's default reason, `SDL_dbus.c:439`) while
+  it runs (8 seconds in; KDE lists one some seconds after it's asked for) and none once it quits, and none with
+  `SDL_VIDEO_ALLOW_SCREENSAVER=1`; `dbus-monitor` saw its `Inhibit` call as it started and `UnInhibit` as it quit. On
+  Wayland SDL asks the same D-Bus service first and the compositor's idle inhibitor otherwise
+  (`SDL_waylandwindow.c:3028-3048`); not run there, nor on GNOME (#1368's desktop), Windows or macOS. The plan said to
+  call `SDL_DisableScreenSaver`; SDL's own call at start makes another one redundant, and it would override a player's
+  `SDL_VIDEO_ALLOW_SCREENSAVER=1`.
+- **The entry below**: two of its sentences narrowed, as its fourth review suggested: a key whose hotkey changes the
+  screen isn't acted on by the new screen's key handling (a stick direction it pushes still moves a cursor, as its
+  Limits say), and a button held since the game started, like one held since the menu closed, doesn't count against
+  Select and Start being alone.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; SDL 3.2.30, as for the entry below): the Linux build; `ctest` 1/1 and
+  `phobos-desktop-tests` 179 checks, 0 failed (the engine is unchanged); `main.cpp` compiled with the build's own
+  command and `-Wall -Wextra`, its object written to a scratch folder: 781 warnings, none in `desktop/` or `tests/`,
+  the build's object and program unchanged by it, and Ninja's dry run showing no compile pending. On the virtual
+  display (Xvfb and xdotool), 75 of 75 checks pass: the entry below's 62, and 13 with an `xmessage` window taking the
+  keyboard (`xdotool windowfocus`) and these bindings stored: Left Shift for Reset beside Left Shift + I for the next
+  disc (so Left Shift is a tap), Escape + Q for Quit (so Pause's Escape is a tap) and Mouse 4 for Mute. The 13: F5 in
+  the library rescanning it, Save's default F5 in force (the fourth review's suggestion); another window taking the
+  keyboard pausing the game (the badge seen in a screenshot) and the keyboard's return resuming it; Mouse 4 clicked
+  while the other window has the keyboard muting nothing, and with it back muting; Left Shift tapped resetting the
+  game, and held across the switch resetting nothing; Escape on the Hotkeys page going back to the menu, its release
+  tapping nothing there, and Escape tapped in the menu closing it; a capture still collecting keys as the other window
+  takes the keyboard cancelled, Alt held across the switch left out of the Pause menu's bindings; the switch turned
+  off in the menu kept in settings.ini; and with it off, the game going on unfocused. Six `main.cpp` mutants, each
+  built outside the repository with the build's own commands, failed their checks there, where the unchanged file
+  built the same way passed all 13: no pause while unfocused; presses completing hotkeys while unfocused; a capture
+  going on as the window loses the keyboard; the switch ignored; a tap running whether or not the window has the
+  keyboard; a tap running on any screen. A first mutant run, without the two Mouse 4 checks, found the presses mutant
+  passing every check, so those two were added. Two more copies, built the same way with one log line before the
+  Playing case's `setInput` (the first review's probe, adapted), check its Minor 1: Right Shift, the keyboard's Select,
+  pressed while the other window has the keyboard and still held as it comes back reaches the game in no frame, and
+  in one with the fix's line taken out; in both, Right Shift held with the keyboard here reaches it (the log works),
+  and held as the menu closes doesn't. The screensaver checks are above. Android isn't rebuilt: no file it builds
+  changed. Not run: a pad (SDL holding back its presses is from SDL's source), a window manager moving the keyboard,
+  a game started while another window has the keyboard (with no window manager, as on the virtual display, SDL's X11
+  driver gives a window it shows the keyboard, `SDL_x11window.c:1567-1570`, as a probe saw; with one, the window
+  manager decides, SDL leaving its activation hint unused, `:1550-1552`, so a game started from a frontend may start
+  paused) and so the badge in place of the "Loading" line, Wayland and macOS sessions, the Windows and macOS builds,
+  Steam, a real game.
+- **Limits**: unfocused means without the keyboard, so with only a pad, a click on another window (on a second screen,
+  say) pauses the game; with the switch off the game goes on then, but a pad still can't play it, SDL holding back its
+  presses while another window has the keyboard. The game goes on by itself as the window gets the keyboard back;
+  whether a click that gives it back also runs that button's hotkey depends on whether SDL has heard of the keyboard
+  by then (the window manager's order; not run). SDL's X11 and Wayland drivers press again the modifiers held as the
+  window gets the keyboard back (`SDL_x11events.c:441-456`, `SDL_waylandevents.c:1731-1748`), so a modifier pressed
+  while the other window has the keyboard and let go after it comes back counts as pressed here: Left Shift, Reset's
+  tap binding, resets the game (seen by the first review; the same before this change). A capture is cancelled only
+  while its keys are still coming: Alt held 700 ms or more before the switch is the binding already (the first review
+  saw Alt held for a second bound), and SDL ignores a focus change a keyboard grab makes (`SDL_x11events.c:1414-1417`),
+  so an Alt+Tab switcher that grabs the keyboard counts only once the switch is made, and an unhurried Alt+Tab during
+  a capture binds Alt (inferred, not run); such a binding can be cleared on the page, and a cancelled capture has to be
+  started again. The screen doesn't sleep while Phobos is open, in the library too (SDL's, as before;
+  `SDL_VIDEO_ALLOW_SCREENSAVER=1` lets it); the test target still isn't in CI.
+- **Review**: the first independent review (diff `3b96765d...`) found NEEDS CHANGES, three Minors: the buttons held as
+  the game went on reached it for one frame (fixed, as under Pause when unfocused and Checks); the reason given for not
+  testing a game started unfocused was wrong (corrected under Checks); and the capture's cancel was claimed for any
+  switch (narrowed, the rest in Limits). Its suggestions are taken: the modifiers SDL presses again and what the switch
+  does for a pad, in Limits; the badge no longer drawn over the "Loading" line. The whole record is in the commit that
+  carries this entry.
+- **Next**: per-game desktop hotkeys (an All consoles, Console and Game picker; no button remapping) and the
+  slow-motion measurement (#424), each its own reviewed pull request; the pad, window manager, Wayland, Steam, Windows
+  and macOS checks; the RP6 pass for the Android changes.
+
 ## Desktop hotkeys: combos of keys, pad buttons, triggers, stick directions and mouse buttons, up to three per action, Guide leading the controller's and the desktop's own keys the keyboard's, a capture page asking before it overwrites — 2026-10-19
 
 Branch `improved-hotkeys`, on the Android commit `a41f6644e` (the entry below). The third pull request of the hotkey
@@ -75,10 +173,11 @@ keyboard and the mouse on a virtual display; **not** with a pad, Steam, Windows 
   with no other button open the menu, a Steam Deck's route (its Guide button being Steam's) that works for the first
   time (below); with another button held they're the game's, so a soft reset such as A, B, Select and Start reaches it
   when its other buttons go down first. B and Backspace close the menu, and Escape where no hotkey has it. A key whose
-  hotkey changes the screen is the hotkey's alone, the new screen not acting on it: a Quit binding completed by F3 or F5
-  doesn't also open the library's folder picker or rescan it. Frame advance stops the game with its picture showing
-  ("Frame advance - pause for the menu"), runs a frame at each press, then one every 100 ms after 300 ms held, the
-  buttons held going into each; the menu lets the game go on.
+  hotkey changes the screen is the hotkey's alone, the new screen's key handling not acting on its press (a stick
+  direction it pushes still moves a cursor: Limits): a Quit binding completed by F3 or F5 doesn't also open the
+  library's folder picker or rescan it. Frame advance stops the game with its picture showing ("Frame advance - pause
+  for the menu"), runs a frame at each press, then one every 100 ms after 300 ms held, the buttons held going into
+  each; the menu lets the game go on.
 - **Pad presses on the screens** (a fault since the desktop's first commit, `3c60b7d69`): the screens asked whether a
   button was newly pressed after `previousButtons` had become the frame's own buttons, so no such press registered:
   the Guide button or Select and Start opening the menu, B or Guide closing it, and the library's Y, X, L1 and R1 (and
@@ -158,9 +257,9 @@ keyboard and the mouse on a virtual display; **not** with a pad, Steam, Windows 
   shows, and in the library the A key, not Y, opens the folder picker; fullscreen doesn't work on the Hotkeys page; as
   the hotkeys stop taking keys, a stick direction one took (a pad's, or the keyboard's I, J, K or L) isn't held back as
   the buttons are, so still pushed it moves the library's or the page's cursor; Select and Start count as alone when no
-  other button reaches the game, so a button held back from it (taken by a hotkey, or held since the menu closed)
-  doesn't count, while a trigger past half, Guide held with no binding of its own and, on the N64, a stick past half do;
-  the test target isn't in CI yet.
+  other button reaches the game, so a button held back from it (taken by a hotkey, or held since the menu closed or
+  the game started) doesn't count, while a trigger past half, Guide held with no binding of its own and, on the N64, a
+  stick past half do; the test target isn't in CI yet.
 - **Review**: the first independent review found NEEDS CHANGES. One Major: a key held as the window lost focus stayed
   held on Wayland and macOS, where SDL lets it go as keyboard 0's rather than the keyboard that pressed it, so every
   hotkey stayed dead until that key was pressed again; fixed as under Game input, with a test. Three Minors: SDL's
