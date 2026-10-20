@@ -35,6 +35,40 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE timing: the CPU beside the GE refitted, Super Monkey Ball within 15% and its exception gone — 2026-10-20
+
+Branch `cursor/psp-smba-refit-cachy`, from master `0f7c17d8a` (#289), master `1257da75d` (#290) merged in
+(`a2c64338e`). The core (`ares/psp/ge/`, `ares/psp/kernel/`), the runner's counter line, the PSP tests and CI's
+`ge-round10c`, `tools/psp-measure/` (contention12.py, its README, ge-terms.py), `tools/psp-ge-profile/decoder/gate.py`,
+docs/psp-core.md part 115 and this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (the
+design, then step 1's probe to step 5's docs).
+- **What**: #279's CPU beside the GE (part 113) refitted to the PSP's rounds 10, 10b and 10c in a hybrid form: the
+  front end's vertex and list-word reads by #279's rule, texels and transfers a fixed time a line; a cap at 0.75 of a
+  window, the spin skip refusing a skip where it binds at either end (counted, as the runner's `ge contention:` line
+  reports); the GE's reads counted where they read (VRAM's as other work); and the CPU's own stalls beside the busy GE
+  in its time. Save-state layout 35 kept.
+- **Why**: Super Monkey Ball's frame was −20.6% with #279, the owner's accepted exception limited at −21%; round 10c
+  (part 114) put the rest in its strips' RAM vertex reads and the CPU slowed beside them. The owner's limit for
+  Activision Hits' 3D menu: +10%.
+- **The gate** (part 115's table; the PSP's timing): every judged frame within 15% (8 of 8, master's 7), Super Monkey
+  Ball −20.6% to −12.7% and its exception out of `gate.py`, the 3D menu +6.7% to +9.95% (its idle capture +6.4% to
+  +9.6%), the median miss 9.8% (master's 6.5%). With the GE on its thread the seven profiles are the same byte for byte.
+- **Checks** (cachyOS, GCC 16.2.1; logs in `smba-refit/step4/`): on `b14ef87a0`, the release suite with the GE thread
+  off 646 groups, 0 failures, on 646, 0, #289's step 110, 0, the measure groups sanitized with `ge-round10c` required
+  14, 0 (`r4/suite-*.log`, `r4/measure-sanitized.log`, each naming its tree); the gate (`gate-{off,on}-b14ef87a0/`);
+  "Fast" against master (`b7/`); #277's On = Off sets, 260 runs (`r4/4d/`); the host cost and H6 (`r4/4g/`); the
+  tools README's recipe (`r4/p6/`); the tests' mutations (`step3/mut*.log`, `step4/*-mutation-fail.log`,
+  `r4/r2l1/`). Part 115 has them all.
+- **The coordinator's library check** on `ee0e44309`: GATE: CLEAN, 266 games each in Software and Vulkan fast, none
+  newly failing, every exit line, none newly flat at frames 1,200 and 3,600, none 1.5x slower
+  (`~/phobos-work/scratch/libcheck/lib-refit-ee0e44309.log`). The final code's check and the RP6 run are the
+  coordinator's, recorded in the pull request.
+- **Reviews so far**: the design (three rounds, PASS), the probe (PASS), the fit tool (PASS for `a2b5af99a`), the code
+  by reading (PASS for `ee0e44309`, its one low finding fixed in `bb09cefc0`); part 115 names their files.
+- **Left** (part 115): Activision Hits' lists 2 and 3; the polling skip's widening; Killzone's per-frame Vulkan variance
+  and its fuzz-ahead variance with the GE on its thread, both there before this branch.
+- Independent review: not yet.
+
 ## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
 
 Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLists.txt`, `tests/rsp-recompiler/`,
@@ -123,7 +157,8 @@ Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
   group (the GE thread's among them), the sample programs and the curves, 105 groups with the new test;
   `PHOBOS_TESTS_REQUIRE=vulkan, programs`. Left out for time: the six measured groups and three of the GPU's, which
   have a machine the switch moves too (a selection with them took 175 s here, against the step's 24). 26 s here; CI
-  took 35 s on `a0dd68a27`, where the GE thread's step took 186 s (120 s on master's last run, 104 s here).
+  took 35 s on `a0dd68a27`, where the GE thread's step took 186 s (181 s on master's last run, PSP Core run 39439646839
+  on `dcf2f1b2c`; 104 s here).
 - **What the step catches** (gcov on a coverage build: `covbranch.txt`): it takes 18 branches the release lane (its
   suite and the GE thread's step) never takes. No mutation tried is caught by the step alone. (1) The spin skip's
   SIGNAL check dropped (ares/psp/kernel/spins.cpp:192): the step reaches it three times, in "the GE's looks polled
@@ -160,6 +195,7 @@ Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
   desktop.yml warnings only); `git diff --check`. All at niceness 5 through `pinned.sh`, two compiles at once.
 - **Not run** here: the rest of the sanitized suite, tests/allegrex, tests/psp/ares (CI's).
 - Independent review: PASS on `a0dd68a27`, read-only (`~/phobos-work/scratch/review-289/REVIEW.md`), no file changes.
+  Taken after it: section 6's suggestions 2, 5 and 6 (`a23c3e8e9`); round two passed it (`REVIEW-r2.md`).
 
 ## PSP measure: ge-terms.py applies to master again, its five places where #277 left them — tools only — 2026-10-20
 
