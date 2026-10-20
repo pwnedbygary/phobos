@@ -33,7 +33,7 @@ auto words(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
   std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   std::vector<u32> out(bytes.size() / 4);
-  std::memcpy(out.data(), bytes.data(), out.size() * 4);
+  if(!out.empty()) std::memcpy(out.data(), bytes.data(), out.size() * 4);  //(memcpy: no null, even for 0 bytes)
   return out;
 }
 
@@ -55,7 +55,7 @@ auto theirs(const Round& round, const char* name) -> std::vector<u32> {
 }
 
 //The core's, or nothing without the measuring program (or the PSP's file to compare it with); with both, the core's
-//run of the round wrote it.
+//run of the round wrote it. It says nothing of what the PSP's side lacks: theirs(), asked first, does.
 auto ours(const Round& round, const char* name) -> std::vector<u32> {
   const char* psp = std::getenv(round.variable);
   if(!psp || !*psp || !std::filesystem::exists(std::filesystem::path(psp) / (std::string(name) + ".bin"))) return {};
@@ -112,9 +112,9 @@ auto misses(const Round& round, std::initializer_list<const char*> tests, std::i
   -> std::vector<f64> {
   std::vector<f64> errors;
   for(auto name : tests) {
-    auto core = ours(round, name);
+    auto psp = theirs(round, name), core = ours(round, name);
     if(core.empty()) return {};
-    auto here = timed(core), there = timed(theirs(round, name));
+    auto here = timed(core), there = timed(psp);
     CHECK(here.size(), there.size());
     if(here.size() != there.size()) continue;
     bool lists = std::string(name) == "time-lists" || std::string(name) == "time-lists2";
@@ -253,20 +253,20 @@ auto measuredContention10() -> void {
     }
     return misses;
   };
-  auto core = ours(Round10, "time-contention");
+  auto psp = theirs(Round10, "time-contention"), core = ours(Round10, "time-contention");
   if(!core.empty()) {
     std::vector<f64> errors;
-    for(auto& pair : pairs(core, theirs(Round10, "time-contention"), 17, 18)) errors.push_back(std::abs(pair.second));
+    for(auto& pair : pairs(core, psp, 17, 18)) errors.push_back(std::abs(pair.second));
     CHECK(errors.size(), 680u);
     if(!errors.empty()) {
       CHECK(median(errors) <= 0.07, true);
       CHECK(within(errors, 0.25) >= 0.9, true);
     }
   }
-  core = ours(Round10b, "time-contention3");
+  psp = theirs(Round10b, "time-contention3"), core = ours(Round10b, "time-contention3");
   if(core.empty()) return;
   std::vector<f64> errors;
-  for(auto& [key, miss] : pairs(core, theirs(Round10b, "time-contention3"), 6, 7)) {
+  for(auto& [key, miss] : pairs(core, psp, 6, 7)) {
     u32 test = std::get<0>(key), size = std::get<1>(key), list = (test - 6) / 7, pattern = (test - 6) % 7;
     errors.push_back(std::abs(miss));
     f64 bound = pattern <= 5 ? 0.08 : list == 1 ? 0.01 : list == 0 ? (size == 1 ? 0.10 : 0.30) : 1.0;

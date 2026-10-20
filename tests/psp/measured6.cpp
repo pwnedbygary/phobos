@@ -21,7 +21,7 @@ auto words(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
   std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   std::vector<u32> out(bytes.size() / 4);
-  std::memcpy(out.data(), bytes.data(), out.size() * 4);
+  if(!out.empty()) std::memcpy(out.data(), bytes.data(), out.size() * 4);  //(memcpy: no null, even for 0 bytes)
   return out;
 }
 
@@ -43,7 +43,7 @@ auto theirs(const char* name) -> std::vector<u32> {
 }
 
 //The core's, or nothing without the measuring program (or the PSP's file to compare it with); with both, the core's
-//run of round 6 wrote it.
+//run of round 6 wrote it. It says nothing of what the PSP's side lacks: theirs(), asked first, does.
 auto ours(const char* name) -> std::vector<u32> {
   const char* psp = std::getenv("PSP_GE_ROUND6");
   if(!psp || !*psp || !std::filesystem::exists(std::filesystem::path(psp) / (std::string(name) + ".bin"))) return {};
@@ -252,9 +252,9 @@ auto measuredTime() -> void {
   f64 worst = 0;
   for(auto name : {"time-commands", "time-primitives", "time-fill", "time-sizes", "time-transfers", "time-texcache",
                    "time-signals"}) {
-    auto core = ours(name);
+    auto psp = theirs(name), core = ours(name);
     if(core.empty()) return;
-    auto here = timed(core), there = timed(theirs(name));
+    auto here = timed(core), there = timed(psp);
     CHECK(here.size(), there.size());
     if(here.size() != there.size()) continue;
     for(u32 n = 0; n < here.size(); n++) {
