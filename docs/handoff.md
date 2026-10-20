@@ -39,28 +39,33 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLists.txt`, `tests/rsp-recompiler/`,
 `.github/workflows/desktop.yml` and this file; no core code changes. Notes and logs:
-`~/phobos-work/scratch/n64-mario-tennis/` (`FINDINGS.md`, round two in `round2/`).
+`~/phobos-work/scratch/n64-mario-tennis/` (`FINDINGS.md`, rounds two and three in `round2/` and `round3/`).
 - **The fault** (FINDINGS.md): with the recompiler on, Mario Tennis's 3D intro, Super Mario 64, Mario Kart 64, Ocarina
   of Time and Mario Golf rendered corrupt on x86-64. The RSP's recompiler calls the out-of-line `RSP::VMOV<e>` and
   `RSP::VMULQ<e>`, which read vector lanes through a pointer cast from the `r128` union (`u16()`, `element()`); GCC
   compiled VMOV's read before the store it reads (stale stack bytes in every recompiled VMOV's lane) and VMULQ's from
   a register never loaded. The interpreter inlines its own copies, compiled right. ares's own build compiles its code
-  with `-fno-strict-aliasing`, and with GCC `-fwrapv` (cmake/common/compiler_common.cmake), which this CMakeLists.txt
-  never included. Every GCC from 11.4 (CI's Linux job's) to trunk gets FINDINGS.md's standalone copy 128 of 128 wrong
-  at -O3 (Compiler Explorer), none with the two flags; Clang none.
-- **The change**: every source under ares/ but ares/ares (shared with the PSP core) and ares/psp gets GCC's `-fwrapv
-  -fno-strict-aliasing`, Clang's and AppleClang's `-fno-strict-aliasing`: compiler_common.cmake's dialect flags, not
-  its warnings. compile_commands.json of the Linux desktop build before and after: 89 of 462 units changed, each by
-  those two flags only (the 18 upstream systems, PCE's vdp-performance, the N64's vulkan.cpp and 36 parallel-rdp
-  units, 33 components), the test's added, none removed; none of the 24 units the PSP core links from (ares/psp,
-  ares/ares's node and android_globals, nall, libco, sljit, libchdr) changed. In the linked Release binary all 16
+  with `-fwrapv -fno-strict-aliasing`, with GCC and Clang alike (cmake/common/compiler_common.cmake and the
+  per-platform cmake/*/compilerconfig.cmake), which this CMakeLists.txt never included. Every GCC from 11.4 (CI's Linux
+  job's) to trunk gets FINDINGS.md's standalone copy 128 of 128 wrong at -O3 (Compiler Explorer), none with the two
+  flags; Clang none.
+- **The change**: every source under ares/ but ares/ares (shared with the PSP core) and ares/psp gets `-fwrapv
+  -fno-strict-aliasing` with GCC, Clang and AppleClang: upstream's dialect flags, not its warnings. Its `-fno-char8_t`
+  is left out: it only retypes `u8""` literals, and the 90 units the dialect applies to and the 2,028 files of ares/,
+  nall/ and thirdparty/ they read have none. compile_commands.json of the Linux desktop build (GCC) before and after:
+  89 of 462 units changed, each by those two flags only (the 18 upstream systems, PCE's vdp-performance, the N64's
+  vulkan.cpp and 36 parallel-rdp units, 33 components), the test's added, none removed; none of the 24 units the PSP
+  core links from (ares/psp, ares/ares's node and android_globals, nall, libco, sljit, libchdr) changed. With Clang 23
+  (configured, not built) the same units carry both flags and the PSP's neither. In the linked Release binary all 16
   `RSP::VMOV<e>` store the shuffled vector before they read the lane; the desktop build has no LTO.
 - **The test**: `tests/rsp-recompiler` (target `rsp-recompiler`, on phobos_core's own objects, its source compiled as
   the N64's): VMOV for every e and de with Vd and Vt apart and the same, every COP2 function, MFC2/CFC2/MTC2/CTC2,
   LBV-LTV and SBV-STV with the base known to the recompiler and not; 34,816 cases from seeded random states,
   recompiled against interpreted, the whole VU state, the GPRs and DMEM compared, the stack filled with a pattern
-  first. Linked with master's N64 object (GCC 16.2.1): 4,608 differ (VMOV 4,096 of 4,096, each lane `a5a5`, the
-  pattern; VMULQ 256 of 256); with the change: 0, in 0.35 s. desktop.yml's Linux job builds and runs it after the
+  first; a group with differences ends with a line for each differing instruction (its mnemonic, or an invalid COP2
+  function's number) and its count. Linked with master's N64 object (GCC 16.2.1): 4,608 differ, the VMOV group's 4,096
+  of 4,096 (each lane `a5a5`, the pattern) and the COP2 functions group's 512: VMOV's 256 of 256 and VMULQ's 256 of
+  256, no other instruction; with the change: 0, in 0.35 s. desktop.yml's Linux job builds and runs it after the
   build, first checking that every N64 compile line has the dialect and the PSP core's hasn't (master 0 of 38, here
   38 of 38).
 - **Checks** (cachyOS, GCC 16.2.1; the Linux desktop build as desktop.yml's preset makes it, Ninja Release, but FFmpeg
@@ -76,7 +81,7 @@ Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLi
   --check`.
 - **Left**: the upstream code the PSP core and the runner share, still without the dialect (ares/ares, nall, libco,
   mia); the teardown crash (FINDINGS.md); an RP6 run (the coordinator's): with the NDK's Clang the N64's units now get
-  `-fno-strict-aliasing` too.
+  `-fwrapv -fno-strict-aliasing` too.
 - Independent review: not yet.
 
 ## Tests and CI: the kernel's tests with the PSP's GE timing, and the skip's contention refusal tested — 2026-10-20

@@ -310,19 +310,19 @@ set(ARES_ALL_SOURCES
 
 set_property(SOURCE ${ARES_ALL_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
 
-# ares's own build compiles its code in the dialect that code relies on (cmake/common/compiler_common.cmake, which this
-# file doesn't include): GCC's -fwrapv -fno-strict-aliasing, Clang's -fno-strict-aliasing. ares reads vector lanes
-# through cast pointers (the N64 RSP's r128::u16() and element()): without -fno-strict-aliasing GCC compiled the RSP's
-# VMOV and VMULQ, as its recompiler calls them, to read stale values. The upstream systems' sources get it: every
-# source under ares/ but ares/ares, which the PSP core shares, and ares/psp, Phobos's own.
+# ares's own build compiles its code in the dialect that code relies on, -fwrapv -fno-strict-aliasing with GCC and Clang
+# alike (cmake/common/compiler_common.cmake and cmake/linux|macos|windows/compilerconfig.cmake, none of which this file
+# includes); their -fno-char8_t is left out, as it only retypes u8"" literals, which this code and its headers have none
+# of. ares reads vector lanes through cast pointers (the N64 RSP's r128::u16() and element()): without
+# -fno-strict-aliasing GCC compiled the RSP's VMOV and VMULQ, as its recompiler calls them, to read stale values. The
+# upstream systems' sources get it: every source under ares/ but ares/ares, which the PSP core shares, and ares/psp,
+# Phobos's own.
 set(ARES_DIALECT_SOURCES ${ARES_SOURCES} ${OTHER_SOURCES})
 list(FILTER ARES_DIALECT_SOURCES INCLUDE REGEX "^ares/")
 list(FILTER ARES_DIALECT_SOURCES EXCLUDE REGEX "^ares/(ares|psp)/")
 list(REMOVE_DUPLICATES ARES_DIALECT_SOURCES)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   set(ARES_DIALECT_OPTIONS -fwrapv -fno-strict-aliasing)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  set(ARES_DIALECT_OPTIONS -fno-strict-aliasing)
 endif()
 set_property(SOURCE ${ARES_DIALECT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
 

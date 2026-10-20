@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <random>
 #include <string>
 
@@ -108,7 +109,22 @@ auto describe(u32 word) -> std::string {
   return text;
 }
 
+//the instruction a case tests (its last word): the disassembler's mnemonic, or an invalid COP2 one's function
+auto instructionName(u32 word) -> std::string {
+  rsp.disassembler.showColors = 0;
+  rsp.disassembler.showValues = 0;
+  std::string text = (const char*)rsp.disassembler.disassemble(0, word);
+  std::string name = text.substr(0, text.find(' '));
+  if(name == "invalid" && word >> 26 == 0x12 && word >> 25 & 1) {
+    char function[32];
+    snprintf(function, sizeof(function), "COP2 function 0x%02x", word & 0x3f);
+    name = function;
+  }
+  return name;
+}
+
 u32 cases = 0, differences = 0, shown = 0;
+std::map<std::string, std::pair<u32, u32>> instructions;  //the group's cases and differences, by instruction
 
 //one case: the words (BREAK and a NOP appended) recompiled and interpreted from the same state
 auto check(const char* group, std::initializer_list<u32> words, const State& start) -> bool {
@@ -118,6 +134,8 @@ auto check(const char* group, std::initializer_list<u32> words, const State& sta
   if(cases % 256 == 0) rsp.recompiler.allocator.release();
   rsp.recompiler.reset();
   cases++;
+  auto& counts = instructions[instructionName(*(words.end() - 1))];
+  counts.first++;
   static State recompiled, interpreted;
   bool ran = run(start, true, recompiled) && run(start, false, interpreted);
   std::string found;
@@ -162,6 +180,7 @@ auto check(const char* group, std::initializer_list<u32> words, const State& sta
   }
   if(found.empty()) return true;
   differences++;
+  counts.second++;
   if(shown++ < 5) {
     printf("%s: ", group);
     for(u32 word : words) printf("[%s] ", describe(word).c_str());
@@ -191,8 +210,12 @@ int main(int argc, char** argv) {
   auto group = [&](const char* name, auto&& body) {
     u32 before = cases, failed = differences;
     shown = 0;
+    instructions.clear();
     body();
     printf("%s: %u cases, %u differ\n", name, cases - before, differences - failed);
+    for(auto& [instruction, counts] : instructions) {
+      if(counts.second) printf("  %s: %u of %u differ\n", instruction.c_str(), counts.second, counts.first);
+    }
   };
 
   //VMOV Vd(de),Vt(e): de is Vs's low three bits
