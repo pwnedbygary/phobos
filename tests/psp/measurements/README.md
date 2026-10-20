@@ -94,9 +94,21 @@ Round 10b, the same program's top-up (its menu's first line since, "Round 10b: t
 placement"), run on the same PSP on the night of 2026-10-18 (pulled at 20:23): 3 files, `time-contention3` and
 `time-placement` laid out as `manifest10b.txt` describes (round 10's records; `time-contention3`'s runs two words
 longer, as `time-contention`'s), at 222/111 and 333/166 MHz; nothing stalled. He ran `2578e331a`'s `pspmeasure.elf` (its
-EBOOT `6fa4ca80…`), the one in `tests/psp/programs`, its arrays on 1 KiB boundaries. Part 112 says what each test is for
-and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 19 KB as 4.5 KB); `SHA256SUMS` holds the unpacked
-files' sums (and the manifest's). No test reads them yet: they're for the GE timing's fit (#269).
+EBOOT `6fa4ca80…`), its arrays on 1 KiB boundaries (the one in `tests/psp/programs` is round 10c's, which draws round
+10b's lists the same way). Part 112 says what each test is for and what the PSP showed. Each `.bin` is packed with xz
+(`xz -9e`, 19 KB as 4.5 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). They're unpacked
+(`PSP_GE_ROUND10b`) and `tests/psp/measured8.cpp` compares the core's run of `time-contention3` with them (part 113).
+
+## `ge-round10c/`
+
+Round 10c, the same program's next round (its menu's first line since, "Round 10c: Monkey Ball's strips, Activision
+Hits' lists (30 KB)"), run on the same PSP on the evening of 2026-10-19 (pulled at 20:18): 6 files, `time-contention4`,
+`time-shrink`, `time-magnify`, `time-gamestrips` and `time-anchors3` laid out as `manifest10c.txt` describes (round 10's
+records; `time-contention4`'s runs two words longer, as `time-contention`'s), at 222/111 and 333/166 MHz; nothing
+stalled. He ran `9bcaff348`'s `pspmeasure.elf` (its EBOOT `243aa27d…`), the one in `tests/psp/programs`, its arrays on
+1 KiB boundaries. Part 114 says what each test is for and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`,
+21 KB as 5.3 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). No test reads them yet: they're
+for Super Monkey Ball's refit and Activision Hits' menu's lists (part 114).
 
 ## `ge-reruns-round10/`
 
@@ -114,5 +126,5 @@ The VFPU's measurements (`tools/psp-measure`'s `vfpu.c`: rounds 1 to 3, about 67
 of functions like `vlog2` and `vsqrt`) are too big for the repository. The owner keeps them and copies them where
 they're needed; `docs/psp-vfpu-measurements.md` describes what they showed.
 
-Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11, rounds 8 and 9 and the captures on
-2026-10-18), as `docs/development-process.md` records.
+Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11, rounds 8 to 10c, the re-runs and the
+captures on 2026-10-18), as `docs/development-process.md` records.
