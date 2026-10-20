@@ -400,6 +400,7 @@ static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* 
   move(m, 0, line);
   press(m, Cross);
   CHECK(waitFor(m, frames, [&] { return std::filesystem::exists(results / last); }), true);
+  m.kernel.geFold(true);  //(with the GE on its thread, the stretches still waiting counted first, as the runner does)
   if(m.kernel.geCapped || m.kernel.geSkipsRefused) {
     std::printf("  %s: %llu windows capped, %llu spin skips refused\n", manifest,
                 (unsigned long long)m.kernel.geCapped, (unsigned long long)m.kernel.geSkipsRefused);

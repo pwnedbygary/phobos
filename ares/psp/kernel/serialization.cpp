@@ -1174,9 +1174,12 @@ auto Kernel::serialize(serializer& s) -> bool {
   //refetch too, each in its kind, and what's read from VRAM as other work (GE::ramRead()), since the Super Monkey Ball
   //refit, still layout 35: a state of it from an earlier build loads, its running list's shares a little off till the
   //next list starts (GE::pipeStart() clears them). A new layout would change every state's number, "Fast"'s too,
-  //against master's, for nothing a state holds.
+  //against master's, for nothing a state holds. The runner's report counts none of it: a window loaded isn't marked
+  //capped (GeWindow::capped, cleared), and the turns run in place of a skip refused before the load are counted only
+  //to it (spinRefusalsEnd()).
   auto& data = cpu.dataCache;
   auto& code = cpu.instructionCache;
+  if(s.reading()) spinRefusalsEnd();
   if(s.reading() && stateLayout < 35) {
     geWindow = {};
     for(auto* cache : {&data, &code}) {
@@ -1189,6 +1192,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   } else {
     auto& w = geWindow;
     s(w.passed), s(w.instructions), s(w.fills), s(w.writebacks), s(w.uncached), s(w.pushed);
+    if(s.reading()) w.capped = 0;
     s(data.recent), s(data.older), s(code.recent), s(code.older);
     u64 unseen[4] = {data.fills - geCacheSeen[0], data.writebacks - geCacheSeen[1], data.uncached - geCacheSeen[2],
                      code.fills - geCacheSeen[3]};

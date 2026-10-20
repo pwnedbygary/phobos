@@ -841,12 +841,15 @@ static auto spinsGeDrawingThreaded() -> void {
 //CPU's, its stalls beside the GE with it, about 1.5 times the cycles passed) and asks after the list (sceGeListSync(id,
 //1)) till it's done: the window owes past the cap as the spin starts, and as its turns run the CPU's time grows faster
 //than the cycles passed, so what the window owes falls through the cap and its push, held there, would fall after it.
-//Every step's state the same with the skip on as off; skips refused while the cap binds, then taken, turns skipped by
-//the thousand. And beside sprites textured from RAM (both kinds' parts), main reading three lines each turn: skipped
-//as run, none refused.
+//Every step's state the same with the skip on as off; on the recompiler, skips refused while the cap binds, then taken,
+//turns skipped by the thousand, and the instructions counted as run in place of the refused skips those of the turns
+//that ran till the next try (on the interpreter, whose accesses aren't counted, nothing is owed: its runs check that
+//the skips are exact). And beside sprites textured from RAM (both kinds' parts), main reading three lines each turn:
+//skipped as run, none refused.
 static auto spinsGeCapped() -> void {
   constexpr u32 Texture = 0x0900'0000, Lines = 0x0940'0000;
-  auto capped = [](KernelMachine& m) {
+  u32 turn = 0;  //(the poll's instructions a turn: its loop's words and its function's stub's two, jr ra and syscall)
+  auto capped = [&turn](KernelMachine& m) {
     auto& memory = m.system.memory;
     for(u32 n = 0; n < 512 * 512; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
     u32 at = GeList;
@@ -878,6 +881,7 @@ static auto spinsGeCapped() -> void {
     u32 poll = main.here();
     main.put(addu(a0, s0, zero)); main.li(a1, 1); main.call("sceGeListSync");
     main.put(bne(v0, zero, branchTo(main, poll))); main.put(nop);
+    turn = (main.here() - poll) / 4 + 2;
     main.call("sceKernelExitGame");
   };
   auto parts = [](KernelMachine& m) {
@@ -905,14 +909,28 @@ static auto spinsGeCapped() -> void {
   m->kernel.run(Step * 64);
   CHECK(m->kernel.exited, true);
   auto& k = m->kernel;
-  if(!k.geCapped || !k.geSkipsRefused || !k.geRefusedInstructions || k.geRefusedInstructions > k.geInstructions) {
-    std::printf("  windows capped %llu; spin skips refused %llu, %llu instructions in them, of %llu\n",
+  if(!k.geCapped || !k.geSkipsRefused || !k.geRefusedRun() || k.geRefusedRun() > k.geInstructions) {
+    std::printf("  windows capped %llu; spin skips refused %llu, %llu instructions run in their place, of %llu\n",
                 (unsigned long long)k.geCapped, (unsigned long long)k.geSkipsRefused,
-                (unsigned long long)k.geRefusedInstructions, (unsigned long long)k.geInstructions);
+                (unsigned long long)k.geRefusedRun(), (unsigned long long)k.geInstructions);
   }
   CHECK(k.geCapped, 1u);
-  CHECK(k.geSkipsRefused > 0 && k.geRefusedInstructions > 0, true);
-  CHECK(k.geRefusedInstructions < k.geInstructions, true);
+  CHECK(k.geSkipsRefused > 0 && k.geRefusedRun() > 0, true);
+  CHECK(k.geRefusedRun() < k.geInstructions, true);
+  //The instructions run in place of the refused skips (Kernel::geRefusedRun()): a refusal leaves the detector's wait
+  //as it was (the cap refuses before a proof could fail), so each is followed by SpinTurns turns of the poll till the
+  //next try, and none cut short (the spin outlasts the cap), the refusals times that many turns of the poll.
+  if(k.geRefusedRun() != k.geSkipsRefused * Kernel::SpinTurns * turn) {
+    std::printf("  %llu instructions run in place of %llu refused skips, %u a turn\n",
+                (unsigned long long)k.geRefusedRun(), (unsigned long long)k.geSkipsRefused, turn);
+  }
+  CHECK(k.geRefusedRun(), k.geSkipsRefused * Kernel::SpinTurns * turn);
+  //On the interpreter, whose accesses aren't counted, the window owes nothing and no skip is refused: its runs above
+  //check that the skips are exact, nothing of the cap.
+  m = machine(capped, false, true, true);
+  m->kernel.run(Step * 64);
+  CHECK(m->kernel.exited, true);
+  CHECK(m->kernel.geCapped + m->kernel.geSkipsRefused, 0u);
   m = machine(parts, true, true, true);
   m->kernel.run(Step * 32);
   CHECK(m->kernel.exited, true);

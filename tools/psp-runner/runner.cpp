@@ -845,7 +845,7 @@ auto main(int argc, char** argv) -> int {
   psp.kernel.geFold(true);  //(with the GE on its thread, the stretches the CPU ended after its runs taken first)
   f64 geBusyCycles = psp.kernel.geBusyCycles, geBusyLines = psp.kernel.geBusyLines;  //(so too)
   u64 geCapped = psp.kernel.geCapped, geSkipsRefused = psp.kernel.geSkipsRefused;  //(the CPU beside the GE's counts)
-  u64 geRefusedInstructions = psp.kernel.geRefusedInstructions, geInstructions = psp.kernel.geInstructions;
+  u64 geRefusedInstructions = psp.kernel.geRefusedRun(), geInstructions = psp.kernel.geInstructions;
   //what ran, for the report, before unloading lets the renderer go
   std::string ranRenderer = psp.gpu ? (psp.gpu->fast ? "Vulkan (fast)" : "Vulkan") : "Software";
   std::string ranDevice = psp.gpu ? psp.gpu->backend->name() : "";
@@ -914,7 +914,8 @@ auto main(int argc, char** argv) -> int {
                 100 * geBusyCycles / (double(frames) * ares::PlayStationPortable::Kernel::VblankCycles));
   }
   //(with the PSP's timing, the CPU beside the GE: its busy windows whose push reached the cap, GE::Cost::Cap; the spin
-  //skips the cap refused, and the instructions their turns ran; and all the CPU's instructions)
+  //skips the cap refused, and the instructions run in their place, any still running at the end counted to it; and all
+  //the CPU's instructions)
   if(gePspTiming) {
     std::printf("ge contention: %llu windows capped; %llu spin skips refused, %llu instructions run in them, of %llu\n",
                 (unsigned long long)geCapped, (unsigned long long)geSkipsRefused,
