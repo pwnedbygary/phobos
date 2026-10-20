@@ -186,14 +186,16 @@ auto Kernel::geContend(u64 from, u64 to, u64 instructions) -> void {
 //handed over before it, from the times the fold leaves and the list's clocks by kind the GE thread gives with each run,
 //as the synchronous GE takes it after that run's geTime(): all it takes is its own or the fold's, so it comes out the
 //same whenever the fold comes, the clock set since or not. Else taken now, with the clocks the last run folded left.
+//No more than GeStretchesKept wait: past that, the oldest are folded with the run they wait on.
 NALL_NOINLINE auto Kernel::geContendThreaded(u64 from, u64 to, u64 instructions) -> void {
   GeStretch stretch{from, to, instructions};
   geCacheCounts(stretch.caches);
   stretch.signal = geSignalDue;
   stretch.cpu = powerState.cpu;
   stretch.number = geStretchesMade++;
-  if(!geRuns.empty()) return stretch.run = geRuns.back().run, geStretches.push_back(stretch);
-  geContendNow(from, to, instructions, stretch.caches, stretch.signal, stretch.cpu);
+  if(geRuns.empty()) return geContendNow(from, to, instructions, stretch.caches, stretch.signal, stretch.cpu);
+  stretch.run = geRuns.back().run, geStretches.push_back(stretch);
+  if(geStretches.size() >= GeStretchesKept) geFold(true, geStretches.front().run);
 }
 
 //(geContend()'s, with the caches' counts as the stretch ended, whether a SIGNAL was due then and the CPU's clock then:

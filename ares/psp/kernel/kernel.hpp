@@ -1165,7 +1165,9 @@ struct Kernel {
   //clocks by kind, which the GE thread gives with each run, as the last folded left them (in the kernel's GE's
   //ramClocks and allClocks, which draws nothing while the thread does). Each stretch numbered in turn (geStretches made
   //so far), so that a go's limit worked out from the bound is worked out exactly from the times as they were when it
-  //was, the stretches after it left out (GeLimit::stretches).
+  //was, the stretches after it left out (GeLimit::stretches). No more than GeStretchesKept wait: past that many the
+  //oldest are folded with the run they wait on, the GE thread waited for to count it, as runs past GeThread::RunsKept
+  //are (a list left at its stall address, nothing due that folds its runs, while the program makes call after call).
   struct GeStretch {
     u64 from, to, instructions;
     u64 caches[4] = {};
@@ -1175,6 +1177,7 @@ struct Kernel {
   };
   mutable std::deque<GeStretch> geStretches;
   u64 geStretchesMade = 0;
+  static constexpr u64 GeStretchesKept = 65536;
   //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
   //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
   //takes for it as it's handed over, and geDoneAt is a lower bound of the synchronous GE's till none is left

@@ -3499,6 +3499,116 @@ static auto geTimePspLimitStretchesThreaded() -> void {
   CHECK(limits[1], limits[0]);
 }
 
+//With the PSP's GE timing and the GE on its thread, a list waiting at its stall address past a full-screen sprite
+//textured from RAM (one run handed over, nothing due that folds it) while the program polls the clock 100,000 times,
+//an uncached access each turn (the spin skip off): no more than Kernel::GeStretchesKept stretches wait (past that the
+//oldest are folded with their run; the review's probe had 100,002 waiting), run free and held back at the start of
+//every step; and the program's times, the GE's, its busy window and the cycles and lines it was busy beside the CPU the
+//same as without the thread.
+static auto geTimePspStretchesKeptThreaded() -> void {
+  constexpr u32 Code = 0x0880'4000, Uncached = 0x4940'0000, Texture = 0x0898'0000, Times = KernelMachine::Results;
+  constexpr u32 Calls = 100'000;
+  enum class Mode : u32 { Off, Free, Held };
+  struct Outcome {
+    u32 times[2] = {};
+    u64 cycles = 0, doneAt = 0, reachAt = 0, pipeAt = 0, window[6] = {}, made = 0;
+    f64 busyCycles = 0, busyLines = 0;
+    size_t most = 0;
+  };
+  auto run = [&](Mode mode) -> Outcome {
+    KernelMachine m;
+    m.pspTiming();
+    m.system.threadGE(mode != Mode::Off);
+    m.kernel.spins = false;
+    auto& memory = m.system.memory;
+    for(u32 n = 0; n < 64 * 64; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0), list.put(GE::Scissor2, 271 << 10 | 479), list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'0102);  //(through: 16-bit texture coordinates and positions)
+    list.put(GE::TextureMappingEnable, 1), list.to(GE::TextureAddress0, Texture);
+    list.put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+    list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3), list.put(GE::TextureFilter, 1 | 1 << 8);
+    list.to(GE::VertexAddress, Vertices);
+    u32 vertex = Vertices;
+    for(u32 half : {0u, 0u, 0u, 0u, 0u, 64u, 64u, 480u, 272u, 0u}) memory.write(2, vertex, half), vertex += 2;
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    u32 stall = list.address;
+    list.put(GE::Finish), list.put(GE::End);
+    u32 end = list.address;
+    Assembler a{m, Code};
+    a.li(a0, ListA), a.li(a1, stall), a.li(a2, 0xffff'ffff), a.li(a3, 0);
+    a.call("sceGeListEnQueue");
+    a.put(addu(s0, v0, zero));
+    a.li(s1, Calls);
+    u32 top = a.here();
+    a.li(t0, Uncached), a.put(lw(t2, 0, t0));
+    a.call("sceKernelGetSystemTimeLow");
+    a.put(addiu(s1, s1, -1));
+    a.put(bne(s1, zero, s32(top - a.here() - 4) / 4));
+    a.put(nop);
+    a.li(t4, Times), a.put(sw(v0, 0, t4));
+    a.put(addu(a0, s0, zero)), a.li(a1, end);
+    a.call("sceGeListUpdateStallAddr");
+    a.li(a0, 0);
+    a.call("sceGeDrawSync");
+    a.call("sceKernelGetSystemTimeLow");
+    a.li(t4, Times), a.put(sw(v0, 4, t4));
+    a.call("sceKernelExitGame");
+    m.system.recompiler.enabled = true;
+    m.system.power(Code);
+    s32 uid = m.kernel.createThread("main", Code, 0x20, 0x4000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+    auto& k = m.kernel;
+    std::atomic<bool> hold{false};
+    if(mode == Mode::Held) {
+      m.system.geThreading->drain();  //(the thread reads its gate as it takes each record)
+      m.system.geThreading->gate = [&](u64) { while(hold.load()) std::this_thread::yield(); };
+    }
+    Outcome o;
+    for(u32 step = 0; step < 1024 && !k.exited; step++) {
+      if(mode != Mode::Held) {
+        k.run(Kernel::VblankCycles / 64);
+      } else {
+        hold = true;
+        std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(2)); hold = false; });
+        k.run(Kernel::VblankCycles / 64);
+        release.join();
+      }
+      o.most = std::max(o.most, k.geStretches.size());
+    }
+    if(mode == Mode::Held) m.system.geThreading->drain(), m.system.geThreading->gate = nullptr;
+    CHECK(k.exited, true);
+    k.geFold(true);
+    o.times[0] = memory.read(4, Times), o.times[1] = memory.read(4, Times + 4);
+    o.cycles = k.cycles, o.doneAt = k.geDoneAt, o.reachAt = k.geReachAt, o.pipeAt = k.gePipeAt;
+    auto& w = k.geWindow;
+    o.window[0] = w.passed, o.window[1] = w.instructions, o.window[2] = w.fills, o.window[3] = w.writebacks;
+    o.window[4] = w.uncached, o.window[5] = w.pushed;
+    o.busyCycles = k.geBusyCycles, o.busyLines = k.geBusyLines;
+    o.made = k.geStretchesMade;
+    return o;
+  };
+  Outcome plain = run(Mode::Off);
+  CHECK(plain.busyLines > 0, true);
+  for(auto mode : {Mode::Free, Mode::Held}) {
+    Outcome threaded = run(mode);
+    if(threaded.most > Kernel::GeStretchesKept) {
+      std::printf("  mode %u: %zu stretches waiting\n", u32(mode), threaded.most);
+    }
+    CHECK(threaded.made > Calls && threaded.most <= Kernel::GeStretchesKept, true);
+    CHECK(threaded.times[0], plain.times[0]);
+    CHECK(threaded.times[1], plain.times[1]);
+    CHECK(threaded.cycles, plain.cycles);
+    CHECK(threaded.doneAt, plain.doneAt);
+    CHECK(threaded.reachAt, plain.reachAt);
+    CHECK(threaded.pipeAt, plain.pipeAt);
+    for(u32 n : range(6)) CHECK(threaded.window[n], plain.window[n]);
+    CHECK(threaded.busyCycles == plain.busyCycles, true);
+    CHECK(threaded.busyLines == plain.busyLines, true);
+  }
+}
+
 //(threaded: with the GE on a thread of its own, the same times, its pipeline the GE thread's: kernel.hpp's GeRun)
 static auto geTimeSignalAcrossRunsOn(bool threaded) -> void {
   u64 reaches[3] = {}, dones[3] = {};
@@ -5762,6 +5872,8 @@ auto geTests() -> Tests {
      geTimePspStretchSignalThreaded},
     {"ge time, the PSP's, with the GE on its thread: a go's limit takes the stretches decided before it",
      geTimePspLimitStretchesThreaded},
+    {"ge time, the PSP's, with the GE on its thread: stretches waiting on a stalled list, no more than it keeps",
+     geTimePspStretchesKeptThreaded},
     {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions}, {"ge profile", geProfile},
     {"ge profile: calls whose callbacks run in them", geProfileCallbacks},
