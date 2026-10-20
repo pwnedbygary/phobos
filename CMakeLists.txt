@@ -408,6 +408,11 @@ else()
   add_custom_command(TARGET phobos POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/Database $<TARGET_FILE_DIR:phobos>/Database
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/System $<TARGET_FILE_DIR:phobos>/System)
+  # tests/rsp-recompiler: the N64 RSP's recompiler against its interpreter, on phobos_core's own objects (the RSP as the
+  # program has it), its own source compiled as the N64's. Built on demand (desktop.yml's Linux job builds and runs it).
+  add_executable(rsp-recompiler EXCLUDE_FROM_ALL tests/rsp-recompiler/rsp-recompiler.cpp)
+  target_link_libraries(rsp-recompiler PRIVATE phobos_core Threads::Threads ${CMAKE_DL_LIBS})
+  set_property(SOURCE tests/rsp-recompiler/rsp-recompiler.cpp APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
   if(WIN32)
     # The icon is made from the PNG at configure time when Python is around; without it the
     # executable just has no icon.

@@ -35,6 +35,50 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
+
+Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLists.txt`, `tests/rsp-recompiler/`,
+`.github/workflows/desktop.yml` and this file; no core code changes. Notes and logs:
+`~/phobos-work/scratch/n64-mario-tennis/` (`FINDINGS.md`, round two in `round2/`).
+- **The fault** (FINDINGS.md): with the recompiler on, Mario Tennis's 3D intro, Super Mario 64, Mario Kart 64, Ocarina
+  of Time and Mario Golf rendered corrupt on x86-64. The RSP's recompiler calls the out-of-line `RSP::VMOV<e>` and
+  `RSP::VMULQ<e>`, which read vector lanes through a pointer cast from the `r128` union (`u16()`, `element()`); GCC
+  compiled VMOV's read before the store it reads (stale stack bytes in every recompiled VMOV's lane) and VMULQ's from
+  a register never loaded. The interpreter inlines its own copies, compiled right. ares's own build compiles its code
+  with `-fno-strict-aliasing`, and with GCC `-fwrapv` (cmake/common/compiler_common.cmake), which this CMakeLists.txt
+  never included. Every GCC from 11.4 (CI's Linux job's) to trunk gets FINDINGS.md's standalone copy 128 of 128 wrong
+  at -O3 (Compiler Explorer), none with the two flags; Clang none.
+- **The change**: every source under ares/ but ares/ares (shared with the PSP core) and ares/psp gets GCC's `-fwrapv
+  -fno-strict-aliasing`, Clang's and AppleClang's `-fno-strict-aliasing`: compiler_common.cmake's dialect flags, not
+  its warnings. compile_commands.json of the Linux desktop build before and after: 89 of 462 units changed, each by
+  those two flags only (the 18 upstream systems, PCE's vdp-performance, the N64's vulkan.cpp and 36 parallel-rdp
+  units, 33 components), the test's added, none removed; none of the 24 units the PSP core links from (ares/psp,
+  ares/ares's node and android_globals, nall, libco, sljit, libchdr) changed. In the linked Release binary all 16
+  `RSP::VMOV<e>` store the shuffled vector before they read the lane; the desktop build has no LTO.
+- **The test**: `tests/rsp-recompiler` (target `rsp-recompiler`, on phobos_core's own objects, its source compiled as
+  the N64's): VMOV for every e and de with Vd and Vt apart and the same, every COP2 function, MFC2/CFC2/MTC2/CTC2,
+  LBV-LTV and SBV-STV with the base known to the recompiler and not; 34,816 cases from seeded random states,
+  recompiled against interpreted, the whole VU state, the GPRs and DMEM compared, the stack filled with a pattern
+  first. Linked with master's N64 object (GCC 16.2.1): 4,608 differ (VMOV 4,096 of 4,096, each lane `a5a5`, the
+  pattern; VMULQ 256 of 256); with the change: 0, in 0.35 s. desktop.yml's Linux job builds and runs it after the
+  build, first checking that every N64 compile line has the dialect and the PSP core's hasn't (master 0 of 38, here
+  38 of 38).
+- **Checks** (cachyOS, GCC 16.2.1; the Linux desktop build as desktop.yml's preset makes it, Ninja Release, but FFmpeg
+  off: its script builds with every CPU, against this machine's two-job rule): no new warning (SDL's own one before
+  and after). On a scratch copy with the change, the recompiler on against the interpreter at the same frames (a
+  picture every 60 to frame 1800): Super Mario 64 2.3, Mario Kart 64 2.0, Ocarina of Time 0.2, Mario Golf 2.0, none
+  above 20; Mario Tennis 7.2, 2 of 29 above 20 (frames 1140 and 1200): the logo board a few pixels apart as the camera
+  pans, both pictures right (the RSP's recompiler alone gives the same two; the recompilers count cycles a little
+  differently). FINDINGS.md's differential checker on that copy: 0 differences in 40,000,000 Mario Tennis blocks and
+  56,000,000 Super Mario 64 blocks. Speed, the recompiler on: 59.9 FPS in every run; with the same work on both sides
+  (round one's recompiler-only fix against this) the emulation per frame is 4.16 and 4.09 ms (Mario Tennis), 3.74 and
+  3.71 ms (Super Mario 64), within the runs' spread. actionlint: master's two desktop.yml warnings only. `git diff
+  --check`.
+- **Left**: the upstream code the PSP core and the runner share, still without the dialect (ares/ares, nall, libco,
+  mia); the teardown crash (FINDINGS.md); an RP6 run (the coordinator's): with the NDK's Clang the N64's units now get
+  `-fno-strict-aliasing` too.
+- Independent review: not yet.
+
 ## Tests and CI: the kernel's tests with the PSP's GE timing, and the skip's contention refusal tested — 2026-10-20
 
 Branch `cursor/ci-psp-timing-cachy`, from master `dcf2f1b2c` (#287). Tests and CI only (`tests/psp/kernel-machine.hpp`,

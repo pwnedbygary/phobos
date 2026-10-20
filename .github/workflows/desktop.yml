@@ -67,6 +67,23 @@ jobs:
           cmake --preset linux-x64
           cmake --build build/linux-x64
 
+      # ares's dialect (CMakeLists.txt) on every N64 source and not on the PSP core's, then the N64 RSP's recompiler
+      # against its interpreter (tests/rsp-recompiler) on the objects just built: seconds.
+      - name: N64 RSP recompiler against the interpreter
+        shell: bash
+        run: |
+          ninja -C build/linux-x64 -t commands phobos_core > "$RUNNER_TEMP/commands.txt"
+          grep -E -e ' -c [^ ]*/ares/n64/' "$RUNNER_TEMP/commands.txt" > "$RUNNER_TEMP/n64.txt" || true
+          grep -E -e ' -c [^ ]*/ares/psp/' "$RUNNER_TEMP/commands.txt" > "$RUNNER_TEMP/psp.txt" || true
+          n64=$(wc -l < "$RUNNER_TEMP/n64.txt")
+          dialect=$(grep -c -F -e '-fwrapv -fno-strict-aliasing' "$RUNNER_TEMP/n64.txt" || true)
+          psp=$(grep -c -F -e '-fno-strict-aliasing' "$RUNNER_TEMP/psp.txt" || true)
+          echo "N64 sources $n64, in ares's dialect $dialect; the PSP core's in it: $psp"
+          [ "$n64" -gt 0 ] && [ "$dialect" -eq "$n64" ] && [ "$psp" -eq 0 ]
+          cmake --build build/linux-x64 --target rsp-recompiler
+          build/linux-x64/rsp-recompiler | tee "$RUNNER_TEMP/rsp-recompiler.log"
+          echo "- tests/rsp-recompiler: $(tail -1 "$RUNNER_TEMP/rsp-recompiler.log")" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package AppImage and zsync
         run: bash scripts/package-linux-appimage.sh build/linux-x64
 
