@@ -1,0 +1,77 @@
+psp-measure's GE tests, round 10c (tools/psp-measure/ge.c in Phobos says what each test draws and runs;
+docs/psp-core.md, part 114, what each is for). Records of words as round 8's (manifest8.txt): case, size, CPU
+MHz << 16 | bus MHz (as scePower gave them back), repeats | values << 16, then per run `values` words: times in
+microseconds from just before sceGeListEnQueue to the finish callback and to sceGeListEnQueue's return;
+time-contention4 two more as round 10's time-contention, a thread's turns of its pattern and their time (the GE
+idle: the first time is the pattern's own); 0xffffffff for a run not finished (see <name>.stalled). All run at
+222/111 and 333/166 MHz; the clocks as found are put back after each. The arrays the GE reads are on 1 KiB
+boundaries. The cases (test case: what; size):
+time-contention4 0: the GE idle; the CPU: streaming reads over 1 MiB; -
+time-contention4 1: the GE idle; the CPU: streaming reads, a half of flat out; -
+time-contention4 2: the GE idle; the CPU: a mix over 256 KiB; -
+time-contention4 3: H: the game's small strips (CLUT4 64x64, 7 levels, trilinear), as round 10 drew them; the CPU idle; triangles
+time-contention4 4: H: the game's small strips (CLUT4 64x64, 7 levels, trilinear), as round 10 drew them; the CPU: streaming reads over 1 MiB; triangles
+time-contention4 5: H: the game's small strips (CLUT4 64x64, 7 levels, trilinear), as round 10 drew them; the CPU: streaming reads, a half of flat out; triangles
+time-contention4 6: H: the game's small strips (CLUT4 64x64, 7 levels, trilinear), as round 10 drew them; the CPU: a mix over 256 KiB; triangles
+time-contention4 7: H nearest within the level chosen; the CPU idle; triangles
+time-contention4 8: H nearest within the level chosen; the CPU: streaming reads over 1 MiB; triangles
+time-contention4 9: H nearest within the level chosen; the CPU: streaming reads, a half of flat out; triangles
+time-contention4 10: H nearest within the level chosen; the CPU: a mix over 256 KiB; triangles
+time-contention4 11: H bilinear without levels; the CPU idle; triangles
+time-contention4 12: H bilinear without levels; the CPU: streaming reads over 1 MiB; triangles
+time-contention4 13: H bilinear without levels; the CPU: streaming reads, a half of flat out; triangles
+time-contention4 14: H bilinear without levels; the CPU: a mix over 256 KiB; triangles
+time-contention4 15: H nearest without levels; the CPU idle; triangles
+time-contention4 16: H nearest without levels; the CPU: streaming reads over 1 MiB; triangles
+time-contention4 17: H nearest without levels; the CPU: streaming reads, a half of flat out; triangles
+time-contention4 18: H nearest without levels; the CPU: a mix over 256 KiB; triangles
+time-contention4 19: H untextured; the CPU idle; triangles
+time-contention4 20: H untextured; the CPU: streaming reads over 1 MiB; triangles
+time-contention4 21: H untextured; the CPU: streaming reads, a half of flat out; triangles
+time-contention4 22: H untextured; the CPU: a mix over 256 KiB; triangles
+time-contention4 23: H with its vertices in VRAM; the CPU idle; triangles
+time-contention4 24: H with its vertices in VRAM; the CPU: streaming reads over 1 MiB; triangles
+time-contention4 25: H with its vertices in VRAM; the CPU: streaming reads, a half of flat out; triangles
+time-contention4 26: H with its vertices in VRAM; the CPU: a mix over 256 KiB; triangles
+time-contention4 27: H untextured, its vertices in VRAM; the CPU idle; triangles
+time-contention4 28: H untextured, its vertices in VRAM; the CPU: streaming reads over 1 MiB; triangles
+time-contention4 29: H untextured, its vertices in VRAM; the CPU: streaming reads, a half of flat out; triangles
+time-contention4 30: H untextured, its vertices in VRAM; the CPU: a mix over 256 KiB; triangles
+time-shrink 0: the whole list as logged: time-clut32 0's tiles into 5650, then 60 sprites into 8888 (VRAM 8888 512x512 not swizzled, 2:1, bilinear); layers
+time-shrink 1: the 60 sprites alone (2:1, bilinear); layers
+time-shrink 2: the same, nearest; layers
+time-shrink 3: 1:1 (sprites 32x68 over 480x272), bilinear; layers
+time-shrink 4: 4:1 (sprites 8x17 over 120x68), bilinear; layers
+time-shrink 5: 2:1, the picture swizzled in VRAM; layers
+time-shrink 6: 2:1, the picture in RAM, swizzled; layers
+time-shrink 7: 2:1, the picture in RAM, not swizzled; layers
+time-shrink 8: one sprite 240x136 over the 480x272 texels (VRAM, not swizzled, bilinear); layers
+time-magnify 0: as logged: RAM 8888 256x512 swizzled magnified 1.875 times over 480x272 (9 x 7 quads), modulated, blended, the alpha test, into 5650, bilinear; layers
+time-magnify 1: the same, nearest; layers
+time-magnify 2: 1:1 (8 x 8 quads over 256x256), bilinear; layers
+time-magnify 3: the same, nearest; layers
+time-magnify 4: 4 times (8 x 8 quads over 256x256, 64x64 texels), bilinear; layers
+time-magnify 5: the same, nearest; layers
+time-magnify 6: as logged, into 8888, bilinear; layers
+time-magnify 7: the same, nearest; layers
+time-magnify 8: as logged, neither blended nor alpha-tested, bilinear; layers
+time-magnify 9: the same, nearest; layers
+time-magnify 10: as logged, the texture 512x256, bilinear; layers
+time-magnify 11: the same, nearest; layers
+time-magnify 12: as logged, CLUT8 256x512, bilinear; layers
+time-magnify 13: the same, nearest; layers
+time-gamestrips 0: time-lights 38: strips of 9 vertices (16x20-pixel triangles, CLUT4 64x64 bilinear, depth and alpha tests, into 8888), unlit; strips
+time-gamestrips 1: the same, nearest; strips
+time-gamestrips 2: the same bilinear, without the alpha test; strips
+time-gamestrips 3: without the depth test; strips
+time-gamestrips 4: into 5650; strips
+time-gamestrips 5: untextured; strips
+time-anchors3 0: round 10's time-anchors2 6: round 8's time-strips 37's strips (RAM 8888 512x512 swizzled, 32 wide), the texture on a 1 KiB boundary; layers
+time-anchors3 1: round 10's time-clut32 0: the game's tiles (CLUT32 512x512 in VRAM, 32x34, three passes, 240 palette loads a layer, into 5650); layers
+time-anchors3 2: round 10's time-widetri 0: the game's pass (a strip of two triangles over 480x272, CLUT8 512x256 in RAM swizzled, bilinear, modulated, blended, the alpha test, into 5650); layers
+time-anchors3 3: round 10's time-perspective 3: RAM 8888 256x256 swizzled, two triangles over 256x256 pixels, w 1 to 2; layers
+time-anchors3 4: round 10's time-mipmaps 1: round 8's time-textures 10 (RAM 8888 256x256 swizzled shrunk 2:1, 3 levels, the level chosen, nearest); layers
+time-anchors3 5: round 10's time-vram8 1: VRAM, not swizzled, CLUT8 512x512, strips 8 wide as sprites; layers
+time-anchors3 6: round 10's time-lights 38: the game's strips drawn, unlit; strips
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.

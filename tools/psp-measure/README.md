@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-10b) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-10c) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 10c: Monkey Ball's strips, Activision Hits' lists (30 KB)
    - Round 10b: the CPU polling, before and beside; placement (30 KB)
    - Round 10: the GE's triangles, lights, the CPU beside it (0.2 MB)
    - Round 9: the GE's triangles, textures, vertices (about 0.1 MB)
@@ -82,7 +83,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `main.c` | The menu, starting afresh, and leaving. |
 | `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
-| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8, 9, 10 and 10b (round 10's and 10b's with a thread reading and writing memory beside the GE). Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
+| `ge.c` | The GE's and the controller's tests, and the timed lists of rounds 6, 8, 9, 10, 10b and 10c (round 10's, 10b's and 10c's with a thread reading and writing memory beside the GE). Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
 | `cpu.c` | Round 8's tests of the CPU alone: its loops in assembly (memory's in C), memory, system and driver calls, the clocks granted. Its waits for the GE are timed as `ge.c`'s are, sharing its reset (`geReset`). |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
@@ -396,15 +397,24 @@ from 0 to 512 bytes past a 1 KiB boundary, controls not swizzled and CLUT8, a pa
 swizzled in RAM. From round 10b on the arrays the GE reads are on 1 KiB boundaries (round 10's build had them 64 bytes
 off a 128-byte one: part 112). About half a minute. The owner ran it the same night; part 112 says what it showed.
 
+Round 10c (about 30 KB, `manifest10c.txt`; part 114) is for what #269's refit and #279's model of the CPU's traffic
+still miss: `time-contention4`, Super Monkey Ball's small trilinear strips (round 10's list H) taken apart (nearest
+within the level, bilinear and nearest without levels, untextured, the vertices in VRAM), each alone and beside a
+thread streaming reads (flat out and at a half) or running the game's mix over 256 KiB; `time-shrink` and
+`time-magnify`, Activision Hits' menu's second and third lists as #269's agent specified them (60 sprites shrinking a
+VRAM picture, and the whole list as logged; triangles magnifying a RAM texture into 5650, bilinear and nearest at
+each magnification); `time-gamestrips`, round 10's game-style strips taken apart; and `time-anchors3`, seven of round
+10's cases again. About half a minute.
+
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its menu as
 a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4 again over
-counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, round 10, round 10b,
-leaving), and checks every file is written (that the stall check got past its stall, and the timing records of rounds 6,
-8, 9, 10 and 10b are whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder,
-and for round 6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the core's own files for a
-closer look):
+counts left as the earlier program left them, round 5, round 6, round 7, round 8, round 9, round 10, round 10b, round
+10c, leaving), and checks every file is written (that the stall check got past its stall, and the timing records of
+rounds 6, 8, 9, 10, 10b and 10c are whole); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs
+from that folder, and for round 6's timing files each case's middle times here and there (`PSP_GE_OURS` keeps the
+core's own files for a closer look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs
@@ -454,17 +464,18 @@ python3 tools/psp-measure/ge-terms.py /tmp/terms
 ```
 
 Then the program's rounds 10, 9, 8 and 6 in that runner with the GE timing "PSP", each with its terms written to a
-file: `EBOOT.PBP` (`make` here, with round 10b) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
-chosen with presses (round 10b the first line, round 10 the second, round 9 the third, round 8 the fourth, round 6 the
-sixth), each run's `results/ge` kept beside its terms, the stick emptied between runs:
+file: `EBOOT.PBP` (`make` here, with round 10c) in a memory stick folder's `PSP/GAME/PSPMEASURE`, the round's menu line
+chosen with presses (round 10c the first line, round 10b the second, round 10 the third, round 9 the fourth, round 8
+the fifth, round 6 the seventh), each run's `results/ge` kept beside its terms, the stick emptied between runs:
 
 ```
 PHOBOS_GE_TERMS=r10.txt RUNNER STICK/PSP/GAME/PSPMEASURE/EBOOT.PBP --memory-stick STICK --ge-timing psp \
-  --frames 30000 --press 60:Down,66:Down!,80:Cross,86:Cross! --start-time 1791290096   # then keep results/ge as ours10
-PHOBOS_GE_TERMS=r9.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Cross,106:Cross! ...    # as ours9
-PHOBOS_GE_TERMS=r8.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Cross,126:Cross! ... # ours8
+  --frames 30000 --press 60:Down,66:Down!,80:Down,86:Down!,100:Cross,106:Cross! --start-time 1791290096   # as ours10
+PHOBOS_GE_TERMS=r9.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Cross,126:Cross! ... # ours9
+PHOBOS_GE_TERMS=r8.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Down,126:Down!,\
+  140:Cross,146:Cross! ...                                                                         # as ours8
 PHOBOS_GE_TERMS=r6.txt ... --press 60:Down,66:Down!,80:Down,86:Down!,100:Down,106:Down!,120:Down,126:Down!,\
-  140:Down,146:Down!,160:Cross,166:Cross! ...                                                      # as ours6
+  140:Down,146:Down!,160:Down,166:Down!,180:Cross,186:Cross! ...                                   # as ours6
 python3 tools/psp-measure/ge-fit.py PSP_RESULTS r10.txt ours10 r9.txt ours9 r8.txt ours8 r6.txt ours6 --again PSP_AGAIN
 ```
 
@@ -472,7 +483,7 @@ python3 tools/psp-measure/ge-fit.py PSP_RESULTS r10.txt ours10 r9.txt ours9 r8.t
 `ge-round10` unpacked into one folder), `PSP_AGAIN` the owner's runs of the earlier rounds again on round 10's evening
 (`ge-reruns-round10`): a list that moved more than 5% between the two (and more than 4 microseconds) is held out as a
 check, as where the program's arrays moved and a texture's place with them. The owner ran round 10's own build (round 10
-on its menu's first line); the committed one is round 10b's, whose lines are one further down. `ge-fit.py` prints each
+on its menu's first line); the committed one is round 10c's, whose lines are two further down. `ge-fit.py` prints each
 term's clocks under `GE::Cost`'s names, then how far the fitted model misses each test's lists (and the checks:
 `time-anchors` and `time-anchors2`, round 8's cases again, the cases outside the model, the lists held out); part 106
 has the command that gave the clocks in `ge.hpp`. `contention10.py PSP_RESULTS r10.txt ours10` reads round 10's
