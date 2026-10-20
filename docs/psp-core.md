@@ -18479,9 +18479,11 @@ refusal, splitting the work by who knows what:
   The term pushes the GE's pipeline back by the lines the CPU's caches move during each stretch between syscalls
   while the GE is busy, weighed by the list's clocks of each kind (`GE::ramClocks`). A stretch ended while runs are
   pending can't be taken yet: it's kept (`Kernel::GeStretch`, numbered) with its instructions, the caches' four counts
-  as it ended and whether a SIGNAL was due (the push moves `geReachAt` only then), and taken as the fold reaches the run
-  it followed, with that run's clocks by kind (`Owed`) and
-  the times the fold leaves (`geContendNow()`): the synchronous GE's order. Each run keeps the caches' counts as it
+  as it ended, whether a SIGNAL was due (the push moves `geReachAt` only then) and the CPU's clock (which weighs the
+  lines against the cycles passed: since the port's review, below), and taken as the fold reaches the run it followed,
+  with that run's clocks by kind (`Owed`) and the times the fold leaves (`geContendNow()`): the synchronous GE's order,
+  the same whenever the fold comes. No more than 65,536 wait (`GeStretchesKept`): past that, the oldest are folded with
+  the run they wait on, as runs past `GeThread::RunsKept` are. Each run keeps the caches' counts as it
   ended (`GeRun::caches`), for the window that a stalled list going on starts there. The fold keeps the times after each
   stretch, so a go's limit worked out later stops at the stretches it was decided with (`GeLimit`'s count). The push
   moves `gePipeAt`, which the next run's shift counts from, so a run's start folds first while stretches wait
@@ -18671,8 +18673,8 @@ list's pipeline).
   first.
 - `geContend()`: #279's with the thread Off; On, a stretch waits on the runs pending or is taken at once
   (`geContendThreaded()`), `geContendNow()` being #279's arithmetic (the window's whole counts and its push,
-  `geContendDue()`) from the counts and the SIGNAL due given, const over mutable members (the window, the counts seen,
-  the busy sums, and `gePipeAt`, which its push moves).
+  `geContendDue()`) from the counts, the SIGNAL due and (since the port's review) the CPU's clock given, const over
+  mutable members (the window, the counts seen, the busy sums, and `gePipeAt`, which its push moves).
 - `spinSkip()`: C's exact limit and FINISH and SIGNAL checks, #279's steady turns', then its busy window's, after a fold
   with the thread.
 - #279 removed the stretch's end C's `goThreaded()` called: a go the bound cut short counts its instructions on across
@@ -18723,6 +18725,60 @@ runs spread from 96 to 234 fps, Killzone's On from 162 to 210, the others within
 while stretches wait (a scratch count): Super Monkey Ball 0.9 a frame, each of them waiting for G; Army of Two 0.5, none
 waiting; the other five none. E's waits for G in all: 0.2 to 2.8 a frame, the same on each head (the threaded spin
 skip's fold adds none in these scenes).
+
+**The port's review and its fixes** (an independent review of `b56fa5010` on the owner's Linux desktop: NEEDS CHANGES,
+four findings; fixed in `99e067692`, `5a29bcc1d`, `216a89cf9` and `d62faaaa0`):
+- **The CPU's clock, carried** (finding 1). A stretch waiting on G's runs didn't keep the CPU's clock: `geContendDue()`
+  read it as the fold took the stretch, and `scePowerSetCpuClockFrequency` and `scePowerSetClockFrequency` change it
+  without folding. With the clock set while stretches waited, the review's program ended 82 µs early with the thread
+  On (6876 against 6958 µs; `geDoneAt` 2,290,006 against 2,317,196): every stretch taken at the last clock. A stretch
+  now keeps the clock it ended at (`GeStretch::cpu`), which `geContendNow()` hands to `geContendDue()`; Off passes
+  `powerState.cpu`, the same arithmetic as before. What a waiting stretch's fold reads is now its own (its
+  instructions, the caches' counts, the SIGNAL flag, the clock), its run's (`GeRun`'s `pipeAt`, bus, cycles and counts,
+  and G's `Owed` for it), brought to it by the fold's order (`geDoneAt`, `geReachAt`, `gePipeAt`, the window, the
+  counts seen, the kernel GE's clocks by kind and the busy sums, each changed only by the fold or after a fold of every
+  stretch waiting), or constant while it waits (`GE::Cost`, and `gePspTiming`, set only as the system powers on,
+  after the kernel's power on has folded them): its push is the same whenever the fold comes. The clock was the one
+  input left. Carrying it, rather than folding before it changes, covers its other writers too (a power on's
+  `powerState = {}` and a state's load set it before they fold) and adds no wait for G. `geContendBound()` still reads
+  the clock as it is: only the spin skip asks it, after folding every run. The test ("ge time, the PSP's, with the GE
+  on its thread: the CPU's clock set while stretches wait", the review's probe as a group: either function, the GE
+  thread run free and held back at each step, against Off) fails on `b56fa5010`'s code for both functions, free and
+  held, and passes after.
+- **Four port items pinned** (finding 2), each with a test that fails with it taken out (the review's mutations, debug
+  with ASan and UBSan):
+  - the threaded spin skip's fold before its busy-window refusals: "the GE's looks polled with the PSP's GE timing,
+    its list stalled as the GE draws, with the GE on its thread: skipped as every turn run", a poll moving lines while
+    its list of sprites textured from RAM waits at a stall address past its first: with no FINISH due nothing in a
+    turn folds the run, so without the fold the skip crosses the GE's done time unrefused (the states differ from step
+    21). Its first version's sprites were untextured fills, whose clocks hardly read RAM: the lines barely pushed the
+    GE, and the test passed without the fold (textured since `d62faaaa0`);
+  - a stretch's SIGNAL flag: "...: a stretch's SIGNAL due kept past sceGeBreak(0)". `sceGeBreak()` clears a due SIGNAL
+    without folding first, the one way the SIGNAL due changes between a stretch's end and its fold (a run's start
+    folds first, as does an interrupt taken); without the flag the SIGNAL's time misses the stretch's push (48,154
+    cycles against 54,560);
+  - a state's clocks by kind from the timed GE: "ge time, the PSP's: a state keeps the list's clocks by kind, loaded
+    with the GE on its thread or not", sprites textured from RAM before the save and untextured after; saving the
+    kernel's GE's copy and loading into it, the render GE's left as it was, has the list loaded with the thread On done
+    at 7589 µs against 7972;
+  - the exact limit's entries for stretches: "...: a go's limit takes the stretches decided before it", a limit
+    decided from the bound after one stretch and before another, worked out exactly, against the synchronous go's
+    limit decided at the same point: without the entries it falls 6,406 cycles short. White-box, as a program can't
+    show it: a go's first limit after a run is handed over is decided before any stretch waits on that run, and a later
+    limit only shortens the go, so a limit short of its time ends a go early and the next go makes it up, the window's
+    sums in whole counts.
+- **Waiting stretches bounded** (finding 3): no more than 65,536 (`GeStretchesKept`, about 5 MiB). Past that the
+  oldest are folded with the run they wait on, G waited for to count it, as `geFoldKept()` does past `RunsKept` runs.
+  It's exact (a stretch's push doesn't depend on when it's folded), and the wait ends: a run's end goes to G as the
+  run stops, at a stall address too. Before, a list left at its stall address with nothing due that folds its runs,
+  while the program made calls, grew them without end (the review's probe: 100,002 after 100,000 calls). The test
+  ("...: stretches waiting on a stalled list, no more than it keeps": 100,000 polls of the clock, an uncached access
+  each, beside a list stalled after a sprite textured from RAM, the spin skip off, free and held back): at most 65,536
+  waiting at a step's end, and the times and the window Off's; with the fold taken out, 95,495 wait.
+- **Checks** (this host's GCC 16.2, debug with ASan and UBSan): the clock test on `b56fa5010`'s code, 20 failures
+  (both functions, free and held), and passing after; "ge time, the PSP's" and the looks polled groups, 22, on
+  `216a89cf9`, and the looks polled 6 on `d62faaaa0`, 0 failures; six mutations (the four above, the clock read at the
+  fold, the bound's fold taken out), each failing its test, each file put back and checked by its hash.
 
 **Not yet**: Auto with its handover both ways (design step 4, R17), a stacked PR; the app's option offered once On beats
 Off on the RP6; Hot Wheels' remaining store cost (the recompiler's check, four times a store, and the model's write);

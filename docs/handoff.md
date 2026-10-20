@@ -64,9 +64,10 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   (a FINISH, a SIGNAL, the go's limits, `sceGeSaveContext`, a spin's skip), the last run's bound answers first (its
   pipeline's two ends so far, or half its words' work), and the emulation thread waits for the GE thread only where it
   doesn't. #279's CPU-beside-the-GE term is carried exactly: each stretch kept with its instructions, the caches'
-  counts as it ended and whether a SIGNAL was due, and taken as the fold reaches it, a run's start folding first while
-  stretches wait (the term's push moves the pipeline's start), a cut go counted as one, spin skips as long as the
-  synchronous go's (deciding from the busy window, folded first).
+  counts as it ended, whether a SIGNAL was due and the CPU's clock (since the port's review), no more than 65,536 of
+  them waiting, and taken as the fold reaches it, a run's start folding first while stretches wait (the term's push
+  moves the pipeline's start), a cut go counted as one, spin skips as long as the synchronous go's (deciding from the
+  busy window, folded first).
 - **Speed with the PSP's timing and #279** (the M1, Vulkan fast, 600 frames, five rounds, medians, `a335937a9`): On/Off
   Ghost of Sparta 1.25x, Chains of Olympus 0.98x, Super Monkey Ball 1.16x, Army of Two 1.23x, Killzone 1.00x, Disaster
   Report 3 1.40x, Hot Wheels 1.21x; before #279 1.15x, 0.99x, 1.08x, 1.10x, 1.01x, 1.38x, 1.09x (0.78x with "Fast": with
@@ -117,14 +118,25 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   PNG's gets its own picture now, so On's PNGs are Off's (the slow three, 24 of 24), and Off's are as they were.
 - **On part 113** (#279 merged in at `8a0a04b7f`, its review's fixes at `0ab56c774`, master with it at `a335937a9`):
   #279's code as it is with the thread Off. With it On, a stretch the CPU ends while runs are pending keeps its
-  instructions, the caches' four counts and whether a SIGNAL was due (`Kernel::GeStretch`), each run the counts as it
-  ended (`GeRun::caches`); the list's clocks by kind come with each run (`GeThread::Owed`) into the kernel's GE's own,
-  which draws nothing meanwhile, and a state saves the render GE's; `goThreaded()` counts a cut go's instructions across
-  its parts (`Allegrex::run(limit, from)`) and ends its stretch once. #279's test machine `pspTiming()` keeps the GE
-  thread as the machine has it, and the CI thread On lane runs the CPU beside the GE's groups. No layout of its own: 35.
-- **Next**: the coordinator's library check on the port (with the PSP's timing On against Off, and Off against
-  master); Auto with its handover both ways (design step 4), a stacked PR; the app's option once On beats Off on the
-  RP6; Hot Wheels' remaining store cost; the busy window kept on the GE thread, so that a run's start needn't wait.
+  instructions, the caches' four counts, whether a SIGNAL was due and the CPU's clock (`Kernel::GeStretch`), each run
+  the counts as it ended (`GeRun::caches`); the list's clocks by kind come with each run (`GeThread::Owed`) into the
+  kernel's GE's own, which draws nothing meanwhile, and a state saves the render GE's; `goThreaded()` counts a cut go's
+  instructions across its parts (`Allegrex::run(limit, from)`) and ends its stretch once. #279's test machine
+  `pspTiming()` keeps the GE thread as the machine has it, and the CI thread On lane runs the CPU beside the GE's
+  groups. No layout of its own: 35.
+- **The port's review** (NEEDS CHANGES on `b56fa5010`, four findings) **and its fixes** (`99e067692`, `5a29bcc1d`,
+  `216a89cf9`, `d62faaaa0`): a stretch waiting on the GE thread's runs carries the CPU's clock it ended at (a clock set
+  while stretches waited gave the thread On another time than Off: 6876 against 6958 µs in the review's program); no
+  more than 65,536 stretches wait (past that the oldest are folded with their run, as runs are past 4,096: a stalled
+  list beside a program making calls grew them without end); and four port items have a test each that fails without
+  it (the threaded spin skip's fold, a stretch's SIGNAL flag, a state's clocks by kind, the exact limit's entries for
+  stretches, that one white-box: a limit short of its time only ends a go early). Part 111 lists what a stretch's
+  fold reads and the checks; ThreadSanitizer, per the review, found nothing in Phobos's code (its only reports came
+  from inside the GPU drivers' own threads, RADV's and lavapipe's).
+- **Next**: an independent review of this fix round; the coordinator's library check on the port (with the PSP's
+  timing On against Off, and Off against master); Auto with its handover both ways (design step 4), a stacked PR; the
+  app's option once On beats Off on the RP6; Hot Wheels' remaining store cost; the busy window kept on the GE thread,
+  so that a run's start needn't wait.
 
 ## PSP GE: part 113 and the handoff after #279's second review — wording only — 2026-10-19
 
