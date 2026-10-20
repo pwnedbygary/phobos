@@ -37,8 +37,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP tests: the measured rounds' groups report a missing round, and a missing file no longer ends a sanitized run — 2026-10-20
 
-Branch `cursor/psp-measured-skips-cachy`, from master `b48c0c68b` (#280's merge): #280's review suggestion S4. Tests
-and their README only; the core doesn't change, so docs/psp-core.md has no part for it.
+Branch `cursor/psp-measured-skips-cachy`, from master `b48c0c68b` (#280's merge), master `f8f301347` (#283) merged
+in: #280's review suggestion S4. Tests and their README only; the core doesn't change, so docs/psp-core.md has no
+part for it.
 - **Why**: #280's independent review (claim (b)) found that neither measured8's four groups (rounds 8, 9, 10 and 10b)
   nor "measured round 6 GE time" could report its skip. Each asked `ours()` for the core's file first and returned
   when it came back empty, which it does without a word when the round's variable is unset or empty or the PSP's file
@@ -74,6 +75,21 @@ and their README only; the core doesn't change, so docs/psp-core.md has no part 
   with an empty folder: before, stopped; after, a skip, and 5 failures where required.
 - **Not run**: the rest of the PSP suite, tests/allegrex, tests/psp/ares, the runner and the app builds (CI's).
 - Independent review: not yet.
+
+## CI: the GE profile decoder's tests on every change to them — 2026-10-19
+
+Branch `cursor/psp-ge-decoder-ci-cachy`, from master `d9bfbefb4` (#281). CI only, a non-blocking follow-up from
+#269's review; the decoder and its tests untouched.
+- **The job** (a new workflow, PSP GE Profile Tests, `.github/workflows/psp-ge-profile.yml`): `python3 -m unittest -v
+  test_geprof test_gate` in `tools/psp-ge-profile/decoder` with Ubuntu 24.04's own Python, on pushes to master and
+  pull requests that change the decoder or the workflow (gate.py reads the owner's captures only as the gate, never in
+  its tests). Not a job in psp-core.yml: its path filters would then run every PSP suite for a decoder change.
+- **The plugin's capture stays skipped** (`test_plugin_capture`): `make hosttest` needs pspdev, which the runners
+  don't have (`psp-config` for `build.mak`, and the SDK's headers, which `plugin.h` includes even with `-DHOST`).
+- **Checks**, here (Python 3.14.7): the job's command ran 30 tests, OK (skipped=1); with one assertion broken on
+  purpose (not committed), FAILED (failures=1, skipped=1), exit 1; actionlint 1.7.12 with shellcheck 0.11.0, clean.
+  CI's run is in the pull request's body. Review: PASS on `483d5b1cf`, independent and read-only, with wording
+  items in the PR body only.
 
 ## PSP measure, round 10c: Super Monkey Ball's small strips beside the CPU taken apart, Activision Hits' menu's second and third lists — 2026-10-19
 
