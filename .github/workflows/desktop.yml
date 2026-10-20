@@ -67,6 +67,54 @@ jobs:
           cmake --preset linux-x64
           cmake --build build/linux-x64
 
+      # ares's dialect (CMakeLists.txt) on every N64 source and not on the PSP core's, then the N64 RSP's recompiler
+      # against its interpreter (tests/rsp-recompiler) on the objects just built: seconds.
+      - name: N64 RSP recompiler against the interpreter
+        shell: bash
+        run: |
+          ninja -C build/linux-x64 -t commands phobos_core > "$RUNNER_TEMP/commands.txt"
+          grep -E -e ' -c [^ ]*/ares/n64/' "$RUNNER_TEMP/commands.txt" > "$RUNNER_TEMP/n64.txt" || true
+          grep -E -e ' -c [^ ]*/ares/psp/' "$RUNNER_TEMP/commands.txt" > "$RUNNER_TEMP/psp.txt" || true
+          has_wrapv=' -fwrapv( |$)'
+          has_aliasing=' -fno-strict-aliasing( |$)'
+          # a later -fno-wrapv or -fstrict-aliasing on the command line undoes the flag
+          undoes=' -fwrapv( .*)? -fno-wrapv( |$)| -fno-strict-aliasing( .*)? -fstrict-aliasing( |$)'
+          count() { grep -c -E "$@" || true; }
+          sources() { grep -m 10 -E "$@" | sed -E 's/.* -c /  /'; }
+          n64=$(wc -l < "$RUNNER_TEMP/n64.txt")
+          wrapv=$(count -e "$has_wrapv" "$RUNNER_TEMP/n64.txt")
+          aliasing=$(count -e "$has_aliasing" "$RUNNER_TEMP/n64.txt")
+          undone=$(count -e "$undoes" "$RUNNER_TEMP/n64.txt")
+          psp=$(wc -l < "$RUNNER_TEMP/psp.txt")
+          flagged=$(count -e "$has_wrapv" -e "$has_aliasing" "$RUNNER_TEMP/psp.txt")
+          echo "N64 sources $n64: -fwrapv in $wrapv, -fno-strict-aliasing in $aliasing, undone later in $undone;" \
+            "PSP sources $psp: either in $flagged"
+          if [ "$n64" -eq 0 ]; then
+            echo "::error::No N64 compile command among phobos_core's"; exit 1
+          fi
+          if [ "$wrapv" -ne "$n64" ]; then
+            echo "::error::$((n64 - wrapv)) of $n64 N64 compile commands lack -fwrapv"
+            sources -v -e "$has_wrapv" "$RUNNER_TEMP/n64.txt"; exit 1
+          fi
+          if [ "$aliasing" -ne "$n64" ]; then
+            echo "::error::$((n64 - aliasing)) of $n64 N64 compile commands lack -fno-strict-aliasing"
+            sources -v -e "$has_aliasing" "$RUNNER_TEMP/n64.txt"; exit 1
+          fi
+          if [ "$undone" -ne 0 ]; then
+            echo "::error::$undone of $n64 N64 compile commands undo a flag (a later -fno-wrapv or -fstrict-aliasing)"
+            sources -e "$undoes" "$RUNNER_TEMP/n64.txt"; exit 1
+          fi
+          if [ "$psp" -eq 0 ]; then
+            echo "::error::No PSP compile command among phobos_core's"; exit 1
+          fi
+          if [ "$flagged" -ne 0 ]; then
+            echo "::error::$flagged of $psp PSP compile commands carry -fwrapv or -fno-strict-aliasing"
+            sources -e "$has_wrapv" -e "$has_aliasing" "$RUNNER_TEMP/psp.txt"; exit 1
+          fi
+          cmake --build build/linux-x64 --target rsp-recompiler
+          build/linux-x64/rsp-recompiler | tee "$RUNNER_TEMP/rsp-recompiler.log"
+          echo "- tests/rsp-recompiler: $(tail -1 "$RUNNER_TEMP/rsp-recompiler.log")" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package AppImage and zsync
         run: bash scripts/package-linux-appimage.sh build/linux-x64
 
