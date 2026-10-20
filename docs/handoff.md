@@ -35,6 +35,190 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Android hotkeys led by Back: the owner's set from the RP6 as the defaults, none needing C or Z, a warning while no controller has sent Back with a button chosen in its place at every level at once, a controller's Back coming as a key — 2026-10-20
+
+Branch `improved-hotkeys`, on the slow-motion commit `68e973d43` (the entry below). The seventh pull request of the
+hotkey plan, from the owner's choices once the RP6's Home was found never to reach an app (the entry below, The RP6,
+seen in passing). On the defaults: "The current global hotkeys I have set are the defaults i would like to make for
+everything. Please analyze the current settings and make sure they work for anyone (i am using the C and Z buttons on
+the retroid, so these should default to something sensible for those who do not have C or Z." On the draft's Replace
+Mode row: "The whole replace mode thing is a tad confusing, I think mode by default for Phobos should be set to "Back"
+so we can set it to that by default. If its unset, then we can display that message". Changed, on Android: the manifest,
+`MainActivity.kt`, `data/SettingsStore.kt`, `input/ControlCapture.kt`, `input/ControlLevels.kt`, `input/FallbackKeys.kt`
+(new), `input/Hotkeys.kt`, `input/WindowKeys.kt`, a comment in `input/GameInputState.kt`, `ui/ControllerPages.kt`,
+`ui/MainViewModel.kt` and six tests (`FallbackKeysTest` new); on the desktop `desktop/main.cpp`, for the entry below's
+leftovers. Checked on the RP6 with a test copy beside the owner's app; **not** with any other controller (see Limits).
+- **The defaults**: the owner's set, read from the test copy's settings file, with two buttons changed. Every controller
+  hotkey is Back held with one other button: Back + A pauses, + R1 saves, + L1 loads, + D-pad right or left steps the
+  slot, + X reloads, + B quits (asking first), + R2 holds fast forward, + L2 holds slow motion, + D-pad down cycles the
+  N64 pak, + D-pad up toggles the PS1 analog mode, + L3 shows the on-screen keyboard and + Y swaps to the Library. Where
+  the owner had Back + Z (a screenshot) and Back + C (mute), buttons most controllers lack, Back + R3 takes a screenshot
+  and Back + Select mutes (the owner's choice), C and Z left free. A keyboard's F5, F9, F8, F12 and Tab stay second
+  bindings (the owner's choice). Unbound, as in the owner's set: Reset, Frame Advance, the fast-forward toggle and the
+  direct slots. Select, only ever a second key, reaches the game alone. The desktop's defaults stay as they are (the
+  owner's choice): there a controller's Back is its Select, which games need, so Guide leads, its tap opening the menu.
+- **Most controllers have no Back button**: stock Android 13's key layouts, read from the RP6 (`/system/usr/keylayout`),
+  give the Xbox 360, One and Series pads, the DualShock 4, the DualSense, the Switch Pro Controller and 8BitDo's pad no
+  key sending Back (the DualShock 4's version-specific layouts and the DualSense's fallback included): their View,
+  Share, Create or Minus button is Select (so is the Xbox 360's, though labelled Back), and their Xbox, PS, Capture or
+  Home button is Mode (the Switch Pro's Home is Android's own Home). Of the layouts read, only Logitech's F310 sends a
+  button as Back; the RP6's Back button sends it too (Linux key 158).
+- **The warning, and a button in Back's place**: the Hotkeys page warns, at the level it shows, while Back starts a
+  hotkey there and no connected controller has been seen sending it: "No controller here has sent Back yet, and Back
+  starts these hotkeys: press it once to show it works, or, with no Back button (most controllers have none), choose
+  another button to start every hotkey in its place, on every console and game." A controller is remembered (its
+  InputDevice descriptor, stored as `back_seen_pads` and kept through a reset) once a Back press of its reaches the
+  window, a fallback's or the navigation bar's not counting. **Choose another button** captures one key or axis
+  direction, which then starts, in Back's place, every binding Back starts: at all consoles (a default included, stored
+  then as the player's) and in each console and game storing hotkeys of its own, in one edit
+  (`Controls.replaceHotkeyLeadEverywhere`, `SettingsStore.setHotkeysEverywhere`). Nothing changes, and the actions in
+  the way are named with the level that sets them, when the button is already in a hotkey Back starts (it would lose a
+  key: Select is in Mute's Back + Select) or would collide anew with another binding at any level; a collision there
+  already doesn't count: "Select can't take Back's place: Mute Audio uses it already. Choose another button (on Xbox and
+  PlayStation pads, Guide or PS), or bind that again first." A button the game uses is asked about: "Use Start in Back's
+  place? Start is also a game button: once it starts the hotkeys, the game no longer gets it." Back itself pressed there
+  changes nothing, its press having shown it works. Resetting all consoles' hotkeys to the defaults brings Back back
+  there, though not in a console's or game's own hotkeys (under Limits). This replaces the draft's Replace Mode row,
+  which changed one level at a time and which the owner found confusing.
+- **A controller's Back as a key**: the manifest now sets `android:enableOnBackInvokedCallback="false"`. With predictive
+  back on (set in the app's first configuration, `27e1d7574`), Android 13 and later hand Back to the back callback
+  rather than the window, so a controller's Back never reached the hotkeys; Compose's BackHandlers still get the Backs
+  the window leaves. Two Backs are kept from the hotkeys and from a capture: the navigation bar's or gesture's (from the
+  virtual keyboard; it cancels a capture) and a fallback, the key Android makes up for one the app left unhandled, B's
+  Back say. Android marks a fallback, but the RP6 sends it unmarked, with the device, scan code and down time of the B
+  it stands for, which `FallbackKeys` goes by. So B in the pause menu goes back as before, where the draft's first build
+  had it tap Pause (found on the RP6).
+- **Behind the Library**: a key starting a Library binding (Back, of Back + Y) is held back from the Library's screens,
+  where Back would go back as it's let go of, the way back to the game half done; every other key goes on to them.
+- **The entry below**: its third review's suggestions are taken. In `desktop/main.cpp` the iterator in quitFirst is
+  renamed (it shadowed `Shell::quit`), and the menu case is checked: with Pause and Quit on one key, that key in the
+  menu runs only Pause, which closes it, and nothing asks after; in play Quit asks (six checks added to the quit-first
+  session, now 14). Two loose ends in its evidence outside the repository are fixed: a note beside round 1's diff, and
+  the slow-motion check no longer clearing a fixed folder.
+- **Checks**:
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0): 446 tests
+    per flavor (432 before), 0 failures, 54 result files each, last run after the first review; the legacy debug APK
+    builds (32,625,919 bytes, SHA-256 `f7dcc62a2e876badfc3834a7ad60efc674558536cafee91e8db3cfb654704ce9`, one build of
+    these sources).
+  - New or changed tests: the defaults (the owner's set whole, written out from its stored values with R3 and Select in
+    place of Z and C and the keyboard's keys beside it, nothing else bound; none needing C or Z; no collision); a key in
+    Back's place (every binding Back starts, the rest left); what's in the way (a key lost, a new collision, not one
+    there already); every level at once (what each level stores, a console's Quit in the way named where it's set, a
+    game's own Mute); the store writing all consoles and each level, and keeping the controllers seen; the routing of
+    the defaults (Back + A pausing, Back alone running nothing, Back + R2 holding fast forward, Select reaching the
+    game, the keyboard's keys); the Library from behind with Back; a capture of one key or axis direction; and the
+    fallbacks (`FallbackKeysTest`, five). The routing tests of taps, holds and double reports keep a Mode-led set of
+    their own, the defaults as they were.
+  - Ten mutants, each made by hand in the worktree, the input package's tests and `HotkeySettingsTest` run (112), then
+    undone and each file's SHA-256 checked; each failed its test or tests: a collision there already counted in the way;
+    only all consoles checked; an action in the way named at the level it was found at, not the one setting it; the
+    consoles' and games' own hotkeys left on Back; the store not writing them; a key starting a Library binding passed
+    to the Library's screens; a capture in Back's place taking no key; a trigger's key let through after it; a fallback
+    known only by its mark; the controllers seen not read back. They ran before the first review, and what has changed
+    since (a word of a comment in `SettingsStore.kt`, the defaults' test, Back's label, two other comments) is nothing
+    they test. After it, that review's mutant of the defaults (Next and Previous slot swapped, N64 pak and PS1 analog
+    swapped, Reload on Back + Start), which every test had passed, failed the defaults' test and no other.
+  - On the RP6 (Android 13): a debug build of the sources the first review saw but for two comment lines, in
+    `SettingsStore.kt` and `MainViewModel.kt` (shortened before that review), Back's label in it still "BACK" (changed
+    after the review), under its own application ID (`com.phobos.emulator.pr7`, APK SHA-256
+    `a156e1d67dabd40243da5a8cdf85bef2cda1eee680637460aac7f704751e961b`), installed beside the owner's app, its data
+    cleared, driven by the built-in controls' own events (sendevent) and checked by screenshots and the log: the warning
+    before any Back press; the rows ("BACK + R1 or F5", "BACK + R2 or TAB", the fast-forward toggle "Not bound"); Select
+    refused with the message above; Start asked about, and cancelled; Mode chosen, the rows then Mode-led with the
+    keyboard's kept ("Mode + R2 or TAB · from all consoles"; on the cleared copy all consoles was the only level with
+    hotkeys, every level at once being the host tests'), the warning gone, Mode + A resuming and Mode + R1 saving; the
+    reset bringing Back and the warning back; one Back press storing the controls' descriptor, the warning going and the
+    page staying; Back + A resuming, Back alone doing nothing, Back + R1 saving. Earlier, on the draft: the controls'
+    Back reaching the window as key 4, B going back on the Hotkeys page, the virtual keyboard's Back doing nothing in
+    play, and Back + Y swapping to the Library and, from behind it, back. The owner's app moved from 2.4.0-196 to
+    2.4.0-276 between the two sessions (updated at 17:40 by the owner; the sessions' scripts only install and remove the
+    test copy), and the second session left it as it found it. The test copy stays installed for the owner's hands-on
+    check.
+  - The desktop, for the entry below's leftovers: the Linux build, ctest 1/1 and its 209 host checks; the quit-first
+    session 14 of 14 on a virtual display, its two mutants failing four and one.
+  - Not run: another controller (the warning and the choice were driven only from the RP6's controls); Android 14 to 17
+    (the app targets 17, API 37).
+- **Limits**:
+  - A controller with no Back button starts with the warning and a button to choose; until then its hotkeys can't be
+    pressed (a keyboard's can, and the screen's menu button).
+  - On such a pad, Guide or PS pressed in the pause menu takes the player to the home screen until Guide or PS itself
+    takes Back's place; another button chosen there, Start say, leaves Mode starting no hotkey (derived, not seen: in
+    the pause menu a Mode press that starts no hotkey is taken neither by the hotkeys nor by the paused game, and
+    Android's `Generic.kcm`, which the RP6 holds and which none of the pads read has a map of its own to replace, makes
+    an unhandled Mode a Home press). In a running game the game's screen takes every key the hotkeys leave, Mode's too
+    (`EmulatorScreen.kt`'s `onKeyEvent`), though not in a dialog over it (the next limit); the Mode-led defaults of the
+    entries below took Mode in the pause menu as well.
+  - A PSP system dialog, a window of its own over the running game, takes only its PSP buttons and the Pause hotkey and
+    passes every other key on, a hotkey's first key included (derived from `PspSystemDialogs.kt` and Android's dialog,
+    fallback-key and soft-keyboard handling, not seen). No other hotkey runs there, and the keys of one act as they
+    would with no hotkeys: as the dialog takes them or, where nothing in its window does, as the fallback `Generic.kcm`
+    gives the key. Guide or PS, let go of with the dialog still up, goes Home, pressed alone or with another button and
+    even where it starts the hotkeys; where Pause is bound to it alone, a press of it alone pauses instead. Back, let go
+    of with the dialog still up, does what the dialog's back button does (from a question about a save chosen in a list,
+    back to the list; in the install dialog, nothing), as a controller's Back always has there. Among the defaults'
+    other keys, by the default button mappings: B acts as the dialog's confirm or back button, as its confirm button is
+    set (the install dialog has neither); the D-pad moves; R3 and L3 (Screenshot's and the on-screen keyboard's), which
+    `Generic.kcm` makes the D-pad's centre, confirm in a message or a save dialog, so Back + R3 in a list of saves loads
+    the one highlighted, or saves to new data, at once (saving over a save or deleting one asks first, and a corrupted
+    one shows its notice); and in the PSP keyboard X and Y come as a backspace and a space. So Back + B can take two
+    steps, B's and then, as Back is let go of, Back's. A Pause hotkey hides the dialog until the game goes on (Back + A,
+    or Guide + A where Guide has Back's place), but for Back + A in the PSP keyboard while Android's soft keyboard
+    shows, which it does once the dialog opens: the soft keyboard has Back first and hides as Back is let go of, so
+    there Back + A acts as A alone, entering the text or cancelling as the dialog's confirm button is set, and Back
+    backs out of the dialog only once the soft keyboard is down.
+  - The Xbox 360 pad's button labelled Back sends Select, by its layout: pressing it doesn't end the warning, and
+    choosing it is refused (Select is in Mute's Back + Select), the refusal naming Guide.
+  - Back alone does nothing, in play or in the pause menu: it starts the hotkeys. B, through its fallback, goes back in
+    menus and, at the pause menu's top, asks whether to quit, as before.
+  - Google calls the opt-out temporary: apps targeting Android 16 get predictive back by default, the attribute set to
+    false opting out for now. A later Android may drop it, and a controller's Back would stop reaching the hotkeys.
+  - On a pad whose only Select-like button sends Back (Logitech's F310, by its layout), Mute's Back + Select can't be
+    pressed.
+  - The warning goes once any connected controller has sent Back; each new controller is remembered by its own first
+    Back press.
+  - The button in Back's place is the player's own then, at all consoles and in each console's or game's own hotkeys.
+    Choosing another needs Back's hotkeys back first, the warning showing only while Back starts one, and Reset hotkeys
+    to the defaults puts Back back at all consoles alone: a console or game with hotkeys of its own keeps the chosen
+    button in them until they're bound again or its own Reset button has it take what it inherits, its own changes gone
+    (a game takes its console's, which keep the chosen button in the actions the console sets itself until the console
+    is reset too). A choice made meanwhile reaches only the bindings Back starts, so the levels' hotkeys then start with
+    different keys.
+  - The RP6's Home still never reaches Phobos (the entry below).
+- **Review**: the first independent review (diff `66fb2a10...`) found NEEDS CHANGES, four Minors: the defaults' test
+  pinned ten of the fifteen controller defaults (a mutant moving the other five passed it); the way back from a chosen
+  button was given for all consoles alone; Guide or PS going Home on a pad without Back wasn't under Limits (by the code
+  it does in the pause menu, not on a running game's screen, which takes every key the hotkeys leave); and three claims
+  went beyond their evidence (every level stored on the device, where all consoles was the only one with hotkeys; a
+  stored value quoted from a read not kept; the Xbox 360's button labelled Back left out). Fixed: the defaults' test
+  checks the whole set, and the text is corrected under Checks and Limits. Of its suggestions, Back's label (now "Back",
+  as the page's text has it), the window callback's comment, Android 17 among the versions not run and the plan row's
+  wording are taken; asking about a game button by every level's button bindings rather than the level shown's, and the
+  warning counting a Back sent by a device that isn't a gamepad, are left for a later change. The second (diff
+  `c5a891a8...`) found NEEDS CHANGES, two Minors in that answer's text: the pause menu's Home presses were said to end
+  once any button took Back's place, where only Guide or PS taking it ends them (another, Start say, leaves Mode
+  starting no hotkey); and a game's own Reset button was said to give it all consoles' hotkeys, where it gives it its
+  console's, the chosen button still leading the actions the console sets itself. Both corrected under Limits. Its
+  suggestions are taken: the PSP system dialog, a window of its own, named under Limits, with what Back does there,
+  found reading it; the two comment lines the RP6's build differs by named under Checks; and, outside the repository,
+  the search for the pads' own key maps kept with its commands and widened to `/system_ext` and `/data/system/devices`
+  (none there either, and the pads' version-specific layouts it turned up read too), and the defaults mutant's diff
+  rebuilt and kept beside its log. The third (diff `7e2f7ca2...`) found NEEDS CHANGES, one Minor in the new PSP line:
+  Guide or PS was said to go Home there only when pressed alone, where by the same reading it does too after starting
+  any hotkey but Pause, which doesn't run. Corrected under Limits. Its suggestions are taken: the line's basis widened
+  to Android's dialog and fallback-key handling, what a hotkey's second key does there, a follow-up for these dialogs
+  under Next, and the mutant's diff called rebuilt. The fourth (diff `9065e204...`) found NEEDS CHANGES, one Minor in
+  that line: a hotkey's second key was said to act there as its PSP button, where R3 and L3, which `Generic.kcm` makes
+  the D-pad's centre, confirm in a message or a save dialog (Back + R3, Screenshot elsewhere, loading the save
+  highlighted in a list), and X and Y come as a backspace and a space in the PSP keyboard. Corrected under Limits, the
+  keys acting as they would with no hotkeys. Its suggestions are taken: Android's soft keyboard over the PSP keyboard
+  having Back first (which keeps Back + A from pausing there, found answering it), the install dialog's buttons doing
+  nothing, and Back + B taking two steps where B's leaves the dialog up. The whole record is in the commit that carries
+  this entry.
+- **Next**: the plan's closing docs (a hotkey reference and the issue matrix); if the owner wants it, a PSP system
+  dialog holding a hotkey's first key back and running its hotkeys (Limits); the RP6 pass by hand; the pad, window
+  manager, Wayland, Steam, Windows and macOS checks.
+
 ## Slow motion, held, at half speed on Android and the desktop, its sound slowed with the picture and measured clean on the RP6 and the desktop first; the defaults it moved, and the desktop's Quit asking first — 2026-10-20
 
 Branch `improved-hotkeys`, on the per-game desktop hotkeys commit `f54ae457f` (the entry below). The sixth pull request

@@ -114,6 +114,42 @@ class ControlLevelsTest {
     }
 
     @Test
+    fun aKeyInBacksPlaceIsStoredAtEveryLevelAtOnceUnlessAnythingAnywhereIsInTheWay() {
+        val save = HotkeyAction.SAVE_STATE
+        val screenshot = HotkeyAction.SCREENSHOT
+        val quit = HotkeyAction.QUIT
+        // All consoles' as the store gives them: Save as a default leaves it (Back + R1, F5), Screenshot stored as F8.
+        val global = mapOf(save to listOf(listOf(BACK, R1), listOf(F5)), screenshot to listOf(listOf(F8)))
+        // The Nintendo 64 stores Quit as Back + R3; Mario Tennis unbinds Save and stores Screenshot with Back + Y.
+        val overrides = ControlOverrides(
+            hotkeys = mapOf(
+                n64.scope!! to mapOf(quit to listOf(listOf(BACK, R3))),
+                tennis.scope!! to mapOf(save to emptyList(), screenshot to listOf(listOf(F8), listOf(BACK, Y))),
+            ),
+        )
+        val swap = Controls.replaceHotkeyLeadEverywhere(BACK, MODE, global, overrides)
+        assertEquals("all consoles store Save whole; Screenshot, Back not in it, stays", mapOf(save to listOf(listOf(MODE, R1), listOf(F5))), swap.global)
+        assertEquals(
+            "each level what it stores itself, whole; the game's unbinding stays",
+            mapOf(n64.scope!! to mapOf(quit to listOf(listOf(MODE, R3))), tennis.scope!! to mapOf(screenshot to listOf(listOf(F8), listOf(MODE, Y)))),
+            swap.scoped,
+        )
+        assertTrue(swap.blockers.isEmpty())
+        // R3 is in the console's Quit, which would lose it (in Mario Tennis too, which inherits it): nothing is stored
+        // anywhere, and the console's Quit is named, where it's set.
+        val lost = Controls.replaceHotkeyLeadEverywhere(BACK, R3, global, overrides)
+        assertEquals(listOf(n64 to quit), lost.blockers)
+        assertTrue(lost.global.isEmpty() && lost.scoped.isEmpty())
+        // A game's own Mute on Mode + R1, where all consoles' Save would land: the game's Mute is named.
+        val clashing = ControlOverrides(hotkeys = mapOf(tennis.scope!! to mapOf(HotkeyAction.MUTE to listOf(listOf(MODE, R1)))))
+        assertEquals(listOf(tennis to HotkeyAction.MUTE), Controls.replaceHotkeyLeadEverywhere(BACK, MODE, global, clashing).blockers)
+        // A stored scope reads back as its level, a game's ROM name holding "|" included.
+        assertEquals(tennis, ControlLevel.of(tennis.scope!!))
+        assertEquals(n64, ControlLevel.of(n64.scope!!))
+        assertEquals(ControlLevel.Game("Nintendo 64", "Odd | Name.z64"), ControlLevel.of("Nintendo 64/Odd | Name.z64"))
+    }
+
+    @Test
     fun levelsReportWhatTheyChangeThemselves() {
         val overrides = ControlOverrides(
             mappings = mapOf(tennis.scope!! to mapOf(x to "")),
@@ -149,6 +185,8 @@ class ControlLevelsTest {
 
     companion object {
         // KeyEvent constants (android.view).
+        const val BACK = 4
+        const val Y = 100
         const val R1 = 103
         const val R3 = 107
         const val MODE = 110

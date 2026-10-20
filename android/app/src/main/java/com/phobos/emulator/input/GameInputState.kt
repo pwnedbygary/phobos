@@ -34,7 +34,7 @@ object GameInputState {
     // Hotkey support: many controllers report the D-pad as HAT axes and the triggers and sticks as
     // axes (motion events), not keys, so key events alone never show them to the hotkeys. This set
     // holds the hotkey tokens held that way: the hat's D-pad keycodes, a trigger's L2/R2 keycode and
-    // each stick direction's axis token (HotkeyTokens), so combos like Mode + D-pad Right can match.
+    // each stick direction's axis token (HotkeyTokens), so combos like Back + D-pad Right can match.
     val hotkeyKeys = mutableSetOf<Int>()
     var hotkeyKeysVersion = 0
         private set

@@ -4,8 +4,9 @@ package com.phobos.emulator.input
  * The activity window's keys, which it gets before any view does (MainActivity's window callback). While a game is on
  * screen every key goes to its [GameKeys], whichever view has focus, so a combo's first key reaches the hotkeys
  * instead of being taken on the way. With the game swapped away behind the Library, keys are watched for the Library
- * hotkey that brings it back: only the key completing it is taken (and a Library tap's key, until its release says
- * whether it was a tap), and every other key goes on to the Library's screens. The repeats and release of a key whose
+ * hotkey that brings it back: only its keys are taken, the one completing it, the one starting a Library binding, and
+ * a Library tap's key (until its release says whether it was a tap); every other key goes on to the Library's
+ * screens. The repeats and release of a key whose
  * press went to a game, or was taken by the Library hotkey, go the same way, whatever changed meanwhile: a game that
  * reloads or is swapped away with keys down still gets them let go of, so its hotkeys don't count them as held when
  * it's back. Used from the main thread.
@@ -67,10 +68,13 @@ class WindowKeys(private val app: App) {
         library.syncExternal(hotkeys, app.heldAxes())
         library.press(hotkeys, keyCode)
         val libraryTap = hotkeys[HotkeyAction.LIBRARY].orEmpty().any { it == listOf(keyCode) && isTapCombo(hotkeys, it) }
+        val startsLibrary = hotkeys[HotkeyAction.LIBRARY].orEmpty().any { it.size > 1 && it.first() == keyCode }
         when {
             HotkeyAction.LIBRARY in library.completions(hotkeys) -> backToGame()
-            // A Library tap's key is the hotkeys', not the Library screens'.
-            libraryTap -> {}
+            // A Library tap's key is the hotkeys', not the Library screens', and so is a key starting a Library
+            // binding: there, Back would go back as it's let go of, and Mode go Home (the fallback Android's
+            // Generic.kcm gives an unhandled Mode), the way back to the game half done.
+            libraryTap || startsLibrary -> {}
             else -> return false
         }
         taken += keyCode

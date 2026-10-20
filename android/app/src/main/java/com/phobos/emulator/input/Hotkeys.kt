@@ -57,31 +57,31 @@ object HotkeyBindings {
 }
 
 /**
- * The hotkeys a player who never bound one has. Mode (the Home or Guide button) leads every controller one, so Select
- * and every other button stay the game's: tapped alone, Mode pauses; held with one other button, it runs that button's
- * action (Quit's asks first). A keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a screenshot, F12
- * pauses and Tab holds fast forward. The actions left out (Reset, the direct slots, fast-forward hold on a controller)
- * are unbound: the pause menu has Reset, and a player can bind them on purpose.
+ * The hotkeys a player who never bound one has. Back (the button a handheld such as the Retroid Pocket has beside Home)
+ * leads every controller one, held with one other button, so each button stays the game's when pressed alone: Back
+ * with A pauses, with R1 saves, with L1 loads (Quit's asks first). A controller with no Back button, most of them,
+ * sending theirs as Select, gets the Hotkeys page's offer of another button in Back's place, at every level at once
+ * ([Controls.replaceHotkeyLeadEverywhere]). A keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a
+ * screenshot, F12 pauses and Tab holds fast forward. The actions left out (Reset, Frame Advance, the fast-forward
+ * toggle, the direct slots) are unbound: the pause menu has Reset, and a player can bind them on purpose.
  */
-val DEFAULT_HOTKEYS: Map<String, List<List<Int>>> = KeyEvent.KEYCODE_BUTTON_MODE.let { mode ->
+val DEFAULT_HOTKEYS: Map<String, List<List<Int>>> = KeyEvent.KEYCODE_BACK.let { back ->
     mapOf(
-        HotkeyAction.PAUSE to listOf(listOf(mode), listOf(KeyEvent.KEYCODE_F12)),
-        HotkeyAction.SAVE_STATE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_R1), listOf(KeyEvent.KEYCODE_F5)),
-        HotkeyAction.LOAD_STATE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_L1), listOf(KeyEvent.KEYCODE_F9)),
-        HotkeyAction.NEXT_SLOT to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_RIGHT)),
-        HotkeyAction.PREVIOUS_SLOT to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_LEFT)),
-        HotkeyAction.RELOAD to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_X)),
-        HotkeyAction.QUIT to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_B)),
-        HotkeyAction.SCREENSHOT to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBR), listOf(KeyEvent.KEYCODE_F8)),
-        HotkeyAction.MUTE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_A)),
-        HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(KeyEvent.KEYCODE_TAB)),
-        HotkeyAction.FAST_FORWARD_TOGGLE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_R2)),
-        HotkeyAction.SLOW_MOTION to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_L2)),
-        HotkeyAction.FRAME_ADVANCE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_START)),
-        HotkeyAction.N64_PAK to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_DOWN)),
-        HotkeyAction.PS1_ANALOG_TOGGLE to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_UP)),
-        HotkeyAction.KEYBOARD to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBL)),
-        HotkeyAction.LIBRARY to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_Y)),
+        HotkeyAction.PAUSE to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_A), listOf(KeyEvent.KEYCODE_F12)),
+        HotkeyAction.SAVE_STATE to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_R1), listOf(KeyEvent.KEYCODE_F5)),
+        HotkeyAction.LOAD_STATE to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_L1), listOf(KeyEvent.KEYCODE_F9)),
+        HotkeyAction.NEXT_SLOT to listOf(listOf(back, KeyEvent.KEYCODE_DPAD_RIGHT)),
+        HotkeyAction.PREVIOUS_SLOT to listOf(listOf(back, KeyEvent.KEYCODE_DPAD_LEFT)),
+        HotkeyAction.RELOAD to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_X)),
+        HotkeyAction.QUIT to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_B)),
+        HotkeyAction.SCREENSHOT to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_THUMBR), listOf(KeyEvent.KEYCODE_F8)),
+        HotkeyAction.MUTE to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_SELECT)),
+        HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_R2), listOf(KeyEvent.KEYCODE_TAB)),
+        HotkeyAction.SLOW_MOTION to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_L2)),
+        HotkeyAction.N64_PAK to listOf(listOf(back, KeyEvent.KEYCODE_DPAD_DOWN)),
+        HotkeyAction.PS1_ANALOG_TOGGLE to listOf(listOf(back, KeyEvent.KEYCODE_DPAD_UP)),
+        HotkeyAction.KEYBOARD to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_THUMBL)),
+        HotkeyAction.LIBRARY to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_Y)),
     )
 }
 
@@ -322,7 +322,8 @@ fun hotkeyConflictMessage(conflicts: List<HotkeyConflict>, name: (String) -> Str
     return "$question It also overlaps ${andList(overlapping)}, which would lose $lost too."
 }
 
-private fun andList(names: List<String>): String =
+/** Names joined as a sentence lists them: "A", "A and B", "A, B and C". */
+fun andList(names: List<String>): String =
     if (names.size < 2) names.joinToString() else names.dropLast(1).joinToString(", ") + " and " + names.last()
 
 /** The pairs of actions with bindings that already collide at a level, by [hotkeyConflicts]'s rules, each pair once. */
@@ -335,6 +336,32 @@ fun existingHotkeyConflicts(hotkeys: Map<String, List<List<Int>>>): List<Pair<St
             .filter { actions.indexOf(it) > index }
             .map { action to it }
     }
+}
+
+/**
+ * What starting with another key every binding one key starts would do at a level ([leadReplacement]): [changes], each
+ * changed action's bindings as they'd be, and [blockers], the actions in the way.
+ */
+data class LeadReplacement(val changes: Map<String, List<List<Int>>>, val blockers: List<String>)
+
+/**
+ * [hotkeys]' bindings that [from] starts started by [to] instead, the rest of each combo kept, and the actions in the
+ * way: one with a binding [from] starts that has [to] already (it would lose a key), or with a binding that a moved one
+ * would collide with by [hotkeyConflicts]'s rules and doesn't already. Each of those has [to] in it, a moved binding
+ * differing from before only in [to]; the moved ones stand to one another as before.
+ */
+fun leadReplacement(hotkeys: Map<String, List<List<Int>>>, from: Int, to: Int): LeadReplacement {
+    if (to == from) return LeadReplacement(emptyMap(), emptyList())
+    fun replaced(combo: List<Int>) = if (combo.firstOrNull() == from) listOf(to) + combo.drop(1) else combo
+    val led = hotkeys.filterValues { bindings -> bindings.any { it.firstOrNull() == from } }
+    val losing = led.filterValues { bindings -> bindings.any { it.firstOrNull() == from && to in it } }.keys
+    val colliding = led.flatMap { (action, bindings) ->
+        bindings.filter { it.firstOrNull() == from && to !in it }.flatMap { combo ->
+            val before = hotkeyConflicts(hotkeys, action, combo).map { it.action to it.slot }.toSet()
+            hotkeyConflicts(hotkeys, action, replaced(combo)).filter { (it.action to it.slot) !in before }
+        }
+    }.map { it.action }
+    return LeadReplacement(led.mapValues { (_, bindings) -> bindings.map(::replaced) }, (losing + colliding).distinct())
 }
 
 /**

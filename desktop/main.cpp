@@ -838,8 +838,8 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   // Quit runs first, and once it has asked, the question has the keys: nothing else the event brought runs (an action
   // bound to the same keys, a collision the page shows: Load state, say, would throw progress away before it asked).
   auto quitFirst = [](std::vector<std::string>& actions) {
-    auto quit = std::find(actions.begin(), actions.end(), Hotkey::quit);
-    if (quit != actions.end()) std::rotate(actions.begin(), quit, quit + 1);
+    auto found = std::find(actions.begin(), actions.end(), Hotkey::quit);
+    if (found != actions.end()) std::rotate(actions.begin(), found, found + 1);
   };
   quitFirst(completed);
   quitFirst(tapped);

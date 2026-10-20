@@ -11,15 +11,15 @@ import org.junit.Test
 
 /**
  * Hotkeys as a game gets them: key events through the activity's window (WindowKeys) to the game screen's keys
- * (GameKeys), joystick moves through GameInputState, which records what the core is sent. The default Mode hotkeys and
- * a keyboard's second bindings, taps, the hold actions driven from the hat, from a trigger reported only as an axis and
- * from a key that also leads a longer binding of the same hold, a button reported both ways, keys let go of while the
- * game is closed or away, and the Library's way back.
+ * (GameKeys), joystick moves through GameInputState, which records what the core is sent. The defaults, Back leading
+ * them, and a keyboard's second bindings; and on a set led by Mode, as the defaults once were, taps, the hold actions
+ * driven from the hat, from a trigger reported only as an axis and from a key that also leads a longer binding of the
+ * same hold, a button reported both ways, keys let go of while the game is closed or away, and the Library's way back.
  */
 class HotkeyRoutingTest {
     private val run = mutableListOf<String>()
     private val events = mutableListOf<String>()
-    private var hotkeys: Map<String, List<List<Int>>> = DEFAULT_HOTKEYS
+    private var hotkeys: Map<String, List<List<Int>>> = MODE_LED
     private var onScreen = true
     private var loaded = true
     private lateinit var coreInput: GameInputState.CoreInput
@@ -103,7 +103,30 @@ class HotkeyRoutingTest {
     }
 
     @Test
+    fun withTheDefaultsBackAndAPausesBackAloneRunsNothingAndBackAndR2HoldFastForward() {
+        hotkeys = DEFAULT_HOTKEYS
+        assertTrue("Back is taken, by the game's hotkeys", key(BACK, down = true))
+        assertTrue("A completes Back + A and is taken", key(BUTTON_A, down = true))
+        assertEquals(listOf(HotkeyAction.PAUSE), run)
+        key(BUTTON_A, down = false)
+        key(BACK, down = false)
+        assertTrue("Back alone is taken too", key(BACK, down = true))
+        assertTrue(key(BACK, down = false))
+        assertEquals("and runs nothing, no binding being Back alone", listOf(HotkeyAction.PAUSE), run)
+        key(BACK, down = true)
+        assertTrue("R2 completes Back + R2", key(R2, down = true))
+        assertEquals(listOf(HotkeyAction.PAUSE, HotkeyAction.FAST_FORWARD_HOLD), run)
+        key(R2, down = true, repeat = 1)
+        assertTrue(events.isEmpty())
+        key(R2, down = false)
+        assertEquals(listOf("fast forward stopped"), events)
+        key(BACK, down = false)
+    }
+
+    @Test
     fun selectReachesTheGameWithTheDefaultHotkeys() {
+        // Select is Mute's second key, after Back: alone, it's the game's.
+        hotkeys = DEFAULT_HOTKEYS
         key(SELECT, down = true)
         assertEquals(Input.SELECT, GameInputState.buttons and Input.SELECT)
         key(R1, down = true)
@@ -126,17 +149,35 @@ class HotkeyRoutingTest {
     }
 
     @Test
-    fun theLibraryHotkeyFromBehindTheLibraryBringsTheGameBackTakingOnlyTheKeyThatCompletesIt() {
+    fun theLibraryHotkeyFromBehindTheLibraryBringsTheGameBackTakingOnlyItsKeys() {
         onScreen = false
-        assertFalse("Mode goes on to the Library's screens", key(MODE, down = true))
-        assertFalse("so does a key completing something else", key(BUTTON_A, down = true))
+        // On the Library's screens Mode would go Home (Android's fallback for an unhandled Mode), and Back in its place
+        // would go back.
+        assertTrue("Mode, which starts the Library hotkey, is held back from the Library's screens", key(MODE, down = true))
+        assertFalse("a key completing something else goes on to them", key(BUTTON_A, down = true))
         assertFalse(key(BUTTON_A, down = false))
         assertTrue("Y completes the Library hotkey", key(BUTTON_Y, down = true))
         assertEquals(listOf("back to the game"), events)
         assertTrue("its repeats are taken", key(BUTTON_Y, down = true, repeat = 1))
         assertTrue("and its release", key(BUTTON_Y, down = false))
-        key(MODE, down = false)
+        assertTrue("and Mode's", key(MODE, down = false))
         assertTrue("nothing ran as a game hotkey: ran $run", run.isEmpty())
+    }
+
+    @Test
+    fun aLibraryHotkeyStartedByBackBringsTheGameBackWithoutBackReachingTheLibrarysScreens() {
+        hotkeys = mapOf(HotkeyAction.LIBRARY to listOf(listOf(BACK, BUTTON_Y)), HotkeyAction.SAVE_STATE to listOf(listOf(BACK, R1)))
+        onScreen = false
+        assertTrue("Back is held back from the Library's screens, where it would go back", key(BACK, down = true))
+        assertTrue("Y completes the Library hotkey", key(BUTTON_Y, down = true))
+        assertEquals(listOf("back to the game"), events)
+        assertTrue(key(BUTTON_Y, down = false))
+        assertTrue("Back's release is taken too", key(BACK, down = false))
+        // A key starting only another hotkey still goes on to the Library's screens.
+        hotkeys = hotkeysOf(HotkeyAction.LIBRARY to listOf(MODE, BUTTON_Y), HotkeyAction.SAVE_STATE to listOf(BACK, R1))
+        onScreen = false
+        assertFalse(key(BACK, down = true))
+        assertFalse(key(BACK, down = false))
     }
 
     @Test
@@ -278,6 +319,7 @@ class HotkeyRoutingTest {
 
     @Test
     fun aKeyboardsSecondBindingsSaveLoadTakeAScreenshotAndPauseFromTheirKeyAlone() {
+        hotkeys = DEFAULT_HOTKEYS
         for (code in listOf(F5, F9, F8, F12)) {
             assertTrue("$code is taken", key(code, down = true))
             key(code, down = false)
@@ -287,6 +329,7 @@ class HotkeyRoutingTest {
 
     @Test
     fun tabHoldsFastForwardUntilItIsLetGo() {
+        hotkeys = DEFAULT_HOTKEYS
         assertTrue(key(TAB, down = true))
         key(TAB, down = true, repeat = 1)
         assertEquals(listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
@@ -385,13 +428,17 @@ class HotkeyRoutingTest {
 
     companion object {
         // KeyEvent and MotionEvent constants (android.view).
+        const val BACK = 4
         const val BUTTON_A = 96
+        const val BUTTON_B = 97
         const val BUTTON_X = 99
         const val BUTTON_Y = 100
+        const val L1 = 102
         const val R1 = 103
         const val L2 = 104
         const val R2 = 105
         const val L3 = 106
+        const val R3 = 107
         const val START = 108
         const val SELECT = 109
         const val MODE = 110
@@ -400,11 +447,34 @@ class HotkeyRoutingTest {
         const val F8 = 138
         const val F9 = 139
         const val F12 = 142
+        const val DPAD_UP = 19
         const val DPAD_DOWN = 20
+        const val DPAD_LEFT = 21
         const val DPAD_RIGHT = 22
         const val AXIS_HAT_X = 15
         const val AXIS_HAT_Y = 16
         const val AXIS_RTRIGGER = 18
         const val AXIS_GAS = 22
+
+        /** The defaults before Back led them: Mode tapped pauses, Mode with another button runs that button's action. */
+        val MODE_LED: Map<String, List<List<Int>>> = mapOf(
+            HotkeyAction.PAUSE to listOf(listOf(MODE), listOf(F12)),
+            HotkeyAction.SAVE_STATE to listOf(listOf(MODE, R1), listOf(F5)),
+            HotkeyAction.LOAD_STATE to listOf(listOf(MODE, L1), listOf(F9)),
+            HotkeyAction.NEXT_SLOT to listOf(listOf(MODE, DPAD_RIGHT)),
+            HotkeyAction.PREVIOUS_SLOT to listOf(listOf(MODE, DPAD_LEFT)),
+            HotkeyAction.RELOAD to listOf(listOf(MODE, BUTTON_X)),
+            HotkeyAction.QUIT to listOf(listOf(MODE, BUTTON_B)),
+            HotkeyAction.SCREENSHOT to listOf(listOf(MODE, R3), listOf(F8)),
+            HotkeyAction.MUTE to listOf(listOf(MODE, BUTTON_A)),
+            HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(TAB)),
+            HotkeyAction.FAST_FORWARD_TOGGLE to listOf(listOf(MODE, R2)),
+            HotkeyAction.SLOW_MOTION to listOf(listOf(MODE, L2)),
+            HotkeyAction.FRAME_ADVANCE to listOf(listOf(MODE, START)),
+            HotkeyAction.N64_PAK to listOf(listOf(MODE, DPAD_DOWN)),
+            HotkeyAction.PS1_ANALOG_TOGGLE to listOf(listOf(MODE, DPAD_UP)),
+            HotkeyAction.KEYBOARD to listOf(listOf(MODE, L3)),
+            HotkeyAction.LIBRARY to listOf(listOf(MODE, BUTTON_Y)),
+        )
     }
 }

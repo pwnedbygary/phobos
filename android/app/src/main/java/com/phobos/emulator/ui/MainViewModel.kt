@@ -369,6 +369,15 @@ class MainViewModel(
     private val _userActivity = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val userActivity: SharedFlow<Unit> = _userActivity
 
+    // The controllers whose Back press is being stored, so another press before it's stored doesn't store it again.
+    private val backPadsNoted = mutableSetOf<String>()
+
+    /** Remembers that the controller [descriptor] names sends Back (MainActivity, at a controller's Back press). */
+    fun noteBackPress(descriptor: String) {
+        if (descriptor in settings.value.backSeenPads || !backPadsNoted.add(descriptor)) return
+        viewModelScope.launch { settingsStore.addBackSeenPad(descriptor) }
+    }
+
     /** True while the idle screensaver overlay is covering the menus. */
     private val _screensaverActive = MutableStateFlow(false)
     val screensaverActive: StateFlow<Boolean> = _screensaverActive.asStateFlow()
@@ -878,6 +887,15 @@ class MainViewModel(
 
     /** Unbinds every binding of hotkey [action] at [level]. */
     fun unbindHotkey(level: ControlLevel, action: String) = editControls { s -> writeHotkeys(level, s, mapOf(action to emptyList())) }
+
+    /**
+     * Every hotkey binding [from] starts, at every level and among the defaults, started by [to] instead; nothing
+     * changes with any action in the way (Controls.replaceHotkeyLeadEverywhere).
+     */
+    fun replaceHotkeyLeadEverywhere(from: Int, to: Int) = editControls { s ->
+        val swap = Controls.replaceHotkeyLeadEverywhere(from, to, s.hotkeys, s.controlOverrides)
+        if (swap.blockers.isEmpty()) settingsStore.setHotkeysEverywhere(swap.global, swap.scoped)
+    }
 
     private suspend fun writeHotkeys(level: ControlLevel, s: EmulatorSettings, changes: Map<String, List<List<Int>>>) {
         val scope = level.scope

@@ -285,6 +285,8 @@ data class EmulatorSettings(
     val controlOverrides: ControlOverrides = ControlOverrides(),
     val hiddenSystems: Set<String> = emptySet(),
     val hotkeys: Map<String, List<List<Int>>> = emptyMap(),
+    /** The controllers (InputDevice descriptors) seen sending Back, the key the default hotkeys start with. */
+    val backSeenPads: Set<String> = emptySet(),
     val systemRomPaths: Map<String, Set<String>> = emptyMap(),
     val systemFirmwarePaths: Map<String, String> = emptyMap(),
     // ZX control scheme ids (ZX_SCHEMES) by "system/game", or by system for the games without their own
@@ -422,6 +424,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val SHADER_PATH = stringPreferencesKey("path_shader")
         val ASPECT_RATIO_MODE = stringPreferencesKey("aspect_ratio_mode")
         val HIDDEN_SYSTEMS = stringSetPreferencesKey("hidden_systems")
+        val BACK_SEEN_PADS = stringSetPreferencesKey("back_seen_pads")
         val HAS_DEFAULTS_INITIALIZED = booleanPreferencesKey("has_defaults_initialized")
         val HOTKEYS_PREFIX = "hotkey_combo_"
         // ZX per-core preferences. Encoded as: zx_scheme_<system> = int;
@@ -638,6 +641,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             aspectRatioMode = enumOrDefault(safeGetString(ASPECT_RATIO_MODE, ""), AspectRatioMode.CORE_PROVIDED),
             hiddenSystems = preferences[HIDDEN_SYSTEMS] ?: emptySet(),
             hotkeys = finalHotkeys,
+            backSeenPads = preferences[BACK_SEEN_PADS] ?: emptySet(),
             inputMappings = mappings,
             controlOverrides = ControlOverrides(scopedMappings, scopedHotkeys),
             systemRomPaths = romPaths,
@@ -928,6 +932,20 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun clearHotkeys() = dataStore.edit { p ->
         p.asMap().keys.filter { it.name.startsWith(HOTKEYS_PREFIX) }.forEach { p.remove(it) }
     }
+
+    /** Adds a controller (its InputDevice descriptor) seen sending Back; resetting the hotkeys keeps the list. */
+    suspend fun addBackSeenPad(descriptor: String) = dataStore.edit { p ->
+        p[BACK_SEEN_PADS] = p[BACK_SEEN_PADS].orEmpty() + descriptor
+    }
+
+    /** All consoles' hotkeys and consoles' and games' (by scope) in one edit: an action's bindings, none to unbind. */
+    suspend fun setHotkeysEverywhere(global: Map<String, List<List<Int>>>, scoped: Map<String, Map<String, List<List<Int>>>>) =
+        dataStore.edit { p ->
+            global.forEach { (action, bindings) -> p[stringPreferencesKey(HOTKEYS_PREFIX + action)] = HotkeyBindings.encode(bindings) }
+            scoped.forEach { (scope, changes) ->
+                changes.forEach { (action, bindings) -> p[stringPreferencesKey(ScopedKeys.hotkey(scope, action))] = HotkeyBindings.encode(bindings) }
+            }
+        }
 
     /** A console's or game's binding changes in one edit: a binding, "" to unbind, null to inherit. */
     suspend fun setScopedMappings(scope: String, changes: Map<Int, String?>) = dataStore.edit { p ->

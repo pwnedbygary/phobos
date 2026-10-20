@@ -22,6 +22,8 @@ class ControlCapture(private val scope: CoroutineScope) {
         val label: String
         data class Button(val bit: Int, override val label: String) : Target
         data class Hotkey(val action: String, override val label: String) : Target
+        /** One key or axis direction to start the hotkeys in another key's place, [label] naming that key. */
+        data class Lead(override val label: String) : Target
     }
 
     private val _target = MutableStateFlow<Target?>(null)
@@ -33,6 +35,7 @@ class ControlCapture(private val scope: CoroutineScope) {
 
     private var onButton: (String) -> Unit = {}
     private var onCombo: (List<Int>) -> Unit = {}
+    private var onLead: (Int) -> Unit = {}
     private var timer: Job? = null
     // Keys pressed for a capture: their releases are swallowed as well, even after it ends.
     private val heldKeys = mutableSetOf<Int>()
@@ -54,6 +57,12 @@ class ControlCapture(private val scope: CoroutineScope) {
     fun captureHotkey(action: String, label: String, onBound: (List<Int>) -> Unit) {
         onCombo = onBound
         start(Target.Hotkey(action, label))
+    }
+
+    /** The first key or axis direction pressed, as a hotkey key, for the key [label] names to be replaced by. */
+    fun captureLead(label: String, onBound: (Int) -> Unit) {
+        onLead = onBound
+        start(Target.Lead(label))
     }
 
     /**
@@ -129,6 +138,7 @@ class ControlCapture(private val scope: CoroutineScope) {
                 if (binding != null) finish(now) { onButton(binding) } else keepWaiting()
             }
             is Target.Hotkey -> addToCombo(listOf(keyCode))
+            is Target.Lead -> finish(now) { onLead(keyCode) }
         }
         return true
     }
@@ -159,6 +169,15 @@ class ControlCapture(private val scope: CoroutineScope) {
                     heldKeys += keys
                     addToCombo(keys)
                 } else if (_combo.value.isEmpty() && deflectedAxes.isNotEmpty()) keepWaiting()
+            }
+            // An axis direction as a hotkey takes it; the key a trigger or hat sends with its axis is swallowed, as
+            // for a button.
+            is Target.Lead -> {
+                val keys = CapturePolicy.hotkeyCaptureTokens(axisValue)
+                if (keys.isNotEmpty()) {
+                    heldKeys += keys
+                    finish(now, keys.toSet()) { onLead(keys.first()) }
+                } else if (deflectedAxes.isNotEmpty()) keepWaiting()
             }
         }
         return true

@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.ScopedKeys
@@ -21,7 +22,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-/** Hotkeys in the settings file: the values builds from before several bindings wrote, and the bindings written now. */
+/**
+ * Hotkeys in the settings file: the values builds from before several bindings wrote, the bindings written now, a key in
+ * Back's place written at every level, and the controllers seen sending Back.
+ */
 class HotkeySettingsTest {
     @get:Rule
     val folder = TemporaryFolder()
@@ -64,7 +68,7 @@ class HotkeySettingsTest {
             assertFalse("an empty value unbinds", HotkeyAction.PAUSE in settings.hotkeys)
             assertEquals(
                 "an action never bound keeps its defaults, the keyboard's included",
-                listOf(listOf(MODE, L1), listOf(F9)),
+                listOf(listOf(BACK, L1), listOf(F9)),
                 settings.hotkeys[HotkeyAction.LOAD_STATE],
             )
             assertEquals(listOf(listOf(SELECT, L1)), settings.controlOverrides.hotkeys[console]?.get(HotkeyAction.LOAD_STATE))
@@ -103,8 +107,42 @@ class HotkeySettingsTest {
         }
     }
 
+    @Test
+    fun aKeyInBacksPlaceIsWrittenToAllConsolesAndToEachLevelAsWholeActions() {
+        withStore { store, dataStore ->
+            store.setHotkeysEverywhere(
+                mapOf(HotkeyAction.SAVE_STATE to listOf(listOf(MODE, R1), listOf(F5))),
+                mapOf(
+                    console to mapOf(HotkeyAction.QUIT to listOf(listOf(MODE, B))),
+                    game to mapOf(HotkeyAction.LOAD_STATE to listOf(emptyList(), listOf(MODE, L1))),
+                ),
+            )
+            val stored = dataStore.data.first()
+            assertEquals("110,103;135", stored[stringPreferencesKey("hotkey_combo_save")])
+            assertEquals("110,97", stored[stringPreferencesKey("scoped_hotkey|n64|quit")])
+            assertEquals(";110,102", stored[stringPreferencesKey("scoped_hotkey|n64/Mario Tennis (USA).z64|load")])
+        }
+    }
+
+    @Test
+    fun theControllersSeenSendingBackAreKeptForTheNextStartThroughAResetOfTheHotkeys() {
+        withStore { store, _ ->
+            assertEquals(emptySet<String>(), store.settings.first().backSeenPads)
+            store.addBackSeenPad("descriptor-1")
+            store.addBackSeenPad("descriptor-2")
+            store.addBackSeenPad("descriptor-1")
+            store.clearHotkeys()
+        }
+        withStore { store, dataStore ->
+            assertEquals(setOf("descriptor-1", "descriptor-2"), store.settings.first().backSeenPads)
+            assertEquals(setOf("descriptor-1", "descriptor-2"), dataStore.data.first()[stringSetPreferencesKey("back_seen_pads")])
+        }
+    }
+
     companion object {
         // KeyEvent constants (android.view).
+        const val BACK = 4
+        const val B = 97
         const val L1 = 102
         const val R1 = 103
         const val SELECT = 109

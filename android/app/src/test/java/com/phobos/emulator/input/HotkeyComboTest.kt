@@ -370,25 +370,31 @@ class HotkeyComboTest {
     }
 
     @Test
-    fun theDefaultsLeaveSelectToTheGameGiveAKeyboardSecondBindingsAndDontCollide() {
-        val combos = DEFAULT_HOTKEYS.values.flatten()
-        assertTrue("no default uses Select", combos.none { SELECT in it })
-        val keyboard = setOf(F5, F8, F9, F12, TAB)
-        assertTrue("every controller default starts with Mode", combos.filter { it.first() !in keyboard }.all { it.first() == MODE })
-        assertEquals("Pause is a Mode tap, or F12", listOf(listOf(MODE), listOf(F12)), DEFAULT_HOTKEYS[pause])
-        assertEquals(listOf(listOf(MODE, R1), listOf(F5)), DEFAULT_HOTKEYS[save])
-        assertEquals(listOf(listOf(MODE, L1), listOf(F9)), DEFAULT_HOTKEYS[HotkeyAction.LOAD_STATE])
-        assertEquals(listOf(listOf(MODE, R3), listOf(F8)), DEFAULT_HOTKEYS[HotkeyAction.SCREENSHOT])
-        assertEquals("Tab holds fast forward", listOf(listOf(TAB)), DEFAULT_HOTKEYS[HotkeyAction.FAST_FORWARD_HOLD])
-        assertEquals("Mode + L2 holds slow motion", listOf(listOf(MODE, L2)), DEFAULT_HOTKEYS["slow_motion"])
+    fun theDefaultsAreTheOwnersSetWithR3AndSelectInPlaceOfZAndCBesideAKeyboardsSecondBindings() {
+        // The owner's set as the RP6's test copy stored it (hotkey_combo_pause "4,96" and so on), but for its Back + Z
+        // (a screenshot) and Back + C (mute), and with a keyboard's keys as second bindings: the owner's choices. Every
+        // other action (Reset, Frame Advance, the fast-forward toggle, the direct slots) is unbound, as in that set.
+        val expected = mapOf(
+            "pause" to listOf(listOf(BACK, A), listOf(F12)),
+            "save" to listOf(listOf(BACK, R1), listOf(F5)),
+            "load" to listOf(listOf(BACK, L1), listOf(F9)),
+            "inc_slot" to listOf(listOf(BACK, DPAD_RIGHT)),
+            "dec_slot" to listOf(listOf(BACK, DPAD_LEFT)),
+            "reload" to listOf(listOf(BACK, X)),
+            "quit" to listOf(listOf(BACK, B)),
+            "screenshot" to listOf(listOf(BACK, R3), listOf(F8)),
+            "mute" to listOf(listOf(BACK, SELECT)),
+            "ff_hold" to listOf(listOf(BACK, R2), listOf(TAB)),
+            "slow_motion" to listOf(listOf(BACK, L2)),
+            "n64_pak" to listOf(listOf(BACK, DPAD_DOWN)),
+            "analog_toggle" to listOf(listOf(BACK, DPAD_UP)),
+            "keyboard" to listOf(listOf(BACK, L3)),
+            "library" to listOf(listOf(BACK, Y)),
+        )
+        assertEquals(expected, DEFAULT_HOTKEYS)
+        assertTrue("none needs C or Z, which most controllers lack", DEFAULT_HOTKEYS.values.flatten().none { C in it || Z in it })
         assertTrue("slow motion is a hold", "slow_motion" in HotkeyAction.HOLDS)
-        assertEquals("Mode + L3 shows the keyboard", listOf(listOf(MODE, L3)), DEFAULT_HOTKEYS[HotkeyAction.KEYBOARD])
-        assertEquals("Mode + Start advances a frame", listOf(listOf(MODE, START)), DEFAULT_HOTKEYS[HotkeyAction.FRAME_ADVANCE])
-        assertEquals("Mode + B asks to quit", listOf(listOf(MODE, B)), DEFAULT_HOTKEYS[HotkeyAction.QUIT])
         assertTrue(existingHotkeyConflicts(DEFAULT_HOTKEYS).isEmpty())
-        assertTrue(DEFAULT_HOTKEYS.values.all { it.size <= HotkeyBindings.LIMIT })
-        val unbound = listOf(HotkeyAction.RESET) + HotkeyAction.DIRECT_SLOTS
-        for (action in unbound) assertNull(action, DEFAULT_HOTKEYS[action])
     }
 
     @Test
@@ -415,12 +421,54 @@ class HotkeyComboTest {
         assertNull(HotkeyTokens.axisOf(SELECT))
     }
 
+    @Test
+    fun aKeyInBacksPlaceStartsEveryBindingBackStartsAndLeavesTheRest() {
+        val hotkeys = mapOf(
+            HotkeyAction.PAUSE to listOf(listOf(BACK, A), listOf(F12)),
+            HotkeyAction.SAVE_STATE to listOf(listOf(BACK, R1), listOf(F5)),
+            HotkeyAction.LOAD_STATE to listOf(listOf(F9), listOf(BACK, L1, R1)),
+            HotkeyAction.SCREENSHOT to listOf(listOf(F8)),
+        )
+        val replacement = leadReplacement(hotkeys, BACK, MODE)
+        assertEquals(
+            mapOf(
+                HotkeyAction.PAUSE to listOf(listOf(MODE, A), listOf(F12)),
+                HotkeyAction.SAVE_STATE to listOf(listOf(MODE, R1), listOf(F5)),
+                HotkeyAction.LOAD_STATE to listOf(listOf(F9), listOf(MODE, L1, R1)),
+            ),
+            replacement.changes,
+        )
+        assertTrue("nothing is in the way", replacement.blockers.isEmpty())
+        assertEquals("Back for Back changes nothing", LeadReplacement(emptyMap(), emptyList()), leadReplacement(hotkeys, BACK, BACK))
+    }
+
+    @Test
+    fun whatsInTheWayIsABindingTheKeyWouldLoseAKeyOfOrNewlyCollideWithNotOneCollidingAlready() {
+        // Back + Select would become Select + Select: a key lost.
+        assertEquals(listOf(HotkeyAction.MUTE), leadReplacement(hotkeysOf(HotkeyAction.MUTE to listOf(BACK, SELECT)), BACK, SELECT).blockers)
+        // Back + X becomes Mode + X, Quit's already; Back + Y becomes Mode + Y, part of Screenshot's Mode + Y + R1. Back
+        // alone (Pause's) becomes a tap beside the longer bindings it starts, no collision; and Load's X + A collides
+        // with Save's Back + X already (X starts one and is in the other), as it will with Mode + X.
+        val hotkeys = mapOf(
+            HotkeyAction.PAUSE to listOf(listOf(BACK)),
+            HotkeyAction.SAVE_STATE to listOf(listOf(BACK, X)),
+            HotkeyAction.QUIT to listOf(listOf(MODE, X)),
+            HotkeyAction.SCREENSHOT to listOf(listOf(F8), listOf(MODE, Y, R1)),
+            HotkeyAction.LIBRARY to listOf(listOf(BACK, Y)),
+            HotkeyAction.LOAD_STATE to listOf(listOf(X, A)),
+        )
+        assertEquals(setOf(HotkeyAction.QUIT, HotkeyAction.SCREENSHOT), leadReplacement(hotkeys, BACK, MODE).blockers.toSet())
+    }
+
     companion object {
         // KeyEvent and MotionEvent constants (android.view).
+        const val BACK = 4
         const val A = 96
         const val B = 97
+        const val C = 98
         const val X = 99
         const val Y = 100
+        const val Z = 101
         const val L1 = 102
         const val R1 = 103
         const val L2 = 104
@@ -435,6 +483,9 @@ class HotkeyComboTest {
         const val F8 = 138
         const val F9 = 139
         const val F12 = 142
+        const val DPAD_UP = 19
+        const val DPAD_DOWN = 20
+        const val DPAD_LEFT = 21
         const val DPAD_RIGHT = 22
         const val AXIS_X = 0
         const val AXIS_HAT_X = 15

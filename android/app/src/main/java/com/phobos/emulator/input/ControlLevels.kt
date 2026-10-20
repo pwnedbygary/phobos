@@ -24,6 +24,12 @@ sealed class ControlLevel {
             is Console -> AllConsoles
             is Game -> Console(system)
         }
+
+    companion object {
+        /** The level a stored [scope] names: a game's is its system, "/" and its ROM file name, which has no "/". */
+        fun of(scope: String): ControlLevel =
+            if ('/' in scope) Game(scope.substringBeforeLast('/'), scope.substringAfterLast('/')) else Console(scope)
+    }
 }
 
 /**
@@ -141,7 +147,39 @@ object Controls {
         for ((other, otherSlot) in overwrite) changes[other] = HotkeyBindings.with(bindings(other), otherSlot, emptyList())
         return changes
     }
+
+    /**
+     * [to] in [from]'s place as the first key of every hotkey binding [from] starts, at every level at once
+     * ([leadReplacement]): what all consoles store then (each changed action whole, a default included) and what each
+     * console and game storing hotkeys of its own does (each changed action of those it stores, whole), or, with
+     * anything in the way at all consoles or at a level having hotkeys of its own, those actions, each with the level
+     * that sets it, and nothing to store.
+     */
+    fun replaceHotkeyLeadEverywhere(
+        from: Int, to: Int, global: Map<String, List<List<Int>>>, overrides: ControlOverrides,
+    ): LeadSwap {
+        val scopes = overrides.hotkeys.filterValues { it.isNotEmpty() }
+        val levels = listOf(ControlLevel.AllConsoles) + scopes.keys.map(ControlLevel::of)
+        val blockers = levels.flatMap { level ->
+            leadReplacement(hotkeys(level, global, overrides), from, to).blockers.map { action ->
+                (hotkeySource(level, action, global, overrides) ?: level) to action
+            }
+        }.distinct()
+        if (blockers.isNotEmpty()) return LeadSwap(emptyMap(), emptyMap(), blockers)
+        val scoped = scopes.mapValues { (_, stored) -> leadReplacement(stored, from, to).changes }.filterValues { it.isNotEmpty() }
+        return LeadSwap(leadReplacement(global, from, to).changes, scoped, emptyList())
+    }
 }
+
+/**
+ * What [Controls.replaceHotkeyLeadEverywhere] stores: all consoles' changed actions ([global]) and, by scope, each
+ * console's and game's ([scoped]); or, when [blockers] (each action in the way, at its level) isn't empty, nothing.
+ */
+data class LeadSwap(
+    val global: Map<String, List<List<Int>>>,
+    val scoped: Map<String, Map<String, List<List<Int>>>>,
+    val blockers: List<Pair<ControlLevel, String>>,
+)
 
 /** How console and game settings are named in storage: "<prefix><scope>|<bit or action>". */
 object ScopedKeys {

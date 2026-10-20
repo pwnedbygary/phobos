@@ -34,6 +34,7 @@ import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
+import com.phobos.emulator.input.FallbackKeys
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.InputLog
@@ -96,6 +97,7 @@ class MainActivity : ComponentActivity() {
         override fun heldAxes(): Set<Int> = GameInputState.hotkeyKeys
         override fun swapBackToGame() = viewModel.swapBackToGame()
     })
+    private val fallbackKeys = FallbackKeys()
 
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) {}
@@ -188,13 +190,23 @@ class MainActivity : ComponentActivity() {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 InputLog.key("window", event)
                 viewModel.noteUserActivity()
-                // A press being captured for a binding goes nowhere else — including the screensaver.
+                // Two keys Android makes up aren't a controller's. A fallback (the Back an unhandled B gives, say,
+                // marked or not: FallbackKeys) follows a key the capture and the hotkeys have had already, and goes to
+                // neither; the navigation bar's or gesture's Back cancels a capture and goes to no hotkey. With no
+                // predictive back (the manifest), both come here as keys.
+                val fallback = fallbackKeys.isFallback(event.keyCode, event.deviceId, event.scanCode, event.downTime, event.flags)
                 val systemBack = event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
-                if (event.action != KeyEvent.ACTION_MULTIPLE &&
+                // A controller that sends Back, which starts the default hotkeys, is remembered (the Hotkeys page warns
+                // while no controller connected ever has); neither of those Backs is a controller's.
+                if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN && !fallback && !systemBack) {
+                    event.device?.descriptor?.let(viewModel::noteBackPress)
+                }
+                // A press being captured for a binding goes nowhere else — including the screensaver.
+                if (event.action != KeyEvent.ACTION_MULTIPLE && !fallback &&
                     viewModel.controlCapture.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, systemBack)
                 ) return true
                 if (viewModel.consumeScreensaverInput()) return true
-                if (event.action != KeyEvent.ACTION_MULTIPLE &&
+                if (event.action != KeyEvent.ACTION_MULTIPLE && !fallback && !systemBack &&
                     windowKeys.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount)
                 ) return true
                 // L1/R1 outside the game step through the Library, Console and Settings tabs (MainScaffold),

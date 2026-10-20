@@ -63,6 +63,7 @@ import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.HotkeyBindings
 import com.phobos.emulator.input.HotkeyConflict
 import com.phobos.emulator.input.HotkeyTokens
+import com.phobos.emulator.input.andList
 import com.phobos.emulator.input.bindingTokens
 import com.phobos.emulator.input.existingHotkeyConflicts
 import com.phobos.emulator.input.hotkeyConflictMessage
@@ -152,10 +153,11 @@ private fun sourceLabel(level: ControlLevel, source: ControlLevel?): String? = w
     else -> "from ${source.label()}"
 }
 
-/** A key as the rows show it: "A", "L1", "Start", "D-pad up". */
+/** A key as the rows show it: "A", "L1", "Start", "D-pad up", "Back". */
 fun keyLabel(keyCode: Int): String {
     val name = KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_")
     return when {
+        name == "BACK" -> "Back"
         name == "BUTTON_THUMBL" -> "L3"
         name == "BUTTON_THUMBR" -> "R3"
         name.startsWith("BUTTON_") -> name.removePrefix("BUTTON_").let { if (it.length > 2) it.lowercase().replaceFirstChar(Char::uppercase) else it }
@@ -274,7 +276,7 @@ fun ControllerHotkeysList(
         Controls.mappings(level, settings.inputMappings, overrides).values.flatMap(::bindingTokens).toSet()
     }
     val collisions = remember(resolved) { existingHotkeyConflicts(resolved) }
-    // Controllers come and go while the page is open: the Mode check is made again when they do.
+    // Controllers come and go while the page is open: the Back check is made again when they do.
     val context = LocalContext.current
     var padsChanged by remember { mutableIntStateOf(0) }
     DisposableEffect(context) {
@@ -287,8 +289,8 @@ fun ControllerHotkeysList(
         inputManager.registerInputDeviceListener(listener, null)
         onDispose { inputManager.unregisterInputDeviceListener(listener) }
     }
-    val modeMissing = remember(resolved, padsChanged) {
-        resolved.values.flatten().any { it.firstOrNull() == KeyEvent.KEYCODE_BUTTON_MODE } && !connectedPadHasModeButton()
+    val backMissing = remember(resolved, padsChanged, settings.backSeenPads) {
+        resolved.values.flatten().any { it.firstOrNull() == KeyEvent.KEYCODE_BACK } && !connectedPadSentBack(settings.backSeenPads)
     }
     val capture = viewModel.controlCapture
     // The unbinding that would leave Pause with no binding, run once the question about it is answered.
@@ -311,6 +313,25 @@ fun ControllerHotkeysList(
         val left = if (slot == null) emptyList() else HotkeyBindings.with(resolved[action].orEmpty(), slot, emptyList())
         if (action == HotkeyAction.PAUSE && left.none { it.isNotEmpty() }) confirmUnbindPause = run else run()
     }
+    // A button chosen for Back's place: one the game uses, while the question about it waits; or why one can't be.
+    var pendingLead by remember { mutableStateOf<Int?>(null) }
+    var leadRefused by remember { mutableStateOf<String?>(null) }
+    fun chooseForBack(to: Int) {
+        val back = KeyEvent.KEYCODE_BACK
+        // Back itself: its press has just shown that a controller sends it, so the warning goes.
+        if (to == back) return
+        val blockers = Controls.replaceHotkeyLeadEverywhere(back, to, global, overrides).blockers
+        when {
+            blockers.isNotEmpty() -> {
+                val names = blockers.map { (at, action) -> hotkeyName(action) + at.inParentheses() }.distinct()
+                leadRefused = "${hotkeyTokenLabel(to)} can't take Back's place: ${andList(names)} " +
+                    "${if (names.size > 1) "use" else "uses"} it already. Choose another button (on Xbox and PlayStation " +
+                    "pads, Guide or PS), or bind ${if (names.size > 1) "those" else "that"} again first."
+            }
+            to in gameTokens -> pendingLead = to
+            else -> viewModel.replaceHotkeyLeadEverywhere(back, to)
+        }
+    }
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = listPadding(inMenu), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         header?.let { item { it() } }
         item {
@@ -321,13 +342,17 @@ fun ControllerHotkeysList(
                 inMenu,
             )
         }
-        if (modeMissing) {
+        if (backMissing) {
             item {
                 ControlsWarning(
-                    "No controller here reports a Mode (Home or Guide) button, which starts the default hotkeys: " +
-                        "bind them to keys your controller has.",
+                    "No controller here has sent Back yet, and Back starts these hotkeys: press it once to show it works, " +
+                        "or, with no Back button (most controllers have none), choose another button to start every hotkey " +
+                        "in its place, on every console and game.",
                     inMenu,
                 )
+            }
+            item {
+                TextButton(onClick = { capture.captureLead("Back") { chooseForBack(it) } }) { Text("Choose another button") }
             }
         }
         if (collisions.isNotEmpty()) {
@@ -410,6 +435,29 @@ fun ControllerHotkeysList(
             dismissButton = { TextButton(onClick = { pendingConflict = null }) { Text("Cancel") } },
         )
     }
+    pendingLead?.let { to ->
+        val key = hotkeyTokenLabel(to)
+        PhobosAlertDialog(
+            onDismissRequest = { pendingLead = null },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = inMenu); Text("Use $key in Back's place?") },
+            text = { Text("$key is also a game button: once it starts the hotkeys, the game no longer gets it.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingLead = null
+                    viewModel.replaceHotkeyLeadEverywhere(KeyEvent.KEYCODE_BACK, to)
+                }) { Text("Use it") }
+            },
+            dismissButton = { TextButton(onClick = { pendingLead = null }) { Text("Cancel") } },
+        )
+    }
+    leadRefused?.let { message ->
+        PhobosAlertDialog(
+            onDismissRequest = { leadRefused = null },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = inMenu); Text("Back not replaced") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { leadRefused = null }) { Text("OK") } },
+        )
+    }
 }
 
 private data class PendingHotkey(
@@ -424,11 +472,21 @@ private data class PendingHotkey(
 fun hotkeyName(action: String): String =
     (HOTKEY_ACTIONS + DIRECT_SLOT_HOTKEY_ACTIONS).firstOrNull { it.second == action }?.first ?: action
 
-/** Whether a connected controller reports a Mode (Home or Guide) button; true with none connected, as nothing says otherwise yet. */
-private fun connectedPadHasModeButton(): Boolean {
+/**
+ * Whether a connected controller has been seen sending Back, [seen] naming those that have; true with none connected,
+ * as nothing says otherwise yet. A controller declaring the key doesn't say: one may declare keys it has no button for.
+ */
+private fun connectedPadSentBack(seen: Set<String>): Boolean {
     val pads = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
         .filter { device -> (device.sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD }
-    return pads.isEmpty() || pads.any { it.hasKeys(KeyEvent.KEYCODE_BUTTON_MODE)[0] }
+    return pads.isEmpty() || pads.any { it.descriptor in seen }
+}
+
+/** The level after an action's name, " (Game Boy)" or " (Tetris.gb)"; nothing for all consoles. */
+private fun ControlLevel.inParentheses(): String = when (this) {
+    ControlLevel.AllConsoles -> ""
+    is ControlLevel.Console -> " ($system)"
+    is ControlLevel.Game -> " ($rom)"
 }
 
 private fun ControlLevel.possessive(): String = when (this) {
@@ -526,6 +584,7 @@ fun CaptureOverlay(capture: ControlCapture) {
     val combo by capture.combo.collectAsState()
     val current = target ?: return
     val hotkey = current is ControlCapture.Target.Hotkey
+    val lead = current is ControlCapture.Target.Lead
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -535,7 +594,14 @@ fun CaptureOverlay(capture: ControlCapture) {
     ) {
         Card {
             Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (hotkey) "Capturing combo for" else "Binding", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    when {
+                        hotkey -> "Capturing combo for"
+                        lead -> "A button in place of"
+                        else -> "Binding"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                )
                 Text(current.label, style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(16.dp))
                 if (hotkey) {
@@ -547,7 +613,12 @@ fun CaptureOverlay(capture: ControlCapture) {
                     Spacer(Modifier.height(8.dp))
                 }
                 Text(
-                    if (hotkey) "Press the combo's first key, then hold the rest with it. The first key is held back from the game." else "Press a button or move a stick",
+                    when {
+                        hotkey -> "Press the combo's first key, then hold the rest with it. The first key is held back from the game."
+                        lead -> "Press the button to start every hotkey with instead, on every console and game. Like any " +
+                            "first key, it's held back from the game."
+                        else -> "Press a button or move a stick"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
