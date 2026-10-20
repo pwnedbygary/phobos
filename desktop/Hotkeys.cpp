@@ -450,4 +450,35 @@ auto bindingChanges(const HotkeyMap& shown, const std::string& action, int slot,
   return changes;
 }
 
+auto hotkeySettingKey(const std::string& scope, const std::string& action) -> std::string {
+  if (scope.empty()) return "hotkey." + action;
+  std::string escaped;
+  for (char c : scope) {
+    switch (c) {
+    case '%': escaped += "%25"; break;
+    case '=': escaped += "%3D"; break;
+    case '\r': escaped += "%0D"; break;
+    case '\n': escaped += "%0A"; break;
+    default: escaped += c; break;
+    }
+  }
+  return "hotkey[" + escaped + "]." + action;
+}
+
+auto overHotkeys(HotkeyMap broader, const HotkeyMap& narrower) -> HotkeyMap {
+  for (auto& [action, bindings] : narrower) broader[action] = bindings;
+  return broader;
+}
+
+auto levelHotkeyChanges(const HotkeyMap& changes, const HotkeyMap& inherited)
+    -> std::map<std::string, std::optional<HotkeyBindings>> {
+  std::map<std::string, std::optional<HotkeyBindings>> stored;
+  for (auto& [action, bindings] : changes) {
+    auto it = inherited.find(action);
+    bool asInherited = bindings == (it == inherited.end() ? HotkeyBindings{} : it->second);
+    stored[action] = asInherited ? std::nullopt : std::optional<HotkeyBindings>(bindings);
+  }
+  return stored;
+}
+
 }

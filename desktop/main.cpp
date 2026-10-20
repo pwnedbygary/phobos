@@ -45,6 +45,9 @@ constexpr float glyph = 8.0f;
 
 enum class Screen { Library, Playing, Menu, Hotkeys };
 
+// Where hotkeys are set (hotkeySettingKey): for every game, for the running game's console, or for the running game.
+enum class HotkeyLevel { AllConsoles, Console, Game };
+
 // Frame advance runs a frame at each press, then one every frameStepMs while held, after frameStepDelayMs (the Android
 // app's pace).
 constexpr Uint64 frameStepDelayMs = 300;
@@ -69,9 +72,10 @@ struct MenuItem {
   std::function<void(int)> choose;
 };
 
-// A row of the Hotkeys page: an action, one of its bindings, the switch that shows the direct slots, or the defaults.
+// A row of the Hotkeys page: the level shown, an action, one of its bindings, the switch that shows the direct slots,
+// or the level's reset.
 struct HotkeyRow {
-  enum class Kind { Action, Binding, Slots, Defaults } kind;
+  enum class Kind { Level, Action, Binding, Slots, Reset } kind;
   std::string action;
   int slot = -1;
 };
@@ -160,8 +164,11 @@ private:
   auto setFullscreen(bool fullscreen) -> void;
   auto toggleFullscreen() -> void;
   auto startFrameStep() -> void;
-  auto storedHotkeys() const -> HotkeyMap;
-  auto storeHotkeys(const HotkeyMap& changes) -> void;
+  auto hotkeyScope(HotkeyLevel level) const -> std::string;
+  auto storedHotkeys(HotkeyLevel level) const -> HotkeyMap;
+  auto hotkeysAt(HotkeyLevel level) const -> HotkeyMap;
+  auto hotkeySource(HotkeyLevel level, const std::string& action) const -> HotkeyLevel;
+  auto storeHotkeys(HotkeyLevel level, const HotkeyMap& changes) -> void;
   auto refreshHotkeys() -> void;
   auto hotkeysTakeKeys() const -> bool;
   auto hotkeyEvent(const SDL_Event& event) -> void;
@@ -170,7 +177,8 @@ private:
   auto endHolds() -> void;
   auto openHotkeys() -> void;
   auto hotkeyRows() const -> std::vector<HotkeyRow>;
-  auto updateHotkeys(bool navUp, bool navDown, bool confirm, bool back, bool clear) -> void;
+  auto updateHotkeys(bool navUp, bool navDown, bool navLeft, bool navRight, bool confirm, bool back, bool clear)
+      -> void;
   auto hotkeysBack() -> void;
   auto clearHotkey(const HotkeyRow& row) -> void;
   auto finishCapture() -> void;
@@ -233,8 +241,9 @@ private:
   HotkeyMap hotkeys;
   HotkeyTracker hotkeyTracker;
   std::map<HotkeyToken, Screen> pressedOn;
-  // The Hotkeys page: its cursor, the action whose bindings are open, whether every direct slot's row shows, the binding
-  // being captured, and a question waiting.
+  // The Hotkeys page: the level it shows, its cursor, the action whose bindings are open, whether every direct slot's
+  // row shows, the binding being captured, and a question waiting.
+  HotkeyLevel hotkeyLevel = HotkeyLevel::AllConsoles;
   int hotkeyCursor = 0;
   std::string hotkeyOpen;
   bool slotHotkeysShown = false;
@@ -302,7 +311,8 @@ auto Shell::run(int argc, char* argv[]) -> int {
       case SDL_EVENT_KEY_UP: if (screen == before) handleKey(event.key); break;
       case SDL_EVENT_DROP_FILE: if (event.drop.data) open(event.drop.data); break;
       case SDL_EVENT_WINDOW_FOCUS_LOST:
-        // A binding being captured keeps none of the keys that switched windows (Alt for Alt+Tab, say).
+        // A binding still being captured (its keys still coming) takes none of the keys that switched windows (Alt for
+        // Alt+Tab, say); a key held longer than the capture's settling time is in the binding already.
         if (capture) {
           capture.reset();
           show("The window lost focus: the binding is unchanged");
@@ -687,22 +697,63 @@ auto Shell::startFrameStep() -> void {
   ares::setPause(true);
 }
 
-// Each action's bindings the player stored in settings.ini (hotkey.<action>): an empty one unbinds the action.
-auto Shell::storedHotkeys() const -> HotkeyMap {
+// A level's scope (hotkeySettingKey): none for all consoles, the running game's system for its console, and its system
+// and title, the pair its states go by, for the game.
+auto Shell::hotkeyScope(HotkeyLevel level) const -> std::string {
+  if (!game || level == HotkeyLevel::AllConsoles) return "";
+  return level == HotkeyLevel::Console ? game->system : game->system + "/" + game->title;
+}
+
+// Each action's bindings the player stored in settings.ini at [level]: an empty one unbinds the action there.
+auto Shell::storedHotkeys(HotkeyLevel level) const -> HotkeyMap {
   HotkeyMap stored;
+  auto scope = hotkeyScope(level);
   for (auto& action : hotkeyActions()) {
-    auto key = "hotkey." + action.name;
+    auto key = hotkeySettingKey(scope, action.name);
     if (settings.has(key)) stored[action.name] = parseHotkeyBindings(settings.text(key));
   }
   return stored;
 }
 
-auto Shell::storeHotkeys(const HotkeyMap& changes) -> void {
-  for (auto& [action, bindings] : changes) settings.setText("hotkey." + action, encodeHotkeyBindings(bindings));
+// What [level] and the levels above it store, the narrowest deciding each action (shownHotkeys adds the defaults).
+auto Shell::hotkeysAt(HotkeyLevel level) const -> HotkeyMap {
+  auto stored = storedHotkeys(HotkeyLevel::AllConsoles);
+  if (level != HotkeyLevel::AllConsoles) stored = overHotkeys(stored, storedHotkeys(HotkeyLevel::Console));
+  if (level == HotkeyLevel::Game) stored = overHotkeys(stored, storedHotkeys(HotkeyLevel::Game));
+  return stored;
+}
+
+// The level deciding [action] at [level]: the narrowest one storing it, else all consoles (with the defaults).
+auto Shell::hotkeySource(HotkeyLevel level, const std::string& action) const -> HotkeyLevel {
+  for (int at = (int)level; at > (int)HotkeyLevel::AllConsoles; at--) {
+    if (settings.has(hotkeySettingKey(hotkeyScope((HotkeyLevel)at), action))) return (HotkeyLevel)at;
+  }
+  return HotkeyLevel::AllConsoles;
+}
+
+// All consoles keep what they're given; a console or a game keeps only what differs from what it inherits, an action
+// that comes out as inherited going back to inheriting (levelHotkeyChanges).
+auto Shell::storeHotkeys(HotkeyLevel level, const HotkeyMap& changes) -> void {
+  auto scope = hotkeyScope(level);
+  if (level == HotkeyLevel::AllConsoles) {
+    for (auto& [action, bindings] : changes) {
+      settings.setText(hotkeySettingKey(scope, action), encodeHotkeyBindings(bindings));
+    }
+  } else {
+    auto inherited = shownHotkeys(hotkeysAt((HotkeyLevel)((int)level - 1)));
+    std::vector<std::string> inheriting;
+    for (auto& [action, bindings] : levelHotkeyChanges(changes, inherited)) {
+      auto key = hotkeySettingKey(scope, action);
+      if (bindings) settings.setText(key, encodeHotkeyBindings(*bindings));
+      else if (settings.has(key)) inheriting.push_back(key);
+    }
+    if (!inheriting.empty()) settings.erase(inheriting);
+  }
   refreshHotkeys();
 }
 
-// The hotkeys in force: on a computer, the default ones on keys its keyboard uses (and Tab, as before) are left to it.
+// The hotkeys in force: the running game's over its console's over all consoles' (the library has all consoles'); on a
+// computer, the default ones on keys its keyboard uses (and Tab, as before) are left to it.
 auto Shell::refreshHotkeys() -> void {
   std::function<bool(HotkeyToken)> gameKey;
   if (game && isKeyboardComputer(game->system)) {
@@ -712,7 +763,7 @@ auto Shell::refreshHotkeys() -> void {
       return key == SDL_SCANCODE_TAB || !keyboardLabels(system, key).empty();
     };
   }
-  hotkeys = resolveHotkeys(storedHotkeys(), gameKey);
+  hotkeys = resolveHotkeys(hotkeysAt(HotkeyLevel::Game), gameKey);
 }
 
 // Only a game and its menu lose keys to the hotkeys: the library's and the Hotkeys page's are their own.
@@ -834,15 +885,17 @@ auto Shell::endHolds() -> void { fastForwardHeld = frameAdvanceHeld = false; }
 
 auto Shell::openHotkeys() -> void {
   screen = Screen::Hotkeys;
-  hotkeyCursor = 0;
+  // On all consoles' first hotkey, the level's row just above it.
+  hotkeyLevel = HotkeyLevel::AllConsoles;
+  hotkeyCursor = 1;
   hotkeyOpen.clear();
   capture.reset();
   question.reset();
 }
 
 auto Shell::hotkeyRows() const -> std::vector<HotkeyRow> {
-  auto shown = shownHotkeys(storedHotkeys());
-  std::vector<HotkeyRow> rows;
+  auto shown = shownHotkeys(hotkeysAt(hotkeyLevel));
+  std::vector<HotkeyRow> rows{{HotkeyRow::Kind::Level, "", -1}};
   bool slotsSwitch = false;
   for (auto& action : hotkeyActions()) {
     // The direct slots come after their switch; hidden, those bound still show.
@@ -855,13 +908,15 @@ auto Shell::hotkeyRows() const -> std::vector<HotkeyRow> {
     if (hotkeyOpen != action.name) continue;
     for (int slot = 0; slot < hotkeyBindingLimit; slot++) rows.push_back({HotkeyRow::Kind::Binding, action.name, slot});
   }
-  rows.push_back({HotkeyRow::Kind::Defaults, "", -1});
+  rows.push_back({HotkeyRow::Kind::Reset, "", -1});
   return rows;
 }
 
-// The Hotkeys page: up and down choose a row; A opens an action's bindings, captures one, shows the direct slots or
-// resets the defaults; X clears; B closes the bindings or goes back to the menu.
-auto Shell::updateHotkeys(bool navUp, bool navDown, bool confirm, bool back, bool clear) -> void {
+// The Hotkeys page: up and down choose a row; on the level's row, left, right or A change the level; A opens an
+// action's bindings, captures one, shows the direct slots or resets the level; X clears; B closes the bindings or goes
+// back to the menu.
+auto Shell::updateHotkeys(bool navUp, bool navDown, bool navLeft, bool navRight, bool confirm, bool back, bool clear)
+    -> void {
   Uint64 now = SDL_GetTicks();
   if (capture) {
     if (!capture->combo.empty() && now - capture->lastAdded >= captureSettleMs) return finishCapture();
@@ -889,8 +944,14 @@ auto Shell::updateHotkeys(bool navUp, bool navDown, bool confirm, bool back, boo
   auto& row = rows[hotkeyCursor];
   if (back) return hotkeysBack();
   if (clear) return clearHotkey(row);
+  if (row.kind == HotkeyRow::Kind::Level && (navLeft || navRight || confirm)) {
+    hotkeyLevel = (HotkeyLevel)(((int)hotkeyLevel + (navLeft ? 2 : 1)) % 3);
+    return;
+  }
   if (!confirm) return;
   switch (row.kind) {
+  case HotkeyRow::Kind::Level:
+    return;
   case HotkeyRow::Kind::Action:
     hotkeyOpen = hotkeyOpen == row.action ? "" : row.action;
     return;
@@ -900,15 +961,29 @@ auto Shell::updateHotkeys(bool navUp, bool navDown, bool confirm, bool back, boo
   case HotkeyRow::Kind::Slots:
     slotHotkeysShown = !slotHotkeysShown;
     return;
-  case HotkeyRow::Kind::Defaults:
-    question = Question{"Reset every hotkey to its default?", "Reset", "Cancel", [this] {
+  case HotkeyRow::Kind::Reset: {
+    // All consoles go back to the defaults, what a console or a game sets staying; a console or a game, to inheriting.
+    auto scope = hotkeyScope(hotkeyLevel);
+    std::string text, done;
+    if (hotkeyLevel == HotkeyLevel::AllConsoles) {
+      text = "Reset all consoles' hotkeys to the defaults? What a console or a game sets for itself stays.";
+      done = "All consoles have the default hotkeys again";
+    } else if (hotkeyLevel == HotkeyLevel::Console) {
+      text = "Reset " + game->system + "'s hotkeys? Its games then have all consoles', but for what a game sets.";
+      done = game->system + " has all consoles' hotkeys again";
+    } else {
+      text = "Reset this game's hotkeys? It then has " + game->system + "'s.";
+      done = "This game has " + game->system + "'s hotkeys again";
+    }
+    question = Question{text, "Reset", "Cancel", [this, scope, done] {
       std::vector<std::string> keys;
-      for (auto& action : hotkeyActions()) keys.push_back("hotkey." + action.name);
+      for (auto& action : hotkeyActions()) keys.push_back(hotkeySettingKey(scope, action.name));
       settings.erase(keys);
       refreshHotkeys();
-      show("Every hotkey is back to its default");
+      show(done);
     }};
     return;
+  }
   }
 }
 
@@ -925,25 +1000,35 @@ auto Shell::hotkeysBack() -> void {
   hotkeyOpen.clear();
 }
 
-// X or Delete: a binding row's binding is cleared, an action row's every binding.
+// X or Delete: a binding row's binding is cleared, an action row's every binding; but for a console or a game, an
+// action it sets goes back to what it inherits, and only one it inherits is unbound for it.
 auto Shell::clearHotkey(const HotkeyRow& row) -> void {
-  if (row.kind == HotkeyRow::Kind::Action) return storeHotkeys({{row.action, {}}});
+  if (row.kind == HotkeyRow::Kind::Action) {
+    auto key = hotkeySettingKey(hotkeyScope(hotkeyLevel), row.action);
+    if (hotkeyLevel != HotkeyLevel::AllConsoles && settings.has(key)) {
+      settings.erase({key});
+      return refreshHotkeys();
+    }
+    return storeHotkeys(hotkeyLevel, {{row.action, {}}});
+  }
   if (row.kind == HotkeyRow::Kind::Binding) {
-    storeHotkeys(bindingChanges(shownHotkeys(storedHotkeys()), row.action, row.slot, {}, {}));
+    storeHotkeys(hotkeyLevel, bindingChanges(shownHotkeys(hotkeysAt(hotkeyLevel)), row.action, row.slot, {}, {}));
   }
 }
 
-// The keys captured become the binding, or, where they collide with other actions' bindings, the question whether to
-// overwrite those (hotkeyConflictMessage). The keys still held stay away from the page until they're let go of.
+// The keys captured become the binding at the level shown, or, where they collide with other actions' bindings there,
+// the question whether to overwrite those (hotkeyConflictMessage). The keys still held stay away from the page until
+// they're let go of.
 auto Shell::finishCapture() -> void {
   auto done = *capture;
   capture.reset();
   suppressedButtons = previousButtons;
-  auto conflicts = hotkeyConflicts(shownHotkeys(storedHotkeys()), done.action, done.combo);
+  auto level = hotkeyLevel;
+  auto conflicts = hotkeyConflicts(shownHotkeys(hotkeysAt(level)), done.action, done.combo);
   std::vector<std::pair<std::string, int>> overwrite;
   for (auto& conflict : conflicts) overwrite.emplace_back(conflict.action, conflict.slot);
-  auto bind = [this, done, overwrite] {
-    storeHotkeys(bindingChanges(shownHotkeys(storedHotkeys()), done.action, done.slot, done.combo, overwrite));
+  auto bind = [this, level, done, overwrite] {
+    storeHotkeys(level, bindingChanges(shownHotkeys(hotkeysAt(level)), done.action, done.slot, done.combo, overwrite));
   };
   if (conflicts.empty()) return bind();
   question = Question{hotkeyConflictMessage(conflicts), "Overwrite", "Cancel", bind};
@@ -1175,7 +1260,7 @@ auto Shell::update() -> void {
     return;
   }
   case Screen::Hotkeys:
-    return updateHotkeys(navUp, navDown, confirm, pressed(PadB), pressed(PadX));
+    return updateHotkeys(navUp, navDown, navLeft, navRight, confirm, pressed(PadB), pressed(PadX));
   case Screen::Library: {
     if (pressed(PadY)) chooseFolder(Pick::Games);
     if (pressed(PadX)) rescan();
@@ -1322,7 +1407,19 @@ auto Shell::drawHotkeys(float width, float height) -> void {
   fill(0, 0, width, height, shadeColor);
   float x = 8, y = 8, w = width - 16, h = height - 16;
   fill(x, y, w, h, panelColor);
-  print(x + 8, y + 8, "Hotkeys", textColor);
+  // The levels as the page names them: all consoles, the running game's system, this game.
+  auto levelName = [&](HotkeyLevel level) -> std::string {
+    if (level == HotkeyLevel::AllConsoles) return "All consoles";
+    return level == HotkeyLevel::Console ? game->system : "This game";
+  };
+  auto inPhrase = [&](HotkeyLevel level) -> std::string {
+    if (level == HotkeyLevel::AllConsoles) return "all consoles";
+    return level == HotkeyLevel::Console ? game->system : "this game";
+  };
+  bool scoped = hotkeyLevel != HotkeyLevel::AllConsoles;
+  auto title = "Hotkeys - " + levelName(hotkeyLevel);
+  if (hotkeyLevel == HotkeyLevel::Game) title += " (" + game->title + ")";
+  print(x + 8, y + 8, title, textColor, w - 16);
   float top = y + 24;
   auto line = [&](const std::string& text, Color color) {
     print(x + 8, top, text, color, w - 16);
@@ -1330,7 +1427,7 @@ auto Shell::drawHotkeys(float width, float height) -> void {
   };
   line("Up to 3 bindings each. A binding's first key starts it and is kept from", dimColor);
   line("the game; a key that starts others acts alone when tapped.", dimColor);
-  auto shown = shownHotkeys(storedHotkeys());
+  auto shown = shownHotkeys(hotkeysAt(hotkeyLevel));
   std::string collisions;
   for (auto& [first, second] : existingHotkeyConflicts(shown)) {
     collisions += (collisions.empty() ? "These collide: " : "; ") + hotkeyLabel(first) + " and " + hotkeyLabel(second);
@@ -1355,34 +1452,46 @@ auto Shell::drawHotkeys(float width, float height) -> void {
     std::string label, value;
     Color valueColor = textColor;
     float indent = 0;
+    // For a console or a game, the actions it sets itself are bright, those it inherits dim.
+    bool inherited = scoped && !row.action.empty() && hotkeySource(hotkeyLevel, row.action) != hotkeyLevel;
     switch (row.kind) {
+    case HotkeyRow::Kind::Level: {
+      label = "Level";
+      // The three side by side, the one shown bright.
+      float optionX = valueX;
+      for (auto level : {HotkeyLevel::AllConsoles, HotkeyLevel::Console, HotkeyLevel::Game}) {
+        auto option = levelName(level);
+        float room = x + w - optionX - 8;
+        if (room >= glyph) print(optionX, rowY, option, level == hotkeyLevel ? textColor : dimColor, room);
+        optionX += (option.size() + 2) * glyph;
+      }
+      break;
+    }
     case HotkeyRow::Kind::Action:
       label = hotkeyLabel(row.action);
       for (auto& combo : bindingsOf(row.action)) {
         if (!combo.empty()) value += (value.empty() ? "" : " or ") + hotkeyComboLabel(combo);
       }
-      if (value.empty()) {
-        value = "Not bound";
-        valueColor = dimColor;
-      }
+      if (value.empty()) value = "Not bound";
+      if (scoped ? inherited : value == "Not bound") valueColor = dimColor;
       break;
     case HotkeyRow::Kind::Binding: {
       indent = 16;
       label = "Binding " + std::to_string(row.slot + 1);
       auto bindings = bindingsOf(row.action);
       if (row.slot < (int)bindings.size()) value = hotkeyComboLabel(bindings[row.slot]);
-      if (value.empty()) {
-        value = "-";
-        valueColor = dimColor;
-      }
+      if (value.empty()) value = "-";
+      if (inherited || value == "-") valueColor = dimColor;
       break;
     }
     case HotkeyRow::Kind::Slots:
       label = "Direct slot hotkeys";
       value = slotHotkeysShown ? "all shown" : "bound ones shown";
       break;
-    case HotkeyRow::Kind::Defaults:
-      label = "Reset hotkeys to the defaults";
+    case HotkeyRow::Kind::Reset:
+      if (hotkeyLevel == HotkeyLevel::AllConsoles) label = "Reset hotkeys to the defaults";
+      else if (hotkeyLevel == HotkeyLevel::Console) label = "Reset " + game->system + "'s hotkeys";
+      else label = "Reset this game's hotkeys";
       break;
     }
     print(x + 8 + indent, rowY, label, textColor, valueX - x - 16 - indent);
@@ -1390,10 +1499,33 @@ auto Shell::drawHotkeys(float width, float height) -> void {
   }
 
   std::string note, hint = "Enter/A Choose   Esc/B Back";
+  Color noteColor = warningColor;
   if (hotkeyCursor < count) {
     auto& row = rows[hotkeyCursor];
+    if (row.kind == HotkeyRow::Kind::Level) {
+      hint = "Left/Right or Enter/A Change   Esc/B Back";
+      noteColor = dimColor;
+      if (hotkeyLevel == HotkeyLevel::AllConsoles) {
+        note = "For every game, unless its console or the game changes them.";
+      } else if (hotkeyLevel == HotkeyLevel::Console) {
+        note = "For every " + game->system + " game, unless the game changes them.";
+      } else {
+        note = "For " + game->title + " only.";
+      }
+    }
     if (row.kind == HotkeyRow::Kind::Action) {
-      hint = std::string(hotkeyOpen == row.action ? "Enter/A Close" : "Enter/A Bindings") + "   Del/X Clear all   Esc/B Back";
+      // A console's or a game's own action goes back to what it inherits; one it inherits is unbound for it.
+      std::string clear = "Clear all";
+      if (scoped) {
+        auto source = hotkeySource(hotkeyLevel, row.action);
+        auto parent = (HotkeyLevel)((int)hotkeyLevel - 1);
+        noteColor = dimColor;
+        note = (source == hotkeyLevel ? "Set for " : "From ") + inPhrase(source);
+        clear = source == hotkeyLevel ? "Use " + inPhrase(parent) + (parent == HotkeyLevel::AllConsoles ? "'" : "'s")
+                                      : "Unbind for " + inPhrase(hotkeyLevel);
+      }
+      hint = std::string(hotkeyOpen == row.action ? "Enter/A Close" : "Enter/A Bindings") + "   Del/X " + clear +
+             "   Esc/B Back";
     }
     if (row.kind == HotkeyRow::Kind::Binding) {
       hint = "Enter/A Capture   Del/X Clear   Esc/B Back";
@@ -1408,7 +1540,7 @@ auto Shell::drawHotkeys(float width, float height) -> void {
       }
     }
   }
-  print(x + 8, y + h - 26, note, warningColor, w - 16);
+  print(x + 8, y + h - 26, note, noteColor, w - 16);
   print(x + 8, y + h - 14, hint, dimColor, w - 16);
 
   if (capture) {

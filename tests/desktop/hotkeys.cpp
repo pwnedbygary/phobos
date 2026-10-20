@@ -2,11 +2,16 @@
 // and mouse buttons: settings.ini's format, a combo's exact keys with its first key pressed first and held back from
 // the game, tap bindings, the tokens that count only where bound, pads holding a token together and the keyboards
 // theirs as one (desktop/Input.cpp), the axes' hysteresis, conflicts and their question, the defaults, the keys a
-// computer's keyboard keeps, and a binding's changes to store.
+// computer's keyboard keeps, a binding's changes to store, and the levels: each one's key in settings.ini
+// (desktop/Settings.cpp reading it back), a game's bindings over its console's over all consoles', and what a level
+// keeps.
 #include <desktop/Hotkeys.hpp>
 #include <desktop/Input.hpp>
+#include <desktop/Settings.hpp>
 
+#include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -400,6 +405,66 @@ auto theDirectSlotsAndTheHoldsAreKnownByName() -> void {
   CHECK(hotkeyActions().size() == 36);
 }
 
+auto eachLevelKeepsItsBindingsUnderItsOwnKeyWhateverTheTitle() -> void {
+  CHECK(hotkeySettingKey("", Hotkey::save) == "hotkey.save");
+  CHECK(hotkeySettingKey("Game Boy", Hotkey::save) == "hotkey[Game Boy].save");
+  CHECK(hotkeySettingKey("Game Boy/Tetris (World)", Hotkey::load) == "hotkey[Game Boy/Tetris (World)].load");
+  // "=" would end the key in settings.ini and a line break its line; "%" written out keeps two titles apart.
+  CHECK(hotkeySettingKey("MSX/A=B%C\r\nD", Hotkey::save) == "hotkey[MSX/A%3DB%25C%0D%0AD].save");
+  CHECK(hotkeySettingKey("MSX/A%3DB", Hotkey::save) != hotkeySettingKey("MSX/A=B", Hotkey::save));
+  // Written to a file and read back.
+  auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  auto file = std::filesystem::temp_directory_path() / ("phobos-hotkeys-test-" + std::to_string(stamp) + ".ini");
+  auto oddTitle = hotkeySettingKey("MSX/A=B\nC", Hotkey::save), allConsoles = hotkeySettingKey("", Hotkey::save);
+  {
+    Settings written;
+    written.load(file.string());
+    written.setText(oddTitle, "k62");
+    written.setText(allConsoles, "k63");
+  }
+  Settings read;
+  read.load(file.string());
+  CHECK(read.text(oddTitle) == "k62");
+  CHECK(read.text(allConsoles) == "k63");
+  std::filesystem::remove(file);
+}
+
+auto aGamesBindingsGoOverItsConsolesWhichGoOverAllConsoles() -> void {
+  HotkeyMap allConsoles{{Hotkey::save, {{f8}}}, {Hotkey::mute, {{f11}}}};
+  HotkeyMap console{{Hotkey::save, {{f5}, {guide, rb}}}, {Hotkey::pause, {}}};
+  HotkeyMap game{{Hotkey::save, {{}, {f12}}}, {Hotkey::load, {{escape}}}};
+  auto atConsole = shownHotkeys(overHotkeys(allConsoles, console));
+  CHECK(of(atConsole, Hotkey::save) == (HotkeyBindings{{f5}, {guide, rb}}));
+  CHECK(!atConsole.count(Hotkey::pause));
+  CHECK(of(atConsole, Hotkey::mute) == (HotkeyBindings{{f11}}));
+  CHECK(of(atConsole, Hotkey::load) == (HotkeyBindings{{guide, lb}, {f9}}));
+  // A game's action replaces its console's whole: the console's F5 doesn't show through the game's empty first slot.
+  auto atGame = shownHotkeys(overHotkeys(overHotkeys(allConsoles, console), game));
+  CHECK(of(atGame, Hotkey::save) == (HotkeyBindings{{}, {f12}}));
+  CHECK(of(atGame, Hotkey::load) == (HotkeyBindings{{escape}}));
+  CHECK(!atGame.count(Hotkey::pause));
+  CHECK(of(atGame, Hotkey::mute) == (HotkeyBindings{{f11}}));
+  CHECK(overHotkeys(allConsoles, {}) == allConsoles);
+}
+
+auto aConsoleOrAGameStoresOnlyWhatItChanges() -> void {
+  // What a game inherits: its console's Save (F5, then Guide+RB), and the defaults.
+  auto inherited = shownHotkeys({{Hotkey::save, {{f5}, {guide, rb}}}});
+  auto stored = levelHotkeyChanges(bindingChanges(inherited, Hotkey::save, 0, {f8}, {}), inherited);
+  CHECK(stored.size() == 1 && stored[Hotkey::save] == (HotkeyBindings{{f8}, {guide, rb}}));
+  // Bound again as it inherits it: no longer the level's own.
+  stored = levelHotkeyChanges(bindingChanges(inherited, Hotkey::save, 0, {f5}, {}), inherited);
+  CHECK(stored.size() == 1 && stored.count(Hotkey::save) && !stored[Hotkey::save]);
+  // Unbinding what it inherits bound is stored, as nothing; what it inherits unbound has nothing to store.
+  stored = levelHotkeyChanges({{Hotkey::pause, {}}, {Hotkey::reset, {}}}, inherited);
+  CHECK(stored[Hotkey::pause] == HotkeyBindings{});
+  CHECK(stored.count(Hotkey::reset) && !stored[Hotkey::reset]);
+  // An overwritten binding: the action it belongs to keeps its others, as the level's own.
+  stored = levelHotkeyChanges(bindingChanges(inherited, Hotkey::screenshot, 1, {f5}, {{Hotkey::save, 0}}), inherited);
+  CHECK(stored[Hotkey::screenshot] == (HotkeyBindings{{guide, r3}, {f5}}));
+  CHECK(stored[Hotkey::save] == (HotkeyBindings{{}, {guide, rb}}));
+}
+
 }
 
 int main() {
@@ -423,6 +488,9 @@ int main() {
   aDefaultBindingOnAKeyTheComputersKeyboardUsesStaysTheGames();
   aBindingStoresItsActionAndEachBindingItOverwritesWhole();
   theDirectSlotsAndTheHoldsAreKnownByName();
+  eachLevelKeepsItsBindingsUnderItsOwnKeyWhateverTheTitle();
+  aGamesBindingsGoOverItsConsolesWhichGoOverAllConsoles();
+  aConsoleOrAGameStoresOnlyWhatItChanges();
   std::printf("%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

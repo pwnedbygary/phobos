@@ -119,8 +119,8 @@ attached to tagged releases.
 Its interface is still a simple one in SDL's debug font: a library (disc sets, cue/m3u, PSP titles read off the
 discs), a pause menu (save states, reset, fast-forward, mute, disc change, the N64's and PS1's options, pausing while
 another window has the keyboard (on by default), and hotkeys: up to three combos an action, of keys, pad buttons,
-triggers, stick directions or mouse buttons), the ZX Spectrum and MSX keyboards, rumble, and firmware matched by
-content as the app matches it.
+triggers, stick directions or mouse buttons, for every game, one console or one game), the ZX Spectrum and MSX
+keyboards, rumble, and firmware matched by content as the app matches it.
 
 ---
 

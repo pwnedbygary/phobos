@@ -181,4 +181,19 @@ auto existingHotkeyConflicts(const HotkeyMap& hotkeys) -> std::vector<std::pair<
 auto bindingChanges(const HotkeyMap& shown, const std::string& action, int slot, const HotkeyCombo& combo,
                     const std::vector<std::pair<std::string, int>>& overwrite) -> HotkeyMap;
 
+// Hotkeys per console and per game: a level stores each action it changes with all of that action's bindings, which
+// replace what it inherits whole, an empty value unbinding the action there; a game's over its console's, over all
+// consoles', over the defaults.
+// The settings.ini key of [action]'s bindings at [scope]: hotkey.<action> for all consoles (no scope), and
+// hotkey[<scope>].<action> for a console (its system) or a game (its system, "/", its title), with "%", "=" and line
+// breaks in the scope written as %25, %3D, %0D and %0A, so the line reads back as that key.
+auto hotkeySettingKey(const std::string& scope, const std::string& action) -> std::string;
+// [narrower]'s stored actions over [broader]'s, each replacing the action's bindings whole.
+auto overHotkeys(HotkeyMap broader, const HotkeyMap& narrower) -> HotkeyMap;
+// What a console or game level stores for [changes] (bindingChanges) when what it inherits is [inherited] (shownHotkeys
+// of the levels above it): an action whose bindings come out as it inherits them isn't stored (nullopt), so the level
+// keeps only what it changes.
+auto levelHotkeyChanges(const HotkeyMap& changes, const HotkeyMap& inherited)
+    -> std::map<std::string, std::optional<HotkeyBindings>>;
+
 }

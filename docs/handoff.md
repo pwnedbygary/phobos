@@ -35,6 +35,108 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Desktop hotkeys per console and per game: a level row on the Hotkeys page, each level storing only the actions it changes, whole, the rest inherited — 2026-10-20
+
+Branch `improved-hotkeys`, on the desktop-window commit `68f2a2799` (the entry below). The fifth pull request of the
+hotkey plan: "A scope picker (All / Console / Game) with inherited bindings. Full per-game button remapping stays out
+of scope." The Android app's hotkeys have had these levels since before the plan (`ControlLevels`); the desktop's are
+now stored the same way. Changed: `desktop/Hotkeys.cpp` and `.hpp` (the levels' rules), `desktop/main.cpp` (the page
+and the storage), `tests/desktop/hotkeys.cpp`, `CMakeLists.txt` (the test target builds `desktop/Settings.cpp` too)
+and `README.md`. Checked with the keyboard on a virtual display; **not** with a pad, Windows or macOS (see Checks).
+- **Levels**: the Hotkeys page's first row, just above the Pause menu where the page still opens, offers all consoles,
+  the running game's console (named by the system the library gives it: "Auto" for most zipped games, under Limits)
+  and the game ("This game"), the one shown bright; left, right or A on it change the level, and the page's title
+  names it (with the game's title for the game). The page opens on all consoles. A level stores each action it
+  changes with all of that action's bindings, which replace what it inherits whole (an empty value unbinding the
+  action there): the game's over its console's, over all consoles', over the defaults. A game plays with its level's
+  hotkeys; the library has all consoles'.
+- **Storage**: all consoles' bindings stay under `hotkey.<action>` in settings.ini; a console's go under
+  `hotkey[<system>].<action>` (`hotkey[Game Boy].save`) and a game's under `hotkey[<system>/<title>].<action>`, the
+  system and title its save states go by, with "%", "=" and line breaks in the scope written as `%25`, `%3D`, `%0D` and
+  `%0A`, since settings.ini ends a key at its first "=" and a line at its break (`hotkeySettingKey`). An older build
+  reads only `hotkey.<action>` and writes back every line it read, the levels' included.
+- **What a level keeps**: a binding captured, changed or cleared at a console or a game is stored only if the action's
+  bindings then differ from what that level inherits; bound back to exactly that, the action goes back to inheriting,
+  its line taken away (`levelHotkeyChanges`). A conflict is checked against the hotkeys of the level shown, and
+  overwriting a binding the level inherits stores the rest of that action's bindings as the level's own (F8 taken from
+  Screenshot for the Game Boy leaves it Guide + R3 there), all consoles' untouched: the plan's rule for the Android
+  app's levels, from its second pull request.
+- **Clearing**: Del or X on a binding row clears that binding at the level shown, kept as above. On an action row it
+  clears every binding for all consoles, as before; at a console or a game, an action the level sets goes back to what
+  it inherits ("Set for this game" in the note, "Del/X Use Game Boy's" in the hint), and one it inherits is unbound for
+  that level alone ("From all consoles", "Del/X Unbind for this game"). There the actions the level sets are bright,
+  those it inherits dim.
+- **Reset**: the last row resets the level shown, after asking: all consoles to the defaults, what a console or a game
+  sets for itself staying; a console or a game to inheriting, every line of its own taken away.
+- **The emulated computers' rule** (the owner's choice, in the desktop hotkeys entry of 2026-10-19) applies to the
+  hotkeys a game plays with, whichever level a binding comes from: on a ZX Spectrum or MSX, a binding equal to one of
+  its action's default combos with Tab or a key the computer's keyboard uses does nothing.
+- **The entry below**: the owner's choice recorded (on by default, going on by itself); and, as its second review
+  suggested, "Left Shift, Reset's tap binding" written as Left Shift bound to Reset, as in the checks (Reset has no
+  default binding), a Limits line for Frame Advance held on a pad through a switch, and in `desktop/main.cpp` the
+  comment on a capture the switch cancels narrowed as the text was (the fourth, the window probe, is under Checks).
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; SDL 3.2.30): the Linux build; `ctest` 1/1 and `phobos-desktop-tests` 201
+  checks, 0 failed, built with `-Werror` and the sanitizers. Its 22 new checks are in three tests: each level's key
+  (with "=", "%" and line breaks in a title written out, and one with "=" and a line feed written to a file through
+  `desktop/Settings.cpp` and read back); a game's bindings over its console's over all consoles' (a game's empty first
+  binding not letting its console's show through); and what a console or a game keeps. Nineteen engine mutants, built
+  outside the repository with the tests, each fail them, where the unchanged files pass: PR 3's thirteen, and six of the
+  levels' functions ("=", "%" or a line feed not written out; a narrower level replacing binding by binding; a level
+  storing every change; an action it inherits unbound stored unbound). `main.cpp` compiled with the build's own command
+  and `-Wall -Wextra`, to a scratch folder: 781 warnings, none in `desktop/` or `tests/`. On the virtual display (Xvfb
+  and xdotool), 112 of 112 checks pass: the entry below's 75, the Hotkeys page's rows still counted from where it opens,
+  and 37 of the levels, in sessions of their own: F6 bound for the Game Boy beside the F5 it inherits, all consoles'
+  untouched, saving in a Game Boy game; F6 for Mute, colliding only with the Game Boy's own F6, asked about and
+  cancelled; Save state's first binding cleared and Screenshot unbound for one game, F6 then saving nothing there, F5
+  still saving and F8 taking no screenshot; in another Game Boy game F6 saving and F8 taking a screenshot; on the MSX,
+  in its game of the same title, F6 saving nothing and F8 taking a screenshot; the game's own Save state taken back to
+  the Game Boy's with Del, and the game's reset; F8 overwritten into the Game Boy's Save state, Screenshot's Guide + R3
+  stored as the Game Boy's own; Fullscreen bound for the Game Boy, then bound back to all consoles' F11 and inheriting
+  again; the Game Boy's reset leaving none of its lines; a game whose title has "=" and "%" keeping its own line, read
+  back when started again; and, added after the first review found these paths untaken, Left on the level row reaching
+  this game, then the Game Boy, then all consoles, whose reset takes their own line away and keeps the Game Boy's and
+  the game's, F7 still saving in the game. Screenshots of the page at each level, its conflict question and two of its
+  reset questions were looked at. The window probe the entry below's second review suggested keeping passes its 5
+  checks: under a stand-in window manager (it sets only `_NET_SUPPORTING_WM_CHECK`, so SDL leaves the keyboard where it
+  is), a game started while another window has the keyboard waits and goes on as its window gets it; with no window
+  manager, SDL gives the game's window the keyboard and the game doesn't wait. PR 4's mutant without the pause fails
+  two. Ten `main.cpp` mutants, built outside the repository with the build's own commands, fail their checks there,
+  where the unchanged file built the same way passes them all (the unchanged file and the first review's two run again
+  once the levels section had its last session; the other eight before): the game's level ignored in play; a level
+  storing every change; Del on a level's own action unbinding it; a game known by its title alone (its hotkeys then
+  reaching the MSX's game of the same title); a level's reset taking away all consoles' lines; conflicts checked against
+  all consoles' hotkeys; the first review's two, which passed the levels section until its last session was added (Left
+  on the level row going right; all consoles' reset taking the running console's lines away too); and PR 3's two Hotkeys
+  page mutants (the page losing keys to hotkeys; nothing held back as the hotkeys stop taking keys), through its page
+  section with the page now opening below the level row. The Android build, which reads the same `CMakeLists.txt`
+  (`android/app/build.gradle.kts`), configures and builds (`:app:assembleLegacyDebug`; JDK 17.0.20.1, the Gradle
+  wrapper); the change is in the file's desktop branch, which Android's build skips. Not run: a pad, a real window
+  manager, the Windows and macOS builds, Wayland, Steam, a real game.
+- **Limits**: a binding set for all consoles or for a console is checked only against the hotkeys of the level shown,
+  so one colliding with a binding a narrower level sets isn't asked about; the collision shows on that level's page
+  ("These collide"). A level keeps its line for an action until it's changed back, cleared or reset, so a console's
+  binding that all consoles later come to match still shows as the console's own. A game's hotkeys go by its system
+  and title, as its states do: a renamed file loses them, and a disc of a set dropped on the window alone, its disc
+  number in its title, has its own rather than the set's. Only the running game's console and the game can be set (the
+  page is in the pause menu), and the page opens on all consoles each time. A zipped game has the library's system
+  "Auto" unless a folder it's in names Arcade, Neo Geo or Neo Geo CD (`desktop/Library.cpp`), as its states' folder
+  does: all such games, whatever their console, share one console level, named "Auto" on the page, where the same game
+  unzipped has its console's. The level row, 45 characters with a console of the longest names (PlayStation Portable,
+  Neo Geo Pocket Color), is cut short in a window under 632 pixels wide (no minimum size is set), as long values on the
+  other rows are. The test target still isn't in CI, and the virtual-display checks, the window probe and the mutant
+  runs are scripts kept outside the repository, with each change's review evidence.
+- **Review**: the first independent review (diff `2e5e10d2...`) found NEEDS CHANGES, three Minors: two wrong references
+  here (the emulated computers' rule placed in the entry below; the owner's choice recorded there credited to that
+  entry's second review); the Android build skipped as building no changed file, where it reads `CMakeLists.txt` (now
+  built, under Checks); and zipped games sharing an "Auto" console level unrecorded (under Levels and Limits now). Its
+  suggestions are taken: Left on the level row and all consoles' reset keeping the narrower levels' lines checked, with
+  the two mutants those checks catch; the key test described as it is; Tab in the emulated computers' rule; "a line
+  feed" for the escape mutant; and the scripts' place, in Limits. The whole record is in the commit that carries this
+  entry.
+- **Next**: the slow-motion measurement (#424), its own reviewed pull request, then the plan's final docs (a hotkey
+  reference and the issue matrix); the pad, window manager, Wayland, Steam, Windows and macOS checks; the RP6 pass for
+  the Android changes.
+
 ## Desktop window: the game waiting while another window has the keyboard (a menu switch, on by default), no hotkey run by the clicks and releases that still come then, a tap only on the screen its key went down on, the screensaver held off by SDL as before — 2026-10-20
 
 Branch `improved-hotkeys`, on the desktop-hotkeys commit `f4e0b1b98` (the entry below). The fourth pull request of the
@@ -50,7 +152,8 @@ macOS (see Checks).
   page the game is paused already, and frame advance's stopped game stays as it is; a game started while another
   window has the keyboard (a file dropped on the window from a file manager, say) waits as soon as it starts, and the
   badge (like frame advance's) takes the place of the "Loading" line rather than covering it. With the switch off the
-  game goes on, as before this change.
+  game goes on, as before this change. On by default, and going on by itself as the window gets the keyboard back: the
+  owner's choice, asked after the first review.
 - **What still comes while another window has the keyboard** (#2365): SDL sends such a window no keys (they go to the
   window that has the keyboard) and no pad presses or axis moves away from the centre (`SDL_joystick.c`'s
   `SDL_PrivateJoystickShouldIgnoreEvent`, unless `SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS`, which Phobos doesn't
@@ -58,9 +161,10 @@ macOS (see Checks).
   the releases, and now no hotkey runs on them: a press completes nothing while the window lacks the keyboard (Mouse 4
   bound to Mute, clicked then, mutes nothing), and a tap runs only while the window has the keyboard, on the screen
   its key went down on with the window having it then (`pressedOn`). So a key held as another window takes the
-  keyboard taps nothing as SDL lets it go (Left Shift, Reset's tap binding, held across the switch resets nothing), and
-  where Escape is a tap binding, Escape leaving the Hotkeys page no longer also taps as it's let go of in the menu it
-  went back to, which closed the menu and let the game go on (seen by the fourth review of the entry below).
+  keyboard taps nothing as SDL lets it go (with Left Shift bound to Reset, as in the checks, Left Shift held across the
+  switch resets nothing), and where Escape is a tap binding, Escape leaving the Hotkeys page no longer also taps as it's
+  let go of in the menu it went back to, which closed the menu and let the game go on (seen by the fourth review of the
+  entry below).
 - **A binding still being captured** (its keys still coming: a capture settles 700 ms after its last new key) is
   cancelled as the window loses the keyboard ("The window lost focus: the binding is unchanged"), so a switch made
   within those 700 ms adds none of its keys (Alt for Alt+Tab) to the binding; a key held longer before the switch has
@@ -115,14 +219,16 @@ macOS (see Checks).
   whether a click that gives it back also runs that button's hotkey depends on whether SDL has heard of the keyboard
   by then (the window manager's order; not run). SDL's X11 and Wayland drivers press again the modifiers held as the
   window gets the keyboard back (`SDL_x11events.c:441-456`, `SDL_waylandevents.c:1731-1748`), so a modifier pressed
-  while the other window has the keyboard and let go after it comes back counts as pressed here: Left Shift, Reset's
-  tap binding, resets the game (seen by the first review; the same before this change). A capture is cancelled only
-  while its keys are still coming: Alt held 700 ms or more before the switch is the binding already (the first review
-  saw Alt held for a second bound), and SDL ignores a focus change a keyboard grab makes (`SDL_x11events.c:1414-1417`),
-  so an Alt+Tab switcher that grabs the keyboard counts only once the switch is made, and an unhurried Alt+Tab during
-  a capture binds Alt (inferred, not run); such a binding can be cleared on the page, and a cancelled capture has to be
-  started again. The screen doesn't sleep while Phobos is open, in the library too (SDL's, as before;
-  `SDL_VIDEO_ALLOW_SCREENSAVER=1` lets it); the test target still isn't in CI.
+  while the other window has the keyboard and let go after it comes back counts as pressed here: with Left Shift bound
+  to Reset, as in the checks, it resets the game (seen by the first review; the same before this change). A pad holding
+  Frame Advance as another window takes the keyboard keeps stepping, a frame every 100 ms, until it's let go of, frame
+  advance's stopped game not being paused for the switch (inferred, not run; a key held is let go of by SDL then, which
+  ends the hold). A capture is cancelled only while its keys are still coming: Alt held 700 ms or more before the
+  switch is the binding already (the first review saw Alt held for a second bound), and SDL ignores a focus change a
+  keyboard grab makes (`SDL_x11events.c:1414-1417`), so an Alt+Tab switcher that grabs the keyboard counts only once
+  the switch is made, and an unhurried Alt+Tab during a capture binds Alt (inferred, not run); such a binding can be
+  cleared on the page, and a cancelled capture has to be started again. The screen doesn't sleep while Phobos is open,
+  in the library too (SDL's, as before; `SDL_VIDEO_ALLOW_SCREENSAVER=1` lets it); the test target still isn't in CI.
 - **Review**: the first independent review (diff `3b96765d...`) found NEEDS CHANGES, three Minors: the buttons held as
   the game went on reached it for one frame (fixed, as under Pause when unfocused and Checks); the reason given for not
   testing a game started unfocused was wrong (corrected under Checks); and the capture's cancel was claimed for any
