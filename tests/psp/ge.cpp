@@ -3269,7 +3269,11 @@ static auto geTimePspWordsThreaded() -> void {
     o.ram.assign(memory.ram.begin(), memory.ram.end()), o.vram.assign(memory.vram.begin(), memory.vram.end());
     return o;
   };
-  Outcome plain = run(false, true), threaded = run(true, true), fast = run(false, false);
+  Outcome plain = run(false, true), threaded = run(true, true);
+  Outcome fast = [&] {
+    FastTimed fastTimed;  //("Fast"'s machine, which counts nothing)
+    return run(false, false);
+  }();
   CHECK(plain.time, threaded.time);
   CHECK(plain.cycles, threaded.cycles);
   CHECK(plain.doneAt, threaded.doneAt);
