@@ -35,6 +35,68 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Tests and CI: the kernel's tests with the PSP's GE timing, and the skip's contention refusal tested — 2026-10-20
+
+Branch `cursor/ci-psp-timing-cachy`, from master `dcf2f1b2c` (#287). Tests and CI only (`tests/psp/kernel-machine.hpp`,
+`ge.cpp`, `modules.cpp`, `spins.cpp`, `.github/workflows/psp-core.yml`); the core doesn't change, so docs/psp-core.md
+has no part for it. A follow-up from #269's review (`~/phobos-work/scratch/review-269/REVIEW-r3.md`, lines 123-128).
+Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
+- **The switch**: `PHOBOS_TESTS_GE_TIMING=PSP` (`testsPspTiming()`, tests/psp/kernel-machine.hpp) makes every kernel
+  test machine that doesn't choose its GE timing start with the PSP's, the option "GE Timing"'s default since #269;
+  unset, nothing changes. Machines made while a `FastTimed` lives stay on "Fast" (as an `Unthreaded` keeps the GE off
+  its thread under `PHOBOS_TESTS_GE_THREAD`); tests that call `pspTiming()` keep it.
+- **Twelve groups pin "Fast"'s numbers** and now say so with a `FastTimed`. With the switch on and no choice they failed
+  73 checks, each a time or an order only "Fast" gives: ge time (`geDone` 0x2993 for 0x600: Sony's peaks), ge time's
+  interrupt (its 294-295 µs), ge FINISH after a quiet function ("Fast"'s 12288 cycles inside the spin), ge profile (9
+  records for 8: "Fast"'s one ModelWork record, 1536 cycles), ge time, the PSP's: the CPU's caches (its "Fast" machine
+  counted 0x402 lines for none), ge callbacks, ge pause, ge suspending signals' callbacks and ge break (the list still
+  drawing where each expects it done by the program's next call), ge endless list (a million commands at once, a
+  SIGNAL taken as met), a spin skipped directly (`anchor()` sets the detector up as "Fast" runs it) and programs
+  unloading themselves (the interpreter's state against the recompiler's: with the PSP's timing the CPU's caches,
+  which a state holds, move in compiled code alone). None showed a fault in the PSP's timing.
+- **CI**: the release job's step "Run the kernel's GE tests with the PSP's GE timing", after the GE thread's, on the
+  same objects, with its own summary line: `PHOBOS_TESTS_ONLY` the spin groups and the GE's looks polled, every "ge "
+  group (the GE thread's among them), the sample programs and the curves, 105 groups with the new test;
+  `PHOBOS_TESTS_REQUIRE=vulkan, programs`. Left out for time: the six measured groups and three of the GPU's, which
+  have a machine the switch moves too (a selection with them took 175 s here, against the step's 24). 26 s here; CI
+  takes 120 s for the GE thread's step, 104 s here, so about 30 s there.
+- **What the step catches** (gcov on a coverage build: `covbranch.txt`): it takes 18 branches the release lane (its
+  suite and the GE thread's step) never takes. No mutation tried is caught by the step alone. (1) The spin skip's
+  SIGNAL check dropped (ares/psp/kernel/spins.cpp:192): the step reaches it three times, in "the GE's looks polled
+  behind a list, past a SIGNAL, with interrupts held off" (its SIGNAL case), each time the SIGNAL's time (8864) past
+  the skip's end (7864 + 976): the CPU's go ends at that time (threads.cpp:296-297) and a skip stops SpinMargin turns
+  short of the go's end (spins.cpp:179-181), so the check never refuses and the same skips are made without it. (4) A
+  due SIGNAL taken with interrupts held off (ge.cpp:466): the step reaches that once, in "ge calls and threads"
+  (tests/psp/ge.cpp:789-846), its SIGNAL reached (7143) by the end of sceGeListEnQueue (7880) while main holds
+  interrupts off; taken there, its callback is a call into the program, which doesn't start while they're held off
+  (interrupts.cpp:24-25), so the order the group checks comes out the same. (3) (1) with threads.cpp:297 dropped as
+  well: caught by both, the step 6 failures, the release lane 71. (2) The skip's contention refusal dropped
+  (spins.cpp:211): passed every lane (below).
+- **The new test** for (2), "the GE's looks polled with the PSP's GE timing after a sleep: no skip across its busy
+  window's kink" (spins.cpp, explicit `pspTiming()`, the recompiler): gcov of today's lanes found the refusal never
+  made, its right-hand operand (`geContendBound(geWindow) != geContendBound(end)`) evaluated 40046 times and true none
+  (566 and none in the step). Three lists of 16 RAM-textured sprites, each queued, then 256 fresh lines read, the
+  shortest sleep (230 µs) and a poll (sceGeListSync) whose turns move no lines: the sleep leaves the GE's busy window's
+  time the cycles passed, and the poll's turns make it the CPU's about 4440 turns in, the push the window owes peaking
+  there (the first list's 15776 cycles: 14764 as the poll begins, 9340 had the turns to the step's end been one
+  stretch). After every step the clock, `geDoneAt`, the window and the rest of the state are the same with the skip as
+  without it; 1.46 million turns skipped, 3340 skips refused at :211 (a scratch probe's count). With (2) it fails at
+  step 1: the GE done at 4515134 against 4516146, pushed 14764 against 15776. It passes with the GE on its thread (the
+  GE thread's step selects it). A first version reading 16 lines failed (2) by 9 cycles; 256 make it about 1000.
+- **The SIGNAL check with the GE on its thread** (reading only, no test): it can't change what a skip does. With runs
+  pending `due()` (spins.cpp:187-192) compares `geReachBound()`, a lower bound (ge.cpp:396-404), and folds only where
+  that lies within the skip; a SIGNAL still to come bounds the go (threads.cpp:298-302), which the skip makes exact
+  before taking its room (spins.cpp:173-177; `geExactLimit()`, ge.cpp:447), so the skip ends before the SIGNAL's exact
+  time. Only a SIGNAL already reached and not taken (interrupts held off) makes `due()` refuse, and then the turns
+  skipped would change nothing: it can't be taken till they're back on.
+- **Checks** (here: cachyOS, GCC 16.2.1; release builds with `SANITIZE=-Wno-error=array-bounds` for its false warning at
+  tests/psp/movies.cpp:52, which CI's GCC 13 doesn't give): the release suite with the switch off 640 groups, 0
+  failures (master's 639 names and results, and the new one), on 640, 0; the GE thread's step 60, 0 (105 s); the new
+  step's selection 105, 0 (26 s); the new test sanitized 1, 0, no sanitizer report; actionlint (master's two
+  desktop.yml warnings only); `git diff --check`. All at niceness 5 through `pinned.sh`, two compiles at once.
+- **Not run** here: the rest of the sanitized suite, tests/allegrex, tests/psp/ares (CI's).
+- Independent review: not yet.
+
 ## CI: the sanitized PSP suite keeps the Vulkan driver loaded, so LeakSanitizer sees what lavapipe holds — 2026-10-20
 
 Branch `cursor/ci-lsan-mesa-cachy`, from master `b398e86f7` (#285), master `16156ab9a` (#286) merged in (`74b58eef2`).

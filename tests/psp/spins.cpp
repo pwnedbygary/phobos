@@ -451,6 +451,7 @@ static auto spinsRefused() -> void {
 //pages a turn may store to: not one the GE watches (a store there forgets textures decoded from it), nor one holding
 //compiled code (a store there drops it).
 static auto spinsDirect() -> void {
+  FastTimed fastTimed;  //(anchor() sets the detector as "Fast" runs it: with the PSP's timing its steady stays false)
   Idle idle;
   //main inside its loop (its ticker asleep for a while), about to make the anchor's syscall
   auto positioned = [&] {
