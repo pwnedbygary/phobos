@@ -79,6 +79,32 @@ core doesn't change, so docs/psp-core.md has no part for it. Notes and logs: `~/
 - **Not run** here: the rest of the sanitized suite, the release lane, tests/allegrex, tests/psp/ares (CI's).
 - Independent review: not yet.
 
+## CI: every workflow's checkout step off Node 20 — 2026-10-20
+
+Branch `cursor/ci-checkout-node24-cachy`, from master `b398e86f7` (#285). CI only, a follow-up from #283's review
+(`~/phobos-work/scratch/review-283/REVIEW.md`, its question 3).
+- **What and why**: the 17 `actions/checkout@v4` steps in `.github/workflows/` use `actions/checkout@v7` now, pinned
+  by major tag as before (android.yml 2, desktop.yml 3, ngcd.yml 1, psp-core.yml 8, psp-ge-profile.yml 1,
+  psp-shaders.yml 1, rsp-neon.yml 1); nothing else in the workflows changed. v4's action.yml declares `node20`, which
+  GitHub is retiring, so every run carried its deprecation warning. Seven other actions the workflows use still
+  declare `node20`; they are left as they are, and the pull request lists them as a possible follow-up.
+- **Why v7** (v7.0.1, the newest major): its action.yml declares `node24` and is otherwise v4's byte for byte, so the
+  options the repo passes (`submodules: recursive`, `fetch-depth: 0`, `filter: blob:none`) mean what they did. The
+  majors' breaking changes miss this repo: v5 needs runner 2.327.1 or later (every job is on GitHub's hosted
+  runners); v6 keeps the token in a file under `$RUNNER_TEMP` that `.git/config` includes, not in `.git/config`
+  itself: git on the runner still gets it, and only a Docker container action would need runner 2.329.0 for it (none
+  here; the repository and its one submodule are public); v7 refuses fork pull requests' code under
+  `pull_request_target` and `workflow_run` (neither is used, and v4.4.0, what v4 is now, refuses it too). The one
+  change the repo will see is on a tag push (the review below, section 4.3): v7 keeps the pushed annotated tag
+  annotated, where v4 fetched it by commit and made it lightweight (so build.txt's `git describe` gave
+  `v2.3.0-208-ga8d5640f` on v2.4.0's push, not `v2.4.0`), and checkout now fails if the tag moved or was deleted
+  after its push, where v4 built the pushed commit. The pull request's body has the evidence.
+- **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 on the seven workflows: only the two warnings master has
+  (desktop.yml:189 SC2046, desktop.yml:249 SC2034); `git diff --check` and `git show --check` clean; the diff is the
+  seven workflows and this file; no `actions/checkout@v4` left in `.github`. CI's runs go in the pull request's body.
+- Independent review: PASS on `0954b8800`, read-only (`~/phobos-work/scratch/review-286/REVIEW.md`); no file changes.
+  Its suggestion S1, the tag-push clause in "Why v7", was added after it.
+
 ## PSP GE: #277's entry after its review and library check; the GE profile's decoder files — docs only — 2026-10-20
 
 Branch `cursor/docs-277-followups-cachy`, from master `9f2d0633d` (#277, merged at `331eed9a9`). Docs only.

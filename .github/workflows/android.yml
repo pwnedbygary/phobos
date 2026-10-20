@@ -40,7 +40,7 @@ jobs:
       # The whole history, without file contents beyond this commit's: the build
       # numbers its version from the commit count and the latest tag.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive   # thirdparty/libadrenotools (public)
           fetch-depth: 0
@@ -133,7 +133,7 @@ jobs:
     steps:
       # As the build checks out: the version comes from the history here too.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
