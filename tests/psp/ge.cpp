@@ -436,6 +436,9 @@ static auto runMain(KernelMachine& m, bool recompile, u32 gp = 0x0812'3456) -> v
 //an SDK after 2.00.10; 0 for one saying none, as gpu/signals recorded) and the global pointer the program had; the
 //program finds its result as it left it.
 static auto geCallbacks() -> void {
+  //with the PSP's timing the interpreter passes as well and only the recompiler fails, as a compiled block takes the
+  //FINISH, due just after sceGeListEnQueue returns, only at its end
+  FastTimed fastTimed;  //(both callbacks before the program goes on: "Fast" gives the list no time)
   for(u32 version : {0x0606'0010u, 0u}) for(bool recompile : {false, true}) {
     KernelMachine m;
     auto& memory = m.system.memory;
@@ -539,6 +542,7 @@ static auto geFinishOrder() -> void {
 //A PAUSE signal: the list runs on to its next FINISH and stops there, paused; its signal callback gets the signal's
 //id; sceGeContinue lets it go on to the end.
 static auto gePause() -> void {
+  FastTimed fastTimed;  //(the list done by the program's next call: "Fast" gives it no time)
   KernelMachine m;
   auto& memory = m.system.memory;
   memory.write(4, Callbacks, recorder(m, 0x0880'4000, Signaled));
@@ -709,6 +713,7 @@ static auto geQueuedTwice() -> void {
 //(sceGeContinue: ALREADY for the newer, as gpu/signals/suspend recorded; BUSY for the older, unmeasured) nor put a
 //list ahead of it (INVALID_VALUE, unmeasured).
 static auto geSuspendedCallbacks() -> void {
+  FastTimed fastTimed;  //(the list done by the program's next calls: "Fast" gives it no time)
   constexpr u32 Id = KernelMachine::Results + 0x60, Seen = KernelMachine::Results + 0x70;
   for(u32 version : {0x0100'0010u, 0x0606'0010u}) for(bool breaking : {true, false}) {
     if(breaking && version > 0x0200'0010) continue;
@@ -1073,6 +1078,7 @@ static auto copySample() -> void {
 //over and over has the GE wait whenever a callback still waits its turn, or runs: one that moves the stall address on
 //finds the list still running at the next SIGNAL, which waits for it.
 static auto geEndless() -> void {
+  FastTimed fastTimed;  //(a million commands at once, a SIGNAL taken as it's met: "Fast" gives commands no time)
   //should a list never let go, the tests stop here, saying why, rather than run on forever
   signal(SIGALRM, [](int) {
     const char text[] = "FAIL ge endless list: a display list never let go\n";
@@ -2210,6 +2216,7 @@ static auto geTransfers() -> void {
 //signal busy; mode 1 throwing everything away, the next list taking the first ID again, and threads waiting for a
 //list or for all drawing left waiting until a list ends.
 static auto geBreak() -> void {
+  FastTimed fastTimed;  //(lists done by the next call: "Fast" gives them no time)
   KernelMachine m;
   auto& memory = m.system.memory;
   CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorAlready);
@@ -2413,6 +2420,7 @@ struct DrawingList {
 //function's syscall, which ends its compiled block, is followed by the block's check of the go's limit anyway: a
 //program can't tell syscall()'s guard for it from none, so dispatch() is asked directly.)
 static auto geQuietFunctions() -> void {
+  FastTimed fastTimed;  //(B's FINISH within the spin: "Fast"'s 12288 cycles)
   constexpr u32 Count = KernelMachine::Results + 0x40, Seen = KernelMachine::Results + 0x50;
   auto spun = [&](const char* polled, bool recompile, bool behind) {
     KernelMachine m;
@@ -2592,6 +2600,7 @@ static auto geQuietFunctions() -> void {
 //whose time hasn't come takes it first, and the FINISHes the lists after it meet as they start; and a state keeps a
 //FINISH waiting.
 static auto geTime() -> void {
+  FastTimed fastTimed;  //(Sony's peaks: "Fast"'s times)
   KernelMachine m;
   auto& memory = m.system.memory;
   auto enqueue = [&](u32 at, u32 stall = 0) { return m.call("sceGeListEnQueue", {at, stall, 0xffff'ffff, 0}); };
@@ -2796,6 +2805,7 @@ static auto wordLoop(Assembler& a, u32 from, u32 bytes, u32 passes, bool store) 
 //function and reading a word reads in that word's line alone; and 32 KiB of straight code run twice reads in its
 //instructions' 512 lines each time. Started with "Fast", the same loops count nothing: none of it is compiled.
 static auto geTimePspCaches() -> void {
+  FastTimed fastTimed;  //(counted(false) started with "Fast", whose code counts nothing)
   constexpr u32 Code = 0x0880'4000, Data = 0x0940'0000, Uncached = 0x4940'0000;
   struct Counts { u64 fills, writebacks, uncached, code; };
   auto counted = [&](bool psp, const std::function<void(Assembler&)>& body) -> Counts {
@@ -3964,6 +3974,7 @@ static auto geTimeBoxMarksThreaded() -> void {
 //at 111 MHz: 130560 * 35 * 333 / (140 * 111) = 97920 cycles, 294 microseconds; and a FINISH whose time comes as an
 //interrupt's handler runs is taken once the handler has returned. On both engines.
 static auto geTimeInterrupts() -> void {
+  FastTimed fastTimed;  //(Sony's peaks: "Fast"'s times)
   for(bool recompile : {false, true}) {
     KernelMachine m;
     auto& memory = m.system.memory;
@@ -5599,6 +5610,7 @@ static auto sameState(KernelMachine& m, const std::vector<u8>& other) -> bool {
 //unfinished (exit 0), as a capture leaves the calls it ends in, and the rest is recorded as before. With every
 //callback slot taken, sceGeSetCallback reads nothing of what it's given, and the profile doesn't either.
 static auto geProfile() -> void {
+  FastTimed fastTimed;  //("Fast"'s charges: the list's one ModelWork record, its 1536 cycles)
   constexpr u32 Registers = KernelMachine::Results + 0x1000;  //after each call, 32 words
   enum Run : u32 { Unprofiled, Profiled, Loaded, UnprofiledUnwaited, ProfiledUnwaited };
   std::vector<u8> unprofiled[2];
