@@ -18663,9 +18663,9 @@ list's pipeline).
   24 the same Off and On with either timing, and Off's PNGs as they were.
 
 **C on part 113** (#279: the CPU's cache models and the traffic-driven contention term, merged into this branch at
-`0c4baeb4f`, `8a0a04b7f`, and with its review's fixes at `69ea2650d`, `0ab56c774`). #279's code is as it was with the
-thread Off; with it On, its term carries as C's stretches did (above, "The CPU beside the GE, carried"). Where the two
-met:
+`0c4baeb4f`, `8a0a04b7f`, with its review's fixes at `69ea2650d`, `0ab56c774`, and master with it, `ba1a19896`, at
+`a335937a9`). #279's code is as it was with the thread Off; with it On, its term carries as C's stretches did (above,
+"The CPU beside the GE, carried"). Where the two met:
 - `geTime()`: C's clocks into cycles (`geCycles()`) and #279's window counting afresh as a stalled list goes on, both;
   a run handed to G keeps the caches' counts as it ends, for the fold to do the same there. `geOwe()`: both, C's fold
   first.
@@ -18673,7 +18673,8 @@ met:
   (`geContendThreaded()`), `geContendNow()` being #279's arithmetic (the window's whole counts and its push,
   `geContendDue()`) from the counts and the SIGNAL due given, const over mutable members (the window, the counts seen,
   the busy sums, and `gePipeAt`, which its push moves).
-- `spinSkip()`: C's exact limit and FINISH and SIGNAL checks, then #279's busy window's, after a fold with the thread.
+- `spinSkip()`: C's exact limit and FINISH and SIGNAL checks, #279's steady turns', then its busy window's, after a fold
+  with the thread.
 - #279 removed the stretch's end C's `goThreaded()` called: a go the bound cut short counts its instructions on across
   its parts now (`Allegrex::run(limit, from)`) and ends its stretch once, as `run()` ends the single go's.
 - The list's clocks by kind, with the thread On, are the render GE's; the kernel's GE keeps a copy as each fold
@@ -18685,45 +18686,43 @@ met:
   the GE's groups now too (measured rounds 10 and 10b's among them); the bigger queue's state test turns it off
   itself, as before. #279's runner line of the caches' counts folds first.
 
-**Exact on part 113** (`0ab56c774`'s runner, #279's review fixes in, and before them `bee76daa1`'s, each the same: the
-M1, MoltenVK; the thread On with `PHOBOS_GE_CHECK=1` against Off, the same runner, the PSP's timing, #279's term live in
-every run, the runner's line of the caches' counts the same On and Off): the gate's scenes in Vulkan fast and Software,
-settled, 600 frames (14 of 14); part 109's section 9 sets (240 of 240, as above); "Fast" unchanged, On against Off (3 of
-3); part 109's slow three from their start, the clock fixed, every frame and then RAM and the state, either timing (6 of
-6); Off against #279's own runner (`69ea2650d`; before, `0c4baeb4f`), the gate's scenes in both renderers (12 of 12).
-The suite Off, 633 groups, and the thread On lane, 53 (#279's tests, its measured rounds 10 and 10b and its spin test of
-lines moved each turn among them, threaded), 0 failures; the ares lane, 391 checks. The test ("ge time, the PSP's, with
-the GE on its thread: the CPU's stretches beside the GE": a list textured from RAM given a sprite at a time, the program
-writing beside it before each stall update, a quiet call between two writes ending a stretch that waits on the run
-before it and is folded only after more lines have moved, some writes outlasting the GE's sprite) gives the same program
-times, GE times, busy window, counts seen, busy sums and memory On as Off, and with the caches off the list is done
-sooner. It fails with each part taken out: the stretch's counts taken at the fold, its instructions dropped, a run's
-counts at its end not kept, a run's start not folding the stretches waiting, the folds not keeping the clocks by kind,
-stretches never waiting (each: the program's own times differ).
+**Exact on part 113** (`a335937a9`'s runner, master `ba1a19896` with #279 merged in, and before it `0ab56c774`'s and
+`bee76daa1`'s, each the same: the M1, MoltenVK; the thread On with `PHOBOS_GE_CHECK=1` against Off, the same runner, the
+PSP's timing, #279's term live in every run, the runner's line of the caches' counts the same On and Off): the gate's
+scenes in Vulkan fast and Software, settled, 600 frames (14 of 14); part 109's section 9 sets (240 of 240, as above);
+"Fast" unchanged, On against Off (3 of 3); part 109's slow three from their start, the clock fixed, every frame and then
+RAM and the state, either timing (6 of 6); Off against master's own runner (`ba1a19896`; before, #279's `69ea2650d` and
+`0c4baeb4f`), the gate's scenes in both renderers (12 of 12). The suite Off, 633 groups, and the thread On lane, 53
+(#279's tests, its measured rounds 10 and 10b and its spin test of lines moved each turn among them, threaded), 0
+failures; the ares lane, 391 checks. The test ("ge time, the PSP's, with the GE on its thread: the CPU's stretches
+beside the GE": a list textured from RAM given a sprite at a time, the program writing beside it before each stall
+update, a quiet call between two writes ending a stretch that waits on the run before it and is folded only after more
+lines have moved, some writes outlasting the GE's sprite) gives the same program times, GE times, busy window, counts
+seen, busy sums and memory On as Off, and with the caches off the list is done sooner. It fails with each part taken
+out: the stretch's counts taken at the fold, its instructions dropped, a run's counts at its end not kept, a run's start
+not folding the stretches waiting, the folds not keeping the clocks by kind, stretches never waiting (each: the
+program's own times differ).
 
-**Speed on part 113** (the M1, Vulkan fast, late frames, 600 frames from each scene's state, Off and On in turn,
-medians, `bee76daa1`'s core (#279 before its review's fixes) with the counters, load 4 to 9 at each run's start; Army of
-Two and Chains of Olympus five rounds from a rerun at load 5, Army of Two's first three spreading from 107 to 170 fps
-On):
+**Speed on part 113** (the M1, Vulkan fast, late frames, 600 frames from each scene's state, Off and On in turn, five
+rounds, medians, `a335937a9`'s core with the counters, load 5 to 8 at each run's start; `bee76daa1`'s, #279 before its
+review's fixes, gave the same within 0.05x):
 
 | Scene | Off fps | On fps | On/Off | E's instructions a frame, Off → On | On/Off before #279 (above) |
 |---|---|---|---|---|---|
-| Ghost of Sparta's menu | 212.7 | 265.6 | 1.25x | 60.4M → 23.5M | 1.15x |
-| Chains of Olympus' difficulty menu | 314.9 | 300.9 | 0.96x | 35.5M → 17.1M | 0.99x |
-| Super Monkey Ball's story | 196.1 | 224.2 | 1.14x | 66.7M → 33.9M | 1.08x |
-| Army of Two's play | 189.0 | 226.8 | 1.20x | 48.8M → 14.6M | 1.10x |
-| Killzone's play | 210.9 | 221.0 | 1.05x | 46.7M → 20.7M | 1.01x |
-| Disaster Report 3's play | 253.3 | 361.5 | 1.43x | 48.5M → 28.5M | 1.38x |
-| Hot Wheels' race | 259.3 | 318.0 | 1.23x | 48.2M → 36.5M | 1.09x |
+| Ghost of Sparta's menu | 209.2 | 261.4 | 1.25x | 60.4M → 23.5M | 1.15x |
+| Chains of Olympus' difficulty menu | 269.9 | 264.0 | 0.98x | 35.5M → 17.0M | 0.99x |
+| Super Monkey Ball's story | 188.8 | 218.8 | 1.16x | 66.7M → 33.9M | 1.08x |
+| Army of Two's play | 184.6 | 227.1 | 1.23x | 48.8M → 14.6M | 1.10x |
+| Killzone's play | 197.1 | 198.1 | 1.00x | 46.7M → 20.7M | 1.01x |
+| Disaster Report 3's play | 245.6 | 344.4 | 1.40x | 48.5M → 28.5M | 1.38x |
+| Hot Wheels' race | 247.3 | 300.4 | 1.21x | 48.3M → 36.5M | 1.09x |
 
-#279's caches count on E either way (part 113's host cost: E's instructions Off here up to 15% over the table above)
-and its term moves the GE's times, so these frames aren't the table above's work; On/Off is what compares. The runs'
-starts that fold first while stretches wait (a scratch count): Super Monkey Ball 0.9 a frame, each of them waiting for
-G; Army of Two 0.5, none waiting; the other five none. E's waits for G in all: 0.2 to 2.8 a frame. Again on
-`0ab56c774` (#279's review fixes in): E's instructions a frame within 0.2M of these, and the waits the same (the
-threaded spin skip's fold, folding first, adds none in these scenes); the frame rates as noisy as the Mac was then
-(five rounds, load 5 to 11), On/Off 0.98x to 1.36x, Ghost of Sparta's and Killzone's runs spreading from 111 to 258
-fps (a rerun of the two at load 6: 1.22x and 1.25x).
+#279's caches count on E either way (part 113's host cost: E's instructions Off here up to 15% over the table above) and
+its term moves the GE's times, so these frames aren't the table above's work; On/Off is what compares (Army of Two's
+runs spread from 96 to 234 fps, Killzone's On from 162 to 210, the others within 8%). The runs' starts that fold first
+while stretches wait (a scratch count): Super Monkey Ball 0.9 a frame, each of them waiting for G; Army of Two 0.5, none
+waiting; the other five none. E's waits for G in all: 0.2 to 2.8 a frame, the same on each head (the threaded spin
+skip's fold adds none in these scenes).
 
 **Not yet**: Auto with its handover both ways (design step 4, R17), a stacked PR; the app's option offered once On beats
 Off on the RP6; Hot Wheels' remaining store cost (the recompiler's check, four times a store, and the model's write);
