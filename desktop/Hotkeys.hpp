@@ -52,6 +52,7 @@ struct Hotkey {
   static constexpr const char* fastForwardHold = "ff_hold";
   static constexpr const char* fastForwardToggle = "ff_toggle";
   static constexpr const char* frameAdvance = "frame_advance";
+  static constexpr const char* slowMotion = "slow_motion";
   static constexpr const char* mute = "mute";
   static constexpr const char* reset = "reset";
   static constexpr const char* reload = "reload";
@@ -72,7 +73,8 @@ auto hotkeyActions() -> const std::vector<HotkeyAction>&;
 auto hotkeyLabel(const std::string& action) -> std::string;
 // A save or load of one slot by its number (1 to 9), or 0 for another action.
 auto directSlot(const std::string& action) -> int;
-// The actions that last while their combo is held (fast-forward hold, frame advance), rather than running once.
+// The actions that last while their combo is held (fast-forward hold, slow motion, frame advance), rather than running
+// once.
 auto isHotkeyHold(const std::string& action) -> bool;
 
 // [bindings] with [slot]'s combo replaced by [combo] (an empty one clears it); the empty slots after the last bound one

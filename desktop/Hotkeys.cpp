@@ -103,6 +103,7 @@ auto hotkeyActions() -> const std::vector<HotkeyAction>& {
       {Hotkey::fullscreen, "Fullscreen"},
       {Hotkey::fastForwardHold, "Fast forward (hold)"},
       {Hotkey::fastForwardToggle, "Fast forward (toggle)"},
+      {Hotkey::slowMotion, "Slow motion (hold)"},
       {Hotkey::frameAdvance, "Frame advance"},
       {Hotkey::mute, "Mute"},
       {Hotkey::reset, "Reset"},
@@ -141,7 +142,7 @@ auto directSlot(const std::string& action) -> int {
 }
 
 auto isHotkeyHold(const std::string& action) -> bool {
-  return action == Hotkey::fastForwardHold || action == Hotkey::frameAdvance;
+  return action == Hotkey::fastForwardHold || action == Hotkey::slowMotion || action == Hotkey::frameAdvance;
 }
 
 auto withHotkeyBinding(HotkeyBindings bindings, int slot, const HotkeyCombo& combo) -> HotkeyBindings {
@@ -192,10 +193,10 @@ auto parseHotkeyBindings(const std::string& value) -> HotkeyBindings {
 }
 
 // Guide (Home) leads every controller hotkey, so Select, Start and every other button stay the game's: tapped alone,
-// Guide opens the pause menu; held with one other button, it runs that button's action. The keyboard's keys are the
-// desktop's long-standing ones: F12 and Escape for the menu, F5 to save, F9 to load, F8 for a screenshot, F11 for
-// fullscreen, Tab to hold fast forward. Reset, quitting, the menu out of fullscreen, the next disc and the direct slots
-// are unbound: the menu has them, and a player can bind them on purpose.
+// Guide opens the pause menu; held with one other button, it runs that button's action (Quit's asks first). The
+// keyboard's keys are the desktop's long-standing ones: F12 and Escape for the menu, F5 to save, F9 to load, F8 for a
+// screenshot, F11 for fullscreen, Tab to hold fast forward. Reset, the menu out of fullscreen, the next disc and the
+// direct slots are unbound: the menu has them, and a player can bind them on purpose.
 auto defaultHotkeys() -> const HotkeyMap& {
   static const HotkeyMap defaults = [] {
     auto guide = buttonToken(SDL_GAMEPAD_BUTTON_GUIDE);
@@ -209,13 +210,15 @@ auto defaultHotkeys() -> const HotkeyMap& {
       {Hotkey::fullscreen, {key(SDL_SCANCODE_F11)}},
       {Hotkey::fastForwardHold, {key(SDL_SCANCODE_TAB)}},
       {Hotkey::fastForwardToggle, {{guide, axisToken(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, true)}}},
+      {Hotkey::slowMotion, {{guide, axisToken(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, true)}}},
       {Hotkey::nextSlot, {with(SDL_GAMEPAD_BUTTON_DPAD_RIGHT)}},
       {Hotkey::previousSlot, {with(SDL_GAMEPAD_BUTTON_DPAD_LEFT)}},
-      {Hotkey::frameAdvance, {with(SDL_GAMEPAD_BUTTON_LEFT_STICK)}},
+      {Hotkey::frameAdvance, {with(SDL_GAMEPAD_BUTTON_START)}},
       {Hotkey::n64Pak, {with(SDL_GAMEPAD_BUTTON_DPAD_DOWN)}},
       {Hotkey::ps1Analog, {with(SDL_GAMEPAD_BUTTON_DPAD_UP)}},
       {Hotkey::mute, {with(SDL_GAMEPAD_BUTTON_SOUTH)}},
       {Hotkey::reload, {with(SDL_GAMEPAD_BUTTON_WEST)}},
+      {Hotkey::quit, {with(SDL_GAMEPAD_BUTTON_EAST)}},
     };
   }();
   return defaults;

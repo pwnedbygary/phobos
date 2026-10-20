@@ -35,6 +35,126 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Slow motion, held, at half speed on Android and the desktop, its sound slowed with the picture and measured clean on the RP6 and the desktop first; the defaults it moved, and the desktop's Quit asking first — 2026-10-20
+
+Branch `improved-hotkeys`, on the per-game desktop hotkeys commit `f54ae457f` (the entry below). The sixth pull request
+of the hotkey plan, for ares issue 424: "Measure 0.5x pacing and audio on the RP6 and on desktop first. Ship the hold
+action only if both are clean; otherwise report the measurements." Both were clean (Measurements), so the hold is in.
+Changed: the runner (`PhobosRunner.cpp` and `.hpp`, shared by both apps) and its JNI call; on Android `PhobosCore.kt`,
+`input/Hotkeys.kt`, `input/GameKeys.kt`, `ui/EmulatorScreen.kt`, `ui/ControllerPages.kt` and three tests; on the
+desktop `desktop/Hotkeys.cpp` and `.hpp`, `desktop/main.cpp` and `tests/desktop/hotkeys.cpp`. Measured on the RP6 and
+on a virtual display; **not** held by hand on a pad (see Limits).
+- **Slow Motion (hold)**: while one of its bindings is held, the game runs at half speed; letting go ends it, as do a
+  pause, the menu, the game ending and, on the desktop, the window losing the keyboard. Fast forward wins over it while
+  both are on; held, it wins over the load boost (a Neo Geo CD's disc, a ZX Spectrum's or MSX's tape). The speed is
+  the plan's 0.5, fixed.
+- **The runner**: `setSlowMotion(speed)` spaces the frames' deadlines 1/speed times as far apart and divides each audio
+  stream's resampler trim by the speed, so each emulated sample makes 1/speed output samples: the sound keeps coming,
+  slowed with the picture, an octave lower at half speed (the owner's choice over silence). It's off again (1) as a
+  game unloads.
+- **Measurements**, made before the hold was kept (scripts and logs outside the repository, with the review's
+  evidence):
+  - *Desktop*: Xvfb, SDL's disk audio driver recording the output (960-frame buffers: with 1024, its whole-millisecond
+    waits run the audio 1.6% fast, underrunning even at normal speed), a test ROM playing a constant 512 Hz tone, the
+    hold on for 10 s. As things stood (fast forward capped at 0.5, which halves the pace too): 29.8 FPS, but 46% of the
+    held sound silent, in 295 gaps of about 22 ms (33 a second), with 27 to 37 underruns a second; the same with the
+    trim divided: no gap. This change, as drafted: 29.9 FPS, frames 33.5 to 37.1 ms apart at the longest, no underrun
+    and no gap, the tone at about 256 Hz while held and 511 Hz after; and as built here, its defaults moved: 29.9 FPS,
+    frames 33.5 to 33.9 ms apart at the longest, no underrun, no gap, 256 Hz held and 511 Hz after (the same again on
+    the final tree, after the first review).
+  - *RP6* (Android 13): the legacy flavour's debug build, given its own application ID by a Gradle init script outside
+    the repository, installed beside the owner's Phobos (its settings and saves untouched) and removed afterwards; a
+    silent Game Boy ROM; Mode + L2 held for 10 s with `adb shell input gamepad keycombination`. Two runs: 29.9 FPS held
+    (one second across the switch 33.3), frames 34.2 to 34.5 ms apart at the longest, no underrun, the trim +100.1 to
+    +100.8%; 59.7 to 59.8 FPS before and after, no underrun. The underrun count is AAudio's
+    (`AAudioStream_getXRunCount`): Phobos writes with blocking `AAudioStream_write`, so each one would be AAudio
+    playing silence because the sound came late. The device's output wasn't recorded. The APK was built from this
+    change's Android sources (SHA-256 `c361e125...`, an incremental build).
+- **Defaults** (the owner's choices): Slow Motion is Mode + L2 on Android and Guide + L2 (the left trigger) on the
+  desktop; Android's on-screen keyboard toggle moves from Mode + L2 to Mode + L3; Frame Advance moves from Mode + L3
+  (Guide + L3) to Mode + Start (Guide + Start), "to match"; Quit, unbound until now, is Mode + B (Guide + B);
+  Screenshot stays Mode + R3. Start alone stays the game's: the desktop test's rule that no default holds Select or
+  Start became Select in none, Start only behind Guide.
+- **The desktop's Quit asks first** (the owner: "Guide+B quits on desktop too, after asking first as Android does"):
+  any binding of Quit stops the game under "Are you sure you want to stop emulating <title>?". Enter or the pad's A
+  quits; Escape, Backspace or B go back to the game; Start doesn't answer, since a player may press it meaning to go
+  on. While it's up the hotkeys run nothing and take no keys, and a key pressed then, the answer's included, taps
+  nothing when it's let go of after. Quit runs first of what a press completes or a release taps, so once it has asked
+  nothing else of that event runs: an action bound to the same keys (a collision the page shows), Load state say,
+  doesn't run with it, whichever name sorts first. The key whose hotkey asked doesn't answer it; a button held as it
+  opens or as it's answered stays out until it's let go of (a Quit binding with Start in it doesn't start the game again
+  from the library); and the window losing and getting back the keyboard leaves the game stopped. The pause menu's Quit
+  item still quits at once.
+- **The RP6, seen in passing** (one device, a few presses): its Home button sends Linux key 102 (`KEY_HOME`), which
+  the key layout these controls load (`/system/usr/keylayout/Generic.kl`, as `dumpsys input` shows: a USB device,
+  vendor `0x2022`, product `0x3002`) makes `MOVE_HOME`, a key the app in front normally gets. With
+  Retroid's "Prevent pressing Home accidentally" on (`prevent_press_home_accidentally=1`), a single press sent no input
+  event at all (getevent on every input device) and reached nothing in Phobos. With it off (the owner turned it off and
+  pressed Home twice, then Home with L2), each press came from the controls, Phobos's input log (switched on) showed no
+  key for it, L2 coming as its own button, and `system_server` started the launcher as Home was let go of: Retroid's
+  software takes the key before any app (where, untested). On this RP6, then, no button gives Mode, which leads every
+  controller default; and the Hotkeys page's Mode-missing hint wouldn't show (derived, not seen: it asks Android
+  whether a pad has the key, and these controls declare `BTN_MODE`, which their key layout makes Mode). Its Back button
+  sends `KEY_BACK`, which didn't reach Phobos's key handling either. Hypothesis: with predictive back
+  (`enableOnBackInvokedCallback`), Android hands Back to the back callback instead, so a controller's Back can't be part
+  of a hotkey on Android 13 and later.
+- **Tests**: on Android, `HotkeyComboTest`'s defaults test checks the four bindings above and that Slow Motion is a
+  hold; `HotkeyRoutingTest` holds Slow Motion with Mode + L2 (L2 taken, the hold ending as L2 is let go of, Mode's
+  release no tap, and the hold ended by a pause forgetting the keys), and its two frame-advance tests that used the
+  default press Mode + Start now; `HeldCrossReplayTest`'s screen has the new call. On the desktop: Slow motion a hold
+  with its label (37 actions), its own longer binding leaving its one-key binding no tap, and the defaults above.
+- **Checks**: Android (JDK 17.0.20.1, Gradle 9.6.0 wrapper, NDK 28.2.13676358): both flavours' unit tests, 432 each, 0
+  failures, 53 result files each, run again after the first review (a test's message changed); and, before it,
+  `:app:assembleLegacyDebug` (32,576,391 bytes, SHA-256 `e39dac9d...`, an incremental build; no file it builds has
+  changed since). Two Android mutants, each edited into the source and taken out again (hashes checked), fail the input
+  package's tests: Slow Motion not a hold fails the defaults test and the hold's routing test, and a pause leaving it on
+  fails the hold's routing test alone. The desktop (GCC 16.2.1, CMake 4.4.4, Ninja, SDL 3.2.30): the Linux build;
+  `ctest` 1/1 and `phobos-desktop-tests` 209 checks, 0 failed, built with `-Werror` and the sanitizers; `main.cpp`
+  compiled with the build's own command and `-Wall -Wextra`, to a scratch folder: 781 warnings, none in `desktop/` or
+  `tests/`, the build's object and program unchanged by it, no compile pending. On the virtual display, 138 of 138
+  checks pass: the entry below's 112, with the Hotkeys page's rows from Frame advance down one lower (Slow motion's row
+  is above them) and the quit section answering the question (three checks more), and the question's own 15, in a
+  session of their own: Backspace, bound to Quit and to Save state both, asks, the game stopping, doesn't answer the
+  question it asked and saves nothing; Z (the pad's B, there leading Reset's binding and bound alone to Save state, so a
+  tap and a key the game never gets) goes back to the game and saves nothing as it's let go of; F6 + X asks with X (the
+  pad's A) still held as F6 is let go of, and X's release doesn't answer; Backspace goes back to the game; another
+  window taking the keyboard and giving it back leaves the game stopped; Escape (a Pause menu tap there, Quit having
+  Escape + Q) goes back to the game and opens no menu as it's let go of; X pressed again quits, closing Phobos, which
+  started with the game. And Quit first, 8 in another session: Quit and Load state share Backspace, which completes as
+  it's pressed, and Escape, a tap of both (it leads Reset's Escape + A); with a state saved first, Backspace asks and
+  loads nothing, so does tapping Escape, and Escape pressed to answer no doesn't ask again as it's let go of. The
+  slow-motion check, 8 of 8: F6 bound to Slow motion asks the runner for half speed and gets 27 to 33 FPS, letting go
+  gives over 57; with fast forward toggled on, F6 held leaves it over 90; another window taking the keyboard ends the
+  hold. The build before slow motion fails its four slow-motion checks. Ten `main.cpp` mutants of the question, built
+  outside the repository with the build's own commands, each fail their checks, where the unchanged file built the same
+  way passes them all: the key that asked answering it; the hotkeys taking keys under it (Z then can't answer); a focus
+  switch starting the game again under it; Quit quitting at once; an answer holding no button back (Return then starts
+  the game again from the library); a key pressed under it tapping once it's gone (Z saving, Escape opening the menu);
+  the asking press's other completions running after it (Save state saving, Load state loading), and its other taps
+  (Load state loading); Quit not run first of a press's completions (Load state loading before the question), or of a
+  release's taps. After each review, every desktop check here ran again on the final tree.
+- **Limits**: no pad held the hold by hand: the RP6's came from injected key events and the desktop's from a keyboard
+  binding, so Guide + L2 on a real trigger is unchecked. The RP6's sound wasn't recorded, only AAudio's count, and it
+  ran the legacy flavour, not the modern one its CPU could run. The speed is fixed at half. On the desktop, the pause
+  menu's Quit item doesn't ask (the owner's question was about the hotkey). The scripts, logs and the measurements'
+  work folders are kept outside the repository, with the review's evidence. Mode on the RP6: above.
+- **Review**: the first independent review (diff `b41758c8...`) found NEEDS CHANGES, one Minor: on the desktop, a key
+  that answered no to the Quit question ran its own tap binding as it was let go of, the question gone (Escape opening
+  the menu where Escape + Q quits, Z saving where Z alone saves and Z + A resets). Fixed as under The desktop's Quit
+  asks first, with checks. Its suggestions are taken: those two cases checked; nothing else of the asking press run; the
+  routing test's message (L2, not B); the load boost named in full. The second (diff `53837441...`) found NEEDS CHANGES,
+  two Minors: these notes said nothing else of the asking press ran, where an action bound to the same keys whose name
+  sorts before Quit's (Load state) still ran first, so Quit runs first now (The desktop's Quit asks first), with checks;
+  and they took the RP6 controls' key layout for granted, since read from the device (The RP6, seen in passing). Its
+  suggestions are taken: each of the two early returns has a mutant of its own (the second's had survived), a Quit tap
+  shared with another action is checked, and Pause sharing Quit's key can no longer open the menu instead (derived: Load
+  state's path); a test line of 127 characters is left, as that file has sixteen more. The whole record is in the commit
+  that carries this entry.
+- **Next**: the owner's choices for the RP6, as a change of their own: the Hotkeys page warning until Phobos has seen
+  a Mode press, and Back tried as the hotkeys' first key, the app no longer opting into predictive back. Then the
+  plan's closing docs (a hotkey reference and the issue matrix); the RP6 pass for the Android changes; the pad, window
+  manager, Wayland, Steam, Windows and macOS checks.
+
 ## Desktop hotkeys per console and per game: a level row on the Hotkeys page, each level storing only the actions it changes, whole, the rest inherited — 2026-10-20
 
 Branch `improved-hotkeys`, on the desktop-window commit `68f2a2799` (the entry below). The fifth pull request of the

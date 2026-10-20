@@ -34,21 +34,23 @@ auto check(bool passed, const char* condition, int line) -> void {
 // SDL 3.2.30's values (SDL_scancode.h, SDL_gamepad.h, SDL_mouse.h), written out rather than taken from the code tested.
 constexpr int scancodeA = 4, scancodeEscape = 41, scancodeTab = 43, scancodeF5 = 62, scancodeF8 = 65, scancodeF9 = 66,
               scancodeF11 = 68, scancodeF12 = 69, scancodeLeftShift = 225;
-constexpr int buttonSouth = 0, buttonWest = 2, buttonBack = 4, buttonGuide = 5, buttonStart = 6, buttonLeftStick = 7,
+constexpr int buttonSouth = 0, buttonEast = 1, buttonWest = 2, buttonBack = 4, buttonGuide = 5, buttonStart = 6,
               buttonRightStick = 8, buttonLeftShoulder = 9, buttonRightShoulder = 10, buttonDpadUp = 11,
               buttonDpadDown = 12, buttonDpadLeft = 13, buttonDpadRight = 14;
-constexpr int axisLeftX = 0, axisRightTrigger = 5;
+constexpr int axisLeftX = 0, axisLeftTrigger = 4, axisRightTrigger = 5;
 constexpr int mouseLeft = 1, mouseX1 = 4;
 
 const auto escape = keyToken(scancodeEscape), tab = keyToken(scancodeTab), f5 = keyToken(scancodeF5),
            f8 = keyToken(scancodeF8), f9 = keyToken(scancodeF9), f11 = keyToken(scancodeF11),
            f12 = keyToken(scancodeF12), leftShift = keyToken(scancodeLeftShift), keyA = keyToken(scancodeA);
-const auto a = buttonToken(buttonSouth), x = buttonToken(buttonWest), select = buttonToken(buttonBack),
-           guide = buttonToken(buttonGuide), start = buttonToken(buttonStart), l3 = buttonToken(buttonLeftStick),
-           r3 = buttonToken(buttonRightStick), lb = buttonToken(buttonLeftShoulder),
+const auto a = buttonToken(buttonSouth), b = buttonToken(buttonEast), x = buttonToken(buttonWest),
+           select = buttonToken(buttonBack),
+           guide = buttonToken(buttonGuide), start = buttonToken(buttonStart), r3 = buttonToken(buttonRightStick),
+           lb = buttonToken(buttonLeftShoulder),
            rb = buttonToken(buttonRightShoulder), up = buttonToken(buttonDpadUp), down = buttonToken(buttonDpadDown),
            left = buttonToken(buttonDpadLeft), right = buttonToken(buttonDpadRight);
-const auto stickLeft = axisToken(axisLeftX, false), rt = axisToken(axisRightTrigger, true);
+const auto stickLeft = axisToken(axisLeftX, false), lt = axisToken(axisLeftTrigger, true),
+           rt = axisToken(axisRightTrigger, true);
 const auto click = mouseToken(mouseLeft), mouse4 = mouseToken(mouseX1);
 
 using Names = std::vector<std::string>;
@@ -209,6 +211,7 @@ auto anActionMatchedByTwoBindingsOrATapBoundTwiceRunsOnce() -> void {
 
 auto aHoldsOwnLongerBindingLeavesItsKeyNoTapButAnotherActionsMakesItOne() -> void {
   CHECK(!isTapCombo({{Hotkey::fastForwardHold, {{tab}, {tab, keyA}}}}, {tab}));
+  CHECK(!isTapCombo({{Hotkey::slowMotion, {{f5}, {f5, keyA}}}}, {f5}));
   CHECK(isTapCombo({{Hotkey::fastForwardHold, {{tab}}}, {Hotkey::save, {{tab, keyA}}}}, {tab}));
   CHECK(isTapCombo({{Hotkey::save, {{f5}, {f5, keyA}}}}, {f5}));
   CHECK(!isTapCombo({{Hotkey::save, {{guide, rb}}}}, {guide, rb}));
@@ -327,9 +330,11 @@ auto existingConflictsNameEachPairOnce() -> void {
 auto theDefaultsLeaveSelectAndStartToTheGameKeepTheKeyboardsKeysAndDontCollide() -> void {
   auto& defaults = defaultHotkeys();
   CHECK(existingHotkeyConflicts(defaults).empty());
+  // Select is in none, and Start only behind Guide: alone, both stay the game's.
   for (auto& [action, bindings] : defaults) {
     for (auto& combo : bindings) {
-      for (auto token : combo) CHECK(token != select && token != start);
+      for (auto token : combo) CHECK(token != select);
+      if (std::find(combo.begin(), combo.end(), start) != combo.end()) CHECK(combo.front() == guide);
     }
   }
   auto bindings = [&](const char* action) { return of(defaults, action); };
@@ -340,14 +345,16 @@ auto theDefaultsLeaveSelectAndStartToTheGameKeepTheKeyboardsKeysAndDontCollide()
   CHECK(bindings(Hotkey::fullscreen) == (HotkeyBindings{{f11}}));
   CHECK(bindings(Hotkey::fastForwardHold) == (HotkeyBindings{{tab}}));
   CHECK(bindings(Hotkey::fastForwardToggle) == (HotkeyBindings{{guide, rt}}));
+  CHECK(bindings(Hotkey::slowMotion) == (HotkeyBindings{{guide, lt}}));
   CHECK(bindings(Hotkey::nextSlot) == (HotkeyBindings{{guide, right}}));
   CHECK(bindings(Hotkey::previousSlot) == (HotkeyBindings{{guide, left}}));
-  CHECK(bindings(Hotkey::frameAdvance) == (HotkeyBindings{{guide, l3}}));
+  CHECK(bindings(Hotkey::frameAdvance) == (HotkeyBindings{{guide, start}}));
   CHECK(bindings(Hotkey::n64Pak) == (HotkeyBindings{{guide, down}}));
   CHECK(bindings(Hotkey::ps1Analog) == (HotkeyBindings{{guide, up}}));
   CHECK(bindings(Hotkey::mute) == (HotkeyBindings{{guide, a}}));
   CHECK(bindings(Hotkey::reload) == (HotkeyBindings{{guide, x}}));
-  for (auto action : {Hotkey::reset, Hotkey::quit, Hotkey::pauseWindow, Hotkey::disc}) CHECK(bindings(action).empty());
+  CHECK(bindings(Hotkey::quit) == (HotkeyBindings{{guide, b}}));
+  for (auto action : {Hotkey::reset, Hotkey::pauseWindow, Hotkey::disc}) CHECK(bindings(action).empty());
 
   // Guide tapped opens the menu; Guide held with RB saves.
   HotkeyTracker tracker;
@@ -402,7 +409,8 @@ auto theDirectSlotsAndTheHoldsAreKnownByName() -> void {
   CHECK(directSlot(Hotkey::save) == 0);
   CHECK(hotkeyLabel("load_slot_9") == "Load state 9");
   CHECK(isHotkeyHold(Hotkey::fastForwardHold) && isHotkeyHold(Hotkey::frameAdvance) && !isHotkeyHold(Hotkey::save));
-  CHECK(hotkeyActions().size() == 36);
+  CHECK(isHotkeyHold("slow_motion") && hotkeyLabel("slow_motion") == "Slow motion (hold)");
+  CHECK(hotkeyActions().size() == 37);
 }
 
 auto eachLevelKeepsItsBindingsUnderItsOwnKeyWhateverTheTitle() -> void {

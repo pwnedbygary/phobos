@@ -31,10 +31,13 @@ class GameKeys(private val screen: Screen) : KeyHandler {
         fun stopFastForward()
         /** The Frame Advance combo went down (true) or was let go (false): what repeats frames after its press's. */
         fun frameAdvanceHeld(held: Boolean)
+        /** The Slow Motion combo went down (true) or was let go (false). */
+        fun slowMotionHeld(held: Boolean)
     }
 
     private val tracker = HotkeyTracker()
     private var fastForwardHeld = false
+    private var slowMotionHeld = false
     private var frameAdvanceHeld = false
 
     /**
@@ -117,6 +120,11 @@ class GameKeys(private val screen: Screen) : KeyHandler {
             fastForwardHeld = fastForward
             if (fastForward) screen.hotkey(HotkeyAction.FAST_FORWARD_HOLD) else if (!screen.fastForwardToggled()) screen.stopFastForward()
         }
+        val slowMotion = holds(HotkeyAction.SLOW_MOTION, slowMotionHeld, hotkeys, completed)
+        if (slowMotion != slowMotionHeld) {
+            slowMotionHeld = slowMotion
+            screen.slowMotionHeld(slowMotion)
+        }
         val frameAdvance = holds(HotkeyAction.FRAME_ADVANCE, frameAdvanceHeld, hotkeys, completed)
         if (frameAdvance != frameAdvanceHeld) {
             frameAdvanceHeld = frameAdvance
@@ -133,6 +141,10 @@ class GameKeys(private val screen: Screen) : KeyHandler {
         if (fastForwardHeld) {
             fastForwardHeld = false
             if (!screen.fastForwardToggled()) screen.stopFastForward()
+        }
+        if (slowMotionHeld) {
+            slowMotionHeld = false
+            screen.slowMotionHeld(false)
         }
         if (frameAdvanceHeld) {
             frameAdvanceHeld = false

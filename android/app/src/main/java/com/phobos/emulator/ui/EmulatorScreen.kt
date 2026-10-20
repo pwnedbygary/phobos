@@ -107,6 +107,8 @@ private const val MENU_REVEAL_MS = 3000L
 /** Frame advance held: the wait before it repeats, then the time between the frames it runs. */
 private const val FRAME_STEP_DELAY_MS = 300L
 private const val FRAME_STEP_MS = 100L
+/** Slow motion's speed while its hotkey is held. */
+private const val SLOW_MOTION_SPEED = 0.5f
 
 @Composable
 fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String, onBack: () -> Unit) {
@@ -259,6 +261,9 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             override fun frameAdvanceHeld(held: Boolean) {
                 frameAdvancing = held
             }
+            override fun slowMotionHeld(held: Boolean) {
+                PhobosCore.setSlowMotion(if (held) SLOW_MOTION_SPEED else 1f)
+            }
         })
     }
     DisposableEffect(Unit) {
@@ -351,13 +356,15 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         if (viewModel.emulatorScreenVisible.value) {
             GameInputState.reset()
             PhobosCore.setFastForward(false)
+            PhobosCore.setSlowMotion(1f)
         }
         viewModel.emulatorScreenShown(screen)
         onDispose {
             if (!viewModel.emulatorScreenReplaced(screen)) {
                 GameInputState.reset()
-                // fastForwardToggled starts false when the screen returns, so native must match.
+                // fastForwardToggled starts false when the screen returns, and no hold is held, so native must match.
                 PhobosCore.setFastForward(false)
+                PhobosCore.setSlowMotion(1f)
             }
             viewModel.emulatorScreenGone(screen)
             // The game stays loaded (paused) when leaving the screen — the swap-screen hotkey

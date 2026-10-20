@@ -380,9 +380,14 @@ class HotkeyComboTest {
         assertEquals(listOf(listOf(MODE, L1), listOf(F9)), DEFAULT_HOTKEYS[HotkeyAction.LOAD_STATE])
         assertEquals(listOf(listOf(MODE, R3), listOf(F8)), DEFAULT_HOTKEYS[HotkeyAction.SCREENSHOT])
         assertEquals("Tab holds fast forward", listOf(listOf(TAB)), DEFAULT_HOTKEYS[HotkeyAction.FAST_FORWARD_HOLD])
+        assertEquals("Mode + L2 holds slow motion", listOf(listOf(MODE, L2)), DEFAULT_HOTKEYS["slow_motion"])
+        assertTrue("slow motion is a hold", "slow_motion" in HotkeyAction.HOLDS)
+        assertEquals("Mode + L3 shows the keyboard", listOf(listOf(MODE, L3)), DEFAULT_HOTKEYS[HotkeyAction.KEYBOARD])
+        assertEquals("Mode + Start advances a frame", listOf(listOf(MODE, START)), DEFAULT_HOTKEYS[HotkeyAction.FRAME_ADVANCE])
+        assertEquals("Mode + B asks to quit", listOf(listOf(MODE, B)), DEFAULT_HOTKEYS[HotkeyAction.QUIT])
         assertTrue(existingHotkeyConflicts(DEFAULT_HOTKEYS).isEmpty())
         assertTrue(DEFAULT_HOTKEYS.values.all { it.size <= HotkeyBindings.LIMIT })
-        val unbound = listOf(HotkeyAction.RESET, HotkeyAction.QUIT) + HotkeyAction.DIRECT_SLOTS
+        val unbound = listOf(HotkeyAction.RESET) + HotkeyAction.DIRECT_SLOTS
         for (action in unbound) assertNull(action, DEFAULT_HOTKEYS[action])
     }
 
@@ -413,6 +418,7 @@ class HotkeyComboTest {
     companion object {
         // KeyEvent and MotionEvent constants (android.view).
         const val A = 96
+        const val B = 97
         const val X = 99
         const val Y = 100
         const val L1 = 102

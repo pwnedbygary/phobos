@@ -44,6 +44,9 @@ class HotkeyRoutingTest {
         override fun frameAdvanceHeld(held: Boolean) {
             events += if (held) "frame advance held" else "frame advance let go"
         }
+        override fun slowMotionHeld(held: Boolean) {
+            events += if (held) "slow motion held" else "slow motion let go"
+        }
     })
 
     /** The window as MainActivity runs it: the game on screen once loaded, or swapped away behind the Library. */
@@ -168,7 +171,7 @@ class HotkeyRoutingTest {
         // The screen used to run a press's frame when it next drew with the hold on, so presses and releases arriving
         // together, as they can while it is running a frame, ran none.
         key(MODE, down = true)
-        repeat(3) { tap(L3) }
+        repeat(3) { tap(START) }
         key(MODE, down = false)
         assertEquals(List(3) { HotkeyAction.FRAME_ADVANCE }, run)
         assertEquals(List(3) { listOf("frame advance held", "frame advance let go") }.flatten(), events)
@@ -258,9 +261,9 @@ class HotkeyRoutingTest {
     fun aHoldDoesntStartWhenLettingGoOfAKeyLeavesItsCombo() {
         key(MODE, down = true)
         key(R1, down = true)
-        key(L3, down = true)
+        key(START, down = true)
         key(R1, down = false)
-        assertEquals("Mode + R1 saved; Mode + L3 was never pressed as such", listOf(HotkeyAction.SAVE_STATE), run)
+        assertEquals("Mode + R1 saved; Mode + Start was never pressed as such", listOf(HotkeyAction.SAVE_STATE), run)
         assertTrue("frame advance didn't start: $events", events.isEmpty())
     }
 
@@ -290,6 +293,24 @@ class HotkeyRoutingTest {
         assertTrue(events.isEmpty())
         key(TAB, down = false)
         assertEquals(listOf("fast forward stopped"), events)
+    }
+
+    @Test
+    fun modeAndL2HoldSlowMotionUntilOneIsLetGoAndAPauseEndsIt() {
+        key(MODE, down = true)
+        assertTrue("L2 completes Mode + L2 and is taken", key(L2, down = true))
+        key(L2, down = true, repeat = 1)
+        assertEquals(listOf("slow motion held"), events)
+        key(L2, down = false)
+        assertEquals(listOf("slow motion held", "slow motion let go"), events)
+        key(MODE, down = false)
+        assertTrue("a hold runs no action, and Mode's release after L2 is no tap", run.isEmpty())
+
+        events.clear()
+        key(MODE, down = true)
+        key(L2, down = true)
+        gameKeys.forgetPressedKeys()
+        assertEquals(listOf("slow motion held", "slow motion let go"), events)
     }
 
     @Test
@@ -368,8 +389,10 @@ class HotkeyRoutingTest {
         const val BUTTON_X = 99
         const val BUTTON_Y = 100
         const val R1 = 103
+        const val L2 = 104
         const val R2 = 105
         const val L3 = 106
+        const val START = 108
         const val SELECT = 109
         const val MODE = 110
         const val TAB = 61

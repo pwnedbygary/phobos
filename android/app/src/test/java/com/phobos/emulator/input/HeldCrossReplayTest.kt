@@ -44,6 +44,7 @@ class HeldCrossReplayTest {
         }
         override fun stopFastForward() {}
         override fun frameAdvanceHeld(held: Boolean) {}
+        override fun slowMotionHeld(held: Boolean) {}
     }
     private val gameKeys = GameKeys(screen)
 

@@ -18,6 +18,7 @@ object HotkeyAction {
     const val SCREENSHOT = "screenshot"
     const val MUTE = "mute"
     const val FRAME_ADVANCE = "frame_advance"
+    const val SLOW_MOTION = "slow_motion"
     const val N64_PAK = "n64_pak"
     const val PS1_ANALOG_TOGGLE = "analog_toggle"
     const val KEYBOARD = "keyboard"
@@ -30,7 +31,7 @@ object HotkeyAction {
     val DIRECT_SLOTS: List<String> = (1..9).flatMap { listOf("$SAVE_SLOT_PREFIX$it", "$LOAD_SLOT_PREFIX$it") }
 
     /** Actions that last while their combo is held, rather than running once. */
-    val HOLDS: Set<String> = setOf(FAST_FORWARD_HOLD, FRAME_ADVANCE)
+    val HOLDS: Set<String> = setOf(FAST_FORWARD_HOLD, SLOW_MOTION, FRAME_ADVANCE)
 }
 
 /**
@@ -58,9 +59,9 @@ object HotkeyBindings {
 /**
  * The hotkeys a player who never bound one has. Mode (the Home or Guide button) leads every controller one, so Select
  * and every other button stay the game's: tapped alone, Mode pauses; held with one other button, it runs that button's
- * action. A keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a screenshot, F12 pauses and Tab holds
- * fast forward. The actions left out (Reset, Quit, the direct slots, fast-forward hold on a controller) are unbound: the
- * pause menu has the dangerous ones, and a player can bind them on purpose.
+ * action (Quit's asks first). A keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a screenshot, F12
+ * pauses and Tab holds fast forward. The actions left out (Reset, the direct slots, fast-forward hold on a controller)
+ * are unbound: the pause menu has Reset, and a player can bind them on purpose.
  */
 val DEFAULT_HOTKEYS: Map<String, List<List<Int>>> = KeyEvent.KEYCODE_BUTTON_MODE.let { mode ->
     mapOf(
@@ -70,14 +71,16 @@ val DEFAULT_HOTKEYS: Map<String, List<List<Int>>> = KeyEvent.KEYCODE_BUTTON_MODE
         HotkeyAction.NEXT_SLOT to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_RIGHT)),
         HotkeyAction.PREVIOUS_SLOT to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_LEFT)),
         HotkeyAction.RELOAD to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_X)),
+        HotkeyAction.QUIT to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_B)),
         HotkeyAction.SCREENSHOT to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBR), listOf(KeyEvent.KEYCODE_F8)),
         HotkeyAction.MUTE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_A)),
         HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(KeyEvent.KEYCODE_TAB)),
         HotkeyAction.FAST_FORWARD_TOGGLE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_R2)),
-        HotkeyAction.FRAME_ADVANCE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBL)),
+        HotkeyAction.SLOW_MOTION to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_L2)),
+        HotkeyAction.FRAME_ADVANCE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_START)),
         HotkeyAction.N64_PAK to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_DOWN)),
         HotkeyAction.PS1_ANALOG_TOGGLE to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_UP)),
-        HotkeyAction.KEYBOARD to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_L2)),
+        HotkeyAction.KEYBOARD to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBL)),
         HotkeyAction.LIBRARY to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_Y)),
     )
 }

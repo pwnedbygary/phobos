@@ -99,6 +99,14 @@ namespace ares {
   std::atomic<bool> emulationRunning{false};
   std::atomic<bool> fastForwardAtomic{false};
   std::atomic<f32>  ffSpeedLimitAtomic{2.0f};
+  // Slow motion's speed, below 1 (1 is off): the frames come further apart, and each audio stream makes 1/speed output
+  // samples of each emulated one, so the sound keeps coming, slowed with the picture.
+  std::atomic<f32>  slowMotionAtomic{1.0f};
+  // The speed slow motion runs at now: 1 while it's off, or while fast forward (which wins over it) is on.
+  static auto slowMotionSpeed() -> f64 {
+    f32 speed = slowMotionAtomic.load(std::memory_order_relaxed);
+    return speed > 0.0f && speed < 1.0f && !fastForwardAtomic.load(std::memory_order_relaxed) ? speed : 1.0;
+  }
   // Per-core refresh rate reported by ares via Screen::refreshRateHint().
   // Most cores are 60 Hz but WonderSwan/NGP run at ~75 Hz and PAL cores at
   // 50 Hz — the old hardcoded 60 FPS cap throttled those cores and caused
@@ -816,14 +824,16 @@ namespace ares {
   // Dynamic rate control. Emulated audio and the DAC run on different clocks that frame pacing
   // can't match exactly, so the ring would slowly fill (then drop samples) or run dry (then
   // underrun). Once per frame, every stream's resampling rate is trimmed by up to ±0.5%, too
-  // little to hear, toward a quarter-full ring, which also leaves a cushion for late frames.
+  // little to hear, toward a quarter-full ring, which also leaves a cushion for late frames. In slow
+  // motion the trim is also divided by its speed: the frames come 1/speed times as far apart, so
+  // each emulated sample makes 1/speed output samples (half speed sounds an octave lower).
   static constexpr f64 audioRateControlRange = 0.005;
   static constexpr f64 audioRingTargetFill = 0.25;
   static auto updateAudioRateControl(AudioThreadState& state) -> void {
     f64 fill = (f64)audioRingFill.load(std::memory_order_relaxed) / (f64)audioRingCapacity;
     state.smoothedFill += (fill - state.smoothedFill) * 0.05;
     f64 error = std::clamp((audioRingTargetFill - state.smoothedFill) / audioRingTargetFill, -1.0, 1.0);
-    f64 trim = 1.0 + audioRateControlRange * error;
+    f64 trim = (1.0 + audioRateControlRange * error) / slowMotionSpeed();
     if (std::abs(trim - state.appliedTrim) < 0.0001 && state.trimmedVersion == state.streamsVersion) return;
     for (auto& stream : state.streams) stream->setResamplerTrim(trim);
     state.appliedTrim = trim;
@@ -1449,8 +1459,9 @@ namespace ares {
         bool spinWait = busyWaitPacing.load(std::memory_order_relaxed) && localRoot
           && localRoot->name() == "Nintendo 64";
 
-        // A load boost paces like fast forward, capped at the chosen speed.
-        bool loadBoost = loadBoostFrames && !fastForwardAtomic;
+        // A load boost paces like fast forward, capped at the chosen speed; slow motion, held, wins over it.
+        f64 slowSpeed = slowMotionSpeed();
+        bool loadBoost = loadBoostFrames && !fastForwardAtomic && slowSpeed == 1.0;
         if (fastForwardAtomic || loadBoost) {
             f64 speed = loadBoost ? (f64)loadBoostSpeed : (f64)ffSpeedLimitAtomic;
             if (speed > 0.0) {
@@ -1477,9 +1488,10 @@ namespace ares {
         // stream fills the ring faster than the DAC drains it → 34fps) and
         // under-throttled light-audio cores (Atari 2600 ran 119fps because
         // the ring was always below target → no wait). The absolute video
-        // deadline is the correct universal pace for every core.
+        // deadline is the correct universal pace for every core. Slow motion
+        // spaces the deadlines 1/speed times as far apart.
         if (!fastForwardAtomic && !loadBoost) {
-          double frameTarget = 1000000.0 / refreshRate;
+          double frameTarget = 1000000.0 / refreshRate / slowSpeed;
           auto period = std::chrono::microseconds((s64)frameTarget);
           frameDeadline += period;
           waitUntil(frameDeadline, spinWait);
@@ -2696,6 +2708,7 @@ namespace ares {
   systemUnloading.store(true);
     isPausedAtomic = true;
     fastForwardAtomic = false;
+    slowMotionAtomic = 1.0f;
     // Keys held on the on-screen keyboard must not carry into the next game.
     clearOnScreenKeys();
     // The next game reports its own geometry with its first frame.
@@ -4012,6 +4025,11 @@ else if (port->type() == "Keyboard") {
   }
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
+  auto setSlowMotion(f32 speed) -> void {
+    slowMotionAtomic = speed;
+    if (speed > 0.0f && speed < 1.0f) LOGI("Slow motion at %.2fx", (f64)speed);
+    else LOGI("Slow motion off");
+  }
   auto setNgcdLoadSpeed(s32 speed) -> void { ngcdLoadSpeed = std::max(1, speed); LOGI("Neo Geo CD loading speed set to %dx", std::max(1, speed)); }
   auto setZxLoadSpeed(s32 speed) -> void { zxLoadSpeed = std::max(1, speed); LOGI("ZX Spectrum tape loading speed set to %dx", std::max(1, speed)); }
   auto setMsxLoadSpeed(s32 speed) -> void { msxLoadSpeed = std::max(1, speed); LOGI("MSX tape loading speed set to %dx", std::max(1, speed)); }
@@ -4829,6 +4847,7 @@ else if (port->type() == "Keyboard") {
         // or it resumes with its stale localRoot.
         isPausedAtomic = true;
         fastForwardAtomic = false;
+        slowMotionAtomic = 1.0f;
         setEmulationRunning(false);
         bool joined = false;
         if (emuThread && emuThreadRunning) {

@@ -52,6 +52,8 @@ enum class HotkeyLevel { AllConsoles, Console, Game };
 // app's pace).
 constexpr Uint64 frameStepDelayMs = 300;
 constexpr Uint64 frameStepMs = 100;
+// Slow motion's speed while its hotkey is held (as on Android).
+constexpr float slowMotionSpeed = 0.5f;
 // A binding being captured is done once no new key has come for captureSettleMs (as on Android), and given up when no
 // key at all has come for captureTimeoutMs, which leaves a controller alone a way out.
 constexpr Uint64 captureSettleMs = 700;
@@ -150,6 +152,8 @@ private:
   auto launch(const Game& entry) -> void;
   auto unloadGame() -> void;
   auto quitGame() -> void;
+  auto askToQuit() -> void;
+  auto answerQuit(bool quitting) -> void;
   auto openMenu() -> void;
   auto closeMenu() -> void;
   auto releaseKeys() -> void;
@@ -229,6 +233,8 @@ private:
   bool fastForward = false;
   bool fastForwardHeld = false;
   bool fastForwardApplied = false;
+  bool slowMotionHeld = false;
+  bool slowMotionApplied = false;
   bool muted = false;
   // Frame advance: the game stopped with its picture showing (startFrameStep), and its hotkey held.
   bool frameStepping = false;
@@ -236,6 +242,8 @@ private:
   Uint64 frameStepNext = 0;
   // The game waiting while another window has the keyboard (Pause when unfocused; update).
   bool focusPaused = false;
+  // The Quit hotkey's question, over the stopped game (askToQuit).
+  bool quitAsked = false;
   // The hotkeys in force (resolveHotkeys) and the keys held, matched against them, with the screen each was pressed on
   // while the window had the keyboard (a tap runs only there).
   HotkeyMap hotkeys;
@@ -301,14 +309,15 @@ auto Shell::run(int argc, char* argv[]) -> int {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       // The hotkeys first, so the keys they take are held back from what follows. A key whose hotkey changed the
-      // screen is the hotkey's alone: the new screen doesn't act on it as well.
+      // screen, or asked whether to quit, is the hotkey's alone: the new screen, or the question, doesn't act on it.
       Screen before = screen;
+      bool askedBefore = quitAsked;
       hotkeyEvent(event);
       input.handle(event);
       switch (event.type) {
       case SDL_EVENT_QUIT: quit = true; break;
       case SDL_EVENT_KEY_DOWN:
-      case SDL_EVENT_KEY_UP: if (screen == before) handleKey(event.key); break;
+      case SDL_EVENT_KEY_UP: if (screen == before && quitAsked == askedBefore) handleKey(event.key); break;
       case SDL_EVENT_DROP_FILE: if (event.drop.data) open(event.drop.data); break;
       case SDL_EVENT_WINDOW_FOCUS_LOST:
         // A binding still being captured (its keys still coming) takes none of the keys that switched windows (Alt for
@@ -556,9 +565,11 @@ auto Shell::launch(const Game& entry) -> void {
   pictureMultiple = 0;
   fastForward = fastForwardHeld = fastForwardApplied = false;
   ares::setFastForward(false);
+  slowMotionHeld = slowMotionApplied = false;
+  ares::setSlowMotion(1.0f);
   frameStepping = frameAdvanceHeld = false;
   // Started running (setPause above); update pauses it again if another window has the keyboard.
-  focusPaused = false;
+  focusPaused = quitAsked = false;
   muted = false;
   ares::setMuteAudio(false);
   suppressedButtons = previousButtons;
@@ -575,7 +586,7 @@ auto Shell::unloadGame() -> void {
   ares::unloadSystem();
   game.reset();
   screen = Screen::Library;
-  frameStepping = focusPaused = false;
+  frameStepping = focusPaused = quitAsked = false;
   endHolds();
   capture.reset();
   question.reset();
@@ -587,6 +598,26 @@ auto Shell::unloadGame() -> void {
 auto Shell::quitGame() -> void {
   unloadGame();
   if (launchedWithGame) quit = true;
+}
+
+// The Quit hotkey asks first, as on Android, the game stopped under the question.
+auto Shell::askToQuit() -> void {
+  quitAsked = true;
+  frameStepping = focusPaused = false;
+  endHolds();
+  releaseKeys();
+  ares::setInput(0, 0, 0, 0, 0);
+  input.rumble(false);
+  ares::setPause(true);
+}
+
+// The question answered: quit, or go back to the game. Every button held then stays out until it's let go of, from the
+// game and from the library alike.
+auto Shell::answerQuit(bool quitting) -> void {
+  quitAsked = false;
+  suppressedButtons = ~0;
+  if (quitting) return quitGame();
+  ares::setPause(false);
 }
 
 auto Shell::openMenu() -> void {
@@ -766,14 +797,15 @@ auto Shell::refreshHotkeys() -> void {
   hotkeys = resolveHotkeys(hotkeysAt(HotkeyLevel::Game), gameKey);
 }
 
-// Only a game and its menu lose keys to the hotkeys: the library's and the Hotkeys page's are their own.
-auto Shell::hotkeysTakeKeys() const -> bool { return game && screen != Screen::Hotkeys; }
+// Only a game and its menu lose keys to the hotkeys: the library's, the Hotkeys page's and the Quit question's are
+// their own.
+auto Shell::hotkeysTakeKeys() const -> bool { return game && screen != Screen::Hotkeys && !quitAsked; }
 
 // An event's keys go to the hotkeys (and to a binding being captured): a press can complete a combo, a release a tap,
-// and the hold actions last while theirs are held. The Hotkeys page runs none: its keys are its own. Nothing runs while
-// another window has the keyboard: a press comes then only as a click on the window (the keys go to that window, and
-// SDL holds back the pads' presses), releases still come (SDL's own as the window loses the keyboard included), and a
-// tap runs only on the screen its key was pressed on with the window having it.
+// and the hold actions last while theirs are held. The Hotkeys page and the Quit question run none: their keys are
+// their own. Nothing runs while another window has the keyboard: a press comes then only as a click on the window (the
+// keys go to that window, and SDL holds back the pads' presses), releases still come (SDL's own as the window loses the
+// keyboard included), and a tap runs only on the screen its key was pressed on with the window having it.
 auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   auto changes = input.hotkeyChanges(event);
   if (changes.empty()) return;
@@ -782,7 +814,8 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   for (auto [token, down] : changes) {
     if (down) {
       hotkeyTracker.press(hotkeys, token);
-      if (focused) pressedOn[token] = screen;
+      // A key pressed with the Quit question up is the question's: let go of after it's answered, it taps nothing.
+      if (focused && !quitAsked) pressedOn[token] = screen;
       else pressedOn.erase(token);
     } else {
       hotkeyTracker.release(token);
@@ -801,12 +834,22 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   // A pad going away lets go of its buttons, which taps nothing.
   if (event.type == SDL_EVENT_GAMEPAD_REMOVED || !tapHere) tapped.clear();
   if (!focused) completed.clear();
-  if (screen == Screen::Hotkeys) return;
+  if (screen == Screen::Hotkeys || quitAsked) return;
+  // Quit runs first, and once it has asked, the question has the keys: nothing else the event brought runs (an action
+  // bound to the same keys, a collision the page shows: Load state, say, would throw progress away before it asked).
+  auto quitFirst = [](std::vector<std::string>& actions) {
+    auto quit = std::find(actions.begin(), actions.end(), Hotkey::quit);
+    if (quit != actions.end()) std::rotate(actions.begin(), quit, quit + 1);
+  };
+  quitFirst(completed);
+  quitFirst(tapped);
   for (auto& action : completed) {
     if (!isHotkeyHold(action)) runHotkey(action);
+    if (quitAsked) return;
   }
   for (auto& action : tapped) {
     if (!isHotkeyHold(action)) runHotkey(action);
+    if (quitAsked) return;
   }
   updateHolds(completed);
 }
@@ -851,7 +894,7 @@ auto Shell::runHotkey(const std::string& action) -> void {
     auto entry = *game;
     return launch(entry);
   }
-  if (action == Hotkey::quit) return quitGame();
+  if (action == Hotkey::quit) return askToQuit();
   if (action == Hotkey::n64Pak && game->system == "Nintendo 64") return show("Controller pak: " + cycleN64Pak(1));
   if (action == Hotkey::disc && game->discs.size() > 1) return changeDisc(1);
   if (action == Hotkey::ps1Analog && game->system == "PlayStation") {
@@ -872,6 +915,7 @@ auto Shell::updateHolds(const std::vector<std::string>& completed) -> void {
     });
   };
   fastForwardHeld = holds(Hotkey::fastForwardHold, fastForwardHeld);
+  slowMotionHeld = holds(Hotkey::slowMotion, slowMotionHeld);
   bool frameAdvance = holds(Hotkey::frameAdvance, frameAdvanceHeld);
   if (frameAdvance && !frameAdvanceHeld) {
     startFrameStep();
@@ -881,7 +925,7 @@ auto Shell::updateHolds(const std::vector<std::string>& completed) -> void {
   frameAdvanceHeld = frameAdvance;
 }
 
-auto Shell::endHolds() -> void { fastForwardHeld = frameAdvanceHeld = false; }
+auto Shell::endHolds() -> void { fastForwardHeld = slowMotionHeld = frameAdvanceHeld = false; }
 
 auto Shell::openHotkeys() -> void {
   screen = Screen::Hotkeys;
@@ -1134,6 +1178,13 @@ auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
 
 // The keys the hotkeys don't have: the library's, the menu's and the Hotkeys page's, and an emulated computer keyboard's.
 auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
+  // The Quit question has the keys: Enter quits, Escape or Backspace goes back to the game.
+  if (quitAsked) {
+    if (!key.down || key.repeat) return;
+    if (key.scancode == SDL_SCANCODE_RETURN || key.scancode == SDL_SCANCODE_KP_ENTER) answerQuit(true);
+    if (key.scancode == SDL_SCANCODE_ESCAPE || key.scancode == SDL_SCANCODE_BACKSPACE) answerQuit(false);
+    return;
+  }
   bool computer = game && isKeyboardComputer(game->system);
   if (key.down && !key.repeat) {
     switch (screen) {
@@ -1207,9 +1258,10 @@ auto Shell::update() -> void {
   bool confirm = pressed(PadA) || pressed(PadStart);
   previousButtons = pad.buttons;
 
-  // Pause when unfocused: while another window has the keyboard the game waits, going on as this window gets it back.
+  // Pause when unfocused: while another window has the keyboard the game waits, going on as this window gets it back
+  // (the Quit question keeps it stopped either way).
   bool focused = SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS;
-  bool unfocusedPause = game && screen == Screen::Playing && !frameStepping && !focused &&
+  bool unfocusedPause = game && screen == Screen::Playing && !frameStepping && !quitAsked && !focused &&
                         settings.flag("pauseWhenUnfocused", true);
   if (unfocusedPause != focusPaused) {
     focusPaused = unfocusedPause;
@@ -1227,6 +1279,14 @@ auto Shell::update() -> void {
     }
   }
 
+  // The Quit question, over the stopped game: A quits (not Start, which a player may press meaning to go on), B goes
+  // back to the game.
+  if (quitAsked) {
+    if (pressed(PadA)) answerQuit(true);
+    else if (pressed(PadB)) answerQuit(false);
+    return;
+  }
+
   switch (screen) {
   case Screen::Playing: {
     if (focusPaused) return;
@@ -1239,6 +1299,11 @@ auto Shell::update() -> void {
     if (fast != fastForwardApplied) {
       ares::setFastForward(fast);
       fastForwardApplied = fast;
+    }
+    // Fast forward wins over slow motion while both are on (the runner's pacing).
+    if (slowMotionHeld != slowMotionApplied) {
+      ares::setSlowMotion(slowMotionHeld ? slowMotionSpeed : 1.0f);
+      slowMotionApplied = slowMotionHeld;
     }
     if (frameStepping && frameAdvanceHeld && now >= frameStepNext) {
       ares::frameAdvance();
@@ -1338,6 +1403,10 @@ auto Shell::render() -> void {
     std::string badge = frameStepping ? "Frame advance - pause for the menu" : "Paused while unfocused";
     fill(8, 8, (badge.size() + 2) * glyph, 16, panelColor);
     print(16, 12, badge, textColor);
+  }
+  if (quitAsked) {
+    drawBox(width, height, wrap("Are you sure you want to stop emulating " + game->title + "?", 52),
+            "Enter/A Quit   Esc/B Cancel");
   }
   if (SDL_GetTicks() < messageUntil) {
     float w = std::min(width - 16, (message.size() + 2) * glyph);

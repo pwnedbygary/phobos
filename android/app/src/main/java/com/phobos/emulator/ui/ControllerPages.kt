@@ -104,6 +104,7 @@ val PAD_BUTTONS = listOf(
 val HOTKEY_ACTIONS = listOf(
     "Fast Forward (Hold)" to HotkeyAction.FAST_FORWARD_HOLD,
     "Fast Forward (Toggle)" to HotkeyAction.FAST_FORWARD_TOGGLE,
+    "Slow Motion (Hold)" to HotkeyAction.SLOW_MOTION,
     "Save State" to HotkeyAction.SAVE_STATE,
     "Load State" to HotkeyAction.LOAD_STATE,
     "Next Slot" to HotkeyAction.NEXT_SLOT,
