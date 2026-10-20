@@ -35,6 +35,62 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the sanitized PSP suite keeps the Vulkan driver loaded, so LeakSanitizer sees what lavapipe holds — 2026-10-20
+
+Branch `cursor/ci-lsan-mesa-cachy`, from master `b398e86f7` (#285), master `16156ab9a` (#286) merged in (`74b58eef2`).
+Tests and CI only (`tests/psp/run-tests.sh`); the core doesn't change, so docs/psp-core.md has no part for it. Notes
+and logs: `~/phobos-work/scratch/ci-lsan/`.
+- **Why**: on GitHub's ubuntu-24.04 image 20261018.339.1 the sanitized "PSP system tests" job failed at exit, after
+  every group passed, on a LeakSanitizer report from frames in an unloaded module: 240 bytes in 3 allocations (a 128
+  and two 56s), or the two 56s alone. 5 of 5 that finished there without the fix (`b26e0cebe`, #279's `69ea2650d`,
+  master's `9f2d0633d`, #286's `0954b8800`, and master's `16156ab9a` since; a sixth, `9bcaff348`'s, was cancelled
+  mid-suite); none in the 156 that finished on 20261004.327.1 and 20261012.334.1 since 15 Oct (#279's re-run among
+  them), nor in #286's re-run there. The only difference in the images' software lists that the job could use is the
+  kernel (6.17.0-1022-azure to 7.0.0-1017-azure); GCC (the FFmpeg build's name, which has the compiler's identity in
+  it, is the same), Clang, glibc 2.39-0ubuntu8.9, Mesa 25.2.8-0ubuntu0.24.04.4 and the loader 1.3.275 are the same.
+- **The blocks are lavapipe's own**, CI's frames named with Ubuntu's debug file for that build (frames #1 and #2 land
+  exactly on the calls of `realloc` in `get_cpu_topology` and of it in its caller, which fixes the base). The 128
+  bytes: Mesa's L3 cache masks (src/util/u_cpu_detect.c:566), made once through `call_once` from
+  `llvmpipe_create_screen` in `vkEnumeratePhysicalDevices`, on Zen CPUs only (family 0x17 and up), kept in its
+  static `util_cpu_caps`. The two 56s: `u_mmInit`'s two blocks, each linked to the other (u_mm.c:77 and 81), the
+  heap of the x86 code `translate_sse` makes (`rtasm_exec_malloc`, its static `exec_heap`), made when it first makes
+  some (in CI, at a draw in lavapipe's queue thread). Mesa frees neither; only lavapipe's static variables hold
+  them, and those go when the loader closes lavapipe at `vkDestroyInstance`, before the check at exit. Why the
+  images before never reported them is not known (the 128 bytes need a Zen runner, the 56s don't); lavapipe has no
+  NODELETE flag of its own and no thread-exit destructors, but glibc can still keep it loaded. A lead, a hypothesis
+  untested on CI: Ubuntu's lavapipe, asahi and nouveau drivers define the same five `STB_GNU_UNIQUE` symbols, glibc
+  keeps whichever of them loads first (NODELETE), and loader 1.3.275 opens `icd.d` in directory order, which a new
+  image can change (review-287, section 3).
+- **Reproduced here** (cachyOS, kernel 7.2.9, Ryzen 7 7800X3D, Mesa 26.3-devel's lavapipe, loader 1.4.363, GCC
+  16.2.1): the sanitized GPU groups (`PHOBOS_TESTS_ONLY=gpu`, lavapipe alone through `VK_ICD_FILENAMES`) leak the
+  same 240 bytes in 3 allocations. A 40-line C program (the loader opened, an instance, its GPUs enumerated, the
+  instance destroyed, the loader closed) leaks the 128 bytes: still with the loader kept open or Mesa's device-select
+  layer off, not with lavapipe kept open, and again with that and `use_globals=0` (a global holds them).
+- **What**: `run-tests.sh` sets `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` (the caller's value kept; only `1`
+  turns it on, so a caller's `0` or empty value turns the fix off) when the address or leak sanitizer is on: the
+  loader (1.3.260 and later) then keeps drivers and layers open, so their static variables are still LeakSanitizer's
+  roots at exit. The release lane doesn't change. No suppressions file: frames in an unloaded module have no name for
+  a pattern to match, the queue thread's pair has no frame of Phobos's, and a pattern on `VulkanBackend::create`
+  would hide that function's own leaks too.
+- **What it can hide**: only what a Vulkan driver or layer still holds from its static variables at exit, which isn't
+  a leak by LeakSanitizer's measure; the libraries the kept drivers load stay too (lavapipe's LLVM, for one), so
+  their static variables are roots as well. A block of Phobos's is hidden only if a driver kept a pointer to it there
+  (Phobos gives Vulkan no allocator or user data). A Vulkan object Phobos fails to destroy is reported as before (the
+  driver's frames named now), unless the driver itself keeps it in a static variable. The sanitized lane no longer
+  exercises unloading a driver; the release lane still does.
+- **Checks** (here; logs in `~/phobos-work/scratch/ci-lsan/logs`): the GPU groups before, 240 bytes leaked, exit 1;
+  after, "78 groups, 0 failures, 1 skipped" (CI's skip), no report, exit 0. A scratch copy's deliberate leaks (never
+  committed: `new char[1234]` in `VulkanBackend::create`, `new char[4321]` in "memory windows"), with the fix: both
+  reported (11 of the 1234 at vulkan.cpp:2237, the 4321 at memory.cpp:8), nothing of lavapipe's; the same build with
+  `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=0` from the caller: lavapipe's 240 bytes back beside them. `bash -n`
+  and `git diff --check` clean; shellcheck's two warnings are master's.
+- **CI on 20261018.339.1**: with the fix, `74b58eef2`'s sanitized job 118629925990 passed there, "639 groups, 0
+  failures, 1 skipped", no LeakSanitizer line; master `16156ab9a` without it failed there (job 118623513419, 240
+  bytes in 3 allocations).
+- **Not run** here: the rest of the sanitized suite, the release lane, tests/allegrex, tests/psp/ares (CI's).
+- Independent review: PASS on `9b18548cc`, read-only (`~/phobos-work/scratch/review-287/REVIEW.md`), wording nits only.
+  Taken after it: L1, L2 and section 6's points on the switch's values, kept drivers' libraries and unloading.
+
 ## CI: every workflow's checkout step off Node 20 — 2026-10-20
 
 Branch `cursor/ci-checkout-node24-cachy`, from master `b398e86f7` (#285). CI only, a follow-up from #283's review
