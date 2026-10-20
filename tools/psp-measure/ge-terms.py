@@ -11,8 +11,8 @@ Its places follow master since #277 (part 111), for the GE thread Off (option "G
 Kernel::geTime() and geOwe() take the thread's branches, so no "R" or "S" line is written, and the emulation thread and
 the GE thread both add to the counts, unguarded.
 
-usage: ge-terms.py SRC   (SRC: e.g. git archive HEAD ares nall libco thirdparty tools/psp-runner tests/psp/ares | tar -x)
-Then build tools/psp-runner from SRC, run psp-measure's rounds (README.md, "The GE's time") and give ge-fit.py the
+usage: ge-terms.py SRC   (SRC: a copy of the checkout, e.g. mkdir -p SRC && git archive HEAD | tar -x -C SRC)
+Then build tools/psp-runner from SRC, run psp-measure's rounds (README.md, "The GE timing's fit") and give ge-fit.py the
 files."""
 import os
 import sys
