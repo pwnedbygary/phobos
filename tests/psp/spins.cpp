@@ -312,13 +312,42 @@ auto gePoll(KernelMachine& m, Poll poll) -> void {
   main.call("sceKernelExitGame");
 }
 
-//A poll begun after a sleep beside the GE: main queues a list of 16 sprites textured from RAM (geSprites()), its
-//finish callback counting the lists done, reads a word from each of 256 lines it hasn't read before, sleeps as briefly
-//as a PSP's delay lets it (230 microseconds: Kernel::delay()) and asks after the list (sceGeListSync(id, 1)) till
-//done, the clock noted after each; three lists.
+//A list at at of count one-pixel sprites, untextured, their corners (a color and a 16-bit x, y and z each) read from
+//RAM at vertices, then its FINISH: nearly all of its clocks the front end's, reading RAM. Where it ends.
+auto geDots(KernelMachine& m, u32 at, u32 vertices, u32 count) -> u32 {
+  auto& memory = m.system.memory;
+  auto put = [&](u32 command, u32 argument = 0) {
+    memory.write(4, at, command << 24 | (argument & 0xff'ffff));
+    at += 4;
+  };
+  put(GE::FrameBufferPointer, 0); put(GE::FrameBufferWidth, 512); put(GE::FrameBufferPixelFormat, 3);
+  put(GE::Scissor1, 0); put(GE::Scissor2, 271 << 10 | 479); put(GE::Region2, 1023 << 10 | 1023);
+  put(GE::VertexType, 0x80'011c);  //(through: a color and a 16-bit x, y and z)
+  put(GE::Base, vertices >> 8 & 0xf'0000); put(GE::VertexAddress, vertices);
+  for(u32 n = 0; n < count; n++) {
+    u32 x = n % 480, y = n / 480 % 272;
+    for(auto [dx, dy] : {std::pair<u32, u32>{0, 0}, {1, 1}}) {
+      memory.write(4, vertices, 0xff00'0000 | n), memory.write(2, vertices + 4, x + dx);
+      memory.write(2, vertices + 6, y + dy), memory.write(2, vertices + 8, 0);
+      vertices += 12;
+    }
+  }
+  for(u32 left = count * 2; left;) {  //(sprites, as many corners a PRIM as its count holds)
+    u32 corners = std::min(left, 65534u);
+    put(GE::Primitive, 6 << 16 | corners);
+    left -= corners;
+  }
+  put(GE::Finish); put(GE::End);
+  return at;
+}
+
+//A poll begun after a sleep beside the GE: main queues a list of 40,000 one-pixel sprites whose corners it reads from
+//RAM (geDots()), its finish callback counting the lists done, reads a word from each of 256 lines it hasn't read
+//before, sleeps 600 microseconds and asks after the list (sceGeListSync(id, 1)) till done, the clock noted after each;
+//three lists.
 auto geSlept(KernelMachine& m) -> void {
   auto& memory = m.system.memory;
-  geSprites(m, GeList, GeVertices, false, nullptr, true);
+  geDots(m, GeList, GeVertices, 40000);
   Assembler callback{m, 0x0880'4000};  //(the finish callback: one more list done)
   callback.li(t0, Finished); callback.put(lw(t1, 0, t0)); callback.put(addiu(t1, t1, 1)); callback.put(sw(t1, 0, t0));
   callback.put(jr(ra)); callback.put(nop);
@@ -337,7 +366,7 @@ auto geSlept(KernelMachine& m) -> void {
   u32 read = main.here();
   main.put(lw(t5, 0, t4)); main.put(addiu(t4, t4, 64)); main.put(addiu(t6, t6, -1));
   main.put(bne(t6, zero, branchTo(main, read))); main.put(nop);
-  main.li(a0, 1); main.call("sceKernelDelayThread");
+  main.li(a0, 600); main.call("sceKernelDelayThread");
   u32 poll = main.here();
   main.put(addu(a0, s0, zero)); main.li(a1, 1); main.call("sceGeListSync");
   main.put(bne(v0, zero, branchTo(main, poll))); main.put(nop);
@@ -601,13 +630,16 @@ static auto spinsGePsp() -> void {
 
 //With the PSP's GE timing, a poll whose turns move no lines, begun after a sleep beside the GE (geSlept()): the sleep
 //fills the GE's busy window with cycles passed and no instructions, so its time is the cycles passed, not the CPU's
-//(geContendBound()), and the poll's turns, each longer for a PSP's CPU than the cycles it takes, make it the CPU's a
-//few thousand turns in. The push the window owes for the lines read before the sleep rises till then and falls after
-//(the first list's: 14764 cycles as the poll begins, 15776 at the kink, 9340 had the turns to the step's end been one
-//stretch), so the turns run one by one push the GE back further than one stretch for all of them would: a skip across
-//that kink is refused (spinSkip()), and once past it the turns are skipped. After every step the clock, the GE's time,
-//its busy window and the rest of the state the same as with every turn run, and in the end the caches' counts;
-//thousands of turns skipped. On the recompiler (the interpreter's accesses aren't counted, so its window owes nothing).
+//(geContendBound()), and the poll's turns, each longer for a PSP's CPU than the cycles it takes, make it the CPU's
+//about ten thousand turns in. The push the window owes for the lines read before the sleep rises till then and falls
+//after (the first list's: 34726 cycles as the poll begins, 36650 at the kink, 24810 had the turns a skip would take
+//been one stretch), so the turns run one by one push the GE back further than one stretch for all of them would: a
+//skip across that kink is refused (spinSkip()), and once past it the turns are skipped. The list reads its vertices
+//from RAM: the hybrid charges texel reads a fixed time a line (GE::Cost), so a list reading only texels owes the most
+//as the poll begins and the refusal would have nothing to guard; and those vertices' stalls make the window's time the
+//CPU's at once after the shortest sleep, hence 600 microseconds. After every step the clock, the GE's time, its busy
+//window and the rest of the state the same as with every turn run, and in the end the caches' counts; thousands of
+//turns skipped. On the recompiler (the interpreter's accesses aren't counted, so its window owes nothing).
 static auto spinsGeKink() -> void {
   auto on = machine(geSlept, true, true, true), off = machine(geSlept, true, false, true);
   bool same = true;
