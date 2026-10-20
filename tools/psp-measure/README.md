@@ -89,7 +89,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
 | `fit.py` | Fits the model behind the maths functions (128 segments of integer coefficients per function) from the results alone, and checks it reproduces every recorded value. It gave the core's `vfpu-segments.hpp`. Needs numpy. |
-| `ge-terms.py`, `ge-fit.py`, `contention10.py`, `contention11.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md parts 106 and 113): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6, 8, 9 and 10's timed lists; `contention10.py` fits the CPU beside the GE to round 10's time-contention, `contention11.py` again with the traffic as the CPU's caches count it (and with `--core`, the core's own run of rounds 10 and 10b beside the PSP's). Python alone. |
+| `ge-terms.py`, `ge-fit.py`, `contention10.py`, `contention11.py`, `contention12.py` | The GE timing's fit (`GE::Cost`, docs/psp-core.md parts 106 and 113): `ge-terms.py` patches a copy of the source so its runner writes each run of the GE's terms (the counts `GE::Cost`'s clocks multiply); `ge-fit.py` fits them to rounds 6, 8, 9 and 10's timed lists; `contention10.py` fits the CPU beside the GE to round 10's time-contention, `contention11.py` again with the traffic as the CPU's caches count it (and with `--core`, the core's own run of rounds 10 and 10b beside the PSP's); `contention12.py` fits rounds 10, 10b and 10c in the Super Monkey Ball refit's two forms and chooses between them (with `--core`, the core's own run of the three rounds against measured8's bounds). Python alone. |
 
 ## The VFPU and the FPU
 
@@ -494,3 +494,268 @@ the CPU's caches count it, and the PSP CPU's pace from the patterns' turns: the 
 `StreamLines`, `WritebackLine`, `UncachedLine`, `InstructionCycles` and the stalls' cycles in `ge.hpp` (part 113).
 `contention11.py --core CORE_R10 PSP_R10 CORE_R10B PSP_R10B` sets the core's own run of rounds 10 and 10b (the runner's
 `results/ge` after each round's line) beside the PSP's files: each list's slowdown beside each pattern, both ways.
+
+`contention12.py` fits the CPU beside the GE to rounds 10, 10b and 10c together in the two forms the Super Monkey Ball
+refit chooses between, and makes the choice (part 113; the refit's design, step 2). A list's reads of RAM are its shares
+as the refit's core counts them (a PRIM's own clocks with its vertices, CALL/RET/JUMP's refetches with the words), u is
+the CPU's lines while the list drew, and the forms are:
+
+- the rule, s = 1 + A + B (one `Contention` for every kind, as the core has it now);
+- the hybrid, s = 1 / (1/(1 + A) - B): the back end's reads (B: texels, transfers) cost a fixed time a line, and its
+  push is at most 0.75 of the window.
+
+```
+python3 tools/psp-measure/contention12.py --terms r10.txt --ours ours10 --turns CORE_R10 CORE_R10B --scenes SCENES
+python3 tools/psp-measure/contention12.py --core CORE_R10 CORE_R10B CORE_R10C [--counters LOG ...]
+```
+
+`r10.txt` and `ours10` are round 10's terms and results as above. Step 2's own came from round 10's own build instead
+(its menu's first line, `--ge-threads 2`; the scratch's `refit/terms10.sh`), and the committed EBOOT's recipe above
+isn't yet shown to give the same files: that comparison joins step 4a's runner build. `CORE_R10` and `CORE_R10B` are a
+runner's own run of rounds 10 and 10b (`results/ge`, any build): the CPU patterns' instructions a turn, from which the
+core's slowdowns are worked out as the kernel works them. The PSP's files are read from `tests/psp/measurements` as they
+are packed (`--psp` for others). The output's first line names every input as given (in the repository relative to it,
+else absolute, without `..`) with its sha256, a folder's that of its files' `sha256sum` lines in the names' byte order
+(`cd FOLDER && LC_ALL=C sh -c 'sha256sum -- * | sha256sum'`), and `GE::Cost`'s pace as parsed from `ge.hpp` with
+`ge.hpp`'s sha256: a saved output names its inputs. For each form it prints its misses in s and s - 1 by round, list
+and rate; the held-out tests; the core simulated against measured8's bounds; the windows at or past the cap; with
+`--scenes`, the gate's judged frames predicted from #279's push (part 113's table); the choice; and `GE::Cost`'s lines.
+`--weights WB UC` puts both forms at one pair of line weights and `--stalls a` takes the stalls without the time-check
+term: the design's prototypes' figures. `--core` sets a runner's run of the three rounds (the refit's, at step 4)
+beside the PSP's files, with measured8's bounds; `--counters` reads the build's counter line in runner outputs.
+
+The counter line: step 3's runner prints `ge contention: N windows capped; M spin skips refused, I instructions run in
+them, of R` once, at the end of a run with the PSP's timing (a log with none, or with more than one, ends the tool's
+run). N counts each window whose due reached the cap, once; M the spin skips refused because the cap binds at either end
+of the turns they would skip; I the emulated instructions run in the turns of those refused skips; R all the emulated
+instructions of the run. I / R is a proxy for H6's cost: the emulated CPU's instructions, where H6 (the design's §2.3)
+takes the host's, the emulation thread's instructions a frame in part 113's eight polling games. If M > 0 in any run,
+step 4g's host measurement decides H6.
+
+The choice, as the tool makes it:
+
+- **The line weights (L2).** Each form at its own: WritebackLine 0-1 and UncachedLine 0-1.5 in steps of 0.05, the pair
+  with the least squared relative error in s over the 908 pairs. Every check of a form uses that pair; the held-out
+  tests fit `Contention` again on their part at it.
+- **H1, no worse out of sample.** In each held-out test (round 10c; round 10's game-like rates; lists G, A and E2; round
+  10 alone against 10b and against 10c; each bus clock against the other), the hybrid's median |miss in s| is at most
+  the rule's plus 0.5 points.
+- **H2, better where the forms differ.** With the game-like rates held out, the hybrid's median |miss in s - 1| is at
+  most 0.75 of the rule's, and its worst list (A, D, E1, E2, F, G, H) no worse than the rule's worst.
+- **H3 (L3).** All of `tests/psp/measured8.cpp`'s bounds for rounds 10 and 10b (round 10's 680 pairs: median 7%, 90%
+  within 25%; round 10b's 144: median 1.5%, polling three ways, writing before the list and writing and settling each
+  within 8%, beside the writer once C within 1%, A within 10% and, twice as long, 30%, and D, E2, H and I within 100%)
+  and the round 10c group's (the RAM-vertex lists' median within 7% and each pair within 20%, the VRAM-vertex lists
+  within 7%): on the simulated core here, on the core's own run with `--core` at step 4. Each median is measured8's: the
+  misses' sizes sorted, the one at half their count (`errors[size / 2]`, the upper of the two middle ones); step 3's
+  round 10c group takes its median the same way.
+- **H4.** No window at or past the cap among the PSP's pairs, the simulated rounds and step 1's windows; in the code,
+  none in step 4's counters.
+- **H5.** Each judged frame within 15% (Super Monkey Ball's exception kept, with a tighter limit, where it isn't, down
+  to -21%), and Activision Hits' 3D menu within LIMIT (`--limit`; the owner's, 10%). All six scenes are judged: a
+  `--scenes` folder without a `.probe` or a `.log` for one of them, or a scene without a terms file and none of the
+  others' to bracket it from, ends the run. A scene judged on provisional inputs (a log without a probe, or a probe
+  without its terms file) is named PROVISIONAL in the header, and H5 then holds so far at most, waiting for step 1.
+  Without `--scenes`, the fit and H1-H4 print as ever, H5 and the choice as not judged. From a probe, each scene's
+  windows bound by T (the CPU's time for its instructions and stalls past the time passed), with T/passed's median and
+  largest. A "work" scene with half or more of its windows bound by T may be a loop spinning for the GE instead, which
+  the tool's table can't tell: H5 waits for its kind ("holds so far (waits: the kind of ...)", or FAILS if a row
+  fails), and the choice says it waits, never a bare "holds" or a final choice beside the warning. The person who has
+  checked the scene gives its kind with `--kind ID=work` or `--kind ID=spin` (printed in the header), which settles it.
+  `--kind` is for a probed scene only: one judged on its log keeps the table's kind, the one its provisional CPU inputs
+  are counted in, and `--kind` for it stops the run as a usage error (argparse's, exit 2, as its other misuses).
+- **The exits (L1).** The hybrid if H1-H5 hold; else the rule, if it meets H3 and H5; else stop and report. After the
+  code, if H6 fails (the spin test, or the refused skips' turns past 0.5% of a polling game's instructions on the host:
+  the counter line above): the rule, if it met H3 and H5 here; else stop and report. A window at or past the cap in step
+  1's log or step 4's counters fails H4.
+
+What step 1 gives (`--scenes SCENES`): a folder with each judged scene's files, named by its id (`smba-story`,
+`gos-menu`, `ahr-menu`, `ahr-legal`, `coo-diff`, `kz-gp`), each scene with a `.probe` or, until the probe, a `.log`:
+
+- `<id>.terms`: `ge-terms.py`'s file of the probe's own run of the scene, with `PHOBOS_GE_TERMS=<id>.terms` set on it
+  (600 frames from its state, the profile from frame 301; the copyright screen's 361, from frame 2). It holds every
+  list of its run, the frames before the profile included (nothing in it marks the profile's first frame), and the
+  tool averages them all (`scene_list()`). Of a scene drawing more than one list a frame it judges the list with the
+  most clocks (place None in the tool's scene table): a fixed place counts from the file's first `S` line, so it can
+  land on the wrong list: a list started before the save (running, or done with its completion still to come) has no
+  `S` line in the probe's run, so the count starts at the first list to start after the load (Killzone's file starts
+  at the frame's small blit list, which place 0 took for its 3D list). It comes from the probe's run because #279
+  changed which lists a scene's
+  600 frames hold (Super Monkey Ball's 647 became 578), and the files made before came from #269's worktree; #277
+  changes none, and the probe still only observes with the terms on. A scene without one is bracketed from the other
+  scenes' parts. A terms file with fewer lists (an `S` line each) than the scene draws a frame, or whose judged list
+  has no clocks, or a line not UTF-8 or naming a term twice, ends the run.
+- `<id>.probe`: the probe's, a line for the run and one for each of the GE's busy windows in the profiled frames (each W
+  is one line, broken here to fit):
+
+  ```
+  P scene=<id> cpu=<MHz> frames=<n>
+  W frame=<n> passed=<cycles> instructions=<n> fills=<n> ifills=<n> writebacks=<n> uncached=<n> vertex_ram=<clocks>
+    vertex_vram=<clocks> prim_ram=<clocks> prim_vram=<clocks> word_ram=<clocks> word_vram=<clocks>
+    refetch_ram=<clocks> refetch_vram=<clocks> texel_ram=<clocks> transfer_ram=<clocks> all=<clocks>
+  ```
+
+  - **A window** is the kernel's own contention window, the one `geContendDue()` and `geContendBound()` charge
+    (`Kernel::GeWindow`, to which `geContendNow()` adds each stretch of the CPU's; with the GE on its thread, as
+    `geFold()` takes the stretches, the same sums): from its start, the first stretch begun while the GE is busy after
+    it was idle (`geContend()` starts the window afresh whenever a stretch begins with the GE done), to its due, the GE
+    done (`geDoneAt`) with the window's push in it. A W line for each window, its fields the window's totals: each W
+    line is a whole window. `frame` (a number; the tool doesn't use it) is the frame the run is in when the probe
+    records the window, at the stretch whose `geContend()` finds the GE done and resets the window; the window written
+    after the run's last frame (below) counts under that frame. The GE may have finished a frame earlier, as the reset
+    waits for the CPU's next stretch. That matters only at the profile's first frame (301; 2 for Activision Hits'
+    copyright screen, whose run goes 361 frames from its state and profiles frames 2 to 361, the gate run's 360 a frame
+    later, after the window its state restores: below): a window recorded in it counts there, whole, though its GE
+    finished in the frame before. A window still open as the run ends, its GE not yet done at the run's last cycle
+    (`geDoneAt` past it), is left out, since a W line is a whole window. One whose GE is done by then is complete,
+    though no later stretch has reset it, and the probe writes it. The probe counts the open window it leaves out (0 or
+    1). The runner's summary line reports that count, with the open window's cycles and lines, so that a cross-check
+    against the kernel's busy totals (which include it) can take it out; it also reports how many lists the probe left
+    out of `<id>.lists` (below).
+  - **`passed`**: the window's cycles in the PSP CPU's cycles at `cpu=` MHz, the time `geContendDue()` and
+    `geContendBound()` set against its instructions and stalls (the kernel counts `GeWindow::passed` at
+    `Kernel::CPUFrequency`, 333 MHz: times `cpu` / 333). `cpu`: the CPU's clock through the profiled frames
+    (`powerState.cpu`), the same through all of them: a probe whose clock changes mid-profile stops and says so. One
+    whose program starts again in the profiled frames, the first profiled frame of a run from boot included
+    (`Kernel::loadExec()` powers the kernel on again, its cycles back to 0), stops too, with no probe file, naming the
+    frame the program started again in. `frames`: the 1/60 s frames profiled (300 for frames 301 to 600). The probe
+    runs with the GE thread Off (option "GE Thread"; since #277 On gives the same sums).
+  - **The CPU's counts**, the window's: `instructions` the CPU's own run in it (`GeWindow::instructions`, none waiting);
+    `fills` the data cache's lines read in, `writebacks` its lines written back, `uncached` its uncached accesses and
+    `ifills` the instruction cache's lines read in, from `geCacheCounts()`'s four counts (`cpu.dataCache`'s `fills`,
+    `writebacks` and `uncached`, `cpu.instructionCache.fills`) as `geContendNow()` adds them to the window (`fills` and
+    `ifills` together are `GeWindow::fills`; with the GE done part way through a stretch, the share before it).
+  - **The GE's clocks** are the running list's, as `geContendDue()` reads them at the window's last stretch: its
+    `ramClocks[kind]` and `allClocks`, counted since `pipeStart()` zeroed them as the list started (`Kernel::geOwe()`),
+    not the clocks counted while the window was open. The two differ because a list's runs count most of its clocks
+    before its window opens: `Kernel::syscall()` charges the CPU's stretch through `geContend()` before it dispatches
+    the call, `Kernel::geEnqueue()` then starts the list (`geOwe()`) and runs it as far as it goes (`geRun()`, as a
+    stall address's update does further on), counting its clocks, and the window opens only at the next stretch. The
+    push `geContendNow()` applies after that read sets only the window's own `pushed` and the kernel's `gePipeAt`,
+    `geDoneAt` and `geReachAt`, never the totals, so a window's last stretch reads the same before and after its push.
+    Taken then: `texel_ram` is `ramClocks[2]`, `transfer_ram` `ramClocks[3]`, `all` `allClocks` (PRIMs and refetches
+    left out), and each split is a running total since `pipeStart()` in the same way, kept where its clocks are charged:
+    - `vertex_ram`, `vertex_vram`: the vertices' work, where `GE::oweVertices()` charges it with `ramRead(0, ...)`
+      (with the GE thread On, `GeThread::replayWords()`), by the vertex address (through indices, the vertices' base);
+    - `prim_ram`, `prim_vram`: `Cost::Prim`, the own start of a PRIM, BEZIER or SPLINE, where `GE::pipePrimitive()`
+      adds it to the front end's work (a patch's in `GE::patch()`), by the same vertex address; it reaches neither
+      `ramClocks` nor `allClocks` now. A patch's `Cost::Patch`, which `GE::patch()` adds beside it, stays out, as
+      `Cost::PatchVertex` does, and step 3 charges the same: the refit's design counts the vertices with their PRIM's
+      own start, which `Cost::Prim` is for all three commands, while `Cost::Patch` is the patch's work making its
+      vertices, which the fit's shares leave out (`clocks()`), so counting it would give the core shares the constants
+      weren't fitted on;
+    - `word_ram`, `word_vram`: the list words, where `GE::pipeItem()` and `GE::pipeStop()` charge `Cost::Command`, by
+      each word's address;
+    - `refetch_ram`, `refetch_vram`: CALL, RET, JUMP and a conditional jump taken, where `GE::runList()`, `GE::run()`'s
+      command loop, charges `Cost::Call` or `Cost::Jump` to the front end, by the address jumped to.
+
+    Today every vertex and every word is charged as a RAM read (with the thread Off, `ramRead(0)` only in
+    `GE::oweVertices()`, `ramRead(1)` only in `GE::pipeItem()` and `GE::pipeStop()`), so in every window `vertex_ram +
+    vertex_vram` equals `ramClocks[0]` and `word_ram + word_vram` equals `ramClocks[1]`. The probe checks both on every
+    W line it writes, on its f64 values, to rounding (a relative 1e-9: the splits are summed apart), and stops on a
+    mismatch with no probe file, naming the window by its `frame` and its number among the run's windows (counted from
+    1 in the order the probe records them) and giving both pairs of values (`vertex_ram + vertex_vram` and
+    `ramClocks[0]`, `word_ram + word_vram` and `ramClocks[1]`).
+
+    A state's load restores the kernel's window as the state holds it (`GeWindow`'s `passed`, `instructions`, `fills`,
+    `writebacks`, `uncached` and `pushed`) and the held list's `ramClocks` and `allClocks` (`Kernel::serialize()`),
+    but not the probe's splits. So the window the load restored carries CPU counts from before the state was saved,
+    and one open at the load whose last list began after it passes the identity check with those counts in it. The
+    list whose totals the GE holds at the save can also outlive that window, those totals keeping the pre-save clocks
+    its splits lack: a list waiting at its stall address stays the running one while the GE is idle (`geRun()` returns
+    on `Stop::Stalled`), `geContend()` resets the window once the GE is done, and `sceGeListUpdateStallAddr()` then
+    runs the same list on with no `geOwe()`, so no `pipeStart()`, as `sceGeContinue()` does a paused list already
+    started.
+
+    So straight after `--load-state` the probe marks both as begun before the load: the window then held (open at the
+    load, or done but not yet reset by a stretch: any of its six fields nonzero; the mark cleared with the window) and
+    the list whose totals the GE holds (running, waiting at its stall address, or paused, as `sceGeContinue()` runs a
+    paused list on with the saved totals; on `GE::probe`, the mark cleared by `pipeStart()`). A profiled window that is
+    the marked one, or whose last stretch falls in a marked list, stops the run with no probe file, as the clock check
+    does, saying which mark fired (the window's, if both): for the window, "the window ending in frame N began before
+    the state was saved:
+    profile from a later frame"; for the list, "the window ending in frame N ends in a display list that began before
+    the state was saved: profile from after that list ends, or from another state". The identity check would also stop
+    a W line whose last stretch falls in a marked list, but naming a mismatch rather than the load, which is why the
+    probe has a test of its own; a marked list gets no L line (below). Only a profile from a state's first frames can
+    meet the marked window, so the copyright screen's starts at frame 2: in every stand-in state the probe's review
+    ran, the window the state restores ended in frame 1 (Chains of Olympus's in frame 2). If the real state's lasts
+    longer, the probe stops with the window's message, and the first frame moves later. A list the GE holds at the save
+    that lasts into the profiled frames (one kept open with stall-address updates) stops the run at its first profiled
+    window, with the list's message.
+
+    A window can span lists: `pipeStart()` zeroes the totals as each list starts, and a queued list starts at the one
+    before's finish while the GE stays busy (`Kernel::geStartNext()`, or `sceGeContinue()`), so a W line spanning lists
+    carries the last list's totals at its last stretch. That is the kernel's own view, right for H4. But lists mix
+    memories: in the probe's review's runs a list holds both memories in 9,490 of Chains of Olympus's 9,492 windows and
+    in 5,265 of Ghost of Sparta's menu's 5,267, and Killzone's vertices do in 1,197 of its 2,601. So the RAM shares the
+    tool sums over a scene's windows (its `share`) assume that each list of a scene has the scene's share (Activision
+    Hits' menu draws 3 lists a frame, its copyright screen 2, Killzone 2). The per-list log (`<id>.lists`, below) lets
+    the probe's review check that.
+
+    At master `9f2d0633d`: `geContendDue()`'s read, `ares/psp/kernel/ge.cpp:246`; `pipeStart()`'s zeroing,
+    `ares/psp/ge/ge.hpp:897`; `Kernel::syscall()`, `ares/psp/kernel/kernel.cpp:1210` and `:1214`; the kernel's cycles
+    set to 0 as `Kernel::loadExec()` powers it on again, `:916` (its `power()` call, `ares/psp/kernel/system.cpp:80`);
+    `geRun()`, `ares/psp/kernel/ge.cpp:58-84` (a list given up on, `:63-64`; one at its stall address, `:86`), and
+    `Kernel::geEnqueue()`'s address, `:746`, and calls, `:768-769`; a stall address's update, `:793-797`;
+    `geContend()`'s reset, `:175-178`; the push, after the read at `:224`, at `:226-229` (`w.pushed`, `:227`; the
+    kernel's values, `:228-229`); a queued list's start, `:576` and `:907`, through `geOwe()`'s `pipeStart()`, with
+    `Cost::List`'s clocks to the front end, `:297`; a list enqueued at the head, `:752-755`; a list's end,
+    `Kernel::geFinished()`'s Completed path, `:550-553` (its SYNC and PAUSE paths, `:536-549`); `sceGeBreak()`'s
+    lists thrown away, `:942-957`, and its list paused, `:969-972`; the vertices, `ares/psp/ge/draw.cpp:534` and
+    `ares/psp/ge/thread.cpp:757`; `Cost::Prim`,
+    `ares/psp/ge/draw.cpp:379` and `ares/psp/ge/curves.cpp:250`, and `Cost::Prim`'s and `Cost::Patch`'s own words,
+    `ares/psp/ge/ge.hpp:777` and `:791`; the words, `ares/psp/ge/draw.cpp:398` and `ares/psp/ge/ge.hpp:907`; the
+    jumps, in `GE::runList()` (`ares/psp/ge/list.cpp:23`), `:102`, `:104`, `:114` and `:123`; the texels' clocks in
+    both `ramClocks[2]` and `otherWork()`, `ares/psp/ge/draw.cpp:282` and `:295`; a state's window and totals,
+    `ares/psp/kernel/serialization.cpp:1187`, `:1197` and `:1203-1204`. No other `ramRead(0)` or `ramRead(1)` is under
+    `ares/psp/ge`; the totals are also set where the thread is switched, its runs folded or a list started on it
+    (`System::threadGE()`, `Kernel::geFold()`, `Kernel::geOwe()`), not with the thread Off.
+  - **RAM and VRAM** are told apart by the core's VRAM-window test: VRAM's if the address's physical part
+    (`& 0x1fff'ffff`) is in `[Memory::VRAMBase, Memory::VRAMBase + Memory::VRAMWindow)` (VRAM's 2 MiB four times over),
+    as `GE::owePrimitive()` and `GE::texelClocks()` test a texture's address and `GE::oweTransfer()` a transfer's ends;
+    else RAM's.
+  - **As the tool reads it**: each line UTF-8; blank lines skipped; every other line a P or a W line of `name=value`
+    fields, none given twice, numbers 0 or more but `scene`'s; one P line, its `scene` the file's id, its `cpu` and
+    `frames` above 0; each W line with all the fields above, `passed` and `all` above 0, and `all` at least
+    `vertex_ram`, `vertex_vram`, `word_ram`, `word_vram`, `texel_ram` and `transfer_ram` together (to a part in a
+    million): `allClocks` holds every `ramRead()` and `otherWork()`, the texels' with the rest of a primitive's
+    back-end work. Anything else ends the run, naming the file and the line. So does a `cpu` other than the scene's
+    clock in the tool's scene table, naming the file and both clocks, since `regimes()` cuts a push by the table's.
+    `all` above 0 holds in practice (in all 92,098 windows of the probe's review's runs), but master doesn't guarantee
+    it: a list enqueued with its stall address at its start keeps the GE busy for `Cost::List`'s clocks, which go to
+    the front end, not to `allClocks` (`Kernel::geOwe()`), so a window ending then would read `all` 0. The tool still
+    stops on such a line. The probe prints every value exactly, as the shortest text that reads back to the same f64
+    (`std::to_chars`), since that part in a million is tighter than `%.6g`'s rounding, up to about 5e-6.
+- `<id>.lists`: the probe's per-list log, beside `<id>.probe` and written with it, which the tool doesn't read. A line
+  for each list that ends in a profiled frame, in the order they end, taken as the list completes, on
+  `Kernel::geFinished()`'s Completed path (not on a FINISH after a SYNC or PAUSE signal, which only lets the list go on
+  or pauses it), before `Kernel::geStartNext()` starts the next and `pipeStart()` zeroes the totals (each L is one
+  line, broken here to fit):
+
+  ```
+  L frame=<n> place=<n> list=<address> vertex_ram=<clocks> vertex_vram=<clocks> prim_ram=<clocks> prim_vram=<clocks>
+    word_ram=<clocks> word_vram=<clocks> refetch_ram=<clocks> refetch_vram=<clocks> texel_ram=<clocks>
+    transfer_ram=<clocks> all=<clocks>
+  ```
+
+  `frame` the frame it ends in; `place` its index among that frame's L lines, from 0 (a list the log leaves out takes
+  no index), which is not the tool's place (the order lists start in, from the terms file: a list may end in the next
+  1/60 s frame); `list` the address the list was enqueued with (`sceGeListEnQueue()`'s or `sceGeListEnQueueHead()`'s)
+  as the kernel keeps it, its low 28 bits (`address & 0x0fff'ffff`, `Kernel::geEnqueue()`), in hex, so an address and
+  its mirrors print alike (Super Monkey Ball enqueues at `0x48c9fcc0`, which prints `0x08c9fcc0`): it is what tells
+  lists apart; then the W line's GE fields in its order and units (GE clocks, as `Cost` counts them), the list's own
+  totals since its `pipeStart()`, each kept as a W line's is. A list that doesn't complete gets none: one
+  `sceGeBreak()` throws away before it completes (one that already completed keeps its line), one the GE gives up on
+  (a bare END, a fault or a SIGNAL the driver can't do: it stays in the queue as running), or one still running as the
+  profile ends. A paused list gets its line if it is continued and completes, but not one resumed after another
+  list's start: that start zeroes the running totals (`sceGeContinue()` starts a list enqueued at the head through
+  `geOwe()`'s `pipeStart()`), and `Kernel::geStartNext()` then resumes the paused list without zeroing them, so its
+  totals would also hold the other list's clocks. The probe counts such lists (the summary line, above). W lines are
+  unaffected: a W line carries what `geContendDue()` reads, whichever list ran. A list begun before a state's load
+  (marked at the load, above) gets none either, and the probe counts it with the others the log leaves out. From the
+  log the probe's review compares each list's own share with the scene's, the judged list's especially (Killzone draws
+  two lists a frame).
+- Until the probe, `<id>.log`: a runner's output with its one `caches:` line (each line UTF-8, as the counters' logs
+  too; two `caches:` lines end the run, as two counter lines do). Super Monkey Ball's and the menu's CPU work are then
+  the design's ranges, and the figures are marked provisional.
