@@ -375,9 +375,10 @@ auto round6Files() -> std::filesystem::path {
   return round6Kept->path;
 }
 
-//Rounds 8's, 9's, 10's and 10b's GE timing files as this core writes them, for measured8.cpp's comparisons with the
-//owner's PSP, the same way: the program's round alone (line, its last file last, within frames) once, with the GE timed
-//as the PSP's.
+//Rounds 8's, 9's, 10's, 10b's and 10c's GE timing files as this core writes them, for measured8.cpp's comparisons with
+//the owner's PSP, the same way: the program's round alone (line, its last file last, within frames) once, with the GE
+//timed as the PSP's. No window of the round's held at the hybrid's cap (Kernel::geCapped; GE::Cost::Cap: it binds in
+//no measured window, as GE::Cost's fit has it), and no spin skip refused for it.
 template<size_t N>
 static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* last, const TimingFile8 (&files)[N],
                        const char* manifest, u32 frames = 20000) -> std::filesystem::path {
@@ -399,6 +400,11 @@ static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* 
   move(m, 0, line);
   press(m, Cross);
   CHECK(waitFor(m, frames, [&] { return std::filesystem::exists(results / last); }), true);
+  if(m.kernel.geCapped || m.kernel.geSkipsRefused) {
+    std::printf("  %s: %llu windows capped, %llu spin skips refused\n", manifest,
+                (unsigned long long)m.kernel.geCapped, (unsigned long long)m.kernel.geSkipsRefused);
+  }
+  CHECK(m.kernel.geCapped + m.kernel.geSkipsRefused, 0u);
   kept = std::make_unique<HostFolder>();
   std::vector<std::string> names = {manifest};
   for(auto& file : files) names.push_back(std::string(file.name) + ".bin");
@@ -408,7 +414,7 @@ static auto timedRound(std::unique_ptr<HostFolder>& kept, u32 line, const char* 
   }
   return kept->path;
 }
-static std::unique_ptr<HostFolder> round8Kept, round9Kept, round10Kept, round10bKept;
+static std::unique_ptr<HostFolder> round8Kept, round9Kept, round10Kept, round10bKept, round10cKept;
 auto round8Files() -> std::filesystem::path {
   return timedRound(round8Kept, GeRound8Line, "cpu-clocks.bin", timingFiles8, "manifest8.txt");
 }
@@ -420,6 +426,9 @@ auto round10Files() -> std::filesystem::path {  //(its CPU contention last, as l
 }
 auto round10bFiles() -> std::filesystem::path {
   return timedRound(round10bKept, GeRound10bLine, "time-placement.bin", timingFiles10b, "manifest10b.txt");
+}
+auto round10cFiles() -> std::filesystem::path {
+  return timedRound(round10cKept, GeRound10cLine, "time-anchors3.bin", timingFiles10c, "manifest10c.txt");
 }
 
 static auto pspMeasure() -> void {

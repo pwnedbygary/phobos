@@ -1147,7 +1147,7 @@ auto Kernel::serialize(serializer& s) -> bool {
       //(more items than the rest of the state holds: a state cut short, or read out of step, refused unread)
       if(u64(count) * 2 * sizeof(f64) > s.capacity() - s.size()) check(false), count = 0;
       pipe.first = 0, pipe.count = 0, pipe.entries = 0;
-      pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
+      pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = pipe.ramWords = 0;
     }
     auto dropOldest = [&] {
       pipe.entries -= pipe.items[pipe.first].entries;
@@ -1170,7 +1170,11 @@ auto Kernel::serialize(serializer& s) -> bool {
   //hold (Allegrex::Cache) and the counts they made that the window hasn't seen yet, and the list's clocks so far that
   //read RAM, by kind, and all of them (layout 35 on: an older state's window starts afresh, with the caches empty).
   //(The clocks the timed GE's: with the GE on its thread, the render GE's, which the kernel's GE keeps a copy of as the
-  //runs folded leave them: Kernel::geFold().)
+  //runs folded leave them: Kernel::geFold().) Those clocks count a PRIM's own start and a JUMP's, CALL's or RET's
+  //refetch too, each in its kind, and what's read from VRAM as other work (GE::ramRead()), since the Super Monkey Ball
+  //refit, still layout 35: a state of it from an earlier build loads, its running list's shares a little off till the
+  //next list starts (GE::pipeStart() clears them). A new layout would change every state's number, "Fast"'s too,
+  //against master's, for nothing a state holds.
   auto& data = cpu.dataCache;
   auto& code = cpu.instructionCache;
   if(s.reading() && stateLayout < 35) {

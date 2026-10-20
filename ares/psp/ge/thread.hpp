@@ -69,7 +69,8 @@ struct GeThread : Memory::Writer {
     RunStart,    //a kick: the render GE defers its primitives into batches; with the PSP's timing, the GE's pipeline
                  //moved on to the kick (Kernel::geResume()): whether it was, and by how many clocks
     RunEnd,      //its end: what's batched drawn, a hardware renderer's work submitted (or finished, unguarded); the
-                 //run's words, the front end's last work (GE::pipeStop())
+                 //run's words and, with the PSP's timing, those of them that read RAM (GE::ramWordsAt()), the front
+                 //end's last work (GE::pipeStop()); (checking) each count against the render GE's own
     Owe,         //with the PSP's timing, a list starting: its own clocks, the pipeline begun afresh (Kernel::geOwe())
     State,       //the GE's state put back whole (sceGeRestoreContext's): commands, matrices and their indices (GE::State)
     Frame,       //a frame's end (System::run()): what the screen shows then (Frame), its picture taken here (frameEnd)
@@ -99,11 +100,14 @@ struct GeThread : Memory::Writer {
   //(with the PSP's timing, the control pass's own work for the GE's front end, which the render GE's pipeline takes
   //once it has taken the words handed over before it, as many as wait: a JUMP taken, a CALL, a RET, after their
   //words, GE::pipeFront(); vertices, a bounding box's, to be shared out among the next PRIM's primitives,
-  //GE::oweVertices(), where the box's check may have handed its word over in a record of its own, none waiting)
-  auto front(f64 clocks, bool vertices = false) -> void {
-    marks.push_back({wordCount | (vertices ? VerticesMark : 0), clocks});
+  //GE::oweVertices(), where the box's check may have handed its word over in a record of its own, none waiting. Each
+  //of a kind, by the memory it reads, which the render GE counts as the synchronous GE does: GE::ramRead() of the
+  //words' kind or the vertices', or GE::otherWork(), VRAM's)
+  enum : u32 { RefetchRam = 0, RefetchVram = 1u << 30, VerticesRam = 2u << 30, VerticesVram = 3u << 30 };
+  static constexpr u32 MarkKind = 3u << 30;  //(a mark's word count's top two bits: its kind)
+  auto front(f64 clocks, u32 kind) -> void {
+    marks.push_back({wordCount | kind, clocks});
   }
-  static constexpr u32 VerticesMark = 0x8000'0000;  //(a mark's word count's top bit: vertices' work)
   //(with the PSP's timing, the run about to start: the GE's pipeline moved on to it by clocks, Kernel::geResume())
   auto resume(f64 clocks) -> void { shifting = true, shift = clocks; }
   //(with the PSP's timing, a list starting: its own clocks, the pipeline begun afresh, Kernel::geOwe())
@@ -123,7 +127,7 @@ struct GeThread : Memory::Writer {
   auto read(u32 address, u32 size, bool loading) -> u64;
   auto write(u32 address, u32 size, Kind kind, u64 cx) -> u64;
   auto runStart() -> void;
-  auto runEnd(u64 words) -> void;  //(words: the run's, run()'s count)
+  auto runEnd(u64 words, u64 ramWords) -> void;  //(words: the run's, run()'s count; ramWords: those that read RAM)
   auto state(const GE& from) -> void;
   auto note(const std::string& text) -> void { notes.push_back(text); }  //(the render GE's, told as it drains)
   //A frame's end: the frame buffer the screen shows then and how it's laid out, as the emulation thread has the

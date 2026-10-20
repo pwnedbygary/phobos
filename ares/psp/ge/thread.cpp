@@ -164,7 +164,9 @@ auto GeThread::primitiveEnd(bool certain, const u8* bytes) -> void {
   if(b.wordAddress != ~0u) listWordDrawn(b.wordAddress);
   if(checking) render.modelPrimitive(replica, b.word, b.vertexAddress, b.indexAddress, b.copies, bytes, b.hardware,
                                      serial + 1);
-  runWords++;  //(in the run's count, for its pipeline, as the record would have been)
+  //(in the run's count, for its pipeline, as the record would have been, and in its RAM words by its own address)
+  if(render.pspTiming) render.segment(b.wordAddress != ~0u && GE::readsRam(b.wordAddress), runWords);
+  runWords++;
   render.replayPrimitive(b.word, b.vertexAddress, b.indexAddress, b.copies, bytes, b.word >> 24 != GE::Primitive);
   undrawn = ~0u;
 }
@@ -391,9 +393,10 @@ auto GeThread::runStart() -> void {
   shifting = false, shift = 0;
 }
 
-auto GeThread::runEnd(u64 words) -> void {
+auto GeThread::runEnd(u64 words, u64 ramWords) -> void {
   flushWords();
-  std::memcpy(append(Kind::RunEnd, sizeof(words)), &words, sizeof(words));
+  u64 counts[2] = {words, ramWords};
+  std::memcpy(append(Kind::RunEnd, sizeof(counts)), counts, sizeof(counts));
   publish();
 }
 
@@ -731,9 +734,10 @@ auto GeThread::listWordDrawn(u32 address) -> void {
   undrawn = render.undrawnPage(address) ? address >> 12 : ~0u;
 }
 
-//(each word counted in the run's, as run() counts it, and taken; a TRANSFER_START's time put in the pipeline as
-//transfer() puts it, and the control pass's front-end work once the words handed over before it are taken, before
-//the first where none were, with the PSP's timing)
+//(each word counted in the run's, as run() counts it, and taken; with the PSP's timing, in its RAM words by its own
+//address (GE::segment(), its memory looked at again on each new page), a TRANSFER_START's time put in the pipeline
+//as transfer() puts it, and the control pass's front-end work once the words handed over before it are taken, before
+//the first where none were, counted by its kind as the synchronous GE counts it)
 auto GeThread::replayWords(const u8* data, u64 serial) -> void {
   u32 runCount, count = 0;
   std::memcpy(&runCount, data, sizeof(u32));
@@ -749,22 +753,34 @@ auto GeThread::replayWords(const u8* data, u64 serial) -> void {
   mark += sizeof(u32);
   u32 taken = 0;
   auto marksDue = [&] {
-    for(u32 at; marksLeft && (std::memcpy(&at, mark, sizeof(u32)), (at & ~VerticesMark) == taken);
+    for(u32 at; marksLeft && (std::memcpy(&at, mark, sizeof(u32)), (at & ~MarkKind) == taken);
         marksLeft--, mark += MarkBytes) {
       f64 clocks;
       std::memcpy(&clocks, mark + sizeof(u32), sizeof(f64));
-      if(!(at & VerticesMark)) render.pipeFront(clocks);
-      else if(render.pspTiming) render.pipe.vertices += clocks, render.ramRead(0, clocks);  //(as oweVertices())
+      if(!render.pspTiming) continue;
+      u32 kind = at & MarkKind;
+      if(kind == RefetchRam || kind == RefetchVram) render.pipeFront(clocks);  //(as runList()'s front())
+      else render.pipe.vertices += clocks;                                     //(as oweVertices())
+      if(kind == RefetchRam) render.ramRead(1, clocks);
+      else if(kind == VerticesRam) render.ramRead(0, clocks);
+      else render.otherWork(clocks);
     }
   };
   marksDue();
   for(u32 n = 0; n < runCount; n++) {
     u32 run[2];
     std::memcpy(run, data + sizeof(u32) + n * sizeof(run), sizeof(run));
+    u32 page = ~0u;
+    bool ram = false;  //(a word from no list never reads RAM)
     for(u32 k = 0; k < run[1]; k++, word += sizeof(u32)) {
       u32 value;
       std::memcpy(&value, word, sizeof(u32));
-      if(run[0] != ~0u) listWordDrawn((run[0] + k * 4) & 0x0fff'ffff);
+      if(run[0] != ~0u) {
+        u32 address = (run[0] + k * 4) & 0x0fff'ffff;
+        listWordDrawn(address);
+        if(address >> 12 != page) page = address >> 12, ram = GE::readsRam(address);
+      }
+      if(render.pspTiming) render.segment(ram, runWords);
       runWords++;
       render.apply(value);
       if(value >> 24 == GE::TransferStart) {
@@ -792,6 +808,7 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     u32 head[7];
     std::memcpy(head, data, sizeof(head));
     if(head[6]) replayWords(data + sizeof(head), header.serial);  //(the words before it, which came in its record)
+    if(render.pspTiming) render.segment(head[1] != ~0u && GE::readsRam(head[1]), runWords);  //(its word's own address)
     runWords++;
     Copies copies;
     std::memcpy(&copies, data + sizeof(head) + head[6], sizeof(Copies));
@@ -826,6 +843,7 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     u32 head[4];
     std::memcpy(head, data, sizeof(head));
     if(head[1] != ~0u) listWordDrawn(head[1]);
+    if(render.pspTiming) render.segment(head[1] != ~0u && GE::readsRam(head[1]), runWords);  //(its word's own address)
     runWords++;
     render.replayClut(head[0], head[2], data + sizeof(head), head[3]);
     break;
@@ -892,7 +910,7 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     takenRuns++;
     render.pspTiming = head[0];
     if(head[0] && head[1]) render.pipeShift(clocks);
-    runWords = 0, render.wordsRun = &runWords;
+    runWords = 0, render.wordsRun = &runWords, render.segmentsStart();
     render.owedPixels = render.owedPrimitives = 0;
     publishSoFar();
     undrawn = ~0u;
@@ -900,15 +918,22 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     break;
   }
   case Kind::RunEnd: {  //(the front end's last work, as Kernel::geTime() ends a run, and the pipeline's clocks kept)
-    u64 words;
-    std::memcpy(&words, data, sizeof(words));
+    u64 counts[2];
+    std::memcpy(counts, data, sizeof(counts));
+    u64 words = counts[0], ramWords = counts[1];
     render.runEnd();
     if(checking && words != runWords) {
       std::fprintf(stderr, "PSP GE thread: a run of %llu words counted %llu by the render GE, at record %llu\n",
                    (unsigned long long)words, (unsigned long long)runWords, (unsigned long long)header.serial);
       std::abort();
     }
-    if(render.pspTiming) render.pipeStop(words);
+    if(checking && ramWords != render.ramWordsAt(runWords)) {
+      std::fprintf(stderr, "PSP GE thread: a run's %llu words read from RAM counted %llu by the render GE, at record "
+                   "%llu\n", (unsigned long long)ramWords, (unsigned long long)render.ramWordsAt(runWords),
+                   (unsigned long long)header.serial);
+      std::abort();
+    }
+    if(render.pspTiming) render.pipeStop(words, ramWords);
     render.wordsRun = nullptr;
     owedRuns[takenRuns % RunsKept] = {render.owedPixels, render.owedPrimitives, render.pipeTime(), render.pipe.front,
                                       {render.ramClocks[0], render.ramClocks[1], render.ramClocks[2], render.ramClocks[3]},
@@ -1381,7 +1406,8 @@ auto GE::readCopiedVertices(u32 count, const VertexFormat& format) -> void {
     if(!format.colorFormat) vertex.color = ambient;
     if(format.through) vertex.u = keep15(vertex.u), vertex.v = keep15(vertex.v);
   }
+  u32 from = vertexAddress;
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
-  oweVertices(count, format);
+  oweVertices(count, format, from);
 }

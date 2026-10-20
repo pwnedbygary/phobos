@@ -131,7 +131,7 @@ auto Kernel::geTime(u64 commands) -> void {
     return;
   }
   if(gePspTiming) {
-    ge.pipeStop(commands);
+    ge.pipeStop(commands, ge.ramWordsAt(commands));
     u64 bus = std::clamp<u32>(powerState.bus, 1, 166);
     u64 before = geDoneAt;
     geDoneAt = gePipeAt + geCycles(ge.pipeTime(), bus);
@@ -171,6 +171,7 @@ auto Kernel::geResume() -> void {
 //window starts afresh when the GE is idle: the CPU's work before a list costs it nothing (the counts seen again as the
 //GE gets busy: geSeeCaches()).
 auto Kernel::geContend(u64 from, u64 to, u64 instructions) -> void {
+  geInstructions += instructions;  //(every stretch of the CPU's comes here: the runner's report, spinRefused())
   if(ge.thread) [[unlikely]] return geContendThreaded(from, to, instructions);
   if(geDoneAt <= from) {
     geWindow = {};
@@ -221,7 +222,9 @@ auto Kernel::geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts
   w.fills += fills, w.writebacks += writebacks, w.uncached += uncached;
   geBusyCycles += f64(overlap);
   geBusyLines += f64(fills) + Cost::WritebackLine * f64(writebacks) + Cost::UncachedLine * f64(uncached);
-  u64 due = geContendDue(w, cpu);
+  f64 owing = geContendOwing(w, cpu);
+  if(owing >= Cost::Cap && !w.capped) w.capped = true, geCapped++;  //(the runner's report: each window once)
+  u64 due = u64(f64(w.passed) * std::min(owing, Cost::Cap));  //(geContendDue()'s)
   if(due <= w.pushed) return;
   u64 pushed = due - w.pushed;
   w.pushed = due;
@@ -229,33 +232,58 @@ auto Kernel::geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts
   if(signal && geReachAt > from) geReachAt += pushed;  //(else geTime() works it out from gePipeAt again)
 }
 
-//The cycles a busy window pushes the GE back by, all told: its lines (each read in one, each written back
-//WritebackLine of one, each uncached access UncachedLine) over its time as a PSP's CPU at cpu MHz would take it (its
-//instructions' and stalls' cycles, or the cycles passed if longer: geContendBound()), as a share u of a thread
-//streaming RAM flat out's, make the list's work take 1 + sum(Contention[kind] x its share of the list's clocks) x u as
-//long: passed x slow / (1 + slow), in whole cycles. (cpu: the clock as the stretch adding to the window ended.)
-auto Kernel::geContendDue(const GeWindow& w, u32 cpu) const -> u64 {
+//A busy window's time as a PSP's CPU would take its instructions and lines beside the GE, in the CPU's cycles: each
+//instruction InstructionCycles, each line read in FillCycles, written back WritebackCycles, each uncached access
+//UncachedCycles; and what each line stalls it more beside the busy GE, the GE's StallFill, StallWriteback and
+//StallUncached cycles of each kind weighed by its share of the list's clocks (none before the list has any).
+auto Kernel::geContendTime(const GeWindow& w) const -> f64 {
+  using Cost = GE::Cost;
+  f64 time = Cost::InstructionCycles * f64(w.instructions) + Cost::FillCycles * f64(w.fills) +
+             Cost::WritebackCycles * f64(w.writebacks) + Cost::UncachedCycles * f64(w.uncached);
+  if(!(ge.allClocks > 0)) return time;
+  for(u32 kind : range(4)) {
+    time += ge.ramClocks[kind] / ge.allClocks * (Cost::StallFill[kind] * f64(w.fills) +
+            Cost::StallWriteback[kind] * f64(w.writebacks) + Cost::StallUncached[kind] * f64(w.uncached));
+  }
+  return time;
+}
+
+//What a busy window owes the GE, as a share of its cycles passed, before the cap: its lines (each read in one, each
+//written back WritebackLine of one, each uncached access UncachedLine) over its time as a PSP's CPU at cpu MHz would
+//take it (geContendTime(), or the cycles passed if longer: geContendBound()), as a share u of a thread streaming RAM
+//flat out's, make the front end's work take 1 + a as long, a = sum(Contention[kind] x its share of the list's clocks x
+//u) over vertices and words, and the back end's cost it a fixed time a line, b the same sum over texels and transfers:
+//a / (1 + a) + b. (cpu: the clock as the stretch adding to the window ended.)
+auto Kernel::geContendOwing(const GeWindow& w, u32 cpu) const -> f64 {
   using Cost = GE::Cost;
   f64 lines = f64(w.fills) + Cost::WritebackLine * f64(w.writebacks) + Cost::UncachedLine * f64(w.uncached);
   if(!(lines > 0) || !(ge.allClocks > 0)) return 0;
   f64 counted = f64(CPUFrequency) / (std::clamp<u32>(cpu, 1, 333) * 1e6);  //(cycles here to a CPU cycle)
-  f64 stalls = Cost::FillCycles * f64(w.fills) + Cost::WritebackCycles * f64(w.writebacks) +
-               Cost::UncachedCycles * f64(w.uncached);
-  f64 time = std::max(f64(w.passed), (Cost::InstructionCycles * f64(w.instructions) + stalls) * counted);
-  f64 u = lines * counted / (time * Cost::StreamLines), slow = 0;
-  for(u32 kind : range(4)) slow += Cost::Contention[kind] * ge.ramClocks[kind] / ge.allClocks * u;
-  return u64(f64(w.passed) * slow / (1 + slow));
+  f64 time = std::max(f64(w.passed), geContendTime(w) * counted);
+  f64 u = lines * counted / (time * Cost::StreamLines);
+  f64 a = (Cost::Contention[0] * ge.ramClocks[0] + Cost::Contention[1] * ge.ramClocks[1]) / ge.allClocks * u;
+  f64 b = (Cost::Contention[2] * ge.ramClocks[2] + Cost::Contention[3] * ge.ramClocks[3]) / ge.allClocks * u;
+  return a / (1 + a) + b;
+}
+
+//The cycles a busy window pushes the GE back by, all told: passed x what it owes (geContendOwing()), at most
+//GE::Cost::Cap of it, in whole cycles.
+auto Kernel::geContendDue(const GeWindow& w, u32 cpu) const -> u64 {
+  return u64(f64(w.passed) * std::min(geContendOwing(w, cpu), GE::Cost::Cap));
 }
 
 //Whether a busy window's time is the PSP's CPU's for its instructions and stalls (longer than the cycles passed) rather
 //than the cycles passed: the push geContendDue() works out has a kink where one gives way to the other. (At the CPU's
 //clock now: spinSkip()'s, with no stretch waiting.)
 auto Kernel::geContendBound(const GeWindow& w) const -> bool {
-  using Cost = GE::Cost;
   f64 counted = f64(CPUFrequency) / (std::clamp<u32>(powerState.cpu, 1, 333) * 1e6);
-  f64 stalls = Cost::FillCycles * f64(w.fills) + Cost::WritebackCycles * f64(w.writebacks) +
-               Cost::UncachedCycles * f64(w.uncached);
-  return (Cost::InstructionCycles * f64(w.instructions) + stalls) * counted > f64(w.passed);
+  return geContendTime(w) * counted > f64(w.passed);
+}
+
+//Whether what a busy window owes reaches the cap (GE::Cost::Cap), its push held there: then its push may rise and
+//fall along a spin's turns (spinSkip()). At the CPU's clock now, as geContendBound().
+auto Kernel::geContendCapped(const GeWindow& w) const -> bool {
+  return geContendOwing(w, powerState.cpu) >= GE::Cost::Cap;
 }
 
 //The CPU's caches' counts as they are now, seen by the GE's busy window (geContend()): as the GE gets busy (geOwe(),

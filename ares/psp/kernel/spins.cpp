@@ -196,7 +196,11 @@ auto Kernel::spinSkip() -> void {
   //more than before the first turn: so it is where that push falls and then rises at most along the turns, which it
   //does with each turn one stretch (one system call), or with the turns moving no lines (then any number: a spin's
   //turn makes no waits, so its stretches are all instructions), the window's time the same kind throughout
-  //(geContendBound()). With no lines in the window nor the turns' the window owes nothing. And the last two turns run
+  //(geContendBound()): along the turns the cycles passed, the lines and the CPU's time with its stalls grow evenly and
+  //the list's shares stay, so each part of what the window owes (geContendOwing(): the front end's a / (1 + a), the
+  //back end's b) is convex, or concave and rising, and their sum has no maximum within them. The cap can make one,
+  //the push following it up and then falling with the sum: a cap binding at either end refuses the skip, counted
+  //(spinRefused()). With no lines in the window nor the turns' the window owes nothing. And the last two turns run
   //moved the same lines with as many system calls (spinTurn()): each turn skipped moves what they did (below).
   if(gePspTiming && !spin.steady) return;
   if(gePspTiming && ge.thread) geFold(true);  //(the window and the GE's time as the synchronous GE has them)
@@ -209,6 +213,7 @@ auto Kernel::spinSkip() -> void {
     end.uncached += turns * spin.moved[2];
     bool lines = moving || geWindow.fills || geWindow.writebacks || geWindow.uncached;
     if(lines && ((moving && spin.calls > 1) || geContendBound(geWindow) != geContendBound(end))) return;
+    if(lines && (geContendCapped(geWindow) || geContendCapped(end))) return spinRefused(skipped);
   }
   SpinShadow shadow{*this, memory};
   if(!spinProve(shadow) || shadow.period != spin.period) {
@@ -239,6 +244,16 @@ auto Kernel::spinSkip() -> void {
     data.uncached += turns * spin.moved[2], cpu.instructionCache.fills += turns * spin.moved[3];
     geContend(cycles - skipped, cycles, skipped);
   }
+}
+
+//A skip refused because the cap binds at either end of its turns (spinSkip()), for the runner's report: counted, with
+//the instructions of the turns it would have skipped, which run instead, each once however many refused skips would
+//have skipped it (the CPU's instructions from here on, by geInstructions' count, up to geRefusedTo).
+auto Kernel::spinRefused(u64 skipped) -> void {
+  geSkipsRefused++;
+  u64 from = std::max(geInstructions, geRefusedTo), to = geInstructions + skipped;
+  if(to > from) geRefusedInstructions += to - from;
+  geRefusedTo = std::max(geRefusedTo, to);
 }
 
 //The CPU's caches' counts as they are (data lines read in, written back, uncached accesses, instruction lines read in).

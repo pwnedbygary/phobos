@@ -726,6 +726,92 @@ static auto spinsGeDrawingThreaded() -> void {
   }
 }
 
+//With the PSP's GE timing, the hybrid's cap in the spin skip (spinSkip(): a cap binding at either end of the turns a
+//skip would skip refuses it, Kernel::spinRefused(), counted). The list: a sprite over the screen textured from a
+//512x512 8888 texture in RAM read wide, its texels nearly all of its clocks (the back end's kind, which costs the GE a
+//fixed time a line). Beside it main reads a word of each of 4,096 lines, waits 1.8 ms (the window's time still the
+//CPU's, its stalls beside the GE with it, about 1.5 times the cycles passed) and asks after the list (sceGeListSync(id,
+//1)) till it's done: the window owes past the cap as the spin starts, and as its turns run the CPU's time grows faster
+//than the cycles passed, so what the window owes falls through the cap and its push, held there, would fall after it.
+//Every step's state the same with the skip on as off; skips refused while the cap binds, then taken, turns skipped by
+//the thousand. And beside sprites textured from RAM (both kinds' parts), main reading three lines each turn: skipped
+//as run, none refused.
+static auto spinsGeCapped() -> void {
+  constexpr u32 Texture = 0x0900'0000, Lines = 0x0940'0000;
+  auto capped = [](KernelMachine& m) {
+    auto& memory = m.system.memory;
+    for(u32 n = 0; n < 512 * 512; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
+    u32 at = GeList;
+    auto put = [&](u32 command, u32 argument = 0) {
+      memory.write(4, at, command << 24 | (argument & 0xff'ffff));
+      at += 4;
+    };
+    put(GE::FrameBufferPointer, 0); put(GE::FrameBufferWidth, 512); put(GE::FrameBufferPixelFormat, 3);
+    put(GE::Scissor1, 0); put(GE::Scissor2, 271 << 10 | 479); put(GE::Region2, 1023 << 10 | 1023);
+    put(GE::VertexType, 0x80'0102);  //(through: 16-bit texture coordinates and positions)
+    put(GE::TextureMappingEnable, 1); put(GE::TextureAddress0, Texture);
+    put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 512); put(GE::TextureSize0, 9 << 8 | 9);
+    put(GE::TextureFormat, 3); put(GE::TextureFunction, 3);
+    put(GE::Base, GeVertices >> 8 & 0xf'0000); put(GE::VertexAddress, GeVertices);
+    u32 vertex = GeVertices;
+    for(u32 half : {0u, 0u, 0u, 0u, 0u, 512u, 512u, 480u, 272u, 0u}) memory.write(2, vertex, half), vertex += 2;
+    put(GE::Primitive, 6 << 16 | 2);  //(a sprite)
+    put(GE::Finish); put(GE::End);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, GeList); main.li(a1, 0); main.li(a2, 0xffff'ffff); main.li(a3, 0);
+    main.call("sceGeListEnQueue");
+    main.put(addu(s0, v0, zero));
+    main.li(s1, Lines); main.li(s2, 256);  //(4,096 lines, 16 a turn of the loop)
+    u32 reads = main.here();
+    for(u32 n = 0; n < 16; n++) main.put(lw(t1, s16(n * 64), s1));
+    main.put(addiu(s1, s1, 1024)); main.put(addiu(s2, s2, -1));
+    main.put(bne(s2, zero, branchTo(main, reads))); main.put(nop);
+    main.li(a0, 1800); main.call("sceKernelDelayThread");
+    u32 poll = main.here();
+    main.put(addu(a0, s0, zero)); main.li(a1, 1); main.call("sceGeListSync");
+    main.put(bne(v0, zero, branchTo(main, poll))); main.put(nop);
+    main.call("sceKernelExitGame");
+  };
+  auto parts = [](KernelMachine& m) {
+    geSprites(m, GeList, GeVertices, false, nullptr, true);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, GeList); main.li(a1, 0); main.li(a2, 0xffff'ffff); main.li(a3, 0);
+    main.call("sceGeListEnQueue");
+    main.put(addu(s0, v0, zero));
+    u32 poll = main.here();
+    main.li(t4, Words), main.put(lw(t5, 0, t4)), main.put(lw(t6, 0x2000, t4)), main.put(lw(t7, 0x4000, t4));
+    main.put(addu(a0, s0, zero)); main.li(a1, 1); main.call("sceGeListSync");
+    main.put(bne(v0, zero, branchTo(main, poll))); main.put(nop);
+    main.call("sceKernelExitGame");
+  };
+  for(bool recompile : {false, true}) {
+    u64 skipped = 0;
+    CHECK(bothWays(capped, recompile, 64, skipped, true), true);
+    if(skipped <= 1000) std::printf("  the cap's spin skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+    CHECK(bothWays(parts, recompile, 32, skipped, true), true);
+    if(skipped <= 1000) std::printf("  both parts' spin skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+  }
+  auto m = machine(capped, true, true, true);
+  m->kernel.run(Step * 64);
+  CHECK(m->kernel.exited, true);
+  auto& k = m->kernel;
+  if(!k.geCapped || !k.geSkipsRefused || !k.geRefusedInstructions || k.geRefusedInstructions > k.geInstructions) {
+    std::printf("  windows capped %llu; spin skips refused %llu, %llu instructions in them, of %llu\n",
+                (unsigned long long)k.geCapped, (unsigned long long)k.geSkipsRefused,
+                (unsigned long long)k.geRefusedInstructions, (unsigned long long)k.geInstructions);
+  }
+  CHECK(k.geCapped, 1u);
+  CHECK(k.geSkipsRefused > 0 && k.geRefusedInstructions > 0, true);
+  CHECK(k.geRefusedInstructions < k.geInstructions, true);
+  m = machine(parts, true, true, true);
+  m->kernel.run(Step * 32);
+  CHECK(m->kernel.exited, true);
+  CHECK(m->kernel.geCapped + m->kernel.geSkipsRefused, 0u);
+  CHECK(m->kernel.spun > 1000, true);
+}
+
 auto spinTests() -> Tests {
   return {
     {"spins skipped as run", spinsSkipped}, {"spins refused", spinsRefused}, {"a spin skipped directly", spinsDirect},
@@ -737,6 +823,8 @@ auto spinTests() -> Tests {
      spinsGeLooksThreaded},
     {"the GE's looks polled with the PSP's GE timing, its list stalled as the GE draws, with the GE on its thread: "
      "skipped as every turn run", spinsGeDrawingThreaded},
+    {"the GE's looks polled with the PSP's GE timing beside a window held at the cap: skips refused, then taken",
+     spinsGeCapped},
   };
 }
 
