@@ -1151,7 +1151,7 @@ struct Kernel {
   //(geContend()). (Mutable, as is gePipeAt: with the GE on its thread, geFold() takes the stretches that waited.)
   struct GeWindow {
     u64 passed = 0, instructions = 0, fills = 0, writebacks = 0, uncached = 0, pushed = 0;
-    bool capped = false;
+    u64 capped = 0;  //(0 or 1; a word, not a bool, so that a window has no padding: tests compare two byte for byte)
   };
   mutable GeWindow geWindow;
   mutable u64 geCacheSeen[4] = {};

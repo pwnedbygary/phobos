@@ -223,7 +223,7 @@ auto Kernel::geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts
   geBusyCycles += f64(overlap);
   geBusyLines += f64(fills) + Cost::WritebackLine * f64(writebacks) + Cost::UncachedLine * f64(uncached);
   f64 owing = geContendOwing(w, cpu);
-  if(owing >= Cost::Cap && !w.capped) w.capped = true, geCapped++;  //(the runner's report: each window once)
+  if(owing >= Cost::Cap && !w.capped) w.capped = 1, geCapped++;  //(the runner's report: each window once)
   u64 due = u64(f64(w.passed) * std::min(owing, Cost::Cap));  //(geContendDue()'s)
   if(due <= w.pushed) return;
   u64 pushed = due - w.pushed;
