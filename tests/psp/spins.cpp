@@ -150,16 +150,17 @@ auto movieWait(KernelMachine& m, bool held = false, u32 library = 0) -> void {
 //How a program asks after the GE as it draws (geWait()): sceGeDrawSync(1); sceGeListSync(its list, 1); the first
 //with its list held at the list's start (its stall address) till another thread moves that to its end; the first with
 //a register counting the turns, which makes it a loop that can't be skipped; or the first with its list held past its
-//first sprite instead (the GE drawing that sprite meanwhile, then idle).
+//first sprite instead, its sprites textured from RAM (the GE drawing that sprite meanwhile, reading RAM, then idle).
 enum class Look : u32 { Draw, List, Stalled, Counting, Drawing };
 
 constexpr u32 GeList = 0x0894'0000, GeVertices = 0x0896'0000, GeCallbacks = R + 0x300, Finished = R + 0x310;
-constexpr u32 Pending = R + 0x320;
+constexpr u32 Pending = R + 0x320, GeTexels = 0x0898'0000;
 
-//A list at at of 16 sprites covering the screen (their vertices at vertices), each a fill the GE takes its time over,
-//then its FINISH; with signal, a SIGNAL (0x42, its callback run, the list going on) after the eighth. Where it ends;
-//first: where its first sprite ends.
-auto geSprites(KernelMachine& m, u32 at, u32 vertices, bool signal = false, u32* first = nullptr) -> u32 {
+//A list at at of 16 sprites covering the screen (their vertices at vertices), each a fill the GE takes its time over
+//(textured: a 64x64 texture at GeTexels, read from RAM, stretched over it), then its FINISH; with signal, a SIGNAL
+//(0x42, its callback run, the list going on) after the eighth. Where it ends; first: where its first sprite ends.
+auto geSprites(KernelMachine& m, u32 at, u32 vertices, bool signal = false, u32* first = nullptr, bool textured = false)
+  -> u32 {
   auto& memory = m.system.memory;
   auto put = [&](u32 command, u32 argument = 0) {
     memory.write(4, at, command << 24 | (argument & 0xff'ffff));
@@ -167,10 +168,22 @@ auto geSprites(KernelMachine& m, u32 at, u32 vertices, bool signal = false, u32*
   };
   put(GE::FrameBufferPointer, 0); put(GE::FrameBufferWidth, 512); put(GE::FrameBufferPixelFormat, 3);
   put(GE::Scissor1, 0); put(GE::Scissor2, 271 << 10 | 479); put(GE::Region2, 1023 << 10 | 1023);
-  put(GE::VertexType, 0x80'011c);  //(through: a color and a 16-bit x, y and z)
+  if(textured) {
+    for(u32 n = 0; n < 64 * 64; n++) memory.write(4, GeTexels + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
+    put(GE::VertexType, 0x80'0102);  //(through: 16-bit texture coordinates and positions)
+    put(GE::TextureMappingEnable, 1); put(GE::TextureAddress0, GeTexels);
+    put(GE::TextureBufferWidth0, (GeTexels >> 24) << 16 | 64); put(GE::TextureSize0, 6 << 8 | 6);
+    put(GE::TextureFormat, 3); put(GE::TextureFunction, 3); put(GE::TextureFilter, 1 | 1 << 8);
+  } else {
+    put(GE::VertexType, 0x80'011c);  //(through: a color and a 16-bit x, y and z)
+  }
   put(GE::Base, vertices >> 8 & 0xf'0000); put(GE::VertexAddress, vertices);
   for(u32 sprite = 0; sprite < 16; sprite++) {
     for(auto [x, y] : {std::pair<u32, u32>{0, 0}, {480, 272}}) {
+      if(textured) {  //(u, v, x, y, z)
+        for(u32 half : {x ? 64u : 0u, y ? 64u : 0u, x, y, 0u}) memory.write(2, vertices, half), vertices += 2;
+        continue;
+      }
       memory.write(4, vertices, 0xff00'00ff + sprite);
       memory.write(2, vertices + 4, x), memory.write(2, vertices + 6, y), memory.write(2, vertices + 8, 0);
       vertices += 12;
@@ -197,7 +210,7 @@ constexpr u32 Words = 0x0940'0000;
 //reads what traffic says besides.
 auto geWait(KernelMachine& m, Look look, Traffic traffic = Traffic::None) -> void {
   auto& memory = m.system.memory;
-  u32 first = 0, end = geSprites(m, GeList, GeVertices, false, &first);
+  u32 first = 0, end = geSprites(m, GeList, GeVertices, false, &first, look == Look::Drawing);
   bool stalled = look == Look::Stalled || look == Look::Drawing;
   u32 stall = look == Look::Stalled ? GeList : look == Look::Drawing ? first : 0;
   Assembler callback{m, 0x0880'4000};  //(the finish callback: one more list done)
@@ -656,10 +669,11 @@ static auto spinsGeLooksThreaded() -> void {
 
 //With the PSP's GE timing and the GE on its thread, the GE asked after (sceGeDrawSync(1)) by a poll whose turns move
 //lines of the CPU's caches while its list waits at its stall address past its first sprite, the GE drawing that sprite
-//and then idle (geWait()'s Look::Drawing): with no FINISH due, nothing in a turn folds the run handed over, and the
-//skip decides from the busy window after folding it (spinSkip(): the GE done part way through the turns it would skip
-//refuses it). Skipped with the GE on its thread, run free and held back at the start of every step, against the GE on
-//the emulation thread with every turn run: every step's state the same, and in the end the caches' counts too.
+//and then idle (geWait()'s Look::Drawing: sprites textured from RAM, whose texels weigh the lines the CPU moves): with
+//no FINISH due, nothing in a turn folds the run handed over, and the skip decides from the busy window after folding
+//it (spinSkip(): the GE done part way through the turns it would skip refuses it). Skipped with the GE on its thread,
+//run free and held back at the start of every step, against the GE on the emulation thread with every turn run: every
+//step's state the same, and in the end the caches' counts too.
 static auto spinsGeDrawingThreaded() -> void {
   auto make = [](Traffic traffic, bool threaded) {
     auto m = std::make_unique<KernelMachine>();
