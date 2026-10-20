@@ -3231,6 +3231,133 @@ static auto geTimePspStretchesThreaded() -> void {
   CHECK(plain.times[Sprites] - plain.times[0] > uncached.times[Sprites] - uncached.times[0], true);
 }
 
+//With the PSP's GE timing and the GE on its thread, the CPU's clock set while the CPU's stretches beside the GE wait on
+//a run handed over (Kernel::GeStretch, the clock each ended at kept with it): seven full-screen sprites textured from
+//RAM handed over at once; then four rounds of a wait beside them (cycles passed and no instructions, so the busy
+//window's time is the cycles passed, against which the clock weighs its lines), 8 KiB of fresh lines written, and the
+//CPU's clock set to 111 MHz, then 222, by scePowerSetCpuClockFrequency or by scePowerSetClockFrequency (the PLL kept,
+//so nothing waits), or kept (a quiet call in its place); then the last sprite and a wait for the list. With the GE on
+//its thread, run free and held back at the start of every step (the runs handed over counted only once the CPU has run
+//on), the program's times, the GE's, its busy window, the counts it has seen and the cycles and lines it was busy
+//beside the CPU the same as without it; and with the clock set, by either function, the list done later than with it
+//kept (at 111 MHz the same lines weigh twice as much against the cycles passed).
+static auto geTimePspClockThreaded() -> void {
+  constexpr u32 Code = 0x0880'4000, Data = 0x0940'0000, Texture = 0x0898'0000, Times = KernelMachine::Results;
+  constexpr u32 Sprites = 8, Rounds = 4;
+  enum class Clock : u32 { Kept, Cpu, All };
+  enum class Mode : u32 { Off, Free, Held };
+  struct Outcome {
+    std::vector<u32> times;
+    u64 cycles = 0, doneAt = 0, reachAt = 0, pipeAt = 0, seen[4] = {}, window[6] = {};
+    f64 busyCycles = 0, busyLines = 0;
+  };
+  auto run = [&](Clock clock, Mode mode) -> Outcome {
+    KernelMachine m;
+    m.pspTiming();
+    m.system.threadGE(mode != Mode::Off);
+    auto& memory = m.system.memory;
+    for(u32 n = 0; n < 64 * 64; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0), list.put(GE::Scissor2, 271 << 10 | 479), list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'0102);  //(through: 16-bit texture coordinates and positions)
+    list.put(GE::TextureMappingEnable, 1), list.to(GE::TextureAddress0, Texture);
+    list.put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+    list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3), list.put(GE::TextureFilter, 1 | 1 << 8);
+    u32 vertex = Vertices;
+    list.to(GE::VertexAddress, vertex);
+    u32 ends[Sprites];
+    for(u32 n = 0; n < Sprites; n++) {  //(10 bytes a vertex: u, v, x, y, z)
+      for(u32 half : {0u, 0u, 0u, 0u, 0u, 64u, 64u, 480u, 272u, 0u}) memory.write(2, vertex, half), vertex += 2;
+      list.put(GE::Primitive, GE::Sprites << 16 | 2);
+      ends[n] = list.address;
+    }
+    list.put(GE::Finish), list.put(GE::End);
+    u32 end = list.address;
+    Assembler a{m, Code};
+    a.li(a0, ListA), a.li(a1, ends[Sprites - 2]), a.li(a2, 0xffff'ffff), a.li(a3, 0);
+    a.call("sceGeListEnQueue");
+    a.put(addu(s0, v0, zero));
+    for(u32 n = 0; n < Rounds; n++) {
+      a.li(a0, 300), a.call("sceKernelDelayThread");
+      wordLoop(a, Data + n * 64_KiB, 8_KiB, 1, true);
+      u32 mhz = n % 2 ? 222 : 111;
+      if(clock == Clock::Cpu) a.li(a0, mhz), a.call("scePowerSetCpuClockFrequency");
+      else if(clock == Clock::All) a.li(a0, 222), a.li(a1, mhz), a.li(a2, 111), a.call("scePowerSetClockFrequency");
+      else a.call("sceKernelGetSystemTimeLow");
+      a.call("sceKernelGetSystemTimeLow");
+      a.li(t4, Times + n * 4), a.put(sw(v0, 0, t4));
+    }
+    a.put(addu(a0, s0, zero)), a.li(a1, end);
+    a.call("sceGeListUpdateStallAddr");
+    a.li(a0, 0);
+    a.call("sceGeDrawSync");
+    a.call("sceKernelGetSystemTimeLow");
+    a.li(t4, Times + Rounds * 4), a.put(sw(v0, 0, t4));
+    a.call("sceKernelExitGame");
+    m.system.recompiler.enabled = true;
+    m.system.power(Code);
+    s32 uid = m.kernel.createThread("main", Code, 0x20, 0x4000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+    std::atomic<bool> hold{false};
+    if(mode == Mode::Held) {
+      m.system.geThreading->drain();  //(the thread reads its gate as it takes each record)
+      m.system.geThreading->gate = [&](u64) { while(hold.load()) std::this_thread::yield(); };
+    }
+    for(u32 step = 0; step < 1024 && !m.kernel.exited; step++) {
+      if(mode != Mode::Held) {
+        m.kernel.run(Kernel::VblankCycles / 32);
+        continue;
+      }
+      hold = true;
+      std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(2)); hold = false; });
+      m.kernel.run(Kernel::VblankCycles / 32);
+      release.join();
+    }
+    if(mode == Mode::Held) m.system.geThreading->drain(), m.system.geThreading->gate = nullptr;
+    CHECK(m.kernel.exited, true);
+    auto& k = m.kernel;
+    k.geFold(true);  //(threaded: every run handed over counted, and the stretches after it)
+    Outcome o;
+    for(u32 n = 0; n <= Rounds; n++) o.times.push_back(memory.read(4, Times + n * 4));
+    o.cycles = k.cycles, o.doneAt = k.geDoneAt, o.reachAt = k.geReachAt, o.pipeAt = k.gePipeAt;
+    for(u32 n : range(4)) o.seen[n] = k.geCacheSeen[n];
+    auto& w = k.geWindow;
+    o.window[0] = w.passed, o.window[1] = w.instructions, o.window[2] = w.fills, o.window[3] = w.writebacks;
+    o.window[4] = w.uncached, o.window[5] = w.pushed;
+    o.busyCycles = k.geBusyCycles, o.busyLines = k.geBusyLines;
+    return o;
+  };
+  auto same = [](const Outcome& x, const Outcome& y) {
+    CHECK(x.times == y.times, true);
+    CHECK(x.cycles, y.cycles);
+    CHECK(x.doneAt, y.doneAt);
+    CHECK(x.reachAt, y.reachAt);
+    CHECK(x.pipeAt, y.pipeAt);
+    for(u32 n : range(4)) CHECK(x.seen[n], y.seen[n]);
+    for(u32 n : range(6)) CHECK(x.window[n], y.window[n]);
+    CHECK(x.busyCycles == y.busyCycles, true);
+    CHECK(x.busyLines == y.busyLines, true);
+  };
+  Outcome kept, set[2];
+  for(auto clock : {Clock::Kept, Clock::Cpu, Clock::All}) {
+    Outcome plain = run(clock, Mode::Off);
+    for(auto mode : {Mode::Free, Mode::Held}) {
+      Outcome threaded = run(clock, mode);
+      if(plain.times != threaded.times || plain.doneAt != threaded.doneAt) {
+        std::printf("  clock %u, mode %u: the list done at %llu, %u microseconds in, against %llu, %u without it\n",
+                    u32(clock), u32(mode), (unsigned long long)threaded.doneAt, threaded.times[Rounds],
+                    (unsigned long long)plain.doneAt, plain.times[Rounds]);
+      }
+      same(plain, threaded);
+    }
+    if(clock == Clock::Kept) kept = plain;
+    else set[clock == Clock::All] = plain;
+  }
+  CHECK(kept.busyLines > 0, true);
+  for(auto& changed : set) CHECK(changed.doneAt > kept.doneAt && changed.times[Rounds] > kept.times[Rounds], true);
+}
+
 //(the stretches the GE thread's runs keep waiting, below) A list at ListA of four full-screen sprites textured from
 //RAM, then 6,000 NOPs, then a SIGNAL whose callback suspends the GE (kind 1, its callbacks callbacks') or the FINISH:
 //the GE's front end gets there long after the call that queues it (2.23 clocks a word), and the bound from the run's
@@ -5630,6 +5757,7 @@ auto geTests() -> Tests {
     {"ge time, the PSP's: a state keeps the list's clocks by kind, loaded with the GE on its thread or not",
      geTimePspStateClocks},
     {"ge time, the PSP's, with the GE on its thread: the CPU's stretches beside the GE", geTimePspStretchesThreaded},
+    {"ge time, the PSP's, with the GE on its thread: the CPU's clock set while stretches wait", geTimePspClockThreaded},
     {"ge time, the PSP's, with the GE on its thread: a stretch's SIGNAL due kept past sceGeBreak(0)",
      geTimePspStretchSignalThreaded},
     {"ge time, the PSP's, with the GE on its thread: a go's limit takes the stretches decided before it",

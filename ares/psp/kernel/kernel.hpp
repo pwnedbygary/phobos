@@ -1153,14 +1153,14 @@ struct Kernel {
   mutable f64 geBusyCycles = 0, geBusyLines = 0;
   auto geContend(u64 from, u64 to, u64 instructions) -> void;
   auto geContendThreaded(u64 from, u64 to, u64 instructions) -> void;
-  auto geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4], bool signal) const -> void;
-  auto geContendDue(const GeWindow& window) const -> u64;
+  auto geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4], bool signal, u32 cpu) const -> void;
+  auto geContendDue(const GeWindow& window, u32 cpu) const -> u64;
   auto geContendBound(const GeWindow& window) const -> bool;
   auto geSeeCaches() -> void;
   auto geCacheCounts(u64 (&counts)[4]) const -> void;
   //With the GE on its thread (GeRun, below), a stretch ended while runs handed over aren't folded yet: kept, with its
-  //instructions, the caches' counts as it ended, whether a SIGNAL was due then, and the last run handed over before
-  //it, and taken in turn as geFold()
+  //instructions, the caches' counts as it ended, whether a SIGNAL was due then, the CPU's clock then (MHz: it weighs
+  //the window's lines, geContendDue()), and the last run handed over before it, and taken in turn as geFold()
   //folds that run, from the times the fold leaves, as the synchronous GE takes it after the run's geTime(); the list's
   //clocks by kind, which the GE thread gives with each run, as the last folded left them (in the kernel's GE's
   //ramClocks and allClocks, which draws nothing while the thread does). Each stretch numbered in turn (geStretches made
@@ -1170,6 +1170,7 @@ struct Kernel {
     u64 from, to, instructions;
     u64 caches[4] = {};
     bool signal = false;
+    u32 cpu = 0;
     u64 run = 0, number = 0;
   };
   mutable std::deque<GeStretch> geStretches;

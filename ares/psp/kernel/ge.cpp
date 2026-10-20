@@ -178,25 +178,28 @@ auto Kernel::geContend(u64 from, u64 to, u64 instructions) -> void {
   }
   u64 counts[4];
   geCacheCounts(counts);
-  geContendNow(from, to, instructions, counts, geSignalDue);
+  geContendNow(from, to, instructions, counts, geSignalDue, powerState.cpu);
 }
 
 //With the GE on its thread, a stretch ended while runs handed over aren't folded yet: kept with the caches' counts as
-//it ended and whether a SIGNAL was due then (GeStretch), and taken as geFold() folds the last run handed over before
-//it, from the times the fold leaves and the list's clocks by kind the GE thread gives with each run, as the
-//synchronous GE takes it after that run's geTime(). Else taken now, with the clocks the last run folded left.
+//it ended, whether a SIGNAL was due then and the CPU's clock then (GeStretch), and taken as geFold() folds the last run
+//handed over before it, from the times the fold leaves and the list's clocks by kind the GE thread gives with each run,
+//as the synchronous GE takes it after that run's geTime(): all it takes is its own or the fold's, so it comes out the
+//same whenever the fold comes, the clock set since or not. Else taken now, with the clocks the last run folded left.
 NALL_NOINLINE auto Kernel::geContendThreaded(u64 from, u64 to, u64 instructions) -> void {
   GeStretch stretch{from, to, instructions};
   geCacheCounts(stretch.caches);
   stretch.signal = geSignalDue;
+  stretch.cpu = powerState.cpu;
   stretch.number = geStretchesMade++;
   if(!geRuns.empty()) return stretch.run = geRuns.back().run, geStretches.push_back(stretch);
-  geContendNow(from, to, instructions, stretch.caches, stretch.signal);
+  geContendNow(from, to, instructions, stretch.caches, stretch.signal, stretch.cpu);
 }
 
-//(geContend()'s, with the caches' counts as the stretch ended and whether a SIGNAL was due then: with the GE on its
-//thread, the list's clocks by kind those the last run folded left, geFold())
-auto Kernel::geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4], bool signal) const -> void {
+//(geContend()'s, with the caches' counts as the stretch ended, whether a SIGNAL was due then and the CPU's clock then:
+//with the GE on its thread, the list's clocks by kind those the last run folded left, geFold())
+auto Kernel::geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4], bool signal, u32 cpu) const
+  -> void {
   if(geDoneAt <= from) {
     geWindow = {};
     return;
@@ -216,7 +219,7 @@ auto Kernel::geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts
   w.fills += fills, w.writebacks += writebacks, w.uncached += uncached;
   geBusyCycles += f64(overlap);
   geBusyLines += f64(fills) + Cost::WritebackLine * f64(writebacks) + Cost::UncachedLine * f64(uncached);
-  u64 due = geContendDue(w);
+  u64 due = geContendDue(w, cpu);
   if(due <= w.pushed) return;
   u64 pushed = due - w.pushed;
   w.pushed = due;
@@ -225,15 +228,15 @@ auto Kernel::geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts
 }
 
 //The cycles a busy window pushes the GE back by, all told: its lines (each read in one, each written back
-//WritebackLine of one, each uncached access UncachedLine) over its time as a PSP's CPU would take it (its instructions'
-//and stalls' cycles, or the cycles passed if longer: geContendBound()), as a share u of a thread streaming RAM flat
-//out's, make the list's work take 1 + sum(Contention[kind] x its share of the list's clocks) x u as long: passed x
-//slow / (1 + slow), in whole cycles.
-auto Kernel::geContendDue(const GeWindow& w) const -> u64 {
+//WritebackLine of one, each uncached access UncachedLine) over its time as a PSP's CPU at cpu MHz would take it (its
+//instructions' and stalls' cycles, or the cycles passed if longer: geContendBound()), as a share u of a thread
+//streaming RAM flat out's, make the list's work take 1 + sum(Contention[kind] x its share of the list's clocks) x u as
+//long: passed x slow / (1 + slow), in whole cycles. (cpu: the clock as the stretch adding to the window ended.)
+auto Kernel::geContendDue(const GeWindow& w, u32 cpu) const -> u64 {
   using Cost = GE::Cost;
   f64 lines = f64(w.fills) + Cost::WritebackLine * f64(w.writebacks) + Cost::UncachedLine * f64(w.uncached);
   if(!(lines > 0) || !(ge.allClocks > 0)) return 0;
-  f64 counted = f64(CPUFrequency) / (std::clamp<u32>(powerState.cpu, 1, 333) * 1e6);  //(cycles here to a CPU cycle)
+  f64 counted = f64(CPUFrequency) / (std::clamp<u32>(cpu, 1, 333) * 1e6);  //(cycles here to a CPU cycle)
   f64 stalls = Cost::FillCycles * f64(w.fills) + Cost::WritebackCycles * f64(w.writebacks) +
                Cost::UncachedCycles * f64(w.uncached);
   f64 time = std::max(f64(w.passed), (Cost::InstructionCycles * f64(w.instructions) + stalls) * counted);
@@ -243,7 +246,8 @@ auto Kernel::geContendDue(const GeWindow& w) const -> u64 {
 }
 
 //Whether a busy window's time is the PSP's CPU's for its instructions and stalls (longer than the cycles passed) rather
-//than the cycles passed: the push geContendDue() works out has a kink where one gives way to the other.
+//than the cycles passed: the push geContendDue() works out has a kink where one gives way to the other. (At the CPU's
+//clock now: spinSkip()'s, with no stretch waiting.)
 auto Kernel::geContendBound(const GeWindow& w) const -> bool {
   using Cost = GE::Cost;
   f64 counted = f64(CPUFrequency) / (std::clamp<u32>(powerState.cpu, 1, 333) * 1e6);
@@ -357,7 +361,7 @@ auto Kernel::geFold(bool wait, u64 through) const -> void {
       while(!geStretches.empty() && geStretches.front().run == run.run) {
         auto stretch = geStretches.front();
         geStretches.pop_front();
-        geContendNow(stretch.from, stretch.to, stretch.instructions, stretch.caches, stretch.signal);
+        geContendNow(stretch.from, stretch.to, stretch.instructions, stretch.caches, stretch.signal, stretch.cpu);
         folded.doneAt = geDoneAt, folded.reachAt = geReachAt, folded.stretch = stretch.number;
         if(!geLimits.empty()) geFolded.push_back(folded);
       }
