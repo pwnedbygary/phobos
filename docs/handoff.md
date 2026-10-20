@@ -49,6 +49,45 @@ Branch `cursor/psp-ge-decoder-ci-cachy`, from master `d9bfbefb4` (#281). CI only
   purpose (not committed), FAILED (failures=1, skipped=1), exit 1; actionlint 1.7.12 with shellcheck 0.11.0, clean.
   CI's run is in the pull request's body. Independent review: not yet.
 
+## PSP measure, round 10c: Super Monkey Ball's small strips beside the CPU taken apart, Activision Hits' menu's second and third lists — 2026-10-19
+
+Branch `cursor/psp-measure-round10c-2b67` (PR #280, draft), from master `08801ab60` (#269 and #278 merged), master
+`d9bfbefb4` merged in (#279, #282, #281); docs/psp-core.md, part 114.
+- **Why**: #279's model of the CPU's traffic (part 113) leaves Super Monkey Ball's rest on the GE's side: round 10's
+  list H (the game's small trilinear CLUT4 strips) comes out about 16% short beside the CPU, the model having it read
+  RAM for 37% of its clocks. #269's refit leaves Activision Hits' menu's second list +48.5% (60 sprites shrinking a
+  VRAM picture, charged 1.64 ms where the PSP leaves them 0.25) and its third +26.7% (triangles magnifying a RAM
+  texture into 5650); 1fd9133c specified both (`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-10c-1fd9133c.md`).
+- **What**: a new first menu line, round 10c (about 30 KB, `manifest10c.txt`): `time-contention4` (31: H as round 10
+  drew it, nearest within the level, bilinear and nearest without levels, untextured, its vertices in VRAM, untextured
+  with them there; each alone and beside streaming reads flat out and at a half and the game's mix over 256 KiB; each
+  pattern alone), `time-shrink` (9: the second list as logged, its sprites alone, nearest, 1:1, 4:1, the picture
+  swizzled in VRAM and from RAM, one sprite 240 wide), `time-magnify` (14: the third list as logged, 1:1 and 4 times,
+  into 8888, unblended, the texture 512x256, CLUT8; bilinear and nearest each), `time-gamestrips` (6: round 10's
+  game-style strips unlit, then nearest, no alpha test, no depth test, into 5650, untextured) and `time-anchors3` (7 of
+  round 10's cases). About half a minute on the PSP. Synthetic: nothing of a game's lists, textures or vertices.
+- **Safety**: round 10's and 10b's: new names only; the clocks put back after each test; every GE wait 5 s with the
+  reset path; the contention thread's own deadline, its lines written back and invalidated after each run; the arrays
+  on 1 KiB boundaries; H's VRAM vertices in VRAM's last 256 KiB, past the depth buffer.
+- **Test**: "psp measure" runs round 10c after round 10b and checks every record; measured8 runs rounds 8, 9, 10 and
+  10b from the new build; `tests/psp/programs/pspmeasure.elf` rebuilt (`b38077b4…`); the owner's EBOOT `243aa27d…`
+  (`git archive 9bcaff348`, byte for byte).
+- **The owner's run** (2026-10-19 evening; `tests/psp/measurements/ge-round10c`, packed with xz, under his go-ahead of
+  2026-10-18): every run finished, nothing stalled; round 10's anchors repeat within 0.2% where nothing moved, 2 to 8%
+  cheaper where round 10's build had its arrays 64 bytes past 1 KiB boundaries.
+- **What it showed** (part 114): the CPU slows H through its vertices' reads from RAM, ×1.29 to 1.33 beside streaming
+  reads, ×1.24 to 1.29 at a half, ×1.43 to 1.51 beside the mix, the same untextured or with any filter; with the
+  vertices in VRAM (read 22 to 31% slower alone), ×0.99 to 1.02. The core with #279's model gives every variant ×1.15
+  to 1.16, 1.10 to 1.11 and 1.20 to 1.21: 10 to 20% short with the vertices in RAM, and 9 to 21% over the PSP with
+  them in VRAM, which the PSP doesn't slow; before #279, ×1.00. Activision Hits' second list as logged takes the PSP
+  4.52 ms (the game's own 3.48): the log doesn't describe it, and the core is within 5% of the logged list. Its third
+  list's logged quads take 1.35 ms of the game's 5.40 (the core 3.7% over); bilinear costs 36% at a texel a pixel and
+  5 to 10% magnified, which the core doesn't charge. Round 10's game-style strips take three times as long with the
+  depth test into 8888 as with either alone (the core 53% short with the pair, within 12% without).
+- **Next**: Super Monkey Ball's refit (its own pull request): H's vertex reads as most of its time beside the CPU, the
+  curve against the CPU's traffic, VRAM vertices at their own rate and out of the contention. For #269's agent: the
+  second list's own words, a bilinear term heavy at a texel a pixel, the depth test into 8888.
+
 ## PSP GE: part 113 and the handoff after #279's second review — wording only — 2026-10-19
 
 Branch `cursor/psp-279-nits-2b67`, from master `f5cf0c6b5` (#279, merged at `9f4e7607a`). Docs only.

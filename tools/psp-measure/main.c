@@ -41,6 +41,9 @@ static unsigned int choose(unsigned int buttons) {
 enum { Vfpu, Ge, Afresh, Leave };
 typedef struct { const char* text; int what, round; const char* note; } Choice;
 static const Choice choices[] = {
+  {"Round 10c: Monkey Ball's strips, Activision Hits' lists (30 KB)", Ge, 12,
+   "It runs the PSP at other clocks part of the time, as round 10 did,\n"
+   "and puts them back after each test. Keep the charger in.\n"},
   {"Round 10b: the CPU polling, before and beside; placement (30 KB)", Ge, 11,
    "It runs the PSP at other clocks part of the time, as round 10 did,\n"
    "and puts them back after each test. Keep the charger in.\n"},
@@ -132,6 +135,7 @@ int main(int argc, char** argv) {
     geRound(9);
     geRound(10);
     geRound(11);
+    geRound(12);
     geEnd();
     sceKernelExitGame();
     return 0;
