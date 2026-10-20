@@ -33,7 +33,7 @@ jobs:
       GLSLANG_SHA256: 2c34071f56ecf39d16233294d3739cf43f981fd39080f2fd9dccb782101191ce
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # (whether the image has one of its own; the pinned one, installed next, comes first in PATH either way)
       - name: The image's glslang

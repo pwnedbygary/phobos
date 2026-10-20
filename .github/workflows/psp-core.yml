@@ -51,7 +51,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # tests/objects.sh, which keeps every suite's objects, on its own small program (seconds)
       - name: Check the build scripts' object keeping
@@ -100,7 +100,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: The host
         run: |
@@ -140,7 +140,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
       # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
@@ -205,7 +205,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
       # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
@@ -291,7 +291,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Name the FFmpeg build
         id: ffmpeg
@@ -327,7 +327,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Name the FFmpeg build
         id: ffmpeg
@@ -363,7 +363,7 @@ jobs:
     steps:
       # (the history, for the build's name: git describe)
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           filter: blob:none
@@ -429,7 +429,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Test the measurements
         run: |
