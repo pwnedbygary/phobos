@@ -97,6 +97,29 @@ Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
 - **Not run** here: the rest of the sanitized suite, tests/allegrex, tests/psp/ares (CI's).
 - Independent review: not yet.
 
+## PSP measure: ge-terms.py applies to master again, its five places where #277 left them — tools only — 2026-10-20
+
+Branch `cursor/ge-terms-master-cachy`, from master `16156ab9a` (#286), master `dcf2f1b2c` (#287) merged in
+(`bc4e4521d`). `tools/psp-measure/ge-terms.py`, its README's recipe and this file; the core doesn't change.
+- **Why**: since #277 (part 111) master's script stopped at its tenth edit on master ("0 places for '    pipe.vertices
+  += format.indexFormat ? …'"): five of its 21 places had moved.
+- **What**: the five follow the code, adding what they added: the vertices' terms beside `ramRead(0, work)` in
+  `GE::oweVertices()`, JUMP's and CALL/RET's at `runList()`'s `front()`, the words' term and the R line in `geTime()`'s
+  branch for the synchronous GE, the S line in `geOwe()`'s. Its patched copy is byte for byte what the Super Monkey
+  Ball refit's step 1 copy of the script (made for `9f2d0633d`) gives. The docstring says the places are master's for
+  the GE thread Off: with it On, `geTime()` and `geOwe()` take the thread's branches, so the file has no R or S lines
+  (and, by reading, both threads add to the counts unguarded).
+- **Checks** (cachyOS x86-64, GCC 16.2.1, Python 3.14.7; `~/phobos-work/scratch/ge-terms/COMMANDS.txt`): it applies
+  to a `git archive` of `16156ab9a` and fails closed on a missing anchor; the patched runner builds with `build.sh`
+  (which compiles `psp.cpp` with `-w`; under `-Wall -Wextra` the script's added lines add no warning); Super Monkey
+  Ball and Chains of Olympus from boot, 2,400 frames, the PSP's timing: master's runner and the patched one without
+  and with PHOBOS_GE_TERMS give the same PNGs, state, WAV, output and report (but for the runner's source and the
+  host's timings), and the terms files are step 1's byte for byte; the README's recipe ran (its folder made first, as
+  `tar -x -C` needs; round 10c's built `EBOOT.PBP` for `make`: no pspdev here), and `ge-fit.py` gives `GE::Cost` back
+  to its figures (61 terms of 61).
+- Independent review: PASS on `c1673609b`, read-only (`~/phobos-work/scratch/review-288/REVIEW.md`); docs findings only.
+  Taken after it: L1, L2 and L3, and section 6's suggestion 1.
+
 ## CI: the sanitized PSP suite keeps the Vulkan driver loaded, so LeakSanitizer sees what lavapipe holds — 2026-10-20
 
 Branch `cursor/ci-lsan-mesa-cachy`, from master `b398e86f7` (#285), master `16156ab9a` (#286) merged in (`74b58eef2`).

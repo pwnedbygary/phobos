@@ -458,6 +458,7 @@ runner built from a patched copy of the source (the core itself carries no count
 clocks to the PSP's times. To fit them again:
 
 ```
+mkdir -p /tmp/terms
 git archive HEAD | tar -x -C /tmp/terms          # a copy of the checkout, which ge-terms.py patches
 python3 tools/psp-measure/ge-terms.py /tmp/terms
 (cd /tmp/terms && tools/psp-runner/build.sh)     # its last line names the runner
