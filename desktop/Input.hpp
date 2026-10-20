@@ -1,7 +1,12 @@
 #pragma once
+#include "Hotkeys.hpp"
+
 #include <SDL3/SDL.h>
 
+#include <functional>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace phobos::desktop {
@@ -23,6 +28,12 @@ struct PadState {
   float lx = 0, ly = 0, rx = 0, ry = 0;
 };
 
+// A hotkey token going down or up.
+struct HotkeyChange {
+  HotkeyToken token;
+  bool down;
+};
+
 // Every connected gamepad and the keyboard drive player 1, as one controller. The keyboard's
 // keys (keyboardPad in Input.cpp) press the bits; I, J, K and L push the left stick.
 struct Input {
@@ -34,8 +45,16 @@ struct Input {
   auto poll(bool keyboardIsPad, bool latchSticks) -> PadState;
   auto rumble(bool on) -> void;
   auto close() -> void;
+  // The hotkey tokens [event] presses or lets go of: a key, a pad button, a pad axis past half (let go below 40%), a
+  // mouse button (not a touch screen's or a pen's). Every pad's same button is one token, held while any pad holds it;
+  // a pad going away lets go of what it held.
+  auto hotkeyChanges(const SDL_Event& event) -> std::vector<HotkeyChange>;
+  // Whether a hotkey took a token from the game (HotkeyTracker::taken): its key, button, trigger or stick direction
+  // then doesn't reach the controller, nor its taps.
+  std::function<bool(HotkeyToken)> taken;
 
 private:
+  auto takes(HotkeyToken token) const -> bool { return taken && taken(token); }
   std::vector<SDL_Gamepad*> pads;
   int stickBits = 0;
   bool rumbling = false;
@@ -43,6 +62,9 @@ private:
   // the held state, so its press is kept for one poll.
   int keyboardTaps = 0;
   int padTaps = 0;
+  HotkeyHolders holders;
+  // Each pad's axes' directions held, as hotkey tokens.
+  std::map<std::pair<SDL_JoystickID, int>, AxisDirections> axes;
 };
 
 // The core's labels for a host key on the ZX Spectrum or MSX keyboard; empty when the key
@@ -50,5 +72,12 @@ private:
 auto keyboardLabels(const std::string& system, SDL_Scancode key) -> std::vector<const char*>;
 
 auto isKeyboardComputer(const std::string& system) -> bool;
+
+// Whether [token] plays the controller: a key of the keyboard's controller, a pad's button (but Guide, which no game
+// gets), trigger or stick.
+auto isGameButton(HotkeyToken token) -> bool;
+// A token's name as the Hotkeys page shows it ("F5", "Guide", "RT", "LS Up", "Mouse 4"), and a combo's ("Guide+RB").
+auto hotkeyTokenLabel(HotkeyToken token) -> std::string;
+auto hotkeyComboLabel(const HotkeyCombo& combo) -> std::string;
 
 }

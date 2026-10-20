@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <map>
 
 namespace phobos::desktop {
@@ -37,11 +38,11 @@ auto Input::openConnected() -> void {
 auto Input::handle(const SDL_Event& event) -> void {
   if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
     for (auto [key, bit] : keyboardPad) {
-      if (event.key.scancode == key) keyboardTaps |= bit;
+      if (event.key.scancode == key && !takes(keyToken(key))) keyboardTaps |= bit;
     }
   } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
     for (auto [button, bit] : padButtons) {
-      if (event.gbutton.button == button) padTaps |= bit;
+      if (event.gbutton.button == button && !takes(buttonToken(button))) padTaps |= bit;
     }
   } else if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
     for (auto* pad : pads) {
@@ -71,13 +72,15 @@ auto Input::poll(bool keyboardIsPad, bool latchSticks) -> PadState {
   PadState state;
   if (keyboardIsPad) {
     const bool* keys = SDL_GetKeyboardState(nullptr);
+    // A key a hotkey took is up, as far as the game knows.
+    auto held = [&](SDL_Scancode key) { return keys[key] && !takes(keyToken(key)); };
     for (auto [key, bit] : keyboardPad) {
-      if (keys[key]) state.buttons |= bit;
+      if (held(key)) state.buttons |= bit;
     }
     state.buttons |= keyboardTaps;
     // I, J, K and L push the left stick all the way (the PSP's analog stick, the N64's, a DualShock's left one).
-    state.lx = (float)keys[SDL_SCANCODE_L] - (float)keys[SDL_SCANCODE_J];
-    state.ly = (float)keys[SDL_SCANCODE_K] - (float)keys[SDL_SCANCODE_I];
+    state.lx = (float)held(SDL_SCANCODE_L) - (float)held(SDL_SCANCODE_J);
+    state.ly = (float)held(SDL_SCANCODE_K) - (float)held(SDL_SCANCODE_I);
   }
   state.buttons |= padTaps;
   keyboardTaps = padTaps = 0;
@@ -87,7 +90,7 @@ auto Input::poll(bool keyboardIsPad, bool latchSticks) -> PadState {
   float leftTrigger = 0.0f, rightTrigger = 0.0f;
   for (auto* pad : pads) {
     for (auto [button, bit] : padButtons) {
-      if (SDL_GetGamepadButton(pad, button)) state.buttons |= bit;
+      if (SDL_GetGamepadButton(pad, button) && !takes(buttonToken(button))) state.buttons |= bit;
     }
     auto axis = [&](SDL_GamepadAxis which) { return std::clamp(SDL_GetGamepadAxis(pad, which) / 32767.0f, -1.0f, 1.0f); };
     float lx = axis(SDL_GAMEPAD_AXIS_LEFTX), ly = axis(SDL_GAMEPAD_AXIS_LEFTY);
@@ -101,6 +104,16 @@ auto Input::poll(bool keyboardIsPad, bool latchSticks) -> PadState {
     leftTrigger = std::max(leftTrigger, axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER));
     rightTrigger = std::max(rightTrigger, axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
   }
+  // A trigger or a stick direction a hotkey took is held back, the stick's half of its axis with it.
+  if (takes(axisToken(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, true))) leftTrigger = 0;
+  if (takes(axisToken(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, true))) rightTrigger = 0;
+  auto holdBack = [&](float& value, SDL_GamepadAxis axis) {
+    if (value != 0 && takes(axisToken(axis, value > 0))) value = 0;
+  };
+  holdBack(state.lx, SDL_GAMEPAD_AXIS_LEFTX);
+  holdBack(state.ly, SDL_GAMEPAD_AXIS_LEFTY);
+  holdBack(state.rx, SDL_GAMEPAD_AXIS_RIGHTX);
+  holdBack(state.ry, SDL_GAMEPAD_AXIS_RIGHTY);
   if (latch(stickBits, PadL2, leftTrigger)) state.buttons |= PadL2;
   if (latch(stickBits, PadR2, rightTrigger)) state.buttons |= PadR2;
   if (latchSticks) {
@@ -126,6 +139,47 @@ auto Input::rumble(bool on) -> void {
 auto Input::close() -> void {
   for (auto* pad : pads) SDL_CloseGamepad(pad);
   pads.clear();
+}
+
+auto Input::hotkeyChanges(const SDL_Event& event) -> std::vector<HotkeyChange> {
+  std::vector<HotkeyChange> changes;
+  // Each pad and mouse holds its own presses, and the keyboards hold theirs as one: SDL lets go of a key held as the
+  // window loses focus as keyboard 0's, whichever keyboard pressed it.
+  enum : std::uint64_t { Keyboard = 1, Pad, Mouse };
+  auto device = [](std::uint64_t kind, std::uint32_t which) { return kind << 32 | which; };
+  auto change = [&](HotkeyToken token, std::uint64_t from, bool down) {
+    if (down ? holders.press(token, from) : holders.release(token, from)) changes.push_back({token, down});
+  };
+  switch (event.type) {
+  case SDL_EVENT_KEY_DOWN:
+  case SDL_EVENT_KEY_UP:
+    if (!event.key.repeat) change(keyToken(event.key.scancode), device(Keyboard, 0), event.key.down);
+    break;
+  case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+  case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    change(buttonToken(event.gbutton.button), device(Pad, event.gbutton.which), event.gbutton.down);
+    break;
+  case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+    auto& held = axes[{event.gaxis.which, event.gaxis.axis}];
+    auto now = latchAxis(held, std::clamp(event.gaxis.value / 32767.0f, -1.0f, 1.0f));
+    auto from = device(Pad, event.gaxis.which);
+    if (now.negative != held.negative) change(axisToken(event.gaxis.axis, false), from, now.negative);
+    if (now.positive != held.positive) change(axisToken(event.gaxis.axis, true), from, now.positive);
+    held = now;
+    break;
+  }
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
+    if (event.button.which == SDL_TOUCH_MOUSEID || event.button.which == SDL_PEN_MOUSEID) break;
+    change(mouseToken(event.button.button), device(Mouse, event.button.which), event.button.down);
+    break;
+  case SDL_EVENT_GAMEPAD_REMOVED:
+    for (auto token : holders.remove(device(Pad, event.gdevice.which))) changes.push_back({token, false});
+    for (auto it = axes.begin(); it != axes.end();) it = it->first.first == event.gdevice.which ? axes.erase(it) : ++it;
+    break;
+  default: break;
+  }
+  return changes;
 }
 
 auto isKeyboardComputer(const std::string& system) -> bool {
@@ -213,6 +267,55 @@ auto keyboardLabels(const std::string& system, SDL_Scancode key) -> std::vector<
   if (system == "ZX Spectrum" || system == "ZX Spectrum 128") return zxSpectrumLabels(key);
   if (system == "MSX" || system == "MSX2") return msxLabels(key);
   return {};
+}
+
+auto isGameButton(HotkeyToken token) -> bool {
+  int code = tokenCode(token);
+  switch (tokenKind(token)) {
+  case HotkeyKind::Key:
+    if (code == SDL_SCANCODE_I || code == SDL_SCANCODE_J || code == SDL_SCANCODE_K || code == SDL_SCANCODE_L) return true;
+    return std::any_of(std::begin(keyboardPad), std::end(keyboardPad), [&](auto& entry) { return entry.first == code; });
+  case HotkeyKind::Button:
+    return code != SDL_GAMEPAD_BUTTON_GUIDE &&
+           std::any_of(std::begin(padButtons), std::end(padButtons), [&](auto& entry) { return entry.first == code; });
+  case HotkeyKind::Axis: return true;
+  case HotkeyKind::Mouse: return false;
+  }
+  return false;
+}
+
+auto hotkeyTokenLabel(HotkeyToken token) -> std::string {
+  int code = tokenCode(token);
+  switch (tokenKind(token)) {
+  case HotkeyKind::Key: {
+    const char* name = SDL_GetScancodeName((SDL_Scancode)code);
+    return name && *name ? std::string(name) : "Key " + std::to_string(code);
+  }
+  case HotkeyKind::Button: {
+    // An Xbox pad's names, as the menus use them; the paddles are P1 to P4.
+    static const char* names[] = {"A", "B", "X", "Y", "Select", "Guide", "Start", "L3", "R3", "LB", "RB",
+                                  "Up", "Down", "Left", "Right", "Share", "P1", "P3", "P2", "P4", "Touchpad"};
+    return code < (int)std::size(names) ? std::string(names[code]) : "Button " + std::to_string(code);
+  }
+  case HotkeyKind::Axis: {
+    static const char* names[][2] = {{"LS Left", "LS Right"}, {"LS Up", "LS Down"}, {"RS Left", "RS Right"},
+                                     {"RS Up", "RS Down"}, {"LT", "LT"}, {"RT", "RT"}};
+    int axis = tokenAxis(token);
+    if (axis < (int)std::size(names)) return names[axis][tokenPositive(token)];
+    return "Axis " + std::to_string(axis) + (tokenPositive(token) ? "+" : "-");
+  }
+  case HotkeyKind::Mouse: {
+    static const char* names[] = {"Left click", "Middle click", "Right click", "Mouse 4", "Mouse 5"};
+    return code >= 1 && code <= (int)std::size(names) ? std::string(names[code - 1]) : "Mouse " + std::to_string(code);
+  }
+  }
+  return "?";
+}
+
+auto hotkeyComboLabel(const HotkeyCombo& combo) -> std::string {
+  std::string label;
+  for (auto token : combo) label += (label.empty() ? "" : "+") + hotkeyTokenLabel(token);
+  return label;
 }
 
 }

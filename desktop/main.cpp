@@ -1,5 +1,6 @@
 #include "DesktopHost.hpp"
 #include "Firmware.hpp"
+#include "Hotkeys.hpp"
 #include "Input.hpp"
 #include "Library.hpp"
 #include "Platform.hpp"
@@ -18,6 +19,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -37,10 +39,20 @@ constexpr Color highlightColor{47, 111, 223, 255};
 constexpr Color textColor{230, 230, 230, 255};
 constexpr Color dimColor{138, 144, 160, 255};
 constexpr Color shadeColor{0, 0, 0, 170};
+constexpr Color warningColor{232, 170, 72, 255};
 // SDL's debug font: 8 x 8 pixel characters, ASCII only.
 constexpr float glyph = 8.0f;
 
-enum class Screen { Library, Playing, Menu };
+enum class Screen { Library, Playing, Menu, Hotkeys };
+
+// Frame advance runs a frame at each press, then one every frameStepMs while held, after frameStepDelayMs (the Android
+// app's pace).
+constexpr Uint64 frameStepDelayMs = 300;
+constexpr Uint64 frameStepMs = 100;
+// A binding being captured is done once no new key has come for captureSettleMs (as on Android), and given up when no
+// key at all has come for captureTimeoutMs, which leaves a controller alone a way out.
+constexpr Uint64 captureSettleMs = 700;
+constexpr Uint64 captureTimeoutMs = 5000;
 
 // What a folder picked in the system's dialog is for.
 enum class Pick { Games, PspFonts, PspMemoryStick };
@@ -55,6 +67,30 @@ struct MenuItem {
   std::string label;
   // 0 for A or Enter, -1 or +1 for left or right.
   std::function<void(int)> choose;
+};
+
+// A row of the Hotkeys page: an action, one of its bindings, the switch that shows the direct slots, or the defaults.
+struct HotkeyRow {
+  enum class Kind { Action, Binding, Slots, Defaults } kind;
+  std::string action;
+  int slot = -1;
+};
+
+// A binding being captured: the keys pressed, in order, since it started.
+struct HotkeyCapture {
+  std::string action;
+  int slot = 0;
+  HotkeyCombo combo;
+  Uint64 started = 0;
+  Uint64 lastAdded = 0;
+};
+
+// A question waiting on the Hotkeys page: Enter or A answers yes, Escape or B no.
+struct Question {
+  std::string text;
+  std::string yes;
+  std::string no;
+  std::function<void()> confirm;
 };
 
 // A held direction steps once, then repeats after a short delay.
@@ -76,6 +112,25 @@ struct Repeat {
   }
 };
 
+// [text] in lines of at most [columns] characters, broken at its spaces.
+static auto wrap(const std::string& text, size_t columns) -> std::vector<std::string> {
+  std::vector<std::string> lines;
+  std::string line;
+  for (size_t start = 0; start < text.size();) {
+    auto space = text.find(' ', start);
+    auto word = text.substr(start, space == std::string::npos ? std::string::npos : space - start);
+    if (!line.empty() && line.size() + 1 + word.size() > columns) {
+      lines.push_back(line);
+      line.clear();
+    }
+    line += (line.empty() ? "" : " ") + word;
+    if (space == std::string::npos) break;
+    start = space + 1;
+  }
+  if (!line.empty()) lines.push_back(line);
+  return lines;
+}
+
 struct Shell {
   auto run(int argc, char* argv[]) -> int;
 
@@ -94,12 +149,31 @@ private:
   auto openMenu() -> void;
   auto closeMenu() -> void;
   auto releaseKeys() -> void;
-  auto statePath() const -> std::string;
-  auto saveState() -> void;
-  auto loadState() -> void;
+  auto statePath(int slot) const -> std::string;
+  auto saveState(int slot) -> void;
+  auto loadState(int slot) -> void;
+  auto setStateSlot(int slot) -> void;
   auto takeScreenshot() -> void;
   auto changeDisc(int direction) -> void;
+  auto cycleN64Pak(int direction) -> std::string;
+  auto togglePs1Analog() -> bool;
+  auto setFullscreen(bool fullscreen) -> void;
   auto toggleFullscreen() -> void;
+  auto startFrameStep() -> void;
+  auto storedHotkeys() const -> HotkeyMap;
+  auto storeHotkeys(const HotkeyMap& changes) -> void;
+  auto refreshHotkeys() -> void;
+  auto hotkeysTakeKeys() const -> bool;
+  auto hotkeyEvent(const SDL_Event& event) -> void;
+  auto runHotkey(const std::string& action) -> void;
+  auto updateHolds(const std::vector<std::string>& completed) -> void;
+  auto endHolds() -> void;
+  auto openHotkeys() -> void;
+  auto hotkeyRows() const -> std::vector<HotkeyRow>;
+  auto updateHotkeys(bool navUp, bool navDown, bool confirm, bool back, bool clear) -> void;
+  auto hotkeysBack() -> void;
+  auto clearHotkey(const HotkeyRow& row) -> void;
+  auto finishCapture() -> void;
   auto menuItems() -> std::vector<MenuItem>;
   auto pspMenuItems(std::vector<MenuItem>& items) -> void;
   auto setPspFonts(const std::string& picked) -> std::string;
@@ -108,6 +182,8 @@ private:
   auto render() -> void;
   auto drawLibrary(float width, float height) -> void;
   auto drawMenu(float width, float height) -> void;
+  auto drawHotkeys(float width, float height) -> void;
+  auto drawBox(float width, float height, const std::vector<std::string>& lines, const std::string& hint) -> void;
   auto fill(float x, float y, float w, float h, Color color) -> void;
   auto print(float x, float y, const std::string& line, Color color, float maxWidth = 0) -> void;
   auto show(const std::string& line) -> void;
@@ -143,14 +219,32 @@ private:
   int menuCursor = 0;
   int stateSlot = 1;
   bool fastForward = false;
-  bool fastForwardKey = false;
+  bool fastForwardHeld = false;
   bool fastForwardApplied = false;
   bool muted = false;
-  // Keys of the ZX Spectrum or MSX keyboard held, with how many host keys hold each.
+  // Frame advance: the game stopped with its picture showing (startFrameStep), and its hotkey held.
+  bool frameStepping = false;
+  bool frameAdvanceHeld = false;
+  Uint64 frameStepNext = 0;
+  // The hotkeys in force (resolveHotkeys) and the keys held, matched against them.
+  HotkeyMap hotkeys;
+  HotkeyTracker hotkeyTracker;
+  // The Hotkeys page: its cursor, the action whose bindings are open, whether every direct slot's row shows, the binding
+  // being captured, and a question waiting.
+  int hotkeyCursor = 0;
+  std::string hotkeyOpen;
+  bool slotHotkeysShown = false;
+  std::optional<HotkeyCapture> capture;
+  std::optional<Question> question;
+  // Keys of the ZX Spectrum or MSX keyboard held, with how many host keys hold each, and the host keys whose press
+  // reached it (a key a hotkey took didn't).
   std::map<std::string, int> heldKeys;
+  std::set<int> typedKeys;
   int previousButtons = 0;
-  // Buttons still held from the library or the menu, kept from the game until released.
+  // Held buttons kept out until they're let go of (update says which).
   int suppressedButtons = 0;
+  // Whether the hotkeys took keys at the last update (hotkeysTakeKeys).
+  bool hotkeysTook = false;
   Repeat up, down, left, right;
 
   std::string message;
@@ -193,11 +287,15 @@ auto Shell::run(int argc, char* argv[]) -> int {
   while (!quit) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+      // The hotkeys first, so the keys they take are held back from what follows. A key whose hotkey changed the
+      // screen is the hotkey's alone: the new screen doesn't act on it as well.
+      Screen before = screen;
+      hotkeyEvent(event);
       input.handle(event);
       switch (event.type) {
       case SDL_EVENT_QUIT: quit = true; break;
       case SDL_EVENT_KEY_DOWN:
-      case SDL_EVENT_KEY_UP: handleKey(event.key); break;
+      case SDL_EVENT_KEY_UP: if (screen == before) handleKey(event.key); break;
       case SDL_EVENT_DROP_FILE: if (event.drop.data) open(event.drop.data); break;
       default: break;
       }
@@ -252,6 +350,9 @@ auto Shell::setup(int argc, char* argv[]) -> bool {
   settings.load(dataFolder + "settings.ini");
   gamesFolder = settings.text("games");
   firmwareFolder = settings.text("firmware", dataFolder + "firmware");
+  stateSlot = std::clamp(settings.number("stateSlot", 1), 1, 9);
+  refreshHotkeys();
+  input.taken = [this](HotkeyToken token) { return hotkeysTakeKeys() && hotkeyTracker.taken(token); };
 
   ares::setHomePath(dataFolder.c_str());
   ares::setSavesPath((dataFolder + "saves").c_str());
@@ -432,11 +533,14 @@ auto Shell::launch(const Game& entry) -> void {
   frameSerial = 0;
   frameWidth = frameHeight = 0;
   pictureMultiple = 0;
-  fastForward = fastForwardKey = fastForwardApplied = false;
+  fastForward = fastForwardHeld = fastForwardApplied = false;
   ares::setFastForward(false);
+  frameStepping = frameAdvanceHeld = false;
   muted = false;
   ares::setMuteAudio(false);
   suppressedButtons = previousButtons;
+  // A computer's keyboard keeps the keys it uses from the default hotkeys.
+  refreshHotkeys();
   SDL_SetWindowTitle(window, ("Phobos - " + entry.title).c_str());
 }
 
@@ -448,6 +552,11 @@ auto Shell::unloadGame() -> void {
   ares::unloadSystem();
   game.reset();
   screen = Screen::Library;
+  frameStepping = false;
+  endHolds();
+  capture.reset();
+  question.reset();
+  refreshHotkeys();
   startPspTitles();
   SDL_SetWindowTitle(window, "Phobos");
 }
@@ -460,7 +569,7 @@ auto Shell::quitGame() -> void {
 auto Shell::openMenu() -> void {
   screen = Screen::Menu;
   menuCursor = 0;
-  fastForwardKey = false;
+  endHolds();
   releaseKeys();
   ares::setInput(0, 0, 0, 0, 0);
   ares::setPause(true);
@@ -469,6 +578,7 @@ auto Shell::openMenu() -> void {
 auto Shell::closeMenu() -> void {
   screen = Screen::Playing;
   suppressedButtons = previousButtons;
+  frameStepping = false;
   ares::setPause(false);
 }
 
@@ -477,25 +587,32 @@ auto Shell::releaseKeys() -> void {
     if (count > 0) ares::setKeyboardKey(label.c_str(), false);
   }
   heldKeys.clear();
+  typedKeys.clear();
 }
 
-auto Shell::statePath() const -> std::string {
+auto Shell::statePath(int slot) const -> std::string {
   auto folder = dataFolder + "states/" + game->system;
   std::error_code error;
   fs::create_directories(toPath(folder), error);
-  return folder + "/" + game->title + " (" + std::to_string(stateSlot) + ").state";
+  return folder + "/" + game->title + " (" + std::to_string(slot) + ").state";
 }
 
-auto Shell::saveState() -> void {
+auto Shell::saveState(int slot) -> void {
   if (!game) return;
-  bool saved = ares::saveState(statePath().c_str());
-  show(saved ? "Saved state " + std::to_string(stateSlot) : "Couldn't save state " + std::to_string(stateSlot));
+  bool saved = ares::saveState(statePath(slot).c_str());
+  show(saved ? "Saved state " + std::to_string(slot) : "Couldn't save state " + std::to_string(slot));
 }
 
-auto Shell::loadState() -> void {
+auto Shell::loadState(int slot) -> void {
   if (!game) return;
-  bool loaded = ares::loadState(statePath().c_str());
-  show(loaded ? "Loaded state " + std::to_string(stateSlot) : "No state " + std::to_string(stateSlot) + " to load");
+  bool loaded = ares::loadState(statePath(slot).c_str());
+  show(loaded ? "Loaded state " + std::to_string(slot) : "No state " + std::to_string(slot) + " to load");
+}
+
+// The slot Save state and Load state use, kept for the next start.
+auto Shell::setStateSlot(int slot) -> void {
+  stateSlot = slot;
+  settings.setNumber("stateSlot", slot);
 }
 
 auto Shell::takeScreenshot() -> void {
@@ -524,19 +641,294 @@ auto Shell::changeDisc(int direction) -> void {
   }
 }
 
-auto Shell::toggleFullscreen() -> void {
-  bool fullscreen = !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN);
+// The N64's controller pak, the next or the previous of the three; returns it.
+auto Shell::cycleN64Pak(int direction) -> std::string {
+  static const std::vector<std::string> paks = {"None", "Rumble Pak", "Controller Pak"};
+  auto it = std::find(paks.begin(), paks.end(), settings.text("n64.pak", "None"));
+  int index = it == paks.end() ? 0 : (int)(it - paks.begin());
+  auto pak = paks[(index + (direction < 0 ? 2 : 1)) % 3];
+  settings.setText("n64.pak", pak);
+  ares::setN64Pak(pak.c_str());
+  return pak;
+}
+
+// The PlayStation's analog controller switched on or off; returns whether it's on.
+auto Shell::togglePs1Analog() -> bool {
+  bool on = ares::togglePs1AnalogMode();
+  settings.setFlag("ps1.analog", on);
+  return on;
+}
+
+auto Shell::setFullscreen(bool fullscreen) -> void {
   SDL_SetWindowFullscreen(window, fullscreen);
   settings.setFlag("fullscreen", fullscreen);
+}
+
+auto Shell::toggleFullscreen() -> void { setFullscreen(!(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)); }
+
+// Frame advance: the game stops where it is, with no menu over its picture, and runs a frame at each press of the
+// hotkey (updateHolds; update repeats them while it's held), the buttons held going into each. The menu lets it go on.
+auto Shell::startFrameStep() -> void {
+  if (frameStepping) return;
+  frameStepping = true;
+  ares::setPause(true);
+}
+
+// Each action's bindings the player stored in settings.ini (hotkey.<action>): an empty one unbinds the action.
+auto Shell::storedHotkeys() const -> HotkeyMap {
+  HotkeyMap stored;
+  for (auto& action : hotkeyActions()) {
+    auto key = "hotkey." + action.name;
+    if (settings.has(key)) stored[action.name] = parseHotkeyBindings(settings.text(key));
+  }
+  return stored;
+}
+
+auto Shell::storeHotkeys(const HotkeyMap& changes) -> void {
+  for (auto& [action, bindings] : changes) settings.setText("hotkey." + action, encodeHotkeyBindings(bindings));
+  refreshHotkeys();
+}
+
+// The hotkeys in force: on a computer, the default ones on keys its keyboard uses (and Tab, as before) are left to it.
+auto Shell::refreshHotkeys() -> void {
+  std::function<bool(HotkeyToken)> gameKey;
+  if (game && isKeyboardComputer(game->system)) {
+    gameKey = [system = game->system](HotkeyToken token) {
+      if (tokenKind(token) != HotkeyKind::Key) return false;
+      auto key = (SDL_Scancode)tokenCode(token);
+      return key == SDL_SCANCODE_TAB || !keyboardLabels(system, key).empty();
+    };
+  }
+  hotkeys = resolveHotkeys(storedHotkeys(), gameKey);
+}
+
+// Only a game and its menu lose keys to the hotkeys: the library's and the Hotkeys page's are their own.
+auto Shell::hotkeysTakeKeys() const -> bool { return game && screen != Screen::Hotkeys; }
+
+// An event's keys go to the hotkeys (and to a binding being captured): a press can complete a combo, a release a tap,
+// and the hold actions last while theirs are held. The Hotkeys page runs none: its keys are its own.
+auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
+  auto changes = input.hotkeyChanges(event);
+  if (changes.empty()) return;
+  for (auto [token, down] : changes) {
+    if (down) hotkeyTracker.press(hotkeys, token);
+    else hotkeyTracker.release(token);
+    // Escape first cancels the capture (handleKey) rather than starting the combo.
+    if (!capture || !down || (capture->combo.empty() && token == keyToken(SDL_SCANCODE_ESCAPE))) continue;
+    if (std::find(capture->combo.begin(), capture->combo.end(), token) != capture->combo.end()) continue;
+    capture->combo.push_back(token);
+    capture->lastAdded = SDL_GetTicks();
+  }
+  auto completed = hotkeyTracker.completions(hotkeys);
+  auto tapped = hotkeyTracker.taps(hotkeys);
+  // A pad going away lets go of its buttons, which taps nothing.
+  if (event.type == SDL_EVENT_GAMEPAD_REMOVED) tapped.clear();
+  if (screen == Screen::Hotkeys) return;
+  for (auto& action : completed) {
+    if (!isHotkeyHold(action)) runHotkey(action);
+  }
+  for (auto& action : tapped) {
+    if (!isHotkeyHold(action)) runHotkey(action);
+  }
+  updateHolds(completed);
+}
+
+// A hotkey's action. Fullscreen works anywhere; the Pause menu hotkey opens or closes the menu; the rest wait for the
+// game to be playing (the menu has them too).
+auto Shell::runHotkey(const std::string& action) -> void {
+  if (action == Hotkey::fullscreen) return toggleFullscreen();
+  if (!game) return;
+  if (action == Hotkey::pause) return screen == Screen::Menu ? closeMenu() : openMenu();
+  if (action == Hotkey::pauseWindow) {
+    setFullscreen(false);
+    if (screen == Screen::Playing) openMenu();
+    return;
+  }
+  if (screen != Screen::Playing) return;
+  if (int slot = directSlot(action)) {
+    return action.compare(0, std::string(Hotkey::saveSlotPrefix).size(), Hotkey::saveSlotPrefix) == 0 ? saveState(slot)
+                                                                                                        : loadState(slot);
+  }
+  if (action == Hotkey::save) return saveState(stateSlot);
+  if (action == Hotkey::load) return loadState(stateSlot);
+  if (action == Hotkey::nextSlot || action == Hotkey::previousSlot) {
+    setStateSlot(action == Hotkey::nextSlot ? stateSlot % 9 + 1 : (stateSlot + 7) % 9 + 1);
+    return show("State slot " + std::to_string(stateSlot));
+  }
+  if (action == Hotkey::screenshot) return takeScreenshot();
+  if (action == Hotkey::fastForwardToggle) {
+    fastForward = !fastForward;
+    return show(fastForward ? "Fast forward on" : "Fast forward off");
+  }
+  if (action == Hotkey::mute) {
+    muted = !muted;
+    ares::setMuteAudio(muted);
+    return show(muted ? "Muted" : "Sound on");
+  }
+  if (action == Hotkey::reset) {
+    ares::resetSystem();
+    return show("Reset");
+  }
+  if (action == Hotkey::reload) {
+    auto entry = *game;
+    return launch(entry);
+  }
+  if (action == Hotkey::quit) return quitGame();
+  if (action == Hotkey::n64Pak && game->system == "Nintendo 64") return show("Controller pak: " + cycleN64Pak(1));
+  if (action == Hotkey::disc && game->discs.size() > 1) return changeDisc(1);
+  if (action == Hotkey::ps1Analog && game->system == "PlayStation") {
+    return show(togglePs1Analog() ? "Analog controller on" : "Analog controller off");
+  }
+}
+
+// A hold action starts as a press completes one of its combos and lasts while every key of one of them stays held,
+// others or not; it ends as the game stops playing. Each press of Frame Advance runs its frame at once, so a quick tap
+// still gets one.
+auto Shell::updateHolds(const std::vector<std::string>& completed) -> void {
+  auto holds = [&](const char* action, bool held) {
+    if (!game || screen != Screen::Playing) return false;
+    if (!held) return std::find(completed.begin(), completed.end(), action) != completed.end();
+    auto it = hotkeys.find(action);
+    return it != hotkeys.end() && std::any_of(it->second.begin(), it->second.end(), [&](const HotkeyCombo& combo) {
+      return hotkeyTracker.holding(combo);
+    });
+  };
+  fastForwardHeld = holds(Hotkey::fastForwardHold, fastForwardHeld);
+  bool frameAdvance = holds(Hotkey::frameAdvance, frameAdvanceHeld);
+  if (frameAdvance && !frameAdvanceHeld) {
+    startFrameStep();
+    ares::frameAdvance();
+    frameStepNext = SDL_GetTicks() + frameStepDelayMs;
+  }
+  frameAdvanceHeld = frameAdvance;
+}
+
+auto Shell::endHolds() -> void { fastForwardHeld = frameAdvanceHeld = false; }
+
+auto Shell::openHotkeys() -> void {
+  screen = Screen::Hotkeys;
+  hotkeyCursor = 0;
+  hotkeyOpen.clear();
+  capture.reset();
+  question.reset();
+}
+
+auto Shell::hotkeyRows() const -> std::vector<HotkeyRow> {
+  auto shown = shownHotkeys(storedHotkeys());
+  std::vector<HotkeyRow> rows;
+  bool slotsSwitch = false;
+  for (auto& action : hotkeyActions()) {
+    // The direct slots come after their switch; hidden, those bound still show.
+    if (directSlot(action.name)) {
+      if (!slotsSwitch) rows.push_back({HotkeyRow::Kind::Slots, "", -1});
+      slotsSwitch = true;
+      if (!slotHotkeysShown && !shown.count(action.name)) continue;
+    }
+    rows.push_back({HotkeyRow::Kind::Action, action.name, -1});
+    if (hotkeyOpen != action.name) continue;
+    for (int slot = 0; slot < hotkeyBindingLimit; slot++) rows.push_back({HotkeyRow::Kind::Binding, action.name, slot});
+  }
+  rows.push_back({HotkeyRow::Kind::Defaults, "", -1});
+  return rows;
+}
+
+// The Hotkeys page: up and down choose a row; A opens an action's bindings, captures one, shows the direct slots or
+// resets the defaults; X clears; B closes the bindings or goes back to the menu.
+auto Shell::updateHotkeys(bool navUp, bool navDown, bool confirm, bool back, bool clear) -> void {
+  Uint64 now = SDL_GetTicks();
+  if (capture) {
+    if (!capture->combo.empty() && now - capture->lastAdded >= captureSettleMs) return finishCapture();
+    if (capture->combo.empty() && now - capture->started >= captureTimeoutMs) {
+      capture.reset();
+      show("Nothing pressed: the binding is unchanged");
+    }
+    return;
+  }
+  if (question) {
+    if (confirm) {
+      auto answer = question->confirm;
+      question.reset();
+      answer();
+    } else if (back) {
+      question.reset();
+    }
+    return;
+  }
+  auto rows = hotkeyRows();
+  int count = (int)rows.size();
+  if (navUp) hotkeyCursor = (hotkeyCursor + count - 1) % count;
+  if (navDown) hotkeyCursor = (hotkeyCursor + 1) % count;
+  hotkeyCursor = std::clamp(hotkeyCursor, 0, count - 1);
+  auto& row = rows[hotkeyCursor];
+  if (back) return hotkeysBack();
+  if (clear) return clearHotkey(row);
+  if (!confirm) return;
+  switch (row.kind) {
+  case HotkeyRow::Kind::Action:
+    hotkeyOpen = hotkeyOpen == row.action ? "" : row.action;
+    return;
+  case HotkeyRow::Kind::Binding:
+    capture = HotkeyCapture{row.action, row.slot, {}, now, now};
+    return;
+  case HotkeyRow::Kind::Slots:
+    slotHotkeysShown = !slotHotkeysShown;
+    return;
+  case HotkeyRow::Kind::Defaults:
+    question = Question{"Reset every hotkey to its default?", "Reset", "Cancel", [this] {
+      std::vector<std::string> keys;
+      for (auto& action : hotkeyActions()) keys.push_back("hotkey." + action.name);
+      settings.erase(keys);
+      refreshHotkeys();
+      show("Every hotkey is back to its default");
+    }};
+    return;
+  }
+}
+
+// B or Escape: an open action's bindings close, else the page goes back to the menu.
+auto Shell::hotkeysBack() -> void {
+  if (hotkeyOpen.empty()) {
+    screen = Screen::Menu;
+    return;
+  }
+  auto rows = hotkeyRows();
+  for (int index = 0; index < (int)rows.size(); index++) {
+    if (rows[index].kind == HotkeyRow::Kind::Action && rows[index].action == hotkeyOpen) hotkeyCursor = index;
+  }
+  hotkeyOpen.clear();
+}
+
+// X or Delete: a binding row's binding is cleared, an action row's every binding.
+auto Shell::clearHotkey(const HotkeyRow& row) -> void {
+  if (row.kind == HotkeyRow::Kind::Action) return storeHotkeys({{row.action, {}}});
+  if (row.kind == HotkeyRow::Kind::Binding) {
+    storeHotkeys(bindingChanges(shownHotkeys(storedHotkeys()), row.action, row.slot, {}, {}));
+  }
+}
+
+// The keys captured become the binding, or, where they collide with other actions' bindings, the question whether to
+// overwrite those (hotkeyConflictMessage). The keys still held stay away from the page until they're let go of.
+auto Shell::finishCapture() -> void {
+  auto done = *capture;
+  capture.reset();
+  suppressedButtons = previousButtons;
+  auto conflicts = hotkeyConflicts(shownHotkeys(storedHotkeys()), done.action, done.combo);
+  std::vector<std::pair<std::string, int>> overwrite;
+  for (auto& conflict : conflicts) overwrite.emplace_back(conflict.action, conflict.slot);
+  auto bind = [this, done, overwrite] {
+    storeHotkeys(bindingChanges(shownHotkeys(storedHotkeys()), done.action, done.slot, done.combo, overwrite));
+  };
+  if (conflicts.empty()) return bind();
+  question = Question{hotkeyConflictMessage(conflicts), "Overwrite", "Cancel", bind};
 }
 
 auto Shell::menuItems() -> std::vector<MenuItem> {
   auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
   std::vector<MenuItem> items;
   items.push_back({"Resume", [this](int d) { if (d == 0) closeMenu(); }});
-  items.push_back({"Save state", [this](int d) { if (d == 0) saveState(); }});
-  items.push_back({"Load state", [this](int d) { if (d == 0) loadState(); }});
-  items.push_back({"State slot: " + std::to_string(stateSlot), [this](int d) { stateSlot = (stateSlot - 1 + (d < 0 ? 8 : 1)) % 9 + 1; }});
+  items.push_back({"Save state", [this](int d) { if (d == 0) saveState(stateSlot); }});
+  items.push_back({"Load state", [this](int d) { if (d == 0) loadState(stateSlot); }});
+  items.push_back({"State slot: " + std::to_string(stateSlot), [this](int d) { setStateSlot((stateSlot - 1 + (d < 0 ? 8 : 1)) % 9 + 1); }});
   items.push_back({"Screenshot", [this](int d) { if (d == 0) takeScreenshot(); }});
   items.push_back({"Reset", [this](int d) { if (d == 0) { ares::resetSystem(); closeMenu(); } }});
   items.push_back({"Fast forward: " + onOff(fastForward), [this](int) { fastForward = !fastForward; }});
@@ -561,21 +953,13 @@ auto Shell::menuItems() -> std::vector<MenuItem> {
       settings.setFlag("n64.asyncRdp", on);
       ares::setN64AsyncRdp(on);
     }});
-    items.push_back({"Controller pak: " + settings.text("n64.pak", "None"), [this](int d) {
-      static const std::vector<std::string> paks = {"None", "Rumble Pak", "Controller Pak"};
-      auto it = std::find(paks.begin(), paks.end(), settings.text("n64.pak", "None"));
-      int index = it == paks.end() ? 0 : (int)(it - paks.begin());
-      auto pak = paks[(index + (d < 0 ? 2 : 1)) % 3];
-      settings.setText("n64.pak", pak);
-      ares::setN64Pak(pak.c_str());
-    }});
+    items.push_back({"Controller pak: " + settings.text("n64.pak", "None"), [this](int d) { cycleN64Pak(d); }});
   }
   if (game->system == "PlayStation") {
-    items.push_back({"Analog controller: " + onOff(settings.flag("ps1.analog", true)), [this](int) {
-      settings.setFlag("ps1.analog", ares::togglePs1AnalogMode());
-    }});
+    items.push_back({"Analog controller: " + onOff(settings.flag("ps1.analog", true)), [this](int) { togglePs1Analog(); }});
   }
   if (game->system == "PlayStation Portable") pspMenuItems(items);
+  items.push_back({"Hotkeys", [this](int d) { if (d == 0) openHotkeys(); }});
   items.push_back({"Fullscreen: " + onOff(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN), [this](int) { toggleFullscreen(); }});
   items.push_back({launchedWithGame ? "Quit" : "Quit to library", [this](int d) { if (d == 0) quitGame(); }});
   return items;
@@ -633,34 +1017,45 @@ auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
   }});
 }
 
+// The keys the hotkeys don't have: the library's, the menu's and the Hotkeys page's, and an emulated computer keyboard's.
 auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
   bool computer = game && isKeyboardComputer(game->system);
-  bool msx = game && (game->system == "MSX" || game->system == "MSX2");
   if (key.down && !key.repeat) {
-    if (key.scancode == SDL_SCANCODE_F11) return toggleFullscreen();
     switch (screen) {
     case Screen::Library:
       if (key.scancode == SDL_SCANCODE_F3) chooseFolder(Pick::Games);
       if (key.scancode == SDL_SCANCODE_F5) rescan();
       return;
     case Screen::Menu:
-      if (key.scancode == SDL_SCANCODE_ESCAPE || key.scancode == SDL_SCANCODE_BACKSPACE || key.scancode == SDL_SCANCODE_F12) closeMenu();
+      // Unless a hotkey took it: then the key does only what its hotkey does (a tap's runs as the key is let go of).
+      if ((key.scancode == SDL_SCANCODE_ESCAPE || key.scancode == SDL_SCANCODE_BACKSPACE) &&
+          !hotkeyTracker.taken(keyToken(key.scancode))) {
+        closeMenu();
+      }
       return;
-    case Screen::Playing:
-      // The MSX keyboard has Escape and F1 to F5 of its own; F12 and the controller open the menu.
-      if (key.scancode == SDL_SCANCODE_F12 || (key.scancode == SDL_SCANCODE_ESCAPE && !msx)) return openMenu();
-      if (key.scancode == SDL_SCANCODE_F5 && !msx) return saveState();
-      if (key.scancode == SDL_SCANCODE_F9) return loadState();
-      if (key.scancode == SDL_SCANCODE_F8) return takeScreenshot();
-      if (key.scancode == SDL_SCANCODE_TAB && !computer) {
-        fastForwardKey = true;
+    case Screen::Hotkeys:
+      if (capture) {
+        if (key.scancode == SDL_SCANCODE_ESCAPE && capture->combo.empty()) capture.reset();
         return;
       }
+      if (key.scancode == SDL_SCANCODE_ESCAPE) {
+        if (question) question.reset();
+        else hotkeysBack();
+      } else if ((key.scancode == SDL_SCANCODE_DELETE || key.scancode == SDL_SCANCODE_BACKSPACE) && !question) {
+        auto rows = hotkeyRows();
+        if (hotkeyCursor < (int)rows.size()) clearHotkey(rows[hotkeyCursor]);
+      }
+      return;
+    case Screen::Playing:
       break;
     }
   }
-  if (!key.down && key.scancode == SDL_SCANCODE_TAB) fastForwardKey = false;
   if (screen != Screen::Playing || !computer || key.repeat) return;
+  // A key a hotkey took doesn't type; a release lets go of only what its press typed.
+  if (key.down ? hotkeyTracker.taken(keyToken(key.scancode)) || !typedKeys.insert(key.scancode).second
+               : !typedKeys.erase(key.scancode)) {
+    return;
+  }
   for (auto* label : keyboardLabels(game->system, key.scancode)) {
     int& count = heldKeys[label];
     if (key.down && count++ == 0) ares::setKeyboardKey(label, true);
@@ -677,28 +1072,41 @@ auto Shell::update() -> void {
   bool computer = game && isKeyboardComputer(game->system);
   bool n64 = game && game->system == "Nintendo 64";
   auto pad = input.poll(screen != Screen::Playing || !computer, screen == Screen::Playing && n64);
-  auto pressed = [&](int bit) { return (pad.buttons & bit) && !(previousButtons & bit); };
+  // Buttons held as the menu closed, a game started or a binding was captured stay out until they're let go of; so does
+  // every button held as the hotkeys stop taking keys (the game unloaded, the Hotkeys page opened), those they took
+  // included, rather than reaching the screen as a new press.
+  bool hotkeysTake = hotkeysTakeKeys();
+  if (hotkeysTook && !hotkeysTake) suppressedButtons = ~0;
+  hotkeysTook = hotkeysTake;
+  suppressedButtons &= pad.buttons;
+  int buttons = pad.buttons & ~suppressedButtons;
+  // Pressed: held, and not in the frame before (kept: previousButtons becomes this frame's before the screens ask).
+  int before = previousButtons;
+  auto pressed = [&](int bit) { return (buttons & bit) && !(before & bit); };
   Uint64 now = SDL_GetTicks();
-  bool menuNavigation = screen != Screen::Playing;
-  bool navUp = up.step(menuNavigation && ((pad.buttons & PadUp) || pad.ly < -0.5f), now);
-  bool navDown = down.step(menuNavigation && ((pad.buttons & PadDown) || pad.ly > 0.5f), now);
-  bool navLeft = left.step(menuNavigation && ((pad.buttons & PadLeft) || pad.lx < -0.5f), now);
-  bool navRight = right.step(menuNavigation && ((pad.buttons & PadRight) || pad.lx > 0.5f), now);
+  bool menuNavigation = screen != Screen::Playing && !capture;
+  bool navUp = up.step(menuNavigation && ((buttons & PadUp) || pad.ly < -0.5f), now);
+  bool navDown = down.step(menuNavigation && ((buttons & PadDown) || pad.ly > 0.5f), now);
+  bool navLeft = left.step(menuNavigation && ((buttons & PadLeft) || pad.lx < -0.5f), now);
+  bool navRight = right.step(menuNavigation && ((buttons & PadRight) || pad.lx > 0.5f), now);
   bool confirm = pressed(PadA) || pressed(PadStart);
-  int buttons = pad.buttons;
-  previousButtons = buttons;
+  previousButtons = pad.buttons;
 
   switch (screen) {
   case Screen::Playing: {
-    // The Guide button, or Select and Start together, opens the menu.
-    bool chord = (buttons & PadSelect) && (buttons & PadStart) && (pressed(PadSelect) || pressed(PadStart));
-    if (pressed(PadHome) || chord) return openMenu();
-    suppressedButtons &= buttons;
-    ares::setInput(pad.lx, pad.ly, pad.rx, pad.ry, buttons & ~(suppressedButtons | PadHome));
-    bool fast = fastForward || fastForwardKey;
+    // Select and Start together, and no other button, open the menu: the route a Steam Deck has, its Guide button being
+    // Steam's. With another button down they're the game's (A, B, Select and Start reset many games).
+    bool chord = buttons == (PadSelect | PadStart) && (pressed(PadSelect) || pressed(PadStart));
+    if (chord) return openMenu();
+    ares::setInput(pad.lx, pad.ly, pad.rx, pad.ry, buttons & ~PadHome);
+    bool fast = fastForward || fastForwardHeld;
     if (fast != fastForwardApplied) {
       ares::setFastForward(fast);
       fastForwardApplied = fast;
+    }
+    if (frameStepping && frameAdvanceHeld && now >= frameStepNext) {
+      ares::frameAdvance();
+      frameStepNext = now + frameStepMs;
     }
     input.rumble(ares::getRumbleState());
     return;
@@ -709,12 +1117,14 @@ auto Shell::update() -> void {
     if (navUp) menuCursor = (menuCursor + count - 1) % count;
     if (navDown) menuCursor = (menuCursor + 1) % count;
     menuCursor = std::clamp(menuCursor, 0, count - 1);
-    if (pressed(PadB) || pressed(PadHome)) return closeMenu();
+    if (pressed(PadB)) return closeMenu();
     if (confirm) return items[menuCursor].choose(0);
     if (navLeft) return items[menuCursor].choose(-1);
     if (navRight) return items[menuCursor].choose(+1);
     return;
   }
+  case Screen::Hotkeys:
+    return updateHotkeys(navUp, navDown, confirm, pressed(PadB), pressed(PadX));
   case Screen::Library: {
     if (pressed(PadY)) chooseFolder(Pick::Games);
     if (pressed(PadX)) rescan();
@@ -783,7 +1193,13 @@ auto Shell::render() -> void {
   float width = outputWidth / scale, height = outputHeight / scale;
   if (screen == Screen::Library) drawLibrary(width, height);
   if (screen == Screen::Menu) drawMenu(width, height);
+  if (screen == Screen::Hotkeys) drawHotkeys(width, height);
   if (screen == Screen::Playing && !ares::isFirstFrameRendered()) print(12, 12, "Loading " + game->title + "...", textColor);
+  if (screen == Screen::Playing && frameStepping) {
+    std::string badge = "Frame advance - pause for the menu";
+    fill(8, 8, (badge.size() + 2) * glyph, 16, panelColor);
+    print(16, 12, badge, textColor);
+  }
   if (SDL_GetTicks() < messageUntil) {
     float w = std::min(width - 16, (message.size() + 2) * glyph);
     fill(8, height - 44, w, 16, panelColor);
@@ -846,6 +1262,121 @@ auto Shell::drawMenu(float width, float height) -> void {
     print(x + 14, rowY, items[i].label, textColor, boxWidth - 28);
   }
   print(x + 12, y + boxHeight - 12, "A Select   B Back   Left/Right Change", dimColor, boxWidth - 24);
+}
+
+auto Shell::drawHotkeys(float width, float height) -> void {
+  fill(0, 0, width, height, shadeColor);
+  float x = 8, y = 8, w = width - 16, h = height - 16;
+  fill(x, y, w, h, panelColor);
+  print(x + 8, y + 8, "Hotkeys", textColor);
+  float top = y + 24;
+  auto line = [&](const std::string& text, Color color) {
+    print(x + 8, top, text, color, w - 16);
+    top += 12;
+  };
+  line("Up to 3 bindings each. A binding's first key starts it and is kept from", dimColor);
+  line("the game; a key that starts others acts alone when tapped.", dimColor);
+  auto shown = shownHotkeys(storedHotkeys());
+  std::string collisions;
+  for (auto& [first, second] : existingHotkeyConflicts(shown)) {
+    collisions += (collisions.empty() ? "These collide: " : "; ") + hotkeyLabel(first) + " and " + hotkeyLabel(second);
+  }
+  if (!collisions.empty()) line(collisions, warningColor);
+  if (game && isKeyboardComputer(game->system)) line("Default keys this computer's keyboard uses, and Tab, stay its own.", dimColor);
+  top += 4;
+
+  auto rows = hotkeyRows();
+  auto bindingsOf = [&](const std::string& action) {
+    auto it = shown.find(action);
+    return it == shown.end() ? HotkeyBindings{} : it->second;
+  };
+  float rowHeight = 12, bottom = y + h - 32, valueX = x + 8 + 30 * glyph;
+  int visible = std::max(1, (int)((bottom - top) / rowHeight));
+  int count = (int)rows.size();
+  int first = std::clamp(hotkeyCursor - visible / 2, 0, std::max(0, count - visible));
+  for (int i = first; i < std::min(count, first + visible); i++) {
+    auto& row = rows[i];
+    float rowY = top + (i - first) * rowHeight;
+    if (i == hotkeyCursor && !capture && !question) fill(x + 4, rowY - 2, w - 8, rowHeight, highlightColor);
+    std::string label, value;
+    Color valueColor = textColor;
+    float indent = 0;
+    switch (row.kind) {
+    case HotkeyRow::Kind::Action:
+      label = hotkeyLabel(row.action);
+      for (auto& combo : bindingsOf(row.action)) {
+        if (!combo.empty()) value += (value.empty() ? "" : " or ") + hotkeyComboLabel(combo);
+      }
+      if (value.empty()) {
+        value = "Not bound";
+        valueColor = dimColor;
+      }
+      break;
+    case HotkeyRow::Kind::Binding: {
+      indent = 16;
+      label = "Binding " + std::to_string(row.slot + 1);
+      auto bindings = bindingsOf(row.action);
+      if (row.slot < (int)bindings.size()) value = hotkeyComboLabel(bindings[row.slot]);
+      if (value.empty()) {
+        value = "-";
+        valueColor = dimColor;
+      }
+      break;
+    }
+    case HotkeyRow::Kind::Slots:
+      label = "Direct slot hotkeys";
+      value = slotHotkeysShown ? "all shown" : "bound ones shown";
+      break;
+    case HotkeyRow::Kind::Defaults:
+      label = "Reset hotkeys to the defaults";
+      break;
+    }
+    print(x + 8 + indent, rowY, label, textColor, valueX - x - 16 - indent);
+    print(valueX, rowY, value, valueColor, x + w - valueX - 8);
+  }
+
+  std::string note, hint = "Enter/A Choose   Esc/B Back";
+  if (hotkeyCursor < count) {
+    auto& row = rows[hotkeyCursor];
+    if (row.kind == HotkeyRow::Kind::Action) {
+      hint = std::string(hotkeyOpen == row.action ? "Enter/A Close" : "Enter/A Bindings") + "   Del/X Clear all   Esc/B Back";
+    }
+    if (row.kind == HotkeyRow::Kind::Binding) {
+      hint = "Enter/A Capture   Del/X Clear   Esc/B Back";
+      auto bindings = bindingsOf(row.action);
+      if (row.slot < (int)bindings.size() && !bindings[row.slot].empty()) {
+        // A computer's keyboard is the game's where it has the key; its controller's buttons aren't on the keyboard.
+        auto first = bindings[row.slot][0];
+        bool gameButton = game && isKeyboardComputer(game->system) && tokenKind(first) == HotkeyKind::Key
+                            ? !keyboardLabels(game->system, (SDL_Scancode)tokenCode(first)).empty()
+                            : isGameButton(first);
+        if (gameButton) note = "Its first key is also a game button, which the game then doesn't get.";
+      }
+    }
+  }
+  print(x + 8, y + h - 26, note, warningColor, w - 16);
+  print(x + 8, y + h - 14, hint, dimColor, w - 16);
+
+  if (capture) {
+    auto keys = capture->combo.empty() ? std::string("(press a key or a button)") : hotkeyComboLabel(capture->combo);
+    drawBox(width, height,
+            {hotkeyLabel(capture->action) + ", binding " + std::to_string(capture->slot + 1),
+             "Hold its keys together, the first one first.", "", keys},
+            "Escape (or 5 seconds of nothing) cancels");
+  } else if (question) {
+    drawBox(width, height, wrap(question->text, 52), "Enter/A " + question->yes + "   Esc/B " + question->no);
+  }
+}
+
+// A box over the page: [lines], then [hint].
+auto Shell::drawBox(float width, float height, const std::vector<std::string>& lines, const std::string& hint) -> void {
+  float boxWidth = std::min(width - 32, 440.0f);
+  float boxHeight = 38 + lines.size() * 12.0f;
+  float x = (width - boxWidth) / 2, y = (height - boxHeight) / 2;
+  fill(0, 0, width, height, shadeColor);
+  fill(x, y, boxWidth, boxHeight, panelColor);
+  for (size_t i = 0; i < lines.size(); i++) print(x + 12, y + 12 + i * 12.0f, lines[i], textColor, boxWidth - 24);
+  print(x + 12, y + boxHeight - 16, hint, dimColor, boxWidth - 24);
 }
 
 auto Shell::fill(float x, float y, float w, float h, Color color) -> void {

@@ -35,6 +35,154 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Desktop hotkeys: combos of keys, pad buttons, triggers, stick directions and mouse buttons, up to three per action, Guide leading the controller's and the desktop's own keys the keyboard's, a capture page asking before it overwrites — 2026-10-19
+
+Branch `improved-hotkeys`, on the Android commit `a41f6644e` (the entry below). The third pull request of the hotkey
+plan: the desktop program's hotkeys, by the Android app's rules, in place of its fixed keys. Its window behaviour
+(#2513, #2365, the screensaver), per-game hotkeys and the slow-motion measurement come after it. Checked with the
+keyboard and the mouse on a virtual display; **not** with a pad, Steam, Windows or macOS (see Checks).
+- **The engine** (`desktop/Hotkeys.hpp`, `Hotkeys.cpp`; SDL's enums, none of its functions): a hotkey's token is a key
+  (its scancode), a pad button, a pad axis pushed one way or a mouse button, and the same button on any pad is one
+  token. The Android rules, ported (`HotkeyTracker`, `isTapCombo`, `hotkeyConflicts`): a combo is matched exactly, its
+  first key pressed first and held back from the game, its other keys held back while that one is down; a one-key
+  binding that leads longer combos runs when tapped, unless the longer ones are a hold's own; up to three bindings an
+  action, any of which runs it; the same conflict rules and question. A stick direction or a mouse button counts only
+  where a binding uses one, so a stick held for the game or a click on the window doesn't keep a combo from matching; a
+  trigger counts as the button it is to the game. `HotkeyHolders` counts the devices holding each token: a button held
+  on two pads goes up when both have let go, and a pad going away lets go of its buttons, which taps nothing. An axis
+  presses past half and lets go below 40%, as the game's buttons do.
+- **Storage** (`settings.ini`; `Settings::has` and `erase` are new): `hotkey.<action>` holds an action's bindings, each
+  token as `k<scancode>`, `b<button>`, `a<axis>+` or `a<axis>-`, or `m<button>`, a combo's joined by `,` and the
+  bindings by `;`, an empty slot kept (`b5,b10;;k62`: Guide + RB, then F5 in the third slot). A stored action replaces
+  its defaults whole; an empty value unbinds it, and no value at all leaves the defaults. A token it can't read is left
+  out.
+- **Game input** (`desktop/Input.cpp`): `Input::hotkeyChanges` turns SDL's events into token presses and releases (a
+  touch screen's or a pen's clicks left out). Each pad and mouse holds its own presses and the keyboards theirs as one:
+  SDL lets go of the keys held as the window loses focus as keyboard 0's, whichever keyboard pressed them (on Wayland
+  the seat's keyboard, on macOS keyboard 1), so a key held through Alt+Tab is let go of. The shell hands the changes to
+  the hotkeys before anything else sees the event, and a token they take is held back (`Input::taken`) from the
+  controller's bits and taps, the triggers and that half of a stick's axis, and from a ZX Spectrum or MSX keyboard
+  (`typedKeys`: a release lets go only of what its press typed). Only a game and its menu lose keys: the library's and
+  the Hotkeys page's are their own. When the hotkeys stop taking keys (the game unloads, the Hotkeys page opens), every
+  button still held stays out until it's let go of, those they took included, rather than reaching the screen as a new
+  press: a Quit binding with Start in it doesn't start the game again from the library.
+- **The shell** (`desktop/main.cpp`): the fixed F5, F9, F8, F11, F12, Escape, Tab and Guide handling is gone, and the
+  hotkeys run the actions: the menu, the menu out of fullscreen, save and load, the next and previous slot (now kept in
+  settings.ini, `stateSlot`), saving and loading slots 1 to 9 without changing it, a screenshot, fullscreen, fast
+  forward held and toggled, frame advance, mute, reset, reload, quit, the N64's controller pak, the next disc and the
+  PlayStation's analog controller. Fullscreen works on every screen but the Hotkeys page (whose keys are its own), the
+  two menu hotkeys with the menu open too, and the rest while a game plays (the menu has them). Select and Start pressed
+  with no other button open the menu, a Steam Deck's route (its Guide button being Steam's) that works for the first
+  time (below); with another button held they're the game's, so a soft reset such as A, B, Select and Start reaches it
+  when its other buttons go down first. B and Backspace close the menu, and Escape where no hotkey has it. A key whose
+  hotkey changes the screen is the hotkey's alone, the new screen not acting on it: a Quit binding completed by F3 or F5
+  doesn't also open the library's folder picker or rescan it. Frame advance stops the game with its picture showing
+  ("Frame advance - pause for the menu"), runs a frame at each press, then one every 100 ms after 300 ms held, the
+  buttons held going into each; the menu lets the game go on.
+- **Pad presses on the screens** (a fault since the desktop's first commit, `3c60b7d69`): the screens asked whether a
+  button was newly pressed after `previousButtons` had become the frame's own buttons, so no such press registered:
+  the Guide button or Select and Start opening the menu, B or Guide closing it, and the library's Y, X, L1 and R1 (and
+  in this change the Hotkeys page's B and X). They now compare with the frame before; A and Start's confirm, asked
+  before that, always worked. Guide's routes are the hotkeys' now. The keyboard's pad keys act on the screens as those
+  buttons do (Z is B, S is X, A is Y, Q and W are L1 and R1, Right Shift and Return are Select and Start): in the
+  library the A key now opens the folder picker, S rescans and Q and W page, and on the Hotkeys page S clears a binding.
+- **The Hotkeys page** (the menu's new Hotkeys item): a row per action lists its bindings joined by "or"; choosing one
+  opens its three binding rows, as on Android, and choosing a binding row captures the keys, buttons, axes and mouse
+  buttons pressed together, done 700 ms after the last new one. Escape pressed first cancels, and so do 5 seconds of
+  nothing, a pad's way out. A capture that collides asks the Android question ("The selected hotkey combo is already
+  bound to \<function\>, would you like to overwrite?"), and Overwrite clears only the colliding bindings. Delete or
+  Backspace (a pad's X) clears a binding, or on an action's row every binding; the direct slots' rows show when bound or
+  switched on; "Reset hotkeys to the defaults" asks first. The page names collisions already there and notes a binding
+  whose first key is also a game button. Its keys are its own, no hotkey taking them there, and a button held as it
+  opens (one the menu lost to a hotkey included) is left out until it's let go of.
+- **Defaults** (`defaultHotkeys`): Guide leads every controller hotkey, and tapped alone it opens the menu; with it, RB
+  saves, LB loads, R3 takes a screenshot, RT toggles fast forward, Right and Left step the slot, L3 is frame advance,
+  Down the N64 pak, Up the PS1 analog controller, A mutes and X reloads. The keyboard keeps the desktop's keys: F12 and
+  Escape the menu, F5 save, F9 load, F8 a screenshot, F11 fullscreen, Tab fast forward held. Reset, quitting, the menu
+  out of fullscreen, the next disc and the direct slots are unbound. On the ZX Spectrum and MSX, a default binding on a
+  key their keyboard uses, and Tab, stays the game's (`resolveHotkeys`), which keeps the fixed keys' MSX F5 and Escape
+  and computers' Tab exceptions; any other binding the player sets on such a key applies.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; SDL 3.2.30 from the main checkout's FetchContent copy, by
+  `-DFETCHCONTENT_SOURCE_DIR_SDL3`; FFmpeg's host build `host-9.0.2-f4fa078896c2` copied from that checkout's cache,
+  the name this branch's script gives): `cmake --preset linux-x64 -DPHOBOS_DESKTOP_TESTS=ON && cmake --build
+  build/linux-x64`, then `ctest --test-dir build/linux-x64`: `phobos` and the new opt-in `phobos-desktop-tests` built,
+  1/1 test passed, 179 checks (`tests/desktop/hotkeys.cpp`, with `desktop/Hotkeys.cpp` and `desktop/Input.cpp` and
+  linked with SDL, built with `-Wall -Wextra -Werror` and the address and undefined-behaviour sanitizers; SDL's values
+  written out in it). The changed desktop sources compiled again with `-Wall -Wextra` (the program's build has `-w`):
+  no warning in them. Thirteen mutations of `Hotkeys.cpp` and `Input.cpp`, each compiled outside the repository with
+  the tests and SDL, each failed the test of its rule: the first key not held back; the first key not having to lead;
+  no exception for a hold's own longer binding; stick directions and mouse buttons always counting; the computers'
+  rule reaching the player's own bindings; a token let go on its first device's release; no hysteresis; an action's
+  own bindings checked; a tap despite another key pressed meanwhile; a release completing combos; empty slots not
+  kept; a code of any length read (`std::stoi` then throws); each keyboard holding its own keys. End to end, on a
+  virtual X display (Xvfb, keys and clicks by xdotool's XTEST, a throwaway data folder, two images made for it: a Game
+  Boy ROM with an empty header and an MSX cartridge whose start loops), 62 checks passed: F5, F9 and F8; Tab held and
+  let go; Shift+Tab not fast-forwarding (#1018); F12 and Escape opening and closing the menu, which runs no save; a
+  capture stored and run, its other binding kept; a conflict overwritten (Screenshot kept Guide + R3) and one cancelled;
+  a mouse button, a slot hotkey (the slot kept) and frame advance captured and run; Escape and silence cancelling a
+  capture; the reset; on the Hotkeys page, S (the keyboard's pad X) clearing a binding though it starts S + F6, S held
+  as the page opened clearing nothing, Delete clearing, and the game still saving after; the pad buttons the screens ask
+  about, by the keyboard's pad keys (Z for B, S for X, X for A, Right Shift and Return for Select and Start): B closing
+  the menu, Select and Start opening it but left to the game with A held, and on the Hotkeys page X clearing a binding
+  and B closing an action's binding rows, then the page; on the MSX, F5, Escape and Tab left to its keyboard while F9
+  and F12 work; and in a game started from the library, a Quit binding of F6 and Return (the keyboard's Start) quitting
+  to a library that stays, Return then starting the game again, and one of F6 and F5 (Save's F5 overwritten) quitting
+  without rescanning the library, a game added to the folder during play showing only once F5 is pressed there. Five
+  `main.cpp` mutants, each built outside the repository with the build's own commands, failed their checks there, where
+  the unchanged file built the same way passed them all: the page losing keys to the hotkeys; nothing held back as the
+  hotkeys stop taking keys; the frame compared with itself; Select and Start opening the menu with another button held;
+  the new screen acting on the key whose hotkey brought it up. `cd android && ./gradlew --max-workers=2 --console=plain
+  :app:assembleLegacyDebug`: BUILD SUCCESSFUL, its CMake configured again from the changed `CMakeLists.txt`, whose
+  Android branch is untouched (the documented `scripts/build-replit.sh` wants an SDK in `.local/android-sdk`, which this
+  checkout hasn't). **Not run**: a pad end to end (Guide's tap and combos, a button pressed just after a quick Guide
+  tap, the triggers and sticks, two pads holding one button), which this machine can't send without a virtual input
+  device on its own system; a Wayland or macOS session (the focus-loss test feeds events shaped as SDL sends them
+  there); the Steam overlay itself (if it kept a key's release from Phobos, the hotkeys would count that key held until
+  it's pressed again: a hypothesis); that Quit binding completed by F3 rather than F5 (the system's folder picker would
+  open on this machine's desktop; F3 takes F5's path); the Windows and macOS builds (CI builds them for pull requests,
+  and none is open); a real game.
+- **Limits**: matched exactly, a keyboard hotkey doesn't run while another key is held: moving with an arrow, F5
+  doesn't save, and holding Tab, F12 doesn't open the menu, where the fixed keys did (the Android app has the same rule
+  on a controller, and the Shift+Tab fix depends on it); a pad button or trigger held for the game (RT to accelerate,
+  say) likewise keeps Guide's tap and combos from running. SDL lets a Guide release through no sooner than 250 ms after
+  its press (`SDL_gamepad.c`), so a quick Guide tap opens the menu that late, and a button pressed meanwhile joins
+  Guide's combo instead (seen by the review with SDL's virtual pads: A about 100 ms after a quick tap muted, and the
+  menu didn't open). Escape can't start a binding the player captures, being the capture's cancel (the defaults have
+  it); on the ZX Spectrum and MSX a default binding on their keys stays off even stored, so binding exactly that combo
+  back to that action there does nothing (the owner's choice over the plan's "bindings you set yourself always apply":
+  changing one of an action's bindings stores its defaults with it, so a stored one equal to a default can't be told
+  from it); there's no "Unbind Pause?" question, Select and Start (alone), B and Backspace still reaching and leaving
+  the menu, but on the ZX Spectrum and MSX, whose keyboard isn't the pad while they run, a player with only a keyboard
+  and every Pause binding cleared can't reach it (closing the window still quits); the hints name the pad's buttons,
+  not the keyboard's pad keys, so on the Hotkeys page the X key opens a binding (it's the pad's A) where "Del/X Clear"
+  shows, and in the library the A key, not Y, opens the folder picker; fullscreen doesn't work on the Hotkeys page; as
+  the hotkeys stop taking keys, a stick direction one took (a pad's, or the keyboard's I, J, K or L) isn't held back as
+  the buttons are, so still pushed it moves the library's or the page's cursor; Select and Start count as alone when no
+  other button reaches the game, so a button held back from it (taken by a hotkey, or held since the menu closed)
+  doesn't count, while a trigger past half, Guide held with no binding of its own and, on the N64, a stick past half do;
+  the test target isn't in CI yet.
+- **Review**: the first independent review found NEEDS CHANGES. One Major: a key held as the window lost focus stayed
+  held on Wayland and macOS, where SDL lets it go as keyboard 0's rather than the keyboard that pressed it, so every
+  hotkey stayed dead until that key was pressed again; fixed as under Game input, with a test. Three Minors: SDL's
+  late Guide release (now under Limits); "fullscreen works on every screen" (corrected); and the Hotkeys page losing
+  keys to the hotkeys, a binding led by A or B taking them from it (fixed, as under The Hotkeys page). Answering it,
+  the pad presses the screens ask about were found never to have registered (above) and fixed. The second, of the
+  delta to the round-two snapshot (diff SHA-256 `90657f84...`): NEEDS CHANGES, two Minors. A Quit binding with A or
+  Start in it (since the pad-press fix, Y, X, L1 or R1 too) acted on the library as the game unloaded, Start or A
+  starting the game again, the hotkeys no longer holding back the buttons they had taken: fixed as under Game input,
+  one rule for every way they stop taking keys (its suggestion), with checks. And this entry said Select and Start
+  "still" opened the menu, where they never had: described as new, and narrowed by the owner to Select and Start
+  pressed alone. Its other suggestions are taken (the keyboard's pad keys noted), and the owner kept the ZX Spectrum and
+  MSX rule by value (Limits). The third, of the delta to the round-three snapshot (diff SHA-256 `3d47d106...`): NEEDS
+  CHANGES, one Minor: a Quit binding completed by F3 or F5 also opened the library's folder picker or rescanned it, the
+  library acting on the key that had just brought it up; fixed as under The shell, with checks. Its suggestions are
+  taken: the stick directions not held back and what counts as Select and Start alone are under Limits, and the warnings
+  were compiled to a scratch folder, Ninja's dry run then showing no compile pending. The whole record is in the commit
+  that carries this entry.
+- **Next**: the desktop window behaviour (pausing on focus loss, #2513; ignoring unfocused input, #2365; the
+  screensaver, #1577), per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull request;
+  the pad and Steam checks above; the RP6 pass for the Android changes.
+
 ## Android hotkeys: up to three bindings per action, any of which runs it, a keyboard's F5, F9, F8, F12 and Tab beside the controller defaults, an overwrite clearing only the binding it collides with — 2026-10-19
 
 Branch `improved-hotkeys`, on the Android hotkeys commit `0e434cd80` (the entry below). The second pull request of the
