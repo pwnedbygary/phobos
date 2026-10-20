@@ -3146,8 +3146,10 @@ static auto geTimePspClassified() -> void {
 }
 
 //With the PSP's GE timing, the list words' rule on both GEs (GE::segment(), the render GE's count beside its words,
-//RunEnd's RAM words checked): a list in RAM draws PRIMs from vertices in RAM and in VRAM, loads a palette, starts a
-//transfer among its other words, and CALLs a list in VRAM that draws from both memories and loads a palette too, then
+//RunEnd's RAM words checked): a list in RAM draws PRIMs from vertices in RAM and in VRAM, checks a bounding box of each
+//(on the GE thread the control pass's check, its vertices' work handed to the render GE as a mark of their memory),
+//loads a palette, starts a transfer among its other words, and CALLs a list in VRAM that draws from both memories and
+//loads a palette too, then
 //RETs; then a Bezier patch and a PRIM too big for the GE thread's ring (drawn by the emulation thread: GeThread's
 //primitiveEnd()), both from RAM, and a JUMP within RAM. The list is queued stalled in the middle of the VRAM list's
 //words, its stall moved to the middle of a stretch of RAM words, then to its end, the program writing beside it all
@@ -3161,6 +3163,7 @@ static auto geTimePspWordsThreaded() -> void {
   constexpr u32 Code = 0x0880'4000, Data = 0x0940'0000, Times = KernelMachine::Results;
   constexpr u32 VramList = VRAM + 0x10'0000, VramVertices = VRAM + 0x18'0000, Palette = Saved;
   constexpr u32 Points = Vertices + 0x1000, BigVertices = 0x0960'0000, BigCount = 0xffff, BigSize = 36;
+  constexpr u32 BoxRam = Vertices + 0x2000, BoxVram = VRAM + 0x18'1000;  //(the second on a page nothing draws on)
   static_assert(BigCount * BigSize > (4u << 20) / 2);
   struct Outcome {
     u32 time = 0;
@@ -3204,6 +3207,13 @@ static auto geTimePspWordsThreaded() -> void {
     list.put(GE::Primitive, GE::Sprites << 16 | 2);
     list.to(GE::VertexAddress, VramVertices);
     list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    for(u32 at : {BoxRam, BoxVram}) {
+      for(u32 n = 0; n < 8; n++) {  //(a box's corners, 16-bit x, y, z: an 8x8 square)
+        for(u32 half : {n & 1 ? 8u : 0u, n & 2 ? 8u : 0u, 0u}) memory.write(2, at, half), at += 2;
+      }
+    }
+    list.to(GE::VertexAddress, BoxRam), list.put(GE::BoundingBox, 8);
+    list.to(GE::VertexAddress, BoxVram), list.put(GE::BoundingBox, 8);
     list.to(GE::ClutAddress, Palette), list.put(GE::ClutAddressUpper, Palette >> 8 & 0xf'0000);
     list.put(GE::ClutFormat, 3 | 0x0f << 8), list.put(GE::ClutLoad, 2);
     list.put(GE::TransferSource, Image & 0xff'fff0), list.put(GE::TransferSourceWidth, (Image >> 24) << 16 | 16);
