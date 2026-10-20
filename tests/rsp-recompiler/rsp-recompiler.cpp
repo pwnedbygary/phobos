@@ -3,8 +3,10 @@
 //with Vd and Vt apart and the same, then every COP2 instruction and the vector loads and stores the recompiler
 //compiles (LWC2 and SWC2, their base register known to it or not). Each runs once recompiled and once interpreted
 //from the same seeded random state (the VU's registers, accumulators and flags, the scalar registers, DMEM), and the
-//two states after it are compared whole. The stack below the run is filled with a pattern first, so a value read from
-//a stale stack slot (as GCC compiled RSP::VMOV without ares's -fno-strict-aliasing) is the same in every run.
+//two states after it are compared: the VU registers, ACCH/ACCM/ACCL, VCOH/VCOL/VCCH/VCCL/VCE, DIVIN/DIVOUT/DIVDP, the
+//GPRs and DMEM, the data the instructions write; not the PC, the branch state, the status or the cycle counts. The
+//stack below the run is filled with a pattern first, so a value read from a stale stack slot (as GCC compiled
+//RSP::VMOV without ares's -fno-strict-aliasing) is the same in every run.
 //usage: rsp-recompiler [states per form] [seed]
 #include <n64/n64.hpp>
 
