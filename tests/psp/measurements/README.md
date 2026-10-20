@@ -24,10 +24,12 @@ xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS
 `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another folder), and
 `tests/psp/measured6.cpp` compares the core's run of round 6 with them.
 
-Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8`, `PSP_GE_ROUND9` or `PSP_GE_ROUND10` set
-empty), the groups comparing with them say so as a skip of `ge-round3`, `ge-round6`, `ge-round8`, `ge-round9` or
-`ge-round10`; where
-`PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead.
+Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8`, `PSP_GE_ROUND9`, `PSP_GE_ROUND10` or
+`PSP_GE_ROUND10b` set empty, or, without `run-tests.sh`, unset), every group comparing with them says so as a skip of
+`ge-round3`, `ge-round6`, `ge-round8`, `ge-round9`, `ge-round10` or `ge-round10b`; where `PHOBOS_TESTS_REQUIRE` names
+it, as CI's does, that's a failure instead. Where one of rounds 6 to 10b's variables names a folder without a file a
+group compares with, that group fails, required or not: the PSP's file is missing. Round 10c's files have no variable
+or requirement yet: no test reads them.
 
 ## `ge-round8/`
 
