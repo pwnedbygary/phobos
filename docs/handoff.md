@@ -64,12 +64,12 @@ Branch `cursor/psp-measure-round10c-2b67` (PR #280, draft), from master `08801ab
 - **What it showed** (part 114): the CPU slows H through its vertices' reads from RAM, ×1.29 to 1.33 beside streaming
   reads, ×1.24 to 1.29 at a half, ×1.43 to 1.51 beside the mix, the same untextured or with any filter; with the
   vertices in VRAM (read 22 to 31% slower alone), ×0.99 to 1.02. The core with #279's model gives every variant ×1.15
-  to 1.16, 1.10 to 1.11 and 1.20 to 1.21, its VRAM vertices too (10 to 20% short); before #279, ×1.00. Activision
-  Hits' second list as logged takes the PSP 4.52 ms (the game's own 3.48): the log doesn't describe it, and the core is
-  within 5% of the logged list. Its third list's logged quads take 1.35 ms of the game's 5.40 (the core 3.7% over);
-  bilinear costs 36% at a texel a pixel and 5 to 10% magnified, which the core doesn't charge. Round 10's game-style
-  strips take three times as long with the depth test into 8888 as with either alone (the core 53% short with the
-  pair, within 12% without).
+  to 1.16, 1.10 to 1.11 and 1.20 to 1.21: 10 to 20% short with the vertices in RAM, and 9 to 21% over the PSP with
+  them in VRAM, which the PSP doesn't slow; before #279, ×1.00. Activision Hits' second list as logged takes the PSP
+  4.52 ms (the game's own 3.48): the log doesn't describe it, and the core is within 5% of the logged list. Its third
+  list's logged quads take 1.35 ms of the game's 5.40 (the core 3.7% over); bilinear costs 36% at a texel a pixel and
+  5 to 10% magnified, which the core doesn't charge. Round 10's game-style strips take three times as long with the
+  depth test into 8888 as with either alone (the core 53% short with the pair, within 12% without).
 - **Next**: Super Monkey Ball's refit (its own pull request): H's vertex reads as most of its time beside the CPU, the
   curve against the CPU's traffic, VRAM vertices at their own rate and out of the contention. For #269's agent: the
   second list's own words, a bilinear term heavy at a texel a pixel, the depth test into 8888.

@@ -19268,11 +19268,12 @@ core, before #279). Every file whole and every run finished in both; decoded as 
 - **Beside the CPU.** Before #279 the core slows H beside no pattern (×1.00: its term for the CPU beside the GE was
   held at none, part 106). With #279's model it slows every variant alike, at both clocks: ×1.15 to 1.16 beside
   streaming reads, ×1.10 to 1.11 at a half, ×1.20 to 1.21 beside the mix. Set against the PSP's, the core's slowdowns
-  are 10 to 13% short beside streaming reads, 11 to 14% at a half and 16 to 20% beside the mix (the core's over the
-  PSP's), as part 113 predicted from round 10 (about 16%). It slows H as much with the vertices in VRAM, where the PSP
-  doesn't slow it: `GE::drawVertices` (`ge/draw.cpp`) counts every vertex as a read of RAM, at one rate, wherever it
-  is (transfers alone look where they read).
-- **Alone.** The core takes 2 to 7% longer than the PSP over H with its vertices in RAM at 222/111 and 9 to 13% at
+  with the vertices in RAM are 10 to 13% short beside streaming reads, 11 to 14% at a half and 16 to 20% beside the
+  mix (the core's over the PSP's), as part 113 predicted from round 10 (about 16%). It slows H as much with the
+  vertices in VRAM, where the PSP doesn't slow it, so there it's 14 to 16% over the PSP's beside streaming reads, 9 to
+  11% at a half and 19 to 21% beside the mix: `GE::readVertices` (`ge/draw.cpp`) counts every vertex as a read of RAM,
+  at one rate, wherever it is (texels and transfers look where they read).
+- **Alone.** The core takes 2 to 7% longer than the PSP over H with its vertices in RAM at 222/111 and 9 to 12% at
   333/166 (32.3 bus clocks a triangle at both clocks, the PSP about 30 and 29), and 11 to 18% less with them in VRAM.
   Everything run with the CPU idle comes out the same before and after #279 (within 1 µs).
 - **Activision Hits' lists' cases.** Within 5% on the second list as logged and its sprites at 2:1 (and on the one
@@ -19295,7 +19296,9 @@ No timing changes here: these are for Super Monkey Ball's refit (its own pull re
 
 - **Super Monkey Ball** (#279's model leaves its frame at −20.6%, within its exception's limit of −21%):
   - What the CPU slows in H is its vertices' reads from RAM. Its texels play no part (the texture cache, the filter,
-    the levels), nor its words beyond 2%: with the vertices in VRAM, H slows by 2% at most.
+    the levels: untextured, it slows the same). With the vertices in VRAM it slows by 2% at most, its words still read
+    from RAM: that bounds the words only while VRAM reads pace the list, and no case here separates them while RAM
+    vertex reads do.
   - H slows nearly as a list of vertices alone does (round 10's list D, culled triangles' vertices from RAM: ×1.39 to
     1.44 beside streaming reads; H ×1.29 to 1.33). By #279's own form, the GE's time ×(1 + `Contention` × a kind's
     share × u), H's ×1.31 beside streaming reads (u = 1, the vertices' `Contention` 0.34) means vertex reads for about
@@ -19307,12 +19310,12 @@ No timing changes here: these are for Super Monkey Ball's refit (its own pull re
     over 256 KiB ×1.43 to 1.51, the model ×1.20 to 1.21); and vertices in VRAM, which the PSP reads 22 to 31% slower
     and the CPU doesn't slow. How much of the frame's −20.6% that closes depends on how much of the frame is lists of
     H's kind: the gate's to say, with the refit.
-- **Activision Hits' menu's second list** (A): the log doesn't describe what the game draws. As logged the list takes
-  the PSP 4.52 ms, 30% over the game's own 3.48, and its sprites cost 1.39 ms alone (part 106's reading, the sprites
-  next to nothing, is out). The core is within 5% of the PSP on the logged list (4.72 ms) and its sprites (1.36 ms), so
-  the +48.5% is in what the game's list does that the log leaves out: its own words (a capture of them, or the log
-  again) settle that, not a rate. Of the rates the cases measure, shrinking sprites cost by the texels they span (1.0
-  to 1.7 bus clocks a texel), where the core is 15% short at 1:1 and 45% at 4:1.
+- **Activision Hits' menu's second list** (A): the log doesn't describe what the game draws (derived). As logged the
+  list takes the PSP 4.52 ms, 30% over the game's own 3.48, and its sprites cost 1.39 ms alone (part 106's reading,
+  the sprites next to nothing, is out). The core is within 5% of the PSP on the logged list (4.72 ms) and its sprites
+  (1.36 ms), so the +48.5% is in what the game's list does that the log leaves out: its own words (a capture of them,
+  or the log again) settle that, not a rate. Of the rates the cases measure, shrinking sprites cost by the texels they
+  span (1.0 to 1.7 bus clocks a texel), where the core is 15% short at 1:1 and 45% at 4:1.
 - **Its third list** (B): the logged quads take the PSP 1.35 ms of the game's 5.40, and the core is 3.7% over on them:
   if the game's quads are as logged, its +26.7% (1.45 ms) lies in the rest of the list. Bilinear costs on narrow rows
   too, most at a texel a pixel: 0.77 bus clocks a pixel at 1:1 (36%), about 0.05 magnified (5% at the logged 1.875
