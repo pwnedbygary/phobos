@@ -3030,6 +3030,111 @@ static auto geTimePspBesideState() -> void {
   CHECK(saveState(fresh) == saveState(m), true);
 }
 
+//With the PSP's GE timing, a state saved while a list waits at its stall address, a quarter of its clocks so far texels
+//read from RAM (four sprites textured from RAM: GE::ramClocks), the same file with the GE on its thread or not, and
+//loaded into a machine with the thread on and one with it off; the list then goes on untextured beside the CPU's
+//writes, the share of its clocks that read RAM falling, which weighs the lines the CPU moves. The program's time and
+//the GE's the same in each machine as in the ones the state came from: the list's clocks by kind saved and loaded as
+//the timed GE's (with the thread, the render GE's), not begun afresh at the load, which would have it done sooner.
+static auto geTimePspStateClocks() -> void {
+  constexpr u32 Code = 0x0880'4000, Data = 0x0940'0000, Texture = 0x0898'0000, Times = KernelMachine::Results;
+  struct Outcome {
+    u32 time = 0;
+    u64 cycles = 0, doneAt = 0, reachAt = 0, pipeAt = 0, window[6] = {};
+  };
+  auto make = [&](bool threaded) {
+    auto m = std::make_unique<KernelMachine>();
+    m->pspTiming();
+    m->system.threadGE(threaded);
+    m->system.recompiler.enabled = true;
+    return m;
+  };
+  auto program = [&](KernelMachine& m) {
+    auto& memory = m.system.memory;
+    for(u32 n = 0; n < 64 * 64; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0), list.put(GE::Scissor2, 271 << 10 | 479), list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'0102);  //(through: 16-bit texture coordinates and positions)
+    list.put(GE::TextureMappingEnable, 1), list.to(GE::TextureAddress0, Texture);
+    list.put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+    list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3), list.put(GE::TextureFilter, 1 | 1 << 8);
+    u32 vertex = Vertices;
+    list.to(GE::VertexAddress, vertex);
+    u32 stall = 0;
+    for(u32 n = 0; n < 8; n++) {  //(10 bytes a vertex: u, v, x, y, z; the last four untextured)
+      if(n == 4) stall = list.address, list.put(GE::TextureMappingEnable, 0);
+      for(u32 half : {0u, 0u, 0u, 0u, 0u, 64u, 64u, 480u, 272u, 0u}) memory.write(2, vertex, half), vertex += 2;
+      list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    }
+    list.put(GE::Finish), list.put(GE::End);
+    u32 end = list.address;
+    Assembler a{m, Code};
+    a.li(a0, ListA), a.li(a1, stall), a.li(a2, 0xffff'ffff), a.li(a3, 0);
+    a.call("sceGeListEnQueue");
+    a.put(addu(s0, v0, zero));
+    a.li(a0, 5000), a.call("sceKernelDelayThread");  //(the state saved in it)
+    a.put(addu(a0, s0, zero)), a.li(a1, end);
+    a.call("sceGeListUpdateStallAddr");
+    wordLoop(a, Data, 512_KiB, 1, true);  //(beside the untextured sprites, which outlast it)
+    a.li(a0, 0);
+    a.call("sceGeDrawSync");
+    a.call("sceKernelGetSystemTimeLow");
+    a.li(t4, Times), a.put(sw(v0, 0, t4));
+    a.call("sceKernelExitGame");
+    m.system.power(Code);
+    s32 uid = m.kernel.createThread("main", Code, 0x20, 0x4000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+    m.kernel.run(Kernel::VblankCycles / 4);  //(4.2 ms: the textured sprites drawn, the program in its wait)
+    m.kernel.geFold(true);  //(threaded: the runs handed over counted)
+  };
+  auto finish = [&](KernelMachine& m) -> Outcome {
+    m.kernel.run(Kernel::CPUFrequency);
+    CHECK(m.kernel.exited, true);
+    auto& k = m.kernel;
+    k.geFold(true);
+    Outcome o;
+    o.time = m.system.memory.read(4, Times);
+    o.cycles = k.cycles, o.doneAt = k.geDoneAt, o.reachAt = k.geReachAt, o.pipeAt = k.gePipeAt;
+    auto& w = k.geWindow;
+    o.window[0] = w.passed, o.window[1] = w.instructions, o.window[2] = w.fills, o.window[3] = w.writebacks;
+    o.window[4] = w.uncached, o.window[5] = w.pushed;
+    return o;
+  };
+  auto same = [](const Outcome& x, const Outcome& y) {
+    CHECK(x.time, y.time);
+    CHECK(x.cycles, y.cycles);
+    CHECK(x.doneAt, y.doneAt);
+    CHECK(x.reachAt, y.reachAt);
+    CHECK(x.pipeAt, y.pipeAt);
+    for(u32 n : range(6)) CHECK(x.window[n], y.window[n]);
+  };
+  auto off = make(false), on = make(true);
+  program(*off), program(*on);
+  auto state = saveState(*off);
+  CHECK(saveState(*on) == state, true);
+  auto& timed = off->system.timedGE();
+  CHECK(timed.ramClocks[2] > timed.allClocks / 8, true);  //(the texels read from RAM, a fair share of the clocks)
+  Outcome straight = finish(*off);
+  same(finish(*on), straight);
+  for(bool threaded : {false, true}) {
+    auto loaded = make(threaded);
+    CHECK(loadState(*loaded, state), true);
+    Outcome o = finish(*loaded);
+    if(o.time != straight.time) {
+      std::printf("  loaded, thread %u: the list done %u microseconds in, against %u straight\n", u32(threaded), o.time,
+                  straight.time);
+    }
+    same(o, straight);
+  }
+  auto cleared = make(false);  //(the list's clocks by kind begun afresh at the load)
+  CHECK(loadState(*cleared, state), true);
+  for(auto& clocks : cleared->system.ge.ramClocks) clocks = 0;
+  cleared->system.ge.allClocks = 0;
+  Outcome sooner = finish(*cleared);
+  CHECK(sooner.doneAt < straight.doneAt && sooner.time < straight.time, true);
+}
+
 //With the PSP's GE timing and the GE on its thread, the CPU's stretches beside the GE as the synchronous GE takes them
 //(Kernel::GeStretch, geFold()): a list textured from RAM given a sprite at a time, the program writing beside it before
 //each stall update, a quiet call between two writes ending a stretch that waits on the run handed over before it,
@@ -3124,6 +3229,147 @@ static auto geTimePspStretchesThreaded() -> void {
   CHECK(plain.vram == threaded.vram, true);
   CHECK(plain.busyLines > 1000 && uncached.busyLines == 0, true);  //(lines moved while the GE was busy)
   CHECK(plain.times[Sprites] - plain.times[0] > uncached.times[Sprites] - uncached.times[0], true);
+}
+
+//(the stretches the GE thread's runs keep waiting, below) A list at ListA of four full-screen sprites textured from
+//RAM, then 6,000 NOPs, then a SIGNAL whose callback suspends the GE (kind 1, its callbacks callbacks') or the FINISH:
+//the GE's front end gets there long after the call that queues it (2.23 clocks a word), and the bound from the run's
+//words alone (geBound(), geReachBound(): half that), with the GE thread held back, after the call's end too, so that
+//nothing in the call folds the run.
+static auto geLateList(KernelMachine& m, bool signal, s32 callbacks = -1) -> u32 {
+  constexpr u32 Texture = 0x0898'0000;
+  auto& memory = m.system.memory;
+  for(u32 n = 0; n < 64 * 64; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
+  ListWriter list{memory, ListA};
+  list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+  list.put(GE::Scissor1, 0), list.put(GE::Scissor2, 271 << 10 | 479), list.put(GE::Region2, 1023 << 10 | 1023);
+  list.put(GE::VertexType, 0x80'0102);  //(through: 16-bit texture coordinates and positions)
+  list.put(GE::TextureMappingEnable, 1), list.to(GE::TextureAddress0, Texture);
+  list.put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+  list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3), list.put(GE::TextureFilter, 1 | 1 << 8);
+  u32 vertex = Vertices;
+  list.to(GE::VertexAddress, vertex);
+  for(u32 n = 0; n < 4; n++) {
+    for(u32 half : {0u, 0u, 0u, 0u, 0u, 64u, 64u, 480u, 272u, 0u}) memory.write(2, vertex, half), vertex += 2;
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+  }
+  for(u32 n = 0; n < 6000; n++) list.put(GE::Nop);
+  if(signal) list.put(GE::Signal, 0x01'0007), list.put(GE::End);
+  list.put(GE::Finish), list.put(GE::End);
+  return m.call("sceGeListEnQueue", {ListA, 0, u32(callbacks), 0});
+}
+
+//(with the GE on its thread, held back at its gate while body runs: let go of after it, or two seconds in should the
+//emulation thread wait for it meanwhile)
+static auto geThreadHeld(KernelMachine& m, const std::function<void()>& body) -> void {
+  std::atomic<bool> hold{true}, done{false};
+  m.system.geThreading->drain();  //(the thread reads its gate as it takes each record)
+  m.system.geThreading->gate = [&](u64) { while(hold.load()) std::this_thread::yield(); };
+  std::thread release([&] {
+    for(u32 n = 0; n < 2000 && !done.load(); n++) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    hold = false;
+  });
+  body();
+  done = true;
+  release.join();
+  m.system.geThreading->drain(), m.system.geThreading->gate = nullptr;
+}
+
+//With the PSP's GE timing and the GE on its thread, held back so that the run handed over isn't counted: a list met a
+//SIGNAL whose time is still to come, its sprites drawing (geLateList()); a stretch of the CPU's ends while the SIGNAL
+//is due, the lines it moved pushing the GE back; then sceGeBreak(0) takes the SIGNAL at once, the GE suspended for its
+//callback, and breaks the list off (a program built with SDK 6.60: nothing of the list runs after the SIGNAL). The
+//stretch, taken as the run is folded, the SIGNAL gone by then, pushes the SIGNAL's time (geReachAt) as the synchronous
+//GE pushed it as the stretch ended (GeStretch::signal): the GE's times, its busy window and the state the same as
+//without the thread.
+static auto geTimePspStretchSignalThreaded() -> void {
+  constexpr u32 Callback = 0x0880'5000;
+  struct Outcome {
+    u64 reachAt = 0, reachBefore = 0, doneAt = 0, pipeAt = 0, window[6] = {};
+    std::vector<u8> state;
+  };
+  auto run = [&](bool threaded) -> Outcome {
+    KernelMachine m;
+    m.pspTiming();
+    m.system.threadGE(threaded);
+    m.system.power(Callback);  //(the CPU's registers set as a power on sets them: the states are compared)
+    m.kernel.sdkVersion = 0x0606'0010;
+    auto& k = m.kernel;
+    Assembler callback{m, Callback};
+    callback.put(jr(ra)), callback.put(nop);
+    m.system.memory.write(4, Callbacks, Callback);  //(the signal function; no finish function)
+    s32 callbacks = s32(m.call("sceGeSetCallback", {Callbacks}));
+    Outcome o;
+    auto body = [&] {
+      u32 id = geLateList(m, true, callbacks);
+      CHECK(k.geSignalDue, true);
+      o.reachBefore = k.geReachAt;
+      k.cycles += 30'000;
+      m.system.dataCache.fills += 300;
+      k.geContend(k.cycles - 30'000, k.cycles, 20'000);
+      CHECK(m.call("sceGeBreak", {0, 0}), id);
+      CHECK(k.geSignalDue, false);
+      if(threaded) CHECK(k.geRuns.size() == 1 && k.geStretches.size() == 2, true);  //(none folded yet)
+    };
+    if(threaded) geThreadHeld(m, body);
+    else body();
+    k.geFold(true);
+    o.reachAt = k.geReachAt, o.doneAt = k.geDoneAt, o.pipeAt = k.gePipeAt;
+    auto& w = k.geWindow;
+    o.window[0] = w.passed, o.window[1] = w.instructions, o.window[2] = w.fills, o.window[3] = w.writebacks;
+    o.window[4] = w.uncached, o.window[5] = w.pushed;
+    o.state = saveState(m);
+    return o;
+  };
+  Outcome plain = run(false), threaded = run(true);
+  CHECK(plain.window[5] > 0 && plain.reachAt == plain.reachBefore + plain.window[5], true);  //(the push, the SIGNAL's)
+  CHECK(threaded.reachAt, plain.reachAt);
+  CHECK(threaded.doneAt, plain.doneAt);
+  CHECK(threaded.pipeAt, plain.pipeAt);
+  for(u32 n : range(6)) CHECK(threaded.window[n], plain.window[n]);
+  CHECK(threaded.state == plain.state, true);
+}
+
+//With the PSP's GE timing and the GE on its thread, held back so that the run handed over isn't counted: a list met
+//its FINISH, its sprites drawing (geLateList()); a stretch of the CPU's ends, the lines it moved pushing the GE back;
+//then a go's limit is decided from the bound of the GE's time (untilNextEvent(), kept as a go keeps it:
+//runUntilNextEventThreaded()), and another stretch ends. Once the thread has counted the run, the limit worked out
+//exactly (geExactLimit()) is the limit the synchronous go decides at the same point: the GE's time with the first
+//stretch's push and not the second's (GeLimit's stretches; the fold's entry after each stretch it takes, geFolded).
+static auto geTimePspLimitStretchesThreaded() -> void {
+  u64 limits[2] = {}, pushed = 0;
+  for(bool threaded : {false, true}) {
+    KernelMachine m;
+    m.pspTiming();
+    m.system.threadGE(threaded);
+    auto& k = m.kernel;
+    auto stretch = [&] {
+      k.cycles += 30'000;
+      m.system.dataCache.fills += 300;
+      k.geContend(k.cycles - 30'000, k.cycles, 20'000);
+    };
+    u64 until = 0;
+    auto body = [&] {
+      geLateList(m, false);
+      CHECK(k.geFinishDue, true);
+      stretch();
+      if(!threaded) pushed = k.geWindow.pushed;
+      k.geBounded = false;
+      until = k.untilNextEvent();
+      if(threaded) {
+        CHECK(k.geBounded, true);
+        k.geLimits.push_back(k.geLimit);
+      }
+      stretch();
+      if(threaded) CHECK(k.geRuns.size() == 1 && k.geStretches.size() == 2, true);  //(none folded yet)
+    };
+    if(threaded) geThreadHeld(m, body);
+    else body();
+    limits[threaded] = threaded ? k.geExactLimit(k.geLimits.back()) : until;
+    k.geLimits.clear(), k.geFolded.clear();
+  }
+  CHECK(pushed > 0, true);
+  CHECK(limits[1], limits[0]);
 }
 
 //(threaded: with the GE on a thread of its own, the same times, its pipeline the GE thread's: kernel.hpp's GeRun)
@@ -5381,7 +5627,13 @@ auto geTests() -> Tests {
     {"ge time, the PSP's: the CPU beside the GE", geTimePspBeside},
     {"ge time, the PSP's: the CPU beside the GE, by its rule", geTimePspContendRule},
     {"ge time, the PSP's: a state saved with the CPU beside the GE", geTimePspBesideState},
+    {"ge time, the PSP's: a state keeps the list's clocks by kind, loaded with the GE on its thread or not",
+     geTimePspStateClocks},
     {"ge time, the PSP's, with the GE on its thread: the CPU's stretches beside the GE", geTimePspStretchesThreaded},
+    {"ge time, the PSP's, with the GE on its thread: a stretch's SIGNAL due kept past sceGeBreak(0)",
+     geTimePspStretchSignalThreaded},
+    {"ge time, the PSP's, with the GE on its thread: a go's limit takes the stretches decided before it",
+     geTimePspLimitStretchesThreaded},
     {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions}, {"ge profile", geProfile},
     {"ge profile: calls whose callbacks run in them", geProfileCallbacks},
