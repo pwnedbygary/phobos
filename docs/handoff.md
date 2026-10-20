@@ -42,9 +42,10 @@ Branch `cursor/docs-277-followups-cachy`, from master `9f2d0633d` (#277, merged 
   next. It gives their results now (the review: PASS on `fee55ee6d`, and on `331eed9a9` with master's #284 merged in;
   the library check of `fee55ee6d`: 266 games, Off the same as master and On the same as Off), CI's on `331eed9a9`
   and the merge, and keeps the rest of next.
-- **tools/psp-ge-profile/README.md**: its list of what's in the folder had only `plugin/` and `decoder/geprof.py`. It
-  names `decoder/gate.py` (the GE timing's gate), `decoder/test_gate.py` and `decoder/test_geprof.py` now, as #283's
-  review suggested (`~/phobos-work/scratch/review-283/REVIEW.md`, its suggestion 3).
+- **tools/psp-ge-profile/README.md**: its list at the top of what's in the folder had only `plugin/` and
+  `decoder/geprof.py`; it names `decoder/gate.py` (the GE timing's gate), `decoder/test_gate.py` and
+  `decoder/test_geprof.py` now, and the "Files" table near its end gains `decoder/gate.py` and `decoder/test_gate.py`,
+  as #283's review suggested (`~/phobos-work/scratch/review-283/REVIEW.md`, its suggestion 3).
 - Independent review: not yet.
 
 ## PSP GE thread, its second part: the frame shown from the GE thread, the emulation thread's work for it cut, its two threads placed, and the PSP's GE timing with it, exact — 2026-10-19

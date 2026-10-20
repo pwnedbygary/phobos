@@ -500,6 +500,8 @@ put over it. The decoder's tests then read the capture back.
 | `hello/hosttest.c` | The load test on the Mac. |
 | `decoder/geprof.py` | The decoder (and `write_capture`, for synthetic captures). |
 | `decoder/test_geprof.py` | Its tests. |
+| `decoder/gate.py` | The GE timing's gate (docs/psp-core.md, part 106): each judged scene within 15% of the owner's capture. |
+| `decoder/test_gate.py` | `gate.py`'s tests. |
 
 ## What's been checked, and what hasn't
 
