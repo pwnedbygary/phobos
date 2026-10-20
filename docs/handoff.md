@@ -35,6 +35,50 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the sanitized PSP suite keeps the Vulkan driver loaded, so LeakSanitizer sees what lavapipe holds — 2026-10-20
+
+Branch `cursor/ci-lsan-mesa-cachy`, from master `b398e86f7` (#285). Tests and CI only (`tests/psp/run-tests.sh`); the
+core doesn't change, so docs/psp-core.md has no part for it. Notes and logs: `~/phobos-work/scratch/ci-lsan/`.
+- **Why**: on GitHub's ubuntu-24.04 image 20261018.339.1 every sanitized "PSP system tests" job failed at exit, after
+  every group passed, on a LeakSanitizer report from frames in an unloaded module: 240 bytes in 3 allocations (a 128
+  and two 56s), or the two 56s alone. 4 of 4 jobs there (`b26e0cebe`, #279's `69ea2650d`, master's `9f2d0633d`,
+  #286's `0954b8800`); none in the 156 that finished on 20261004.327.1 and 20261012.334.1 since 15 Oct (#279's
+  re-run among them), nor in #286's re-run there. Of what the job uses, only the kernel differs between the images
+  (6.17.0-1022-azure, 7.0.0-1017-azure): GCC (the FFmpeg build's name, which has the compiler's identity in it, is
+  the same), Clang, glibc 2.39-0ubuntu8.9, Mesa 25.2.8-0ubuntu0.24.04.4 and the loader 1.3.275 don't.
+- **The blocks are lavapipe's own**, CI's frames named with Ubuntu's debug file for that build (frames #1 and #2 land
+  exactly on the calls of `realloc` in `get_cpu_topology` and of it in its caller, which fixes the base). The 128
+  bytes: Mesa's L3 cache masks (src/util/u_cpu_detect.c:566), made once through `call_once` from
+  `llvmpipe_create_screen` in `vkEnumeratePhysicalDevices`, on Zen CPUs only (family 0x17 and up), kept in its
+  static `util_cpu_caps`. The two 56s: `u_mmInit`'s two blocks, each linked to the other (u_mm.c:77 and 81), the
+  heap of the x86 code `translate_sse` makes (`rtasm_exec_malloc`, its static `exec_heap`), made when it first makes
+  some (in CI, at a draw in lavapipe's queue thread). Mesa frees neither; only lavapipe's static variables hold
+  them, and those go when the loader closes lavapipe at `vkDestroyInstance`, before the check at exit. Why the
+  images before never reported them is not known (lavapipe has no NODELETE flag and no thread-exit destructors; the
+  128 bytes need a Zen runner, the 56s don't).
+- **Reproduced here** (cachyOS, kernel 7.2.9, Ryzen 7 7800X3D, Mesa 26.3-devel's lavapipe, loader 1.4.363, GCC
+  16.2.1): the sanitized GPU groups (`PHOBOS_TESTS_ONLY=gpu`, lavapipe alone through `VK_ICD_FILENAMES`) leak the
+  same 240 bytes in 3 allocations. A 40-line C program (the loader opened, an instance, its GPUs enumerated, the
+  instance destroyed, the loader closed) leaks the 128 bytes: still with the loader kept open or Mesa's device-select
+  layer off, not with lavapipe kept open, and again with that and `use_globals=0` (a global holds them).
+- **What**: `run-tests.sh` sets `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` (the caller's value kept) when the
+  address or leak sanitizer is on: the loader (1.3.260 and later) then keeps drivers and layers open, so their
+  static variables are still LeakSanitizer's roots at exit. The release lane doesn't change. No suppressions file:
+  frames in an unloaded module have no name for a pattern to match, the queue thread's pair has no frame of
+  Phobos's, and a pattern on `VulkanBackend::create` would hide that function's own leaks too.
+- **What it can hide**: only what a Vulkan driver or layer still holds from its static variables at exit, which isn't
+  a leak by LeakSanitizer's measure; a block of Phobos's only if a driver kept a pointer to it there (Phobos gives
+  Vulkan no allocator or user data). A Vulkan object Phobos fails to destroy is reported as before (the driver's
+  frames named now), unless the driver itself keeps it in a static variable.
+- **Checks** (here; logs in `~/phobos-work/scratch/ci-lsan/logs`): the GPU groups before, 240 bytes leaked, exit 1;
+  after, "78 groups, 0 failures, 1 skipped" (CI's skip), no report, exit 0. A scratch copy's deliberate leaks (never
+  committed: `new char[1234]` in `VulkanBackend::create`, `new char[4321]` in "memory windows"), with the fix: both
+  reported (11 of the 1234 at vulkan.cpp:2237, the 4321 at memory.cpp:8), nothing of lavapipe's; the same build with
+  `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=0` from the caller: lavapipe's 240 bytes back beside them. `bash -n`
+  and `git diff --check` clean; shellcheck's two warnings are master's.
+- **Not run** here: the rest of the sanitized suite, the release lane, tests/allegrex, tests/psp/ares (CI's).
+- Independent review: not yet.
+
 ## PSP GE: #277's entry after its review and library check; the GE profile's decoder files — docs only — 2026-10-20
 
 Branch `cursor/docs-277-followups-cachy`, from master `9f2d0633d` (#277, merged at `331eed9a9`). Docs only.

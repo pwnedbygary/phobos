@@ -78,6 +78,13 @@ esac
 #The address sanitizer's check for stack use after return gives every call a fresh frame on its own heap, which the
 #interpreter's per-instruction and the GE's per-pixel functions make hundreds of times slower; its other checks stay.
 export ASAN_OPTIONS=${ASAN_OPTIONS-detect_stack_use_after_return=0}
+#LeakSanitizer looks at exit, after the Vulkan loader has closed the GPU's driver with the last instance: what the
+#driver keeps for good in its static variables (lavapipe's: the CPU's L3 cache masks on AMD's Zen, the heap of the x86
+#code it makes) is then held by nothing it can see, a leak from frames it can't name. With this the loader (1.3.260 and
+#later) keeps drivers and layers open to the end, so that stays held, and a leak of Phobos's own is still reported.
+if [[ $SANITIZE == *address* || $SANITIZE == *leak* ]]; then
+  export VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=${VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING-1}
+fi
 SYSROOT=()
 #zlib packs the disc tests' CSO images (disc-image.hpp)
 LIBRARIES=(-lpthread -ldl -lz)
