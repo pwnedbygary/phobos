@@ -43,7 +43,8 @@ auto theirs(const char* name) -> std::vector<u32> {
 }
 
 //The core's, or nothing without the measuring program (or the PSP's file to compare it with); with both, the core's
-//run of round 6 wrote it. It says nothing of what the PSP's side lacks: theirs(), asked first, does.
+//run of round 6 wrote it. It says nothing of what the PSP's side lacks: theirs(), asked before any return on ours()'s
+//empty answer, does.
 auto ours(const char* name) -> std::vector<u32> {
   const char* psp = std::getenv("PSP_GE_ROUND6");
   if(!psp || !*psp || !std::filesystem::exists(std::filesystem::path(psp) / (std::string(name) + ".bin"))) return {};

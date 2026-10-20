@@ -51,9 +51,10 @@ part for it.
   pointer for 0 bytes, which UBSan takes as undefined; with `-fno-sanitize-recover=all` the program stopped there
   ("measured round 6 lighting", measured6.cpp:24; "curves round 3", curves.cpp:373), never reaching the failure and
   the skip their code means for a missing file.
-- **What**: the five ask `theirs()` first, as measured6's other groups do (measured8's `misses()` and
-  `measuredContention10()`, measured6's `measuredTime()`); `ours()`'s comment says why. The three readers copy only
-  when there's something to copy. With the files there, every group reads and checks the same.
+- **What**: the five ask `theirs()` first (measured8's `misses()` and `measuredContention10()`, measured6's
+  `measuredTime()`), as five of measured6's other six groups do; the sixth, the driver statuses, asks `ours()` first
+  but `theirs()` before it can return. `ours()`'s comment says why. The three readers copy only when there's
+  something to copy. With the files there, every group reads and checks the same.
   `tests/psp/measurements/README.md` names `PSP_GE_ROUND10b` and `ge-round10b`, says what a missing round and a
   missing file do now, and that round 10c's files have neither a variable nor a requirement (no test reads them).
 - **The other readers**, checked and left: measured6's other six groups (`theirs()` first; the driver statuses ask
@@ -74,7 +75,8 @@ part for it.
   passed; after, sanitized and release, every group fails on the PSP's missing file (13 failures). "curves round 3"
   with an empty folder: before, stopped; after, a skip, and 5 failures where required.
 - **Not run**: the rest of the PSP suite, tests/allegrex, tests/psp/ares, the runner and the app builds (CI's).
-- Independent review: not yet.
+- Independent review: PASS on `e17c27607`, read-only (`~/phobos-work/scratch/review-284/REVIEW.md`), no changes asked.
+  Its two wording nits are fixed after it (N1: measured6's `ours()` comment and the "What" bullet; N2: the PR body).
 
 ## CI: the GE profile decoder's tests on every change to them — 2026-10-19
 
