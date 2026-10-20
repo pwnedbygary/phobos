@@ -35,6 +35,18 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: #277's entry after its review and library check; the GE profile's decoder files — docs only — 2026-10-20
+
+Branch `cursor/docs-277-followups-cachy`, from master `9f2d0633d` (#277, merged at `331eed9a9`). Docs only.
+- **#277's entry, below**: its last bullet still named the fix round's review and the coordinator's library check as
+  next. It gives their results now (the review: PASS on `fee55ee6d`, and on `331eed9a9` with master's #284 merged in;
+  the library check of `fee55ee6d`: 266 games, Off the same as master and On the same as Off), CI's on `331eed9a9`
+  and the merge, and keeps the rest of next.
+- **tools/psp-ge-profile/README.md**: its list of what's in the folder had only `plugin/` and `decoder/geprof.py`. It
+  names `decoder/gate.py` (the GE timing's gate), `decoder/test_gate.py` and `decoder/test_geprof.py` now, as #283's
+  review suggested (`~/phobos-work/scratch/review-283/REVIEW.md`, its suggestion 3).
+- Independent review: not yet.
+
 ## PSP GE thread, its second part: the frame shown from the GE thread, the emulation thread's work for it cut, its two threads placed, and the PSP's GE timing with it, exact — 2026-10-19
 
 Branch `cursor/psp-ge-thread2-2b67` (GE round 4, part B, second PR; draft PR #277), from master `d428d91f9` (#276) with
@@ -133,10 +145,21 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   stretches, that one white-box: a limit short of its time only ends a go early). Part 111 lists what a stretch's
   fold reads and the checks; ThreadSanitizer, per the review, found nothing in Phobos's code (its only reports came
   from inside the GPU drivers' own threads, RADV's and lavapipe's).
-- **Next**: an independent review of this fix round; the coordinator's library check on the port (with the PSP's
-  timing On against Off, and Off against master); Auto with its handover both ways (design step 4), a stacked PR; the
-  app's option once On beats Off on the RP6; Hot Wheels' remaining store cost; the busy window kept on the GE thread,
-  so that a run's start needn't wait.
+- **The fix round's review** (PASS on `fee55ee6d`, no findings; `~/phobos-work/scratch/review-277/REVIEW-port-r2.md`):
+  the reviewer's clock probe gives 6,958 µs Off and On; taking out any of the four items, or the fix round's two (the
+  clock a stretch carries, the cap's fold), fails a test; the cap holds and can't hang; the docs match. It re-ran six
+  games from boot, On against Off and Off against master (6 of 6 each; "Fast" 3 of 3), Resistance's spin skip,
+  threaded states, the release suite (639 groups), the thread On lane (59) and ThreadSanitizer (29 groups, no report).
+  The look at the merge with master's #284 (`REVIEW-port-r3.md`): PASS on `331eed9a9`, the whole PR, no findings.
+- **The library check** (the coordinator's, of `fee55ee6d` on the owner's Linux desktop;
+  `~/phobos-work/scratch/libcheck/lib277.log`): 266 games from their start with the library's presses, 3,600 frames,
+  pictures at 60, 300, 1,200 and 3,600, the PSP's GE timing, the clock fixed (`--start-time 1700000000`), Software and
+  Vulkan fast on RADV. With the thread Off no game differs from master `d9bfbefb4` in either renderer, and with it On
+  none differs from Off; none newly failing, every run's exit line there. (Master's emulation code was `d9bfbefb4`'s
+  until #277; `331eed9a9` adds only #284's docs and tests to `fee55ee6d`.) The same check on `b56fa5010` was clean
+  too. CI on `331eed9a9`: 14 checks passed, the 3 publish jobs skipped. Merged 2026-10-20 as `9f2d0633d`.
+- **Next**: Auto with its handover both ways (design step 4), a stacked PR; the app's option once On beats Off on the
+  RP6; Hot Wheels' remaining store cost; the busy window kept on the GE thread, so that a run's start needn't wait.
 
 ## PSP tests: the measured rounds' groups report a missing round, and a missing file no longer ends a sanitized run — 2026-10-20
 

@@ -16,6 +16,12 @@ scenes are captured here as Phobos measures from save states, so the two compare
   capture. It shows short notices on screen (that it's on, that a capture is coming, that it was saved or why not;
   only a small blinking square while it counts) and keeps a trace of every step in `PHOBOS/trace.txt`.
 - `decoder/geprof.py`: reads a capture and prints, per vblank and per second, what the GE and the CPU did.
+- `decoder/gate.py`: the GE timing's gate (docs/psp-core.md, part 106): Phobos's GE profiles beside the owner's
+  captures of the same scenes, each judged scene by its whole frame, within 15% of the PSP's either way.
+- `decoder/test_gate.py`: gate.py's verdict tested: a frame within 15% passes either way and one outside it fails;
+  the owner's accepted exception passes only the way he accepted, no further than its limit.
+- `decoder/test_geprof.py`: geprof.py's tests, on synthetic captures written as the plugin writes them, and on the
+  plugin's own capture once `make hosttest` has written it.
 
 ## The owner's steps
 
