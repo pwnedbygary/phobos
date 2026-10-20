@@ -5765,13 +5765,19 @@ static void buildClut32(int c, int layers) {
   }
   drawTiles(&tiles10[c], layers);
 }
-//The tiles of a TileCase (time-clut32's, time-placement's), layers times, in a list of their own.
+//The tiles of a TileCase (time-clut32's, time-placement's), layers times, in a list of their own; tilesInto, in the
+//list being built (time-shrink's whole list).
+static void tilesInto(const TileCase* t, int layers);
 static void drawTiles(const TileCase* t, int layers) {
+  timedList(t->target);
+  tilesInto(t, layers);
+  sceGuFinish();
+}
+static void tilesInto(const TileCase* t, int layers) {
   static const short sides[3][2] = {{32, 34}, {16, 17}, {64, 68}};
   int w = sides[t->side][0], h = sides[t->side][1], columns = (480 + w - 1) / w, rows = 272 / h;
   int each = t->sprites ? 2 : 4, count = columns * rows;
   void* texels = t->vram ? VRAM_TEXTURE : (void*)big;
-  timedList(t->target);
   if(!t->sprites) setUp3D(&identity, 1), sceGuDisable(GU_DEPTH_TEST);
   screen480();
   if(t->psm >= 0) texture8(t->psm, t->swizzled, 512, 512, texels, t->linear);
@@ -5812,7 +5818,6 @@ static void drawTiles(const TileCase* t, int layers) {
       }
     }
   }
-  sceGuFinish();
 }
 
 //-- wide triangles into 16-bit (time-widetri): Activision Hits Remixed's copyright screen's second list, 24% short in
@@ -6045,6 +6050,38 @@ static void levels10(int psm, int bits, int width, int height, int count, unsign
   sceGuTexLevelMode(how == LevelConst ? GU_TEXTURE_CONST : GU_TEXTURE_AUTO,
                     how == LevelAuto || how == LevelConst ? bias : 0);
 }
+//The small strips (time-mipmaps 14 to 21, time-contention's list H): 3D strips of 6 vertices (4 triangles of 15 pixels
+//over 11x5.5, UvVertex) tiling the target's 512x256, each over the whole texture, the depth test passing and writing,
+//into 8888, the CLUT4 texture `m` says; textured or not, the vertices in big or in VRAM's last 256 KiB (written
+//through the uncached mirror), as asked (round 10c's lists).
+static void smallStrips10(const MipCase* m, int size, int textured, int vram) {
+  int strips = size / 4, height = m->height, mipmapped = m->how == LevelAuto;
+  UvVertex* v = vram ? (UvVertex*)0x441c0000 : (UvVertex*)(big + 262144);  //(past the textures, in big's second MiB)
+  for(int s = 0; s < strips; s++) {
+    float x = s % 46 * 11, y = s / 46 % 46 * 5.5f;
+    for(int k = 0; k < 6; k++) {
+      float px = x + (k >> 1) * 5.5f, py = y + (k & 1) * 5.5f;
+      v[s * 6 + k] = (UvVertex){(k >> 1) / 2.0f, k & 1, (px - 256) / 256, (128 - py) / 128, 0};
+    }
+  }
+  fillDepth(0);
+  sceKernelDcacheWritebackAll();
+  timedList(GU_PSM_8888);
+  setUp3D(&identity, 1);
+  sceGuOffset(2048 - 256, 2048 - 128);
+  sceGuViewport(2048, 2048, 512, 256);
+  sceGuDepthFunc(GU_GEQUAL);
+  if(textured) {
+    texture8(GU_PSM_T4, 1, 64, height, big, 0);
+    levels10(GU_PSM_T4, 4, 64, height, m->levels, (unsigned char*)big, m->how, -2.625f);
+    sceGuTexFilter(m->filter, mipmapped ? GU_LINEAR : m->filter);
+  }
+  UvVertex* drawn = vram ? (UvVertex*)0x041c0000 : v;
+  for(int s = 0; s < strips; s++) {
+    sceGuDrawArray(GU_TRIANGLE_STRIP, UvVertexType | GU_TRANSFORM_3D, 6, 0, drawn + s * 6);
+  }
+  sceGuFinish();
+}
 static void buildMipmaps(int c, int size) {
   if(c < 4) {
     buildTextures(9 + c, size);
@@ -6052,27 +6089,7 @@ static void buildMipmaps(int c, int size) {
   }
   const MipCase* m = &mipmaps10[c - 4];
   if(m->height) {  //the small CLUT4 textures, 64 texels wide
-    int strips = size / 4, height = m->height, mipmapped = m->how == LevelAuto;
-    UvVertex* v = (UvVertex*)(big + 262144);  //(past the textures, in big's second megabyte)
-    for(int s = 0; s < strips; s++) {
-      float x = s % 46 * 11, y = s / 46 % 46 * 5.5f;
-      for(int k = 0; k < 6; k++) {
-        float px = x + (k >> 1) * 5.5f, py = y + (k & 1) * 5.5f;
-        v[s * 6 + k] = (UvVertex){(k >> 1) / 2.0f, k & 1, (px - 256) / 256, (128 - py) / 128, 0};
-      }
-    }
-    fillDepth(0);
-    sceKernelDcacheWritebackAll();
-    timedList(GU_PSM_8888);
-    setUp3D(&identity, 1);
-    sceGuOffset(2048 - 256, 2048 - 128);
-    sceGuViewport(2048, 2048, 512, 256);
-    sceGuDepthFunc(GU_GEQUAL);
-    texture8(GU_PSM_T4, 1, 64, height, big, 0);
-    levels10(GU_PSM_T4, 4, 64, height, m->levels, (unsigned char*)big, m->how, -2.625f);
-    sceGuTexFilter(m->filter, mipmapped ? GU_LINEAR : m->filter);
-    for(int s = 0; s < strips; s++) sceGuDrawArray(GU_TRIANGLE_STRIP, UvVertexType | GU_TRANSFORM_3D, 6, 0, v + s * 6);
-    sceGuFinish();
+    smallStrips10(m, size, 1, 0);
     return;
   }
   FloatVertex* v = (FloatVertex*)(big + 393216);
@@ -6325,6 +6342,12 @@ static void buildContention10(int c, int size) {
   case 6: buildScenes(5, size); return;
   case 8: buildLoads(3, size); return;
   case 9: buildMipmaps(14, size); return;
+  case 11: buildMipmaps(15, size); return;  //(round 10c's: H nearest within the level chosen)
+  case 12: buildMipmaps(16, size); return;  //(bilinear without levels)
+  case 13: buildMipmaps(17, size); return;  //(nearest without levels)
+  case 14: smallStrips10(&mipmaps10[10], size, 0, 0); return;  //(untextured)
+  case 15: smallStrips10(&mipmaps10[10], size, 1, 1); return;  //(its vertices in VRAM)
+  case 16: smallStrips10(&mipmaps10[10], size, 0, 1); return;  //(untextured, its vertices in VRAM)
   }
   if(k->ge == 4 || k->ge == 10) {  //vertices into big
     static const Parts strip = {0, 0, 2, 0, 2, 4}, skinned = {3, 4, 2, 0, 2, 4};
@@ -6683,6 +6706,292 @@ static void round10b(void) {
 #undef CASES
 }
 
+//---- round 10c: what #269's refit and #279's model of the CPU's traffic still miss (docs/psp-core.md, part 114).
+//Super Monkey Ball's small strips beside the CPU, taken apart (time-contention4); Activision Hits' menu's second and
+//third lists as #269's agent specified them (time-shrink, time-magnify: SPECS-10c's A and B) and round 10's game-style
+//strips taken apart (time-gamestrips: its C); seven of round 10's cases again (time-anchors3). Round 10's framework
+//and safety; the arrays on 1 KiB boundaries.
+
+//-- Super Monkey Ball's small strips beside the CPU (time-contention4): round 10's list H (time-mipmaps 14: 3D strips
+//of 6 vertices of a CLUT4 64x64 RAM texture, 7 levels, trilinear) took 1.31 to 1.55 times as long beside the CPU's RAM
+//traffic, about 16% more than #279's model gives a list that reads RAM for 37% of its clocks (its vertices 32%, its
+//words 5%, its texels 0.6%). Taken apart: H as round 10 drew it; nearest within the level chosen (time-mipmaps 15);
+//bilinear without levels (16); nearest without levels (17); untextured; H with its vertices in VRAM's last 256 KiB;
+//untextured with them there. Each alone and beside round 10's streaming reads (flat out and a half) and its game's mix
+//over 256 KiB, after each pattern alone; round 10's time-contention otherwise (runContention10, its four words a run).
+#define PATTERNS10C(ge) {ge, Streaming}, {ge, Streaming2}, {ge, Mix256}
+#define GE_ROW10C(ge) {ge, NoThread}, PATTERNS10C(ge)
+static const ContentionCase contentions4[] = {
+  PATTERNS10C(0), GE_ROW10C(9), GE_ROW10C(11), GE_ROW10C(12), GE_ROW10C(13), GE_ROW10C(14), GE_ROW10C(15),
+  GE_ROW10C(16),
+};
+#define PATTERN_NAMES10C(ge, unit, n, a, b)                                                                          \
+  {ge "; the CPU: streaming reads over 1 MiB", unit, n, {a, b}},                                                     \
+  {ge "; the CPU: streaming reads, a half of flat out", unit, n, {a, b}},                                            \
+  {ge "; the CPU: a mix over 256 KiB", unit, n, {a, b}}
+#define GE_NAMES10C(ge)                                                                                              \
+  {ge "; the CPU idle", "triangles", 2, {4096, 8192}}, PATTERN_NAMES10C(ge, "triangles", 2, 4096, 8192)
+static const TimedCase contentionCases4[] = {
+  PATTERN_NAMES10C("the GE idle", "-", 1, 0, 0),
+  GE_NAMES10C("H: the game's small strips (CLUT4 64x64, 7 levels, trilinear), as round 10 drew them"),
+  GE_NAMES10C("H nearest within the level chosen"), GE_NAMES10C("H bilinear without levels"),
+  GE_NAMES10C("H nearest without levels"), GE_NAMES10C("H untextured"),
+  GE_NAMES10C("H with its vertices in VRAM"), GE_NAMES10C("H untextured, its vertices in VRAM"),
+};
+_Static_assert(sizeof(contentions4) / sizeof(contentions4[0]) ==
+               sizeof(contentionCases4) / sizeof(contentionCases4[0]), "a line for each case");
+
+//-- the menu's second list (time-shrink): its 60 sprites shrink an 8888 512x512 VRAM picture (480x272 of it) 2:1,
+//bilinear, into an 8888 buffer, after round 10's tiles (time-clut32 0: 3.23 ms of the PSP's 3.48 for the whole list);
+//#269's refit charges the sprites 1.64 ms. As logged: 2D, 10-byte vertices (16-bit texture coordinates and positions),
+//a draw of 2 vertices a sprite, 15 x 4 sprites 16x34 pixels over 240x136 at RenderedAt, each over 32x68 texels; not
+//blended, no depth or alpha test. The whole list (the tiles into 5650, then the sprites, a layer each); the sprites
+//alone; nearest; 1:1 (sprites 32x68 over 480x272); 4:1 (8x17 over 120x68); 2:1 from the picture swizzled in VRAM and
+//from RAM, swizzled and not; one sprite 240x136 over the 480x272 texels (rows 240 wide). A layer: the sprites once.
+typedef struct { short whole, shrink, vram, swizzled, linear, one; } ShrinkCase;
+static const ShrinkCase shrinks[] = {
+  {1, 2, 1, 0, 1, 0}, {0, 2, 1, 0, 1, 0}, {0, 2, 1, 0, 0, 0}, {0, 1, 1, 0, 1, 0}, {0, 4, 1, 0, 1, 0},
+  {0, 2, 1, 1, 1, 0}, {0, 2, 0, 1, 1, 0}, {0, 2, 0, 0, 1, 0}, {0, 2, 1, 0, 1, 1},
+};
+static const TimedCase shrinkCases[] = {
+  {"the whole list as logged: time-clut32 0's tiles into 5650, then 60 sprites into 8888 (VRAM 8888 512x512 not "
+   "swizzled, 2:1, bilinear)", "layers", 2, {1, 2}},
+  {"the 60 sprites alone (2:1, bilinear)", "layers", 2, {1, 4}}, {"the same, nearest", "layers", 2, {1, 4}},
+  {"1:1 (sprites 32x68 over 480x272), bilinear", "layers", 2, {1, 4}},
+  {"4:1 (sprites 8x17 over 120x68), bilinear", "layers", 2, {1, 4}},
+  {"2:1, the picture swizzled in VRAM", "layers", 2, {1, 4}},
+  {"2:1, the picture in RAM, swizzled", "layers", 2, {1, 4}},
+  {"2:1, the picture in RAM, not swizzled", "layers", 2, {1, 4}},
+  {"one sprite 240x136 over the 480x272 texels (VRAM, not swizzled, bilinear)", "layers", 2, {1, 4}},
+};
+_Static_assert(sizeof(shrinks) / sizeof(shrinks[0]) == sizeof(shrinkCases) / sizeof(shrinkCases[0]),
+               "a line for each case");
+typedef struct { unsigned short u, v; short x, y, z; } ShortVertex;  //(10 bytes, as the menu's sprites)
+enum { ShortVertexType = GU_TEXTURE_16BIT | GU_VERTEX_16BIT | GU_TRANSFORM_2D };
+static void shrinkSprites(const ShrinkCase* k) {
+  texture8(GU_PSM_8888, k->swizzled, 512, 512, k->vram ? VRAM_TEXTURE : (void*)big, k->linear);
+  int count = k->one ? 1 : 60, w = k->one ? 240 : 32 / k->shrink, h = k->one ? 136 : 68 / k->shrink;
+  int across = k->one ? 480 : 32, down = k->one ? 272 : 68;  //(texels a sprite)
+  ShortVertex* v = sceGuGetMemory(count * 2 * sizeof(ShortVertex));
+  for(int n = 0; n < count; n++) {
+    int column = n % 15, row = n / 15;
+    v[n * 2] = (ShortVertex){column * 32, row * 68, column * w, row * h, 0};
+    v[n * 2 + 1] = (ShortVertex){column * 32 + across, row * 68 + down, column * w + w, row * h + h, 0};
+  }
+  for(int n = 0; n < count; n++) sceGuDrawArray(GU_SPRITES, ShortVertexType, 2, 0, v + n * 2);
+}
+static void buildShrink(int c, int layers) {
+  const ShrinkCase* k = &shrinks[c];
+  timedList(k->whole ? GU_PSM_5650 : GU_PSM_8888);
+  screen480();
+  for(int layer = 0; layer < layers; layer++) {
+    if(k->whole) {
+      sceGuDrawBuffer(GU_PSM_5650, (void*)Target, Stride);
+      tilesInto(&tiles10[0], 1);
+      sceGuDisable(GU_BLEND);
+    }
+    sceGuDrawBuffer(GU_PSM_8888, (void*)RenderedAt, Stride);
+    shrinkSprites(k);
+  }
+  sceGuFinish();
+}
+
+//-- the menu's third list (time-magnify): 63 3D strips of 4 vertices (24 bytes: here FloatVertex) over 480x272 (9 x 7
+//quads) magnifying an 8888 256x512 RAM texture, swizzled, 1.875 times (256 texels over 480 pixels), bilinear,
+//modulated, blended (source alpha, 1 - source alpha), the alpha test (greater than 0), into 5650; +26.7% in #269's
+//refit, which reads a triangle's narrow rows wide into 16-bit (part 112 reads round 10's copyright pass as bilinear on
+//wide reads instead). Bilinear and nearest each: as logged; 1:1 and 4 times (8 x 8 quads over 256x256: 256 and 64
+//texels across); into 8888; neither blended nor alpha-tested; the texture 512x256; CLUT8 256x512 (time-widetri's
+//palette). A layer: every quad once.
+typedef struct { short layout, psm, wide, target, blended, linear; } MagnifyCase;
+enum { AsLogged, OneToOne, FourTimes };
+#define LINEAR_AND_NEAREST(layout, psm, wide, target, blended)                                                       \
+  {layout, psm, wide, target, blended, 1}, {layout, psm, wide, target, blended, 0}
+static const MagnifyCase magnifies[] = {
+  LINEAR_AND_NEAREST(AsLogged, GU_PSM_8888, 0, GU_PSM_5650, 1),
+  LINEAR_AND_NEAREST(OneToOne, GU_PSM_8888, 0, GU_PSM_5650, 1),
+  LINEAR_AND_NEAREST(FourTimes, GU_PSM_8888, 0, GU_PSM_5650, 1),
+  LINEAR_AND_NEAREST(AsLogged, GU_PSM_8888, 0, GU_PSM_8888, 1),
+  LINEAR_AND_NEAREST(AsLogged, GU_PSM_8888, 0, GU_PSM_5650, 0),
+  LINEAR_AND_NEAREST(AsLogged, GU_PSM_8888, 1, GU_PSM_5650, 1),
+  LINEAR_AND_NEAREST(AsLogged, GU_PSM_T8, 0, GU_PSM_5650, 1),
+};
+#define LINEAR_AND_NEAREST_NAMES(what)                                                                               \
+  {what ", bilinear", "layers", 2, {1, 4}}, {"the same, nearest", "layers", 2, {1, 4}}
+static const TimedCase magnifyCases[] = {
+  LINEAR_AND_NEAREST_NAMES("as logged: RAM 8888 256x512 swizzled magnified 1.875 times over 480x272 (9 x 7 quads), "
+                           "modulated, blended, the alpha test, into 5650"),
+  LINEAR_AND_NEAREST_NAMES("1:1 (8 x 8 quads over 256x256)"),
+  LINEAR_AND_NEAREST_NAMES("4 times (8 x 8 quads over 256x256, 64x64 texels)"),
+  LINEAR_AND_NEAREST_NAMES("as logged, into 8888"),
+  LINEAR_AND_NEAREST_NAMES("as logged, neither blended nor alpha-tested"),
+  LINEAR_AND_NEAREST_NAMES("as logged, the texture 512x256"),
+  LINEAR_AND_NEAREST_NAMES("as logged, CLUT8 256x512"),
+};
+_Static_assert(sizeof(magnifies) / sizeof(magnifies[0]) == sizeof(magnifyCases) / sizeof(magnifyCases[0]),
+               "a line for each case");
+static void buildMagnify(int c, int layers) {
+  const MagnifyCase* k = &magnifies[c];
+  int width = k->wide ? 512 : 256, height = k->wide ? 256 : 512, logged = k->layout == AsLogged;
+  int across = logged ? 9 : 8, down = logged ? 7 : 8, right = logged ? 480 : 256, bottom = logged ? 272 : 256;
+  float scale = logged ? 256.0f / 480 : k->layout == OneToOne ? 1 : 0.25f;  //(texels a pixel)
+  timedList(k->target);
+  setUp3D(&identity, 1);
+  sceGuDisable(GU_DEPTH_TEST);
+  screen480();
+  texture8(k->psm, 1, width, height, big, k->linear);
+  sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+  if(k->blended) {
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+    sceGuEnable(GU_ALPHA_TEST);
+    sceGuAlphaFunc(GU_GREATER, 0, 0xff);
+  }
+  FloatVertex* v = sceGuGetMemory(across * down * 4 * sizeof(FloatVertex));
+  for(int q = 0; q < across * down; q++) {
+    float x0 = q % across * right / across, x1 = (q % across + 1) * right / across;
+    float y0 = q / across * bottom / down, y1 = (q / across + 1) * bottom / down;
+    for(int corner = 0; corner < 4; corner++) {  //top-left, top-right, bottom-left, bottom-right
+      float x = corner & 1 ? x1 : x0, y = corner & 2 ? y1 : y0;
+      float u = x * scale / width, t = y * scale / height;
+      v[q * 4 + corner] = (FloatVertex){u, t, 0xffffffff, (x - 240) / 240, (136 - y) / 136, 0};
+    }
+  }
+  for(int layer = 0; layer < layers; layer++) {
+    for(int q = 0; q < across * down; q++) sceGuDrawArray(GU_TRIANGLE_STRIP, FloatVertexType3D, 4, 0, v + q * 4);
+  }
+  sceGuFinish();
+}
+
+//-- round 10's game-style strips taken apart (time-gamestrips): time-lights 37 and 38 (strips of 9 vertices of 12
+//bytes: 8-bit texture coordinates and normal, 16-bit position; triangles of 16x20 pixels; a CLUT4 64x64 RAM texture,
+//swizzled, bilinear, modulated; the depth test passing and writing, the alpha test, into 8888) took the same lit or
+//not, 2.1 times #269's model's pixels. The strips unlit: as round 10 drew them (time-lights 38); nearest; without the
+//alpha test; without the depth test; into 5650; untextured.
+typedef struct { short linear, alpha, depth, target, textured; } GameStripCase;
+static const GameStripCase gameStrips[] = {
+  {1, 1, 1, GU_PSM_8888, 1}, {0, 1, 1, GU_PSM_8888, 1}, {1, 0, 1, GU_PSM_8888, 1}, {1, 1, 0, GU_PSM_8888, 1},
+  {1, 1, 1, GU_PSM_5650, 1}, {1, 1, 1, GU_PSM_8888, 0},
+};
+static const TimedCase gameStripCases[] = {
+  {"time-lights 38: strips of 9 vertices (16x20-pixel triangles, CLUT4 64x64 bilinear, depth and alpha tests, into "
+   "8888), unlit", "strips", 2, {256, 1024}},
+  {"the same, nearest", "strips", 2, {256, 1024}},
+  {"the same bilinear, without the alpha test", "strips", 2, {256, 1024}},
+  {"without the depth test", "strips", 2, {256, 1024}}, {"into 5650", "strips", 2, {256, 1024}},
+  {"untextured", "strips", 2, {256, 1024}},
+};
+_Static_assert(sizeof(gameStrips) / sizeof(gameStrips[0]) == sizeof(gameStripCases) / sizeof(gameStripCases[0]),
+               "a line for each case");
+static void buildGameStrips(int c, int count) {
+  const GameStripCase* g = &gameStrips[c];
+  Parts p = {0, 0, 1, 0, 1, 2};
+  unsigned char* at = (unsigned char*)big;
+  for(int n = 0; n < count * 9; n++) {  //strip n / 9 at a 128x20 cell of the target's 512x256 (as buildLights10's)
+    int strip = n / 9, k = n % 9;
+    float x = (strip & 3) * 128 + k * 16, y = (strip / 4 % 12) * 20 + (k & 1) * 20;
+    at = putPart(putPart(at, 1, k / 8.0f), 1, (k & 1) * 0.5f);
+    at = putPart(putPart(putPart(at, 1, 0), 1, 0), 1, 1) + 1;
+    at = putPart(putPart(putPart(at, 2, (x - 256) / 256), 2, (128 - y) / 128), 2, 0);
+  }
+  int bytes = (at - (unsigned char*)big) / (count * 9);
+  fillDepth(0);
+  sceKernelDcacheWritebackAll();
+  timedList(g->target);
+  setUp3D(&identity, 1);
+  sceGuOffset(2048 - 256, 2048 - 128);
+  sceGuViewport(2048, 2048, 512, 256);
+  if(g->depth) sceGuDepthFunc(GU_GEQUAL);
+  else sceGuDisable(GU_DEPTH_TEST);
+  if(g->alpha) sceGuEnable(GU_ALPHA_TEST), sceGuAlphaFunc(GU_GREATER, 0, 0xff);
+  if(g->textured) texture8(GU_PSM_T4, 1, 64, 64, bytes8, g->linear), sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+  int type = partsType(&p) | GU_TRANSFORM_3D;
+  for(int strip = 0; strip < count; strip++) {
+    sceGuDrawArray(GU_TRIANGLE_STRIP, type, 9, 0, (unsigned char*)big + strip * 9 * bytes);
+  }
+  sceGuFinish();
+}
+
+//-- anchors (time-anchors3): seven of round 10's cases, built by round 10's code at round 10's sizes.
+static const TimedCase anchorCases10c[] = {
+  {"round 10's time-anchors2 6: round 8's time-strips 37's strips (RAM 8888 512x512 swizzled, 32 wide), the texture on "
+   "a 1 KiB boundary", "layers", 2, {1, 2}},
+  {"round 10's time-clut32 0: the game's tiles (CLUT32 512x512 in VRAM, 32x34, three passes, 240 palette loads a "
+   "layer, into 5650)", "layers", 2, {1, 2}},
+  {"round 10's time-widetri 0: the game's pass (a strip of two triangles over 480x272, CLUT8 512x256 in RAM swizzled, "
+   "bilinear, modulated, blended, the alpha test, into 5650)", "layers", 2, {1, 2}},
+  {"round 10's time-perspective 3: RAM 8888 256x256 swizzled, two triangles over 256x256 pixels, w 1 to 2", "layers", 2,
+   {1, 2}},
+  {"round 10's time-mipmaps 1: round 8's time-textures 10 (RAM 8888 256x256 swizzled shrunk 2:1, 3 levels, the level "
+   "chosen, nearest)", "layers", 2, {1, 2}},
+  {"round 10's time-vram8 1: VRAM, not swizzled, CLUT8 512x512, strips 8 wide as sprites", "layers", 2, {1, 2}},
+  {"round 10's time-lights 38: the game's strips drawn, unlit", "strips", 2, {1024, 4096}},
+};
+static void buildAnchors10c(int c, int size) {
+  switch(c) {
+  case 0: buildAnchors10(6, size); break;
+  case 1: buildClut32(0, size); break;
+  case 2: buildWide(0, size); break;
+  case 3: buildPerspective(3, size); break;
+  case 4: buildMipmaps(1, size); break;
+  case 5: buildNarrow(1, size); break;
+  default: buildLights10(38, size); break;
+  }
+}
+
+static void writeManifest10c(void) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/manifest10c.txt", folder);
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return;
+  static const char text[] =
+    "psp-measure's GE tests, round 10c (tools/psp-measure/ge.c in Phobos says what each test draws and runs;\n"
+    "docs/psp-core.md, part 114, what each is for). Records of words as round 8's (manifest8.txt): case, size, CPU\n"
+    "MHz << 16 | bus MHz (as scePower gave them back), repeats | values << 16, then per run `values` words: times in\n"
+    "microseconds from just before sceGeListEnQueue to the finish callback and to sceGeListEnQueue's return;\n"
+    "time-contention4 two more as round 10's time-contention, a thread's turns of its pattern and their time (the GE\n"
+    "idle: the first time is the pattern's own); 0xffffffff for a run not finished (see <name>.stalled). All run at\n"
+    "222/111 and 333/166 MHz; the clocks as found are put back after each. The arrays the GE reads are on 1 KiB\n"
+    "boundaries. The cases (test case: what; size):\n";
+  sceIoWrite(file, text, sizeof(text) - 1);
+  static const struct { const char* test; const TimedCase* cases; int count; } tests[] = {
+    {"time-contention4", contentionCases4, sizeof(contentionCases4) / sizeof(contentionCases4[0])},
+    {"time-shrink", shrinkCases, sizeof(shrinkCases) / sizeof(shrinkCases[0])},
+    {"time-magnify", magnifyCases, sizeof(magnifyCases) / sizeof(magnifyCases[0])},
+    {"time-gamestrips", gameStripCases, sizeof(gameStripCases) / sizeof(gameStripCases[0])},
+    {"time-anchors3", anchorCases10c, sizeof(anchorCases10c) / sizeof(anchorCases10c[0])},
+  };
+  char line[320];
+  for(unsigned int t = 0; t < sizeof(tests) / sizeof(tests[0]); t++) {
+    for(int c = 0; c < tests[t].count; c++) {
+      int length = snprintf(line, sizeof(line), "%s %d: %s; %s\n", tests[t].test, c, tests[t].cases[c].name,
+                            tests[t].cases[c].unit);
+      sceIoWrite(file, line, length < (int)sizeof(line) ? length : (int)sizeof(line) - 1);
+    }
+  }
+  static const char end[] =
+    "<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).\n"
+    "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
+  sceIoWrite(file, end, sizeof(end) - 1);
+  sceIoClose(file);
+}
+
+static void round10c(void) {
+  foundCpu = scePowerGetCpuClockFrequencyInt();
+  foundBus = scePowerGetBusClockFrequencyInt();
+  foundPll = foundCpu > 2 * foundBus ? foundCpu : 2 * foundBus;  //(as round 6 reads them)
+  writeManifest10c();
+  prepareTexels();
+#define CASES(table) table, sizeof(table) / sizeof(table[0])
+  contending = contentions4, contendClocks = 0;
+  timeCases8("time-contention4", CASES(contentionCases4), 4, 4, AtTwo, buildContention10, runContention10);
+  timeCases8("time-shrink", CASES(shrinkCases), 8, 2, AtTwo, buildShrink, 0);
+  timeCases8("time-magnify", CASES(magnifyCases), 8, 2, AtTwo, buildMagnify, 0);
+  timeCases8("time-gamestrips", CASES(gameStripCases), 8, 2, AtTwo, buildGameStrips, 0);
+  timeCases8("time-anchors3", CASES(anchorCases10c), 8, 2, AtTwo, buildAnchors10c, 0);
+#undef CASES
+}
+
 //---- the rounds
 
 static int guReady;  //whether sceGuInit has set the GE up: once, on the first round, kept until geEnd
@@ -6758,7 +7067,7 @@ static void round2(void) {
 
 //A round of the GE's tests (2 to 10, and 11 for round 10b) into results/ge. Returns 0 if something couldn't be written.
 int geRound(int round) {
-  if(round < 2 || round > 11) return 1;
+  if(round < 2 || round > 12) return 1;
   if(!guReady) {
     sceGuInit();
     guReady = 1;
@@ -6774,7 +7083,8 @@ int geRound(int round) {
   else if(round == 8) round8();
   else if(round == 9) round9();
   else if(round == 10) round10();
-  else round10b();
+  else if(round == 11) round10b();
+  else round10c();
   return !failed;
 }
 
