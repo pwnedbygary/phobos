@@ -60,6 +60,7 @@ import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.Controls
 import com.phobos.emulator.input.DEFAULT_HOTKEYS
 import com.phobos.emulator.input.HotkeyAction
+import com.phobos.emulator.input.HotkeyBindings
 import com.phobos.emulator.input.HotkeyConflict
 import com.phobos.emulator.input.HotkeyTokens
 import com.phobos.emulator.input.bindingTokens
@@ -227,7 +228,7 @@ fun ControllerButtonsList(
                         overline = padName.takeIf { consoleName != null && consoleName != padName },
                         value = binding?.let(::bindingLabel) ?: "Not bound",
                         source = if (unused) "unused on $console" else sourceLabel(level, Controls.mappingSource(level, bit, global, overrides)),
-                        onCapture = { capture.captureButton(bit, title) { viewModel.bindButton(level, bit, it) } },
+                        onSelect = { capture.captureButton(bit, title) { viewModel.bindButton(level, bit, it) } },
                         onUnbind = if (binding != null) ({ viewModel.unbindButton(level, bit) }) else null,
                         onReset = if (overrides.changesMapping(level, bit)) ({ viewModel.inheritButton(level, bit) }) else null,
                     )
@@ -286,21 +287,36 @@ fun ControllerHotkeysList(
         onDispose { inputManager.unregisterInputDeviceListener(listener) }
     }
     val modeMissing = remember(resolved, padsChanged) {
-        resolved.values.any { it.firstOrNull() == KeyEvent.KEYCODE_BUTTON_MODE } && !connectedPadHasModeButton()
+        resolved.values.flatten().any { it.firstOrNull() == KeyEvent.KEYCODE_BUTTON_MODE } && !connectedPadHasModeButton()
     }
     val capture = viewModel.controlCapture
-    var confirmUnbindPause by remember { mutableStateOf(false) }
+    // The unbinding that would leave Pause with no binding, run once the question about it is answered.
+    var confirmUnbindPause by remember { mutableStateOf<(() -> Unit)?>(null) }
     var showSlotHotkeys by remember { mutableStateOf(false) }
     var pendingConflict by remember { mutableStateOf<PendingHotkey?>(null) }
+    // The action whose bindings are open, one at a time.
+    var expanded by remember(level) { mutableStateOf<String?>(null) }
     // Bound slot rows always show; the rest wait for the toggle.
     val slotsBound = HotkeyAction.DIRECT_SLOTS.any { !resolved[it].isNullOrEmpty() }
     val actions = if (showSlotHotkeys || slotsBound) HOTKEY_ACTIONS + DIRECT_SLOT_HOTKEY_ACTIONS else HOTKEY_ACTIONS
+    fun bind(action: String, slot: Int, combo: List<Int>) {
+        val conflicts = hotkeyConflicts(resolved, action, combo)
+        if (conflicts.isEmpty()) viewModel.bindHotkey(level, action, slot, combo)
+        else pendingConflict = PendingHotkey(level, action, slot, combo, conflicts)
+    }
+    // One binding, or every one with no slot.
+    fun unbind(action: String, slot: Int?) {
+        val run: () -> Unit = { if (slot == null) viewModel.unbindHotkey(level, action) else viewModel.bindHotkey(level, action, slot, emptyList()) }
+        val left = if (slot == null) emptyList() else HotkeyBindings.with(resolved[action].orEmpty(), slot, emptyList())
+        if (action == HotkeyAction.PAUSE && left.none { it.isNotEmpty() }) confirmUnbindPause = run else run()
+    }
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = listPadding(inMenu), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         header?.let { item { it() } }
         item {
             ControlsHint(
-                "${level.hint()} Select a hotkey, then hold its keys together. Its first key starts it and is held back " +
-                    "from the game; a key alone that starts other hotkeys acts when tapped.",
+                "${level.hint()} Select a hotkey for its bindings (up to three, any of which runs it), then a binding, " +
+                    "and hold its keys together. A binding's first key starts it and is held back from the game; a key " +
+                    "alone that starts other hotkeys acts when tapped.",
                 inMenu,
             )
         }
@@ -329,28 +345,36 @@ fun ControllerHotkeysList(
         item {
             ControlsCard(inMenu) {
                 actions.forEach { (name, action) ->
-                    val combo = resolved[action].orEmpty()
-                    val sharesGameButton = combo.firstOrNull()?.let { it in gameTokens } == true
+                    val bindings = resolved[action].orEmpty()
+                    val bound = bindings.filter { it.isNotEmpty() }
                     ControlRow(
                         title = name,
                         overline = null,
-                        value = if (combo.isEmpty()) "Not bound" else comboLabel(combo),
+                        value = if (bound.isEmpty()) "Not bound" else bound.joinToString(" or ", transform = ::comboLabel),
                         source = listOfNotNull(
                             sourceLabel(level, Controls.hotkeySource(level, action, global, overrides)),
-                            "its first key is also a game button".takeIf { sharesGameButton },
+                            "a binding's first key is also a game button".takeIf { bound.any { it.first() in gameTokens } },
                         ).joinToString(" · ").ifEmpty { null },
-                        onCapture = {
-                            capture.captureHotkey(action, name) { combo ->
-                                val conflicts = hotkeyConflicts(resolved, action, combo)
-                                if (conflicts.isEmpty()) viewModel.bindHotkey(level, action, combo)
-                                else pendingConflict = PendingHotkey(level, action, combo, conflicts)
-                            }
-                        },
-                        onUnbind = if (combo.isEmpty()) null else ({
-                            if (action == HotkeyAction.PAUSE) confirmUnbindPause = true else viewModel.bindHotkey(level, action, emptyList())
-                        }),
+                        onSelect = { expanded = action.takeIf { it != expanded } },
+                        onUnbind = if (bound.isEmpty()) null else ({ unbind(action, null) }),
                         onReset = if (overrides.changesHotkey(level, action)) ({ viewModel.inheritHotkey(level, action) }) else null,
                     )
+                    if (expanded == action) {
+                        repeat(HotkeyBindings.LIMIT) { slot ->
+                            val combo = bindings.getOrElse(slot) { emptyList() }
+                            Box(Modifier.padding(start = 24.dp)) {
+                                ControlRow(
+                                    title = "Binding ${slot + 1}",
+                                    overline = null,
+                                    value = if (combo.isEmpty()) "Not bound" else comboLabel(combo),
+                                    source = "its first key is also a game button".takeIf { combo.firstOrNull()?.let { it in gameTokens } == true },
+                                    onSelect = { capture.captureHotkey(action, "$name, binding ${slot + 1}") { bind(action, slot, it) } },
+                                    onUnbind = if (combo.isEmpty()) null else ({ unbind(action, slot) }),
+                                    onReset = null,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -360,15 +384,15 @@ fun ControllerHotkeysList(
             item { ResetLevelButton("Reset ${level.possessive()} hotkeys", enabled = overrides.hasHotkeys(level)) { viewModel.inheritAllHotkeys(level) } }
         }
     }
-    if (confirmUnbindPause) {
+    confirmUnbindPause?.let { unbindPause ->
         PhobosAlertDialog(
-            onDismissRequest = { confirmUnbindPause = false },
+            onDismissRequest = { confirmUnbindPause = null },
             title = { DialogSystemBars(settings.fullScreenMode, inGame = inMenu); Text("Unbind Pause?") },
             text = { Text("Without a Pause hotkey, the screen is the only way into the pause menu: tap the game, then the menu button.") },
             confirmButton = {
-                TextButton(onClick = { confirmUnbindPause = false; viewModel.bindHotkey(level, HotkeyAction.PAUSE, emptyList()) }) { Text("Unbind") }
+                TextButton(onClick = { confirmUnbindPause = null; unbindPause() }) { Text("Unbind") }
             },
-            dismissButton = { TextButton(onClick = { confirmUnbindPause = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmUnbindPause = null }) { Text("Cancel") } },
         )
     }
     pendingConflict?.let { pending ->
@@ -379,7 +403,7 @@ fun ControllerHotkeysList(
             confirmButton = {
                 TextButton(onClick = {
                     pendingConflict = null
-                    viewModel.bindHotkey(pending.level, pending.action, pending.combo, pending.conflicts.map { it.action })
+                    viewModel.bindHotkey(pending.level, pending.action, pending.slot, pending.combo, pending.conflicts.map { it.action to it.slot })
                 }) { Text("Overwrite") }
             },
             dismissButton = { TextButton(onClick = { pendingConflict = null }) { Text("Cancel") } },
@@ -390,6 +414,7 @@ fun ControllerHotkeysList(
 private data class PendingHotkey(
     val level: ControlLevel,
     val action: String,
+    val slot: Int,
     val combo: List<Int>,
     val conflicts: List<HotkeyConflict>,
 )
@@ -455,12 +480,15 @@ private fun ResetLevelButton(label: String, enabled: Boolean, onClick: () -> Uni
     }
 }
 
-/** A row: tap (or select) to capture, long-press or the clear icon to unbind, the undo icon to inherit again. */
+/**
+ * A row: tap (or select) to capture, or to open a hotkey's bindings; long-press or the clear icon to unbind, the undo
+ * icon to inherit again.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ControlRow(
     title: String, overline: String?, value: String, source: String?,
-    onCapture: () -> Unit, onUnbind: (() -> Unit)?, onReset: (() -> Unit)?,
+    onSelect: () -> Unit, onUnbind: (() -> Unit)?, onReset: (() -> Unit)?,
 ) {
     val ring = MaterialTheme.colorScheme.primary
     ListItem(
@@ -482,7 +510,7 @@ private fun ControlRow(
             }
         },
         colors = transparentListItemColors(),
-        modifier = Modifier.focusRing(ring).combinedClickable(onClick = onCapture, onLongClick = onUnbind),
+        modifier = Modifier.focusRing(ring).combinedClickable(onClick = onSelect, onLongClick = onUnbind),
     )
 }
 

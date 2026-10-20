@@ -34,29 +34,57 @@ object HotkeyAction {
 }
 
 /**
- * The hotkeys a player who never bound one has. Mode (the Home or Guide button) leads every one, so Select and every
- * other button stay the game's: tapped alone, Mode pauses; held with one other button, it runs that button's action.
- * The actions left out (Reset, Quit, fast-forward hold, the direct slots) are unbound: the pause menu has the
- * dangerous ones, and a player can bind them on purpose.
+ * An action's bindings: up to [LIMIT] combos, as ares allows (its BindingLimit), any of which runs it. Each keeps its
+ * slot, so clearing one leaves the others where they are; the empty slots after the last bound one are dropped.
  */
-val DEFAULT_HOTKEYS: Map<String, List<Int>> = KeyEvent.KEYCODE_BUTTON_MODE.let { mode ->
+object HotkeyBindings {
+    const val LIMIT = 3
+
+    /** [bindings] with the combo in [slot] replaced by [combo]; an empty one clears the slot. */
+    fun with(bindings: List<List<Int>>, slot: Int, combo: List<Int>): List<List<Int>> =
+        List(maxOf(bindings.size, slot + 1)) { if (it == slot) combo else bindings.getOrElse(it) { emptyList() } }
+            .dropLastWhile { it.isEmpty() }
+
+    /** As stored: each combo's keys joined by ",", the combos by ";", an empty slot kept so the later ones keep theirs. */
+    fun encode(bindings: List<List<Int>>): String =
+        bindings.dropLastWhile { it.isEmpty() }.joinToString(";") { it.joinToString(",") }
+
+    /** A stored value: one from before there were several bindings, a single combo, is the first. */
+    fun parse(value: String): List<List<Int>> =
+        value.split(';').take(LIMIT).map { combo -> combo.split(',').mapNotNull { it.trim().toIntOrNull() } }
+            .dropLastWhile { it.isEmpty() }
+}
+
+/**
+ * The hotkeys a player who never bound one has. Mode (the Home or Guide button) leads every controller one, so Select
+ * and every other button stay the game's: tapped alone, Mode pauses; held with one other button, it runs that button's
+ * action. A keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a screenshot, F12 pauses and Tab holds
+ * fast forward. The actions left out (Reset, Quit, the direct slots, fast-forward hold on a controller) are unbound: the
+ * pause menu has the dangerous ones, and a player can bind them on purpose.
+ */
+val DEFAULT_HOTKEYS: Map<String, List<List<Int>>> = KeyEvent.KEYCODE_BUTTON_MODE.let { mode ->
     mapOf(
-        HotkeyAction.PAUSE to listOf(mode),
-        HotkeyAction.SAVE_STATE to listOf(mode, KeyEvent.KEYCODE_BUTTON_R1),
-        HotkeyAction.LOAD_STATE to listOf(mode, KeyEvent.KEYCODE_BUTTON_L1),
-        HotkeyAction.NEXT_SLOT to listOf(mode, KeyEvent.KEYCODE_DPAD_RIGHT),
-        HotkeyAction.PREVIOUS_SLOT to listOf(mode, KeyEvent.KEYCODE_DPAD_LEFT),
-        HotkeyAction.RELOAD to listOf(mode, KeyEvent.KEYCODE_BUTTON_X),
-        HotkeyAction.SCREENSHOT to listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBR),
-        HotkeyAction.MUTE to listOf(mode, KeyEvent.KEYCODE_BUTTON_A),
-        HotkeyAction.FAST_FORWARD_TOGGLE to listOf(mode, KeyEvent.KEYCODE_BUTTON_R2),
-        HotkeyAction.FRAME_ADVANCE to listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBL),
-        HotkeyAction.N64_PAK to listOf(mode, KeyEvent.KEYCODE_DPAD_DOWN),
-        HotkeyAction.PS1_ANALOG_TOGGLE to listOf(mode, KeyEvent.KEYCODE_DPAD_UP),
-        HotkeyAction.KEYBOARD to listOf(mode, KeyEvent.KEYCODE_BUTTON_L2),
-        HotkeyAction.LIBRARY to listOf(mode, KeyEvent.KEYCODE_BUTTON_Y),
+        HotkeyAction.PAUSE to listOf(listOf(mode), listOf(KeyEvent.KEYCODE_F12)),
+        HotkeyAction.SAVE_STATE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_R1), listOf(KeyEvent.KEYCODE_F5)),
+        HotkeyAction.LOAD_STATE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_L1), listOf(KeyEvent.KEYCODE_F9)),
+        HotkeyAction.NEXT_SLOT to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_RIGHT)),
+        HotkeyAction.PREVIOUS_SLOT to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_LEFT)),
+        HotkeyAction.RELOAD to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_X)),
+        HotkeyAction.SCREENSHOT to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBR), listOf(KeyEvent.KEYCODE_F8)),
+        HotkeyAction.MUTE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_A)),
+        HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(KeyEvent.KEYCODE_TAB)),
+        HotkeyAction.FAST_FORWARD_TOGGLE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_R2)),
+        HotkeyAction.FRAME_ADVANCE to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_THUMBL)),
+        HotkeyAction.N64_PAK to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_DOWN)),
+        HotkeyAction.PS1_ANALOG_TOGGLE to listOf(listOf(mode, KeyEvent.KEYCODE_DPAD_UP)),
+        HotkeyAction.KEYBOARD to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_L2)),
+        HotkeyAction.LIBRARY to listOf(listOf(mode, KeyEvent.KEYCODE_BUTTON_Y)),
     )
 }
+
+/** Every bound combo, with its action: each action's bindings in slot order, the empty slots left out. */
+private fun Map<String, List<List<Int>>>.bound(): List<Pair<String, List<Int>>> =
+    flatMap { (action, bindings) -> bindings.filter { it.isNotEmpty() }.map { action to it } }
 
 /**
  * Hotkey tokens are the positive Android keycodes plus negative tokens for axes that are not
@@ -82,16 +110,22 @@ fun interface KeyHandler {
     fun onKey(keyCode: Int, down: Boolean, repeatCount: Int): Boolean
 }
 
-data class HotkeyConflict(val action: String, val kind: Kind) {
+/** [action]'s binding in [slot] collides with another, as [kind]. */
+data class HotkeyConflict(val action: String, val slot: Int, val kind: Kind) {
     enum class Kind { EXACT, OVERLAP, CROSS_ROLE }
 }
 
 /**
  * A one-key combo whose key leads longer combos: a tap binding. It fires when its key is let go with nothing else
- * pressed meanwhile, so it doesn't fire as the longer combos are pressed.
+ * pressed meanwhile, so it doesn't fire as the longer combos are pressed. A hold's own longer bindings don't make that
+ * hold's one-key binding a tap: whichever of them is held, the hold is the same, so its key starts it at once (a tap,
+ * coming as its key is let go, can't start a hold).
  */
-fun isTapCombo(hotkeys: Map<String, List<Int>>, combo: List<Int>): Boolean =
-    combo.size == 1 && hotkeys.values.any { it.size > 1 && it.first() == combo[0] }
+fun isTapCombo(hotkeys: Map<String, List<List<Int>>>, combo: List<Int>): Boolean =
+    combo.size == 1 && hotkeys.bound().any { (action, other) ->
+        other.size > 1 && other.first() == combo[0] &&
+            !(action in HotkeyAction.HOLDS && combo in hotkeys.getValue(action))
+    }
 
 /**
  * Tracks keys and axes in press order for exact-set hotkey combos.
@@ -133,7 +167,7 @@ class HotkeyTracker {
      * A key event went down. Returns true when the game must not see it. A repeat changes nothing, and neither does a
      * key the hat or an axis already holds: a button a pad reports both ways is pressed once.
      */
-    fun press(hotkeys: Map<String, List<Int>>, token: Int): Boolean {
+    fun press(hotkeys: Map<String, List<List<Int>>>, token: Int): Boolean {
         if (!keyTokens.add(token) || token in order) return token in consumed
         tapped = null
         tapCandidate = if (order.isEmpty()) token else null
@@ -167,9 +201,10 @@ class HotkeyTracker {
      * combo uses is left out, so moving a stick doesn't keep combos from matching. Returns true when
      * a token was pressed: one already down as a key event isn't pressed again.
      */
-    fun syncExternal(hotkeys: Map<String, List<Int>>, held: Set<Int>): Boolean {
+    fun syncExternal(hotkeys: Map<String, List<List<Int>>>, held: Set<Int>): Boolean {
+        val combos = hotkeys.bound().map { it.second }
         val relevant = held.filterTo(mutableSetOf()) { token ->
-            !HotkeyTokens.isAxis(token) || hotkeys.values.any { token in it }
+            !HotkeyTokens.isAxis(token) || combos.any { token in it }
         }
         // The same key may still be down as a key event: it stays until that one is let go.
         (externals - relevant).forEach { if (it !in keyTokens) letGo(it) }
@@ -180,7 +215,7 @@ class HotkeyTracker {
         tapCandidate = if (order.isEmpty() && pressed.size == 1) pressed.first() else null
         // A modifier must lead: when a hat reports two directions together, add the ones that are
         // some combo's first key before the rest.
-        val modifiers = hotkeys.values.mapNotNull { it.firstOrNull() }.toSet()
+        val modifiers = combos.map { it.first() }.toSet()
         pressed.sortedBy { if (it in modifiers) 0 else 1 }.forEach { token ->
             order += token
             if (consumedOnDown(hotkeys, token)) consumed += token else consumed -= token
@@ -193,39 +228,45 @@ class HotkeyTracker {
      * The combos the presses since the last look completed ([matches]), for running them: a release completes none
      * (only a tap, [taps]), and a combo still held isn't completed again as other keys come and go.
      */
-    fun completions(hotkeys: Map<String, List<Int>>): List<String> {
+    fun completions(hotkeys: Map<String, List<List<Int>>>): List<String> {
         if (!pressedSinceLook) return emptyList()
         pressedSinceLook = false
         return matches(hotkeys)
     }
 
-    /** The actions whose combo is exactly the set held, with their modifier pressed first; never a tap binding. */
-    fun matches(hotkeys: Map<String, List<Int>>): List<String> {
+    /**
+     * The actions with a binding whose combo is exactly the set held, its modifier pressed first; never a tap binding.
+     * Each action once, however many of its bindings match.
+     */
+    fun matches(hotkeys: Map<String, List<List<Int>>>): List<String> {
         val pressed = order.toSet()
-        return hotkeys.mapNotNull { (action, combo) ->
-            if (combo.isEmpty() || combo.size != pressed.size || !pressed.containsAll(combo)) return@mapNotNull null
+        return hotkeys.bound().mapNotNull { (action, combo) ->
+            if (combo.size != pressed.size || !pressed.containsAll(combo)) return@mapNotNull null
             if (isTapCombo(hotkeys, combo)) return@mapNotNull null
             val positions = combo.map(order::indexOf)
             if (positions.first() == positions.min()) action else null
-        }
+        }.distinct()
     }
 
-    /** The tap bindings the last release completed; each tap is reported once. */
-    fun taps(hotkeys: Map<String, List<Int>>): List<String> {
+    /** The actions a tap binding of the last release completed; each tap is reported once. */
+    fun taps(hotkeys: Map<String, List<List<Int>>>): List<String> {
         val key = tapped ?: return emptyList()
         tapped = null
-        return hotkeys.mapNotNull { (action, combo) -> action.takeIf { combo == listOf(key) && isTapCombo(hotkeys, combo) } }
+        return hotkeys.bound()
+            .mapNotNull { (action, combo) -> action.takeIf { combo == listOf(key) && isTapCombo(hotkeys, combo) } }
+            .distinct()
     }
 
     /** Whether every key of [combo] is held (others may be too): how long a hold action lasts. */
     fun holding(combo: List<Int>): Boolean = combo.isNotEmpty() && order.containsAll(combo)
 
-    private fun consumedOnDown(hotkeys: Map<String, List<Int>>, token: Int): Boolean {
+    private fun consumedOnDown(hotkeys: Map<String, List<List<Int>>>, token: Int): Boolean {
+        val combos = hotkeys.bound().map { it.second }
         // The first key of a combo is always its modifier, never the game's.
-        if (hotkeys.values.any { it.firstOrNull() == token }) return true
+        if (combos.any { it.first() == token }) return true
         val at = order.indexOf(token)
         if (at < 0) return false
-        return hotkeys.values.any { combo ->
+        return combos.any { combo ->
             combo.size > 1 && token in combo.drop(1) &&
                 combo.first() in order && order.indexOf(combo.first()) < at
         }
@@ -233,25 +274,29 @@ class HotkeyTracker {
 }
 
 /**
- * What binding [action] to [combo] would overwrite at a level: the same set, a combo that is part
- * of it or contains it, or a key that is one combo's modifier and another's action. Two combos
- * that share only their modifier are fine, and so are a tap binding and the longer combos its key
- * leads ([isTapCombo]), unless the tap is a hold action, which can't wait for its key's release.
+ * The other actions' bindings that binding [combo] to one of [action]'s would overwrite at a level: the same set, a
+ * combo that is part of it or contains it, or a key that is one combo's modifier and another's action. Two combos that
+ * share only their modifier are fine, and so are a tap binding and the longer combos its key leads ([isTapCombo]),
+ * unless the tap is a hold action, which can't wait for its key's release. [action]'s own other bindings aren't
+ * checked, since whichever of them fires runs the same action: a hold's one-key binding starts it at once even where
+ * its key leads a longer binding of that hold ([isTapCombo]). But where a combo of two keys or more is part of another
+ * of the same action, not a hold, pressing the longer can run the action twice, the shorter completing on the way.
  */
-fun hotkeyConflicts(hotkeys: Map<String, List<Int>>, action: String, combo: List<Int>): List<HotkeyConflict> {
+fun hotkeyConflicts(hotkeys: Map<String, List<List<Int>>>, action: String, combo: List<Int>): List<HotkeyConflict> {
     if (combo.isEmpty()) return emptyList()
     val candidate = combo.toSet()
-    return hotkeys.mapNotNull { (otherAction, otherCombo) ->
-        if (otherAction == action || otherCombo.isEmpty()) return@mapNotNull null
-        val other = otherCombo.toSet()
-        when {
-            candidate == other -> HotkeyConflict(otherAction, HotkeyConflict.Kind.EXACT)
-            tapAndCombo(action, combo, otherCombo) || tapAndCombo(otherAction, otherCombo, combo) -> null
-            candidate.containsAll(other) || other.containsAll(candidate) ->
-                HotkeyConflict(otherAction, HotkeyConflict.Kind.OVERLAP)
-            combo.first() in otherCombo.drop(1) || otherCombo.first() in combo.drop(1) ->
-                HotkeyConflict(otherAction, HotkeyConflict.Kind.CROSS_ROLE)
-            else -> null
+    return hotkeys.filterKeys { it != action }.flatMap { (otherAction, bindings) ->
+        bindings.mapIndexedNotNull { slot, otherCombo ->
+            val other = otherCombo.toSet()
+            val kind = when {
+                otherCombo.isEmpty() -> null
+                candidate == other -> HotkeyConflict.Kind.EXACT
+                tapAndCombo(action, combo, otherCombo) || tapAndCombo(otherAction, otherCombo, combo) -> null
+                candidate.containsAll(other) || other.containsAll(candidate) -> HotkeyConflict.Kind.OVERLAP
+                combo.first() in otherCombo.drop(1) || otherCombo.first() in combo.drop(1) -> HotkeyConflict.Kind.CROSS_ROLE
+                else -> null
+            }
+            kind?.let { HotkeyConflict(otherAction, slot, it) }
         }
     }
 }
@@ -262,25 +307,28 @@ private fun tapAndCombo(tapAction: String, tap: List<Int>, longer: List<Int>): B
 /**
  * The question a conflicting binding asks, the actions named by [name]. An exact conflict asks whether to overwrite the
  * action(s) bound to the same combo, and names any that only overlap it after; with no exact one, the overlaps are asked
- * about.
+ * about. Overwriting clears only the colliding bindings, so the overlapped actions keep their others.
  */
 fun hotkeyConflictMessage(conflicts: List<HotkeyConflict>, name: (String) -> String): String {
     val exact = conflicts.filter { it.kind == HotkeyConflict.Kind.EXACT }.map { name(it.action) }.distinct()
     val overlapping = conflicts.map { name(it.action) }.distinct() - exact.toSet()
     if (exact.isEmpty()) return "The selected hotkey combo overlaps ${andList(overlapping)}, would you like to overwrite?"
     val question = "The selected hotkey combo is already bound to ${andList(exact)}, would you like to overwrite?"
-    return if (overlapping.isEmpty()) question else "$question It also overlaps ${andList(overlapping)}, which would be unbound too."
+    if (overlapping.isEmpty()) return question
+    val lost = if (conflicts.count { name(it.action) in overlapping } > 1) "those bindings" else "that binding"
+    return "$question It also overlaps ${andList(overlapping)}, which would lose $lost too."
 }
 
 private fun andList(names: List<String>): String =
     if (names.size < 2) names.joinToString() else names.dropLast(1).joinToString(", ") + " and " + names.last()
 
-/** The pairs of actions whose combos already collide at a level, by [hotkeyConflicts]'s rules, each pair once. */
-fun existingHotkeyConflicts(hotkeys: Map<String, List<Int>>): List<Pair<String, String>> {
-    val actions = hotkeys.filterValues { it.isNotEmpty() }.keys.toList()
+/** The pairs of actions with bindings that already collide at a level, by [hotkeyConflicts]'s rules, each pair once. */
+fun existingHotkeyConflicts(hotkeys: Map<String, List<List<Int>>>): List<Pair<String, String>> {
+    val actions = hotkeys.bound().map { it.first }.distinct()
     return actions.flatMapIndexed { index, action ->
-        hotkeyConflicts(hotkeys, action, hotkeys.getValue(action))
+        hotkeys.getValue(action).flatMap { hotkeyConflicts(hotkeys, action, it) }
             .map { it.action }
+            .distinct()
             .filter { actions.indexOf(it) > index }
             .map { action to it }
     }

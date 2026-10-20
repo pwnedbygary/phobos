@@ -13,7 +13,7 @@ class HotkeyComboTest {
 
     @Test
     fun arbitraryLengthComboMatchesExactlyAndOnlyWithItsModifierFirst() {
-        val hotkeys = mapOf(save to combo)
+        val hotkeys = hotkeysOf(save to combo)
         val tracker = HotkeyTracker()
         combo.forEachIndexed { index, key ->
             assertFalse("key $index is not consumed before the combo is complete", tracker.matches(hotkeys).isNotEmpty())
@@ -25,7 +25,7 @@ class HotkeyComboTest {
 
     @Test
     fun actionKeysStillWorkAloneAndBeforeTheModifier() {
-        val hotkeys = mapOf(save to listOf(SELECT, R1))
+        val hotkeys = hotkeysOf(save to listOf(SELECT, R1))
         val tracker = HotkeyTracker()
         assertFalse("R1 alone is the game's", tracker.press(hotkeys, R1))
         assertTrue("Select is the modifier and is always consumed", tracker.press(hotkeys, SELECT))
@@ -34,7 +34,7 @@ class HotkeyComboTest {
 
     @Test
     fun aReleasedComboCanBePressedAgain() {
-        val hotkeys = mapOf(save to listOf(SELECT, R1))
+        val hotkeys = hotkeysOf(save to listOf(SELECT, R1))
         val tracker = HotkeyTracker()
         tracker.press(hotkeys, SELECT)
         tracker.press(hotkeys, R1)
@@ -50,14 +50,14 @@ class HotkeyComboTest {
     fun aStickDirectionCountsOnlyWhenACombosUsesIt() {
         val stickUp = HotkeyTokens.axis(1, positive = false)
         // No combo uses the stick: moving it doesn't keep Select + R1 from matching.
-        val hotkeys = mapOf(save to listOf(SELECT, R1))
+        val hotkeys = hotkeysOf(save to listOf(SELECT, R1))
         val tracker = HotkeyTracker()
         assertFalse(tracker.syncExternal(hotkeys, setOf(stickUp)))
         tracker.press(hotkeys, SELECT)
         tracker.press(hotkeys, R1)
         assertEquals(listOf(save), tracker.matches(hotkeys))
         // A combo that uses it: the direction joins the keys held and completes the combo.
-        val withStick = mapOf(save to listOf(SELECT, stickUp))
+        val withStick = hotkeysOf(save to listOf(SELECT, stickUp))
         val other = HotkeyTracker()
         other.press(withStick, SELECT)
         assertTrue(other.syncExternal(withStick, setOf(stickUp)))
@@ -68,7 +68,7 @@ class HotkeyComboTest {
 
     @Test
     fun conflictsCoverEqualPrefixAndCrossRoleBindings() {
-        val hotkeys = mapOf(
+        val hotkeys = hotkeysOf(
             HotkeyAction.SAVE_STATE to listOf(SELECT, R1),
             HotkeyAction.PAUSE to listOf(SELECT, START, R1),
             HotkeyAction.LIBRARY to listOf(R1, X),
@@ -79,10 +79,10 @@ class HotkeyComboTest {
         val sameAsSave = hotkeyConflicts(hotkeys, HotkeyAction.RESET, listOf(SELECT, R1))
         assertEquals(
             listOf(
-                HotkeyConflict(HotkeyAction.SAVE_STATE, HotkeyConflict.Kind.EXACT),
-                HotkeyConflict(HotkeyAction.PAUSE, HotkeyConflict.Kind.OVERLAP),
-                HotkeyConflict(HotkeyAction.LIBRARY, HotkeyConflict.Kind.CROSS_ROLE),
-                HotkeyConflict(HotkeyAction.MUTE, HotkeyConflict.Kind.CROSS_ROLE),
+                HotkeyConflict(HotkeyAction.SAVE_STATE, 0, HotkeyConflict.Kind.EXACT),
+                HotkeyConflict(HotkeyAction.PAUSE, 0, HotkeyConflict.Kind.OVERLAP),
+                HotkeyConflict(HotkeyAction.LIBRARY, 0, HotkeyConflict.Kind.CROSS_ROLE),
+                HotkeyConflict(HotkeyAction.MUTE, 0, HotkeyConflict.Kind.CROSS_ROLE),
             ),
             sameAsSave,
         )
@@ -104,20 +104,20 @@ class HotkeyComboTest {
     @Test
     fun aTapAndTheCombosItsKeyLeadsDontConflictUnlessTheTapIsAHoldAction() {
         val load = HotkeyAction.LOAD_STATE
-        val hotkeys = mapOf(save to listOf(MODE, R1), load to listOf(MODE, L1))
+        val hotkeys = hotkeysOf(save to listOf(MODE, R1), load to listOf(MODE, L1))
         assertTrue(hotkeyConflicts(hotkeys, pause, listOf(MODE)).isEmpty())
         // The other way round: a combo bound with the tap that leads it already there.
-        assertTrue(hotkeyConflicts(mapOf(pause to listOf(MODE)), save, listOf(MODE, R1)).isEmpty())
+        assertTrue(hotkeyConflicts(hotkeysOf(pause to listOf(MODE)), save, listOf(MODE, R1)).isEmpty())
         // A hold can't wait for its key's release, so it collides with the combos its key starts.
         assertEquals(
-            listOf(HotkeyConflict(save, HotkeyConflict.Kind.OVERLAP), HotkeyConflict(load, HotkeyConflict.Kind.OVERLAP)),
+            listOf(HotkeyConflict(save, 0, HotkeyConflict.Kind.OVERLAP), HotkeyConflict(load, 0, HotkeyConflict.Kind.OVERLAP)),
             hotkeyConflicts(hotkeys, HotkeyAction.FAST_FORWARD_HOLD, listOf(MODE)),
         )
     }
 
     @Test
     fun aKeyHeldAsAKeyEventAndAsAHatStaysHeldUntilBothLetGo() {
-        val hotkeys = mapOf(save to listOf(SELECT, R1))
+        val hotkeys = hotkeysOf(save to listOf(SELECT, R1))
         val tracker = HotkeyTracker()
         tracker.press(hotkeys, SELECT)
         tracker.press(hotkeys, R1)
@@ -130,7 +130,7 @@ class HotkeyComboTest {
 
     @Test
     fun aButtonReportedAsAKeyAndAsAnAxisCompletesItsComboOnceEitherWayRound() {
-        val hotkeys = mapOf(HotkeyAction.FAST_FORWARD_TOGGLE to listOf(MODE, R2))
+        val hotkeys = hotkeysOf(HotkeyAction.FAST_FORWARD_TOGGLE to listOf(MODE, R2))
         val keyFirst = HotkeyTracker()
         keyFirst.press(hotkeys, MODE)
         keyFirst.press(hotkeys, R2)
@@ -149,7 +149,7 @@ class HotkeyComboTest {
     @Test
     fun aReleaseCompletesNoComboEvenWhenWhatsLeftIsOne() {
         val frameAdvance = HotkeyAction.FRAME_ADVANCE
-        val hotkeys = mapOf(save to listOf(MODE, R1), frameAdvance to listOf(MODE, L3))
+        val hotkeys = hotkeysOf(save to listOf(MODE, R1), frameAdvance to listOf(MODE, L3))
         val tracker = HotkeyTracker()
         tracker.press(hotkeys, MODE)
         tracker.press(hotkeys, R1)
@@ -165,24 +165,29 @@ class HotkeyComboTest {
     fun theConflictQuestionUsesTheAlreadyBoundSentenceWheneverACombosTheSame() {
         val names = mapOf(save to "Save State", HotkeyAction.LOAD_STATE to "Load State", HotkeyAction.MUTE to "Mute Audio")
         fun message(vararg conflicts: HotkeyConflict) = hotkeyConflictMessage(conflicts.toList()) { names.getValue(it) }
-        val exactSave = HotkeyConflict(save, HotkeyConflict.Kind.EXACT)
+        val exactSave = HotkeyConflict(save, 0, HotkeyConflict.Kind.EXACT)
         assertEquals("The selected hotkey combo is already bound to Save State, would you like to overwrite?", message(exactSave))
         assertEquals(
             "The selected hotkey combo is already bound to Save State, would you like to overwrite? " +
-                "It also overlaps Load State and Mute Audio, which would be unbound too.",
+                "It also overlaps Load State and Mute Audio, which would lose those bindings too.",
             message(
-                HotkeyConflict(HotkeyAction.LOAD_STATE, HotkeyConflict.Kind.OVERLAP),
+                HotkeyConflict(HotkeyAction.LOAD_STATE, 0, HotkeyConflict.Kind.OVERLAP),
                 exactSave,
-                HotkeyConflict(HotkeyAction.MUTE, HotkeyConflict.Kind.CROSS_ROLE),
+                HotkeyConflict(HotkeyAction.MUTE, 1, HotkeyConflict.Kind.CROSS_ROLE),
             ),
         )
         assertEquals(
+            "The selected hotkey combo is already bound to Save State, would you like to overwrite? " +
+                "It also overlaps Load State, which would lose that binding too.",
+            message(exactSave, HotkeyConflict(HotkeyAction.LOAD_STATE, 2, HotkeyConflict.Kind.OVERLAP)),
+        )
+        assertEquals(
             "The selected hotkey combo is already bound to Save State and Load State, would you like to overwrite?",
-            message(exactSave, HotkeyConflict(HotkeyAction.LOAD_STATE, HotkeyConflict.Kind.EXACT)),
+            message(exactSave, HotkeyConflict(HotkeyAction.LOAD_STATE, 0, HotkeyConflict.Kind.EXACT)),
         )
         assertEquals(
             "The selected hotkey combo overlaps Load State, would you like to overwrite?",
-            message(HotkeyConflict(HotkeyAction.LOAD_STATE, HotkeyConflict.Kind.OVERLAP)),
+            message(HotkeyConflict(HotkeyAction.LOAD_STATE, 0, HotkeyConflict.Kind.OVERLAP)),
         )
     }
 
@@ -200,7 +205,7 @@ class HotkeyComboTest {
 
     @Test
     fun aKeyAloneThatLeadsCombosFiresWhenTappedNotWhenPressed() {
-        val hotkeys = mapOf(pause to listOf(MODE), save to listOf(MODE, R1))
+        val hotkeys = hotkeysOf(pause to listOf(MODE), save to listOf(MODE, R1))
         val tracker = HotkeyTracker()
         assertTrue("Mode starts combos: never the game's", tracker.press(hotkeys, MODE))
         assertTrue("nothing fires on the press", tracker.matches(hotkeys).isEmpty())
@@ -211,7 +216,7 @@ class HotkeyComboTest {
 
     @Test
     fun aTapIsOffWhenAnotherKeyIsPressedMeanwhileOrWasAlreadyHeld() {
-        val hotkeys = mapOf(pause to listOf(MODE), save to listOf(MODE, R1))
+        val hotkeys = hotkeysOf(pause to listOf(MODE), save to listOf(MODE, R1))
         val tracker = HotkeyTracker()
         tracker.press(hotkeys, MODE)
         tracker.press(hotkeys, R1)
@@ -236,7 +241,7 @@ class HotkeyComboTest {
 
     @Test
     fun repeatsOfAHeldKeyChangeNothing() {
-        val hotkeys = mapOf(pause to listOf(MODE), save to listOf(MODE, R1))
+        val hotkeys = hotkeysOf(pause to listOf(MODE), save to listOf(MODE, R1))
         val tracker = HotkeyTracker()
         tracker.press(hotkeys, MODE)
         assertTrue("a repeat keeps what its press decided", tracker.press(hotkeys, MODE))
@@ -246,7 +251,7 @@ class HotkeyComboTest {
 
     @Test
     fun aOneKeyComboThatStartsNothingElseFiresOnItsPress() {
-        val hotkeys = mapOf(HotkeyAction.SCREENSHOT to listOf(F8), save to listOf(MODE, R1))
+        val hotkeys = hotkeysOf(HotkeyAction.SCREENSHOT to listOf(F8), save to listOf(MODE, R1))
         val tracker = HotkeyTracker()
         tracker.press(hotkeys, F8)
         assertEquals(listOf(HotkeyAction.SCREENSHOT), tracker.matches(hotkeys))
@@ -255,19 +260,130 @@ class HotkeyComboTest {
     }
 
     @Test
-    fun theDefaultsLeaveSelectToTheGameAndDontCollide() {
-        assertTrue("no default uses Select", DEFAULT_HOTKEYS.values.none { SELECT in it })
-        assertTrue("every default starts with Mode", DEFAULT_HOTKEYS.values.all { it.first() == MODE })
-        assertEquals("Pause is a Mode tap", listOf(MODE), DEFAULT_HOTKEYS[pause])
-        assertTrue(existingHotkeyConflicts(DEFAULT_HOTKEYS).isEmpty())
-        val unbound = listOf(HotkeyAction.RESET, HotkeyAction.QUIT, HotkeyAction.FAST_FORWARD_HOLD) + HotkeyAction.DIRECT_SLOTS
-        for (action in unbound) assertNull(action, DEFAULT_HOTKEYS[action])
+    fun anyOfAnActionsBindingsRunsItAndTheActionIsReportedOnce() {
+        val hotkeys = mapOf(
+            pause to listOf(listOf(MODE), listOf(F12)),
+            save to listOf(listOf(MODE, R1), listOf(F5), listOf(MODE, R1)),
+        )
+        val tracker = HotkeyTracker()
+        assertTrue("F5 starts a binding: never the game's", tracker.press(hotkeys, F5))
+        assertEquals(listOf(save), tracker.completions(hotkeys))
+        tracker.release(F5)
+        tracker.press(hotkeys, MODE)
+        tracker.press(hotkeys, R1)
+        assertEquals("two bindings match, the action is run once", listOf(save), tracker.completions(hotkeys))
+        tracker.release(R1)
+        tracker.release(MODE)
+        assertTrue("Mode leads a combo, so it waits for its tap", tracker.taps(hotkeys).isEmpty())
+        tracker.press(hotkeys, MODE)
+        tracker.release(MODE)
+        assertEquals(listOf(pause), tracker.taps(hotkeys))
+        tracker.press(hotkeys, F12)
+        assertEquals("F12 leads nothing, so it fires on its press", listOf(pause), tracker.completions(hotkeys))
     }
 
     @Test
-    fun existingConflictsNameEachPairOnce() {
-        val hotkeys = mapOf(save to listOf(MODE, R1), HotkeyAction.LOAD_STATE to listOf(MODE, L1), HotkeyAction.SCREENSHOT to listOf(MODE, R1))
+    fun aHoldsOwnLongerBindingLeavesItsKeyAloneNoTapButAnotherActionsOrANonHoldsOwnMakesItOne() {
+        val ffHold = HotkeyAction.FAST_FORWARD_HOLD
+        val own = mapOf(ffHold to listOf(listOf(TAB), listOf(TAB, X)))
+        assertFalse("Tab and Tab + X hold the same, so Tab needn't wait for its release", isTapCombo(own, listOf(TAB)))
+        assertTrue("another action's longer combo", isTapCombo(own + hotkeysOf(save to listOf(TAB, R1)), listOf(TAB)))
+        assertTrue(
+            "a hold's longer binding still makes another action's key alone a tap",
+            isTapCombo(mapOf(ffHold to listOf(listOf(TAB, X)), save to listOf(listOf(TAB))), listOf(TAB)),
+        )
+        assertTrue(
+            "a binding that isn't a hold waits, so its longer one doesn't run it twice",
+            isTapCombo(mapOf(save to listOf(listOf(F5), listOf(F5, X))), listOf(F5)),
+        )
+    }
+
+    @Test
+    fun aTapBoundTwiceToOneActionRunsItOnce() {
+        // An action's own bindings aren't checked against each other, so one key can be two of them: Pause run twice
+        // would pause and resume.
+        val hotkeys = mapOf(pause to listOf(listOf(MODE), listOf(MODE)), save to listOf(listOf(MODE, R1)))
+        val tracker = HotkeyTracker()
+        tracker.press(hotkeys, MODE)
+        tracker.release(MODE)
+        assertEquals(listOf(pause), tracker.taps(hotkeys))
+    }
+
+    @Test
+    fun aStickDirectionInOnlyASecondBindingIsTrackedAndCompletesIt() {
+        val left = HotkeyTokens.axis(AXIS_X, positive = false)
+        val hotkeys = mapOf(HotkeyAction.MUTE to listOf(listOf(MODE, A), listOf(MODE, left)))
+        val tracker = HotkeyTracker()
+        tracker.press(hotkeys, MODE)
+        assertTrue(tracker.completions(hotkeys).isEmpty())
+        assertTrue("a stick direction a binding uses is pressed", tracker.syncExternal(hotkeys, setOf(left)))
+        assertEquals(listOf(HotkeyAction.MUTE), tracker.completions(hotkeys))
+    }
+
+    @Test
+    fun aConflictNamesTheCollidingBindingsSlotAndLeavesTheActionsOwnOut() {
+        val screenshot = HotkeyAction.SCREENSHOT
+        val hotkeys = mapOf(
+            save to listOf(listOf(MODE, R1), listOf(F5)),
+            screenshot to listOf(emptyList(), listOf(F8)),
+        )
+        assertEquals(listOf(HotkeyConflict(screenshot, 1, HotkeyConflict.Kind.EXACT)), hotkeyConflicts(hotkeys, HotkeyAction.LOAD_STATE, listOf(F8)))
+        assertEquals(listOf(HotkeyConflict(save, 1, HotkeyConflict.Kind.EXACT)), hotkeyConflicts(hotkeys, screenshot, listOf(F5)))
+        assertTrue("Save's own other binding", hotkeyConflicts(hotkeys, save, listOf(F5)).isEmpty())
+        assertTrue(hotkeyConflicts(hotkeys, save, listOf(MODE, R1, L1)).isEmpty())
+    }
+
+    @Test
+    fun existingConflictsNameEachPairOnceHoweverManyOfTheirBindingsCollide() {
+        val hotkeys = hotkeysOf(save to listOf(MODE, R1), HotkeyAction.LOAD_STATE to listOf(MODE, L1), HotkeyAction.SCREENSHOT to listOf(MODE, R1))
         assertEquals(listOf(save to HotkeyAction.SCREENSHOT), existingHotkeyConflicts(hotkeys))
+        val twice = mapOf(save to listOf(listOf(MODE, R1), listOf(F5)), HotkeyAction.SCREENSHOT to listOf(listOf(F5), listOf(MODE, R1)))
+        assertEquals(listOf(save to HotkeyAction.SCREENSHOT), existingHotkeyConflicts(twice))
+    }
+
+    @Test
+    fun bindingsAreStoredJoinedBySemicolonsAndAValueFromBeforeIsTheFirst() {
+        assertEquals("a single combo, as stored before", listOf(listOf(MODE, R1)), HotkeyBindings.parse("110,103"))
+        assertEquals("unbound", emptyList<List<Int>>(), HotkeyBindings.parse(""))
+        assertEquals(listOf(listOf(MODE, R1), listOf(F5)), HotkeyBindings.parse("110,103;135"))
+        assertEquals("an empty slot keeps the next in its place", listOf(emptyList(), listOf(F5)), HotkeyBindings.parse(";135"))
+        assertEquals(listOf(listOf(MODE, R1)), HotkeyBindings.parse("110, 103;;"))
+        assertEquals("three at most", listOf(listOf(1), listOf(2), listOf(3)), HotkeyBindings.parse("1;2;3;4"))
+
+        assertEquals("110,103;135", HotkeyBindings.encode(listOf(listOf(MODE, R1), listOf(F5))))
+        assertEquals(";135", HotkeyBindings.encode(listOf(emptyList(), listOf(F5))))
+        assertEquals("110", HotkeyBindings.encode(listOf(listOf(MODE), emptyList())))
+        assertEquals("", HotkeyBindings.encode(emptyList()))
+        for (bindings in listOf(listOf(listOf(MODE, R1), listOf(F5), listOf(F8)), listOf(emptyList(), emptyList(), listOf(F12)))) {
+            assertEquals(bindings, HotkeyBindings.parse(HotkeyBindings.encode(bindings)))
+        }
+    }
+
+    @Test
+    fun replacingABindingKeepsTheOthersInTheirSlots() {
+        val two = listOf(listOf(MODE, R1), listOf(F5))
+        assertEquals(listOf(emptyList(), listOf(F5)), HotkeyBindings.with(two, 0, emptyList()))
+        assertEquals(listOf(listOf(MODE, R1)), HotkeyBindings.with(two, 1, emptyList()))
+        assertEquals(listOf(listOf(MODE, R1), listOf(F5), listOf(F8)), HotkeyBindings.with(two, 2, listOf(F8)))
+        assertEquals(listOf(listOf(MODE, R1), emptyList(), listOf(F8)), HotkeyBindings.with(listOf(listOf(MODE, R1)), 2, listOf(F8)))
+        assertEquals(emptyList<List<Int>>(), HotkeyBindings.with(listOf(emptyList(), listOf(F5)), 1, emptyList()))
+    }
+
+    @Test
+    fun theDefaultsLeaveSelectToTheGameGiveAKeyboardSecondBindingsAndDontCollide() {
+        val combos = DEFAULT_HOTKEYS.values.flatten()
+        assertTrue("no default uses Select", combos.none { SELECT in it })
+        val keyboard = setOf(F5, F8, F9, F12, TAB)
+        assertTrue("every controller default starts with Mode", combos.filter { it.first() !in keyboard }.all { it.first() == MODE })
+        assertEquals("Pause is a Mode tap, or F12", listOf(listOf(MODE), listOf(F12)), DEFAULT_HOTKEYS[pause])
+        assertEquals(listOf(listOf(MODE, R1), listOf(F5)), DEFAULT_HOTKEYS[save])
+        assertEquals(listOf(listOf(MODE, L1), listOf(F9)), DEFAULT_HOTKEYS[HotkeyAction.LOAD_STATE])
+        assertEquals(listOf(listOf(MODE, R3), listOf(F8)), DEFAULT_HOTKEYS[HotkeyAction.SCREENSHOT])
+        assertEquals("Tab holds fast forward", listOf(listOf(TAB)), DEFAULT_HOTKEYS[HotkeyAction.FAST_FORWARD_HOLD])
+        assertTrue(existingHotkeyConflicts(DEFAULT_HOTKEYS).isEmpty())
+        assertTrue(DEFAULT_HOTKEYS.values.all { it.size <= HotkeyBindings.LIMIT })
+        val unbound = listOf(HotkeyAction.RESET, HotkeyAction.QUIT) + HotkeyAction.DIRECT_SLOTS
+        for (action in unbound) assertNull(action, DEFAULT_HOTKEYS[action])
     }
 
     @Test
@@ -304,10 +420,15 @@ class HotkeyComboTest {
         const val L2 = 104
         const val R2 = 105
         const val L3 = 106
+        const val R3 = 107
         const val START = 108
         const val SELECT = 109
         const val MODE = 110
+        const val TAB = 61
+        const val F5 = 135
         const val F8 = 138
+        const val F9 = 139
+        const val F12 = 142
         const val DPAD_RIGHT = 22
         const val AXIS_X = 0
         const val AXIS_HAT_X = 15
@@ -315,3 +436,7 @@ class HotkeyComboTest {
         const val AXIS_GAS = 22
     }
 }
+
+/** Hotkeys with one binding each, as most tests need. */
+internal fun hotkeysOf(vararg bindings: Pair<String, List<Int>>): Map<String, List<List<Int>>> =
+    bindings.associate { (action, combo) -> action to listOf(combo) }

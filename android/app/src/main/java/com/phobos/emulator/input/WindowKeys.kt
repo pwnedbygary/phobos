@@ -17,7 +17,7 @@ class WindowKeys(private val app: App) {
         fun gameKeys(): KeyHandler?
         /** A game is loaded and paused behind the Library or Settings. */
         fun swappedAway(): Boolean
-        fun hotkeys(): Map<String, List<Int>>
+        fun hotkeys(): Map<String, List<List<Int>>>
         /** The hat and axis directions held (GameInputState.hotkeyKeys). */
         fun heldAxes(): Set<Int>
         fun swapBackToGame()
@@ -66,11 +66,11 @@ class WindowKeys(private val app: App) {
         val hotkeys = app.hotkeys()
         library.syncExternal(hotkeys, app.heldAxes())
         library.press(hotkeys, keyCode)
-        val libraryCombo = hotkeys[HotkeyAction.LIBRARY].orEmpty()
+        val libraryTap = hotkeys[HotkeyAction.LIBRARY].orEmpty().any { it == listOf(keyCode) && isTapCombo(hotkeys, it) }
         when {
             HotkeyAction.LIBRARY in library.completions(hotkeys) -> backToGame()
             // A Library tap's key is the hotkeys', not the Library screens'.
-            libraryCombo == listOf(keyCode) && isTapCombo(hotkeys, libraryCombo) -> {}
+            libraryTap -> {}
             else -> return false
         }
         taken += keyCode

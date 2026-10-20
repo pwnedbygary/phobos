@@ -199,9 +199,9 @@ class MainActivity : ComponentActivity() {
                 ) return true
                 // L1/R1 outside the game step through the Library, Console and Settings tabs (MainScaffold),
                 // unless the Library hotkey uses them.
-                val libraryCombo = viewModel.activeControls.value.hotkeys[HotkeyAction.LIBRARY].orEmpty()
+                val libraryKeys = viewModel.activeControls.value.hotkeys[HotkeyAction.LIBRARY].orEmpty().flatten()
                 val shoulder = event.keyCode == KeyEvent.KEYCODE_BUTTON_L1 || event.keyCode == KeyEvent.KEYCODE_BUTTON_R1
-                if (!viewModel.emulatorScreenVisible.value && shoulder && event.keyCode !in libraryCombo) {
+                if (!viewModel.emulatorScreenVisible.value && shoulder && event.keyCode !in libraryKeys) {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         viewModel.stepTab(if (event.keyCode == KeyEvent.KEYCODE_BUTTON_L1) -1 else 1)
                     }

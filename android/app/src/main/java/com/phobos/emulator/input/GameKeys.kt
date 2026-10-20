@@ -108,10 +108,10 @@ class GameKeys(private val screen: Screen) : KeyHandler {
     }
 
     /**
-     * A hold action starts when a press completes its combo ([completed]) and lasts while every key of it stays held,
-     * other keys or not. A tap can't start one: it comes as its key is let go.
+     * A hold action starts when a press completes one of its combos ([completed]) and lasts while every key of one of
+     * them stays held, other keys or not. A tap can't start one: it comes as its key is let go.
      */
-    private fun updateHolds(hotkeys: Map<String, List<Int>>, completed: List<String>) {
+    private fun updateHolds(hotkeys: Map<String, List<List<Int>>>, completed: List<String>) {
         val fastForward = holds(HotkeyAction.FAST_FORWARD_HOLD, fastForwardHeld, hotkeys, completed)
         if (fastForward != fastForwardHeld) {
             fastForwardHeld = fastForward
@@ -126,8 +126,8 @@ class GameKeys(private val screen: Screen) : KeyHandler {
         }
     }
 
-    private fun holds(action: String, held: Boolean, hotkeys: Map<String, List<Int>>, completed: List<String>): Boolean =
-        if (held) tracker.holding(hotkeys[action].orEmpty()) else action in completed
+    private fun holds(action: String, held: Boolean, hotkeys: Map<String, List<List<Int>>>, completed: List<String>): Boolean =
+        if (held) hotkeys[action].orEmpty().any(tracker::holding) else action in completed
 
     private fun endHolds() {
         if (fastForwardHeld) {

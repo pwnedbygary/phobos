@@ -11,14 +11,15 @@ import org.junit.Test
 
 /**
  * Hotkeys as a game gets them: key events through the activity's window (WindowKeys) to the game screen's keys
- * (GameKeys), joystick moves through GameInputState, which records what the core is sent. The default Mode hotkeys,
- * taps, the hold actions driven from the hat and a trigger reported only as an axis, a button reported both ways, keys
- * let go of while the game is closed or away, and the Library's way back.
+ * (GameKeys), joystick moves through GameInputState, which records what the core is sent. The default Mode hotkeys and
+ * a keyboard's second bindings, taps, the hold actions driven from the hat, from a trigger reported only as an axis and
+ * from a key that also leads a longer binding of the same hold, a button reported both ways, keys let go of while the
+ * game is closed or away, and the Library's way back.
  */
 class HotkeyRoutingTest {
     private val run = mutableListOf<String>()
     private val events = mutableListOf<String>()
-    private var hotkeys: Map<String, List<Int>> = DEFAULT_HOTKEYS
+    private var hotkeys: Map<String, List<List<Int>>> = DEFAULT_HOTKEYS
     private var onScreen = true
     private var loaded = true
     private lateinit var coreInput: GameInputState.CoreInput
@@ -137,7 +138,7 @@ class HotkeyRoutingTest {
 
     @Test
     fun fastForwardHoldStartsAndStopsOnATriggerReportedOnlyAsAnAxis() {
-        hotkeys = mapOf(HotkeyAction.FAST_FORWARD_HOLD to listOf(MODE, R2))
+        hotkeys = hotkeysOf(HotkeyAction.FAST_FORWARD_HOLD to listOf(MODE, R2))
         key(MODE, down = true)
         move(rt = 1f)
         assertEquals(listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
@@ -149,7 +150,7 @@ class HotkeyRoutingTest {
 
     @Test
     fun frameAdvanceFromTheHatRunsAFrameOnItsPressThenHoldsAndRepeatsChangeNothing() {
-        hotkeys = mapOf(HotkeyAction.FRAME_ADVANCE to listOf(MODE, DPAD_DOWN))
+        hotkeys = hotkeysOf(HotkeyAction.FRAME_ADVANCE to listOf(MODE, DPAD_DOWN))
         key(MODE, down = true)
         move(hatY = 1f)
         assertEquals("the press runs a frame", listOf(HotkeyAction.FRAME_ADVANCE), run)
@@ -273,8 +274,63 @@ class HotkeyRoutingTest {
     }
 
     @Test
+    fun aKeyboardsSecondBindingsSaveLoadTakeAScreenshotAndPauseFromTheirKeyAlone() {
+        for (code in listOf(F5, F9, F8, F12)) {
+            assertTrue("$code is taken", key(code, down = true))
+            key(code, down = false)
+        }
+        assertEquals(listOf(HotkeyAction.SAVE_STATE, HotkeyAction.LOAD_STATE, HotkeyAction.SCREENSHOT, HotkeyAction.PAUSE), run)
+    }
+
+    @Test
+    fun tabHoldsFastForwardUntilItIsLetGo() {
+        assertTrue(key(TAB, down = true))
+        key(TAB, down = true, repeat = 1)
+        assertEquals(listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
+        assertTrue(events.isEmpty())
+        key(TAB, down = false)
+        assertEquals(listOf("fast forward stopped"), events)
+    }
+
+    @Test
+    fun aHoldStartedFromItsSecondBindingLastsWhileThatOneIsHeld() {
+        hotkeys = mapOf(HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(MODE, R2), listOf(TAB)))
+        key(TAB, down = true)
+        key(BUTTON_A, down = true)
+        key(BUTTON_A, down = false)
+        assertEquals(listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
+        assertTrue("Tab is still held: $events", events.isEmpty())
+        key(TAB, down = false)
+        assertEquals(listOf("fast forward stopped"), events)
+    }
+
+    @Test
+    fun aHoldsKeyAloneStartsItAtOnceThoughItAlsoLeadsALongerBindingOfThatHold() {
+        hotkeys = mapOf(HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(TAB), listOf(TAB, BUTTON_X)))
+        assertTrue(key(TAB, down = true))
+        assertEquals("no waiting for Tab's release", listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
+        assertTrue("X with Tab held is the longer binding's, not the game's", key(BUTTON_X, down = true))
+        key(BUTTON_X, down = false)
+        assertEquals("the same hold, started once", listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
+        assertTrue("Tab is still held: $events", events.isEmpty())
+        key(TAB, down = false)
+        assertEquals(listOf("fast forward stopped"), events)
+    }
+
+    @Test
+    fun frameAdvanceOnModeAloneBesideModeAndL3RunsAFrameAsModeGoesDown() {
+        hotkeys = mapOf(HotkeyAction.FRAME_ADVANCE to listOf(listOf(MODE, L3), listOf(MODE)))
+        key(MODE, down = true)
+        assertEquals(listOf(HotkeyAction.FRAME_ADVANCE), run)
+        assertEquals(listOf("frame advance held"), events)
+        key(MODE, down = false)
+        assertEquals(listOf("frame advance held", "frame advance let go"), events)
+        assertEquals("and no tap as Mode is let go", listOf(HotkeyAction.FRAME_ADVANCE), run)
+    }
+
+    @Test
     fun aLibraryTapFromBehindTheLibraryTakesItsKeysPressAndRelease() {
-        hotkeys = mapOf(HotkeyAction.LIBRARY to listOf(MODE), HotkeyAction.SAVE_STATE to listOf(MODE, R1))
+        hotkeys = hotkeysOf(HotkeyAction.LIBRARY to listOf(MODE), HotkeyAction.SAVE_STATE to listOf(MODE, R1))
         onScreen = false
         assertTrue("Mode is held back from the Library's screens", key(MODE, down = true))
         assertTrue(events.isEmpty())
@@ -284,13 +340,26 @@ class HotkeyRoutingTest {
 
     @Test
     fun aLibraryTapsKeyPressedWithAnotherIsNoTapAndItsReleaseIsStillTaken() {
-        hotkeys = mapOf(HotkeyAction.LIBRARY to listOf(MODE), HotkeyAction.SAVE_STATE to listOf(MODE, R1))
+        hotkeys = hotkeysOf(HotkeyAction.LIBRARY to listOf(MODE), HotkeyAction.SAVE_STATE to listOf(MODE, R1))
         onScreen = false
         assertTrue(key(MODE, down = true))
         assertFalse("A goes on to the Library's screens", key(BUTTON_A, down = true))
         assertFalse(key(BUTTON_A, down = false))
         assertTrue("Mode's release is taken, as its press was", key(MODE, down = false))
         assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun aLibraryTapInASecondBindingBringsTheGameBackFromBehindTheLibrary() {
+        hotkeys = mapOf(
+            HotkeyAction.LIBRARY to listOf(listOf(MODE, BUTTON_Y), listOf(SELECT)),
+            HotkeyAction.SAVE_STATE to listOf(listOf(SELECT, R1)),
+        )
+        onScreen = false
+        assertTrue("Select is held back from the Library's screens", key(SELECT, down = true))
+        assertTrue(events.isEmpty())
+        assertTrue("its release is the tap", key(SELECT, down = false))
+        assertEquals(listOf("back to the game"), events)
     }
 
     companion object {
@@ -303,6 +372,11 @@ class HotkeyRoutingTest {
         const val L3 = 106
         const val SELECT = 109
         const val MODE = 110
+        const val TAB = 61
+        const val F5 = 135
+        const val F8 = 138
+        const val F9 = 139
+        const val F12 = 142
         const val DPAD_DOWN = 20
         const val DPAD_RIGHT = 22
         const val AXIS_HAT_X = 15

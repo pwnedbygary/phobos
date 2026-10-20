@@ -35,6 +35,88 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Android hotkeys: up to three bindings per action, any of which runs it, a keyboard's F5, F9, F8, F12 and Tab beside the controller defaults, an overwrite clearing only the binding it collides with — 2026-10-19
+
+Branch `improved-hotkeys`, on the Android hotkeys commit `0e434cd80` (the entry below). The second pull request of the
+hotkey plan: each action takes up to three bindings, as ares allows (its `BindingLimit`). The desktop half, desktop
+per-game hotkeys and the slow-motion measurement come after it. Device checks are **not** done: no device is attached
+to this machine (see Checks).
+- **Bindings** (`input/Hotkeys.kt`): an action's hotkey is a list of up to three combos (`HotkeyBindings`), each in its
+  slot, and any of them runs the action under the rules of the entry below: matched exactly, the first key pressed
+  first and held back from the game, a tap for a one-key binding that leads longer combos. The tracker and the conflict
+  check read every binding; an action matched by two of its bindings at once runs once, as does one with a tap bound
+  twice, and a hold lasts while every key of any of its bindings stays held (`GameKeys`). A hold's own longer bindings
+  don't make its one-key binding a tap (`isTapCombo`): whichever is held, the hold is the same, so that key starts it at
+  once, where a tap, coming as its key is let go, could never start it (with Tab and Tab + X both holding fast forward,
+  Tab alone holds it). Clearing a binding leaves the others in their slots.
+- **Storage** (`data/SettingsStore.kt`): `hotkey_combo_<action>` and the console and game keys hold an action's combos
+  joined by `;`, each combo's keys by `,` as before; an empty slot is kept so the later ones keep their places (`;135`
+  is a second binding alone). A value stored before this change, a single combo, reads as the first binding, so every
+  binding a player made is kept. A console or game still overrides an action's bindings as a whole.
+- **Conflicts** (`hotkeyConflicts`, `Controls.bindHotkey`): a new binding is checked against each of the other actions'
+  bindings, by the same rules as before; an action's own bindings aren't checked against each other, since whichever
+  fires runs the same action (a hold's as above; two that overlap are under Limits). Each conflict names the colliding
+  binding's slot, and Overwrite clears only that binding, so the action it belonged to keeps its others. At a console
+  or game, overwriting a binding the level inherits leaves the level the rest of that action's bindings, in their
+  slots, as its own. The question is unchanged ("The selected hotkey combo is already bound to \<function\>, would you
+  like to overwrite?"); its note on the actions it only overlaps now says they "would lose that binding too" ("those
+  bindings", when more than one goes) instead of "would be unbound too".
+- **The Hotkeys page** (`ui/ControllerPages.kt`): a row lists its bindings joined by "or". Selecting it opens its three
+  binding rows beneath it, one action at a time: selecting one captures a combo for that slot, and its clear icon or a
+  long press clears it. The plan said a sheet; the rows open in the page because a dialog is a window of its own, which
+  neither the capture overlay drawn in the page nor the activity window's key routing reaches. The row's own clear icon
+  still unbinds every binding, and the "Unbind Pause?" question comes only when an unbinding would leave Pause none.
+  `ControlRow`'s `onCapture` is now `onSelect`.
+- **Defaults** (`DEFAULT_HOTKEYS`): a keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a screenshot,
+  F12 pauses, and Tab holds fast forward (its only default). Each is a one-key binding leading nothing, so it fires on
+  its press, and it is held back from the game like any first key. No default button binding uses those keys, and no
+  Android emulated keyboard reads a physical one (the ZX and MSX keyboards are on screen, `setKeyboardKey`), so the
+  plan's rule of skipping keys an emulated keyboard uses leaves nothing out here. An action a player has bound or
+  unbound keeps exactly what they stored, so the keyboard's binding shows only beside the defaults of actions never
+  changed.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0 wrapper and its daemon, SDK `/opt/android-sdk`, NDK 28.2.13676358):
+  `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+  :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue`: BUILD SUCCESSFUL. 431 tests per flavor (415
+  before), 0 failures, errors or skips, 53 result files each; `HotkeyComboTest` 26, `HotkeyRoutingTest` 23,
+  `ControlLevelsTest` 10, `HotkeySettingsTest` 2 (new). The 16 new tests: the storage format with a value from before,
+  and through the settings file (`data/HotkeySettingsTest`) a value from before, then bindings written and read back at
+  the next start; `HotkeyBindings.with`; any binding running its action once, and a tap bound twice running once; a
+  conflict naming its slot with the action's own bindings left out; a hold's own longer binding not making its key alone
+  a tap; a stick direction used only in a second binding; F5/F9/F8/F12 through the window; Tab holding fast forward; a
+  hold started from a second binding lasting while that one is held; Tab alone holding fast forward beside Tab + X, and
+  Frame Advance on Mode alone beside Mode + L3; a Library tap in a second binding; and overwriting at all consoles, a
+  console (an inherited binding) and a game. Two tests were extended: collisions already there named once however many
+  of two actions' bindings collide, and the defaults with the keyboard's. Nine mutations, each taken out after its run,
+  the files' SHA-256 checked afterwards. Before the first review, on the input package's 89 tests: a hold lasting only
+  while its first binding is held failed the second-binding hold test alone, and Overwrite clearing every binding of the
+  action it overlaps failed the overwrite test alone. After it, on the input package's 95 tests and
+  `HotkeySettingsTest`'s 2 (legacy flavor): the tap rule as the first review found it failed the tap-rule test and the
+  Tab and Frame Advance tests; exempting any action's own longer bindings, not only a hold's, and exempting every longer
+  binding of a hold, whether or not it has the key alone, each failed the tap-rule test alone; taps reported without
+  `distinct()` failed the tap-bound-twice test alone; stick directions looked for in first bindings only failed the
+  stick test alone; a Library tap looked for in the first binding only failed the Library test alone; and the store
+  reading a value as one combo failed the read-back test alone. APK, an incremental build: `app-legacy-debug.apk`,
+  32,728,558 bytes, SHA-256 `354d2e8bb85dbaf9da84d8de35206eaae883082b9d120f8e675b45322c0aa820`. **No device check**:
+  with the entry below's RP6 pass, still to do: a second binding firing, the binding rows opened and captured with a
+  controller, the keyboard's F-keys and Tab in a game, an overwrite keeping the other bindings.
+- **Limits**: the page's binding rows and its Pause question have no host test (Compose), so they wait for the device
+  pass; Tab, held back from the game as a first key, no longer moves focus in the pause menu (the D-pad and arrow keys
+  still do); a player who bound Tab or one of those F-keys to a game button loses it to the new defaults, which hold it
+  back from the game as a first key (the row notes that a binding's first key is also a game button); the "Unbind
+  Pause?" question counts F12, so on a device with no keyboard, clearing Pause's Mode binding leaves no Pause hotkey a
+  controller can press, without asking; a value with several bindings read by a build from before this change loses
+  the key on each side of each `;` (only a downgrade does that); two bindings of one action that overlap aren't asked
+  about, so with Mode + R1 and Mode + R1 + L1 both saving, pressing the longer saves twice; and when the action a new
+  combo is already bound to has another binding the combo overlaps, the question names that action once and Overwrite
+  clears both.
+- **Review**: the first independent review found NEEDS CHANGES, one Minor: a hold's one-key binding beside a longer
+  binding of that hold that its key leads was accepted and never fired, and these notes and `hotkeyConflicts`' comment
+  said an action's own bindings never collide. Fixed as under Bindings, with tests, and both texts corrected. The whole
+  record is in the commit that carries this entry.
+- **Next**: the desktop hotkey engine and capture page, then its window behaviour (#2513, #2365, the screensaver),
+  per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull request; the RP6 pass for both
+  Android changes.
+
 ## Android hotkeys: a combo of as many keys as the player can hold, its first key held back from the game, Mode (Home or Guide) leading the defaults and pausing when tapped, every button and axis bindable, a conflict asked about before it overwrites — 2026-10-19
 
 Branch `improved-hotkeys`, from master `08801ab60`. The Android half of ares #2212 ("enhanced hotkey bindings") and the

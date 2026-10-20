@@ -24,7 +24,7 @@ class HeldCrossReplayTest {
     private var sticksSent = FloatArray(4)
     private val hotkeysRun = mutableListOf<String>()
     private var mappings: Map<Int, String> = DEFAULT_MAPPINGS
-    private var hotkeys: Map<String, List<Int>> = DEFAULT_HOTKEYS
+    private var hotkeys: Map<String, List<List<Int>>> = DEFAULT_HOTKEYS
     private var rightStick = PspRightStick.OFF
     private lateinit var coreInput: GameInputState.CoreInput
 
@@ -309,7 +309,7 @@ class HeldCrossReplayTest {
         )
 
         /** Combos an RP6 owner might set without Z or C, on Select and the Xbox button. */
-        val RP6_HOTKEYS = mapOf(
+        val RP6_HOTKEYS = hotkeysOf(
             HotkeyAction.PAUSE to listOf(BUTTON_SELECT, BUTTON_START),
             HotkeyAction.SAVE_STATE to listOf(BUTTON_SELECT, BUTTON_R1),
             HotkeyAction.LOAD_STATE to listOf(BUTTON_SELECT, BUTTON_L1),

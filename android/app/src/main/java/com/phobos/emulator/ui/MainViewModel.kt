@@ -869,16 +869,22 @@ class MainViewModel(
         level.scope?.let { settingsStore.clearScopedMappings(it) }
     }
 
-    /** Sets hotkey [action] at [level]; an empty [combo] unbinds it there. [overwrite] actions are unbound at the same level. */
-    fun bindHotkey(level: ControlLevel, action: String, combo: List<Int>, overwrite: List<String> = emptyList()) = editControls { s ->
-        val changes = linkedMapOf<String, List<Int>>()
-        changes[action] = combo
-        overwrite.filter { it != action }.forEach { changes[it] = emptyList() }
+    /**
+     * Sets hotkey [action]'s binding [slot] at [level]; an empty [combo] clears it there. The [overwrite] bindings (action
+     * and slot) are cleared at the same level (Controls.bindHotkey).
+     */
+    fun bindHotkey(level: ControlLevel, action: String, slot: Int, combo: List<Int>, overwrite: List<Pair<String, Int>> = emptyList()) =
+        editControls { s -> writeHotkeys(level, s, Controls.bindHotkey(level, action, slot, combo, overwrite, s.hotkeys, s.controlOverrides)) }
+
+    /** Unbinds every binding of hotkey [action] at [level]. */
+    fun unbindHotkey(level: ControlLevel, action: String) = editControls { s -> writeHotkeys(level, s, mapOf(action to emptyList())) }
+
+    private suspend fun writeHotkeys(level: ControlLevel, s: EmulatorSettings, changes: Map<String, List<List<Int>>>) {
         val scope = level.scope
         if (scope == null) {
             settingsStore.setHotkeys(changes)
         } else {
-            settingsStore.setScopedHotkeys(scope, changes.mapValues { (a, c) -> Controls.hotkeyChange(level, a, c, s.hotkeys, s.controlOverrides) })
+            settingsStore.setScopedHotkeys(scope, changes.mapValues { (a, b) -> Controls.hotkeyChange(level, a, b, s.hotkeys, s.controlOverrides) })
         }
     }
 
