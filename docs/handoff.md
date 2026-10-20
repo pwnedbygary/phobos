@@ -35,6 +35,27 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP measure: ge-terms.py applies to master again, its five places where #277 left them — tools only — 2026-10-20
+
+Branch `cursor/ge-terms-master-cachy`, from master `16156ab9a` (#286). `tools/psp-measure/ge-terms.py` and this file;
+the core doesn't change.
+- **Why**: since #277 (part 111) master's script stopped at its tenth edit on master ("0 places for '    pipe.vertices
+  += format.indexFormat ? …'"): five of its 21 places had moved.
+- **What**: the five follow the code, adding what they added: the vertices' terms beside `ramRead(0, work)` in
+  `GE::oweVertices()`, JUMP's and CALL/RET's at `runList()`'s `front()`, the words' term and the R line in `geTime()`'s
+  branch for the synchronous GE, the S line in `geOwe()`'s. Its patched copy is byte for byte what the Super Monkey
+  Ball refit's step 1 copy of the script (made for `9f2d0633d`) gives. The docstring says the places are master's for
+  the GE thread Off: with it On, `geTime()` and `geOwe()` take the thread's branches, so the file has no R or S lines
+  (and, by reading, both threads add to the counts unguarded).
+- **Checks** (cachyOS x86-64, GCC 16.2.1, Python 3.14.7; `~/phobos-work/scratch/ge-terms/COMMANDS.txt`): it applies
+  to a `git archive` of `16156ab9a` and fails closed on a missing anchor; the patched runner builds warning-free with
+  `build.sh`; Super Monkey Ball and Chains of Olympus from boot, 2,400 frames, the PSP's timing: master's runner and
+  the patched one without and with PHOBOS_GE_TERMS give the same PNGs, state, WAV, output and report (but for the
+  runner's source and the host's timings), and the terms files are step 1's byte for byte; the README's recipe ran as
+  written (round 10c's built `EBOOT.PBP` for `make`: no pspdev here), and `ge-fit.py` gives `GE::Cost` back to its
+  figures (61 terms of 61).
+- Independent review: not yet.
+
 ## CI: every workflow's checkout step off Node 20 — 2026-10-20
 
 Branch `cursor/ci-checkout-node24-cachy`, from master `b398e86f7` (#285). CI only, a follow-up from #283's review
