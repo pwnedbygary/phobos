@@ -35,6 +35,20 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the GE profile decoder's tests on every change to them — 2026-10-19
+
+Branch `cursor/psp-ge-decoder-ci-cachy`, from master `d9bfbefb4` (#281). CI only, a non-blocking follow-up from
+#269's review; the decoder and its tests untouched.
+- **The job** (a new workflow, PSP GE Profile Tests, `.github/workflows/psp-ge-profile.yml`): `python3 -m unittest -v
+  test_geprof test_gate` in `tools/psp-ge-profile/decoder` with Ubuntu 24.04's own Python, on pushes to master and
+  pull requests that change the decoder or the workflow (gate.py reads the owner's captures only as the gate, never in
+  its tests). Not a job in psp-core.yml: its path filters would then run every PSP suite for a decoder change.
+- **The plugin's capture stays skipped** (`test_plugin_capture`): `make hosttest` needs pspdev, which the runners
+  don't have (`psp-config` for `build.mak`, and the SDK's headers, which `plugin.h` includes even with `-DHOST`).
+- **Checks**, here (Python 3.14.7): the job's command ran 30 tests, OK (skipped=1); with one assertion broken on
+  purpose (not committed), FAILED (failures=1, skipped=1), exit 1; actionlint 1.7.12 with shellcheck 0.11.0, clean.
+  CI's run is in the pull request's body. Independent review: not yet.
+
 ## PSP GE: part 113 and the handoff after #279's second review — wording only — 2026-10-19
 
 Branch `cursor/psp-279-nits-2b67`, from master `f5cf0c6b5` (#279, merged at `9f4e7607a`). Docs only.

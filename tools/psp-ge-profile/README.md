@@ -428,6 +428,9 @@ fall), Killzone's FINISH from below its list's start (five records of a capture 
 inside its enqueue, a game drawing into one frame buffer, and interrupt handlers' calls with an error code for a
 thread; and, once `make hosttest` has written it, the capture the plugin's own record path makes.
 
+CI (`.github/workflows/psp-ge-profile.yml`) runs them, with `test_gate.py`'s for the GE timing's gate (`gate.py`), on
+every change to `decoder/`: all but the plugin's capture, as `make hosttest` needs pspdev, which its runners don't have.
+
 ## Building
 
 `make` in `plugin/`, with pspdev's toolchain on the PATH (`psp-config`), gives `phobosprof.prx`. On the
