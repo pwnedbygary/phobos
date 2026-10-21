@@ -44,6 +44,13 @@ class FallbackKeysTest {
     }
 
     @Test
+    fun theNavigationBarsBackIsTheSystemsAndAControllersIsnt() {
+        assertTrue("the navigation bar's or gesture's Back", isSystemBack(BACK, VIRTUAL_KEYBOARD))
+        assertFalse("the controls' Back", isSystemBack(BACK, CONTROLS))
+        assertFalse("another key the system types", isSystemBack(BUTTON_B, VIRTUAL_KEYBOARD))
+    }
+
+    @Test
     fun keysWithNoScanCodeArentToldByTheKeyBefore() {
         // What adb or the system types has no scan code: the navigation bar's Back, say.
         assertFalse(fallback(BUTTON_B, 0, 1_000, device = VIRTUAL_KEYBOARD))

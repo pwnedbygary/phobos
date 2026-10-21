@@ -67,9 +67,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.phobos.emulator.PhobosCore
 import com.phobos.emulator.input.ActiveControls
-import com.phobos.emulator.input.HotkeyAction
-import com.phobos.emulator.input.HotkeyTracker
+import com.phobos.emulator.input.FallbackKeys
 import com.phobos.emulator.input.InputBindings
+import com.phobos.emulator.input.KeyHandler
+import com.phobos.emulator.input.isSystemBack
 import com.phobos.emulator.util.PSP_INPUT_URL
 import com.phobos.emulator.util.PspDialogAnswer
 import com.phobos.emulator.util.PspDialogRequest
@@ -100,17 +101,19 @@ import java.time.format.FormatStyle
  * answered for the game by the player, and a game data install's progress, which asks nothing. Touch and controller
  * both work. A controller's D-pad moves the choice, and the PSP buttons the user mapped confirm and back out, circle or
  * cross confirming as the game asks (Japanese games often confirm with circle); Start finishes the keyboard.
- * [controls] are the game's bindings: its pause hotkey opens the pause menu ([onPause]), which the dialog waits behind.
+ * [controls] are the game's bindings. [hotkeys] has each key first, the game's hotkeys running as over the game
+ * (GameKeys.onDialogKey): the keys it takes aren't the dialog's, and its Pause opens the pause menu, which the dialog
+ * waits behind.
  */
 @Composable
 fun PspSystemDialog(
     request: PspDialogRequest,
     controls: ActiveControls,
     fullScreen: Boolean,
-    onPause: () -> Unit,
+    hotkeys: KeyHandler,
     onAnswer: (PspDialogAnswer) -> Unit,
 ) {
-    val keys = PspDialogKeys(controls, onPause)
+    val keys = PspDialogKeys(controls, hotkeys)
     when (request.kind) {
         PspDialogRequest.KIND_MESSAGE -> PspMessageDialog(request, keys, fullScreen, onAnswer)
         PspDialogRequest.KIND_KEYBOARD -> PspKeyboardDialog(request, keys, fullScreen, onAnswer)
@@ -119,8 +122,8 @@ fun PspSystemDialog(
     }
 }
 
-/** The bindings a dialog reads its keys by, and what opens the pause menu. */
-private class PspDialogKeys(val controls: ActiveControls, val onPause: () -> Unit)
+/** The bindings a dialog reads its keys by, and the game's hotkeys, which have its keys first. */
+private class PspDialogKeys(val controls: ActiveControls, val hotkeys: KeyHandler)
 
 /** What a key does in a PSP dialog. */
 private enum class PspKey { UP, DOWN, LEFT, RIGHT, CONFIRM, BACK, START }
@@ -148,42 +151,32 @@ private fun pspKey(event: KeyEvent, request: PspDialogRequest, bindings: InputBi
     }
 }
 
-/** A dialog's keys held (for the pause hotkey's combination), and the focus a controller's keys need to reach it. */
+/** The focus a controller's keys need to reach a dialog, and the keys Android makes up in its window. */
 private class PspDialogInput {
-    val hotkeys = HotkeyTracker()
     val focus = FocusRequester()
     var focused by mutableStateOf(false)
+    val fallbackKeys = FallbackKeys()
 }
 
 /**
- * The dialog's keys: [onKey] on each press of a PSP key (the D-pad's repeating while held; its release taken too, so
- * Android makes nothing else of it, such as Back from a controller's B), and the pause hotkey opening the pause menu.
- * The dialog takes [input]'s focus ([PspTakeFocus]); in the keyboard ([typing]) its first field taking text does.
+ * The dialog's keys: the game's hotkeys first ([PspDialogKeys.hotkeys]), which keep the keys they take, but not a key
+ * Android makes up, as at the activity's window (a fallback, or the navigation bar's or gesture's Back, which backs out
+ * of the dialog); then [onKey] on each press of a PSP key (the D-pad's repeating while held; its release taken too, so
+ * Android makes nothing else of it, such as Back from a controller's B). The dialog takes [input]'s focus
+ * ([PspTakeFocus]); in the keyboard ([typing]) its first field taking text does.
  */
 private fun Modifier.pspKeys(request: PspDialogRequest, keys: PspDialogKeys, input: PspDialogInput,
                              typing: Boolean = false, onKey: (PspKey) -> Unit): Modifier {
     val bindings = InputBindings.of(keys.controls.mappings)
     return this
         .onPreviewKeyEvent { event ->
-            val code = event.nativeKeyEvent.keyCode
+            val native = event.nativeKeyEvent
+            val code = native.keyCode
             val down = event.type == KeyEventType.KeyDown
-            val up = event.type == KeyEventType.KeyUp
-            val hotkeys = keys.controls.hotkeys
-            // A press completes the pause combo, a release a pause tap (Mode alone, by default).
-            val pauses = when {
-                down && event.nativeKeyEvent.repeatCount == 0 -> {
-                    input.hotkeys.press(hotkeys, code)
-                    input.hotkeys.completions(hotkeys)
-                }
-                up -> {
-                    input.hotkeys.release(code)
-                    input.hotkeys.taps(hotkeys)
-                }
-                else -> emptyList()
-            }
-            if (HotkeyAction.PAUSE in pauses) {
-                input.hotkeys.reset()
-                keys.onPause()
+            val pressedOrLetGo = down || event.type == KeyEventType.KeyUp
+            val madeUp = input.fallbackKeys.isFallback(code, native.deviceId, native.scanCode, native.downTime, native.flags) ||
+                isSystemBack(code, native.deviceId)
+            if (pressedOrLetGo && !madeUp && keys.hotkeys.onKey(code, down, native.repeatCount)) {
                 return@onPreviewKeyEvent true
             }
             val key = pspKey(event, request, bindings, typing) ?: return@onPreviewKeyEvent false
@@ -506,7 +499,7 @@ private fun PspSaveDialog(
  * A game data install's progress, where the PSP shows its own (the game's mode 1; in mode 0 the game draws its own and
  * nothing comes here): the install's icon, its titles and detail, the bytes it copies, and how far it has got. No
  * button and no back: the install can't be stopped from here, and the core takes the dialog down when it's done. The
- * pause hotkey still opens the pause menu.
+ * hotkeys still run, the pause hotkey opening the pause menu.
  */
 @Composable
 private fun PspInstallDialog(request: PspDialogRequest, keys: PspDialogKeys, fullScreen: Boolean) {

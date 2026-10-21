@@ -557,6 +557,9 @@ struct GPU : GE::Renderer {
   auto shot(std::vector<u32>& pixels, u32& width, u32& height, u32& format) -> bool {
     return backend && backend->shot(pixels, width, height, format);
   }
+  //Everything handed to the GPU waited for, so shot() has the picture show() presented last at once rather than a
+  //frame or two later: for a screenshot, between frames, the GE drawn out (GE::drawer()) and nothing else on the GPU.
+  auto settle() -> void;
   //A late frame, for a host that shows frames read back but takes them late (System's "Late Frames": the runner
   //timing the GPU as the app presents, which reads nothing back): the frame buffer as picture() would read it, a
   //shot of it taken on the GPU at the PSP's size, as show() takes one, with nothing waited for; shot() has it once

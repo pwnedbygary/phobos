@@ -82,6 +82,7 @@ import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.GameKeys
 import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.InputLog
+import com.phobos.emulator.input.KeyHandler
 import com.phobos.emulator.input.VOLUME_KEYS
 import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.ui.hud.PerformanceHudOverlay
@@ -374,7 +375,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
     // The PSP's system dialog the game waits on (a message, the keyboard, saving or loading), over the running game;
     // hidden while the pause menu (which its pause hotkey opens) or a layout editor is up. The game's buttons are let
-    // go of as it opens, and the game takes the controller back once it's answered.
+    // go of as it opens, the hotkeys go on in it (GameKeys.onDialogKey), and the game takes the controller back once
+    // it's answered.
     val shownPspDialog = pspDialog?.takeIf { isLoaded && !isPaused && !editingTouchLayout && !editingHud }
     LaunchedEffect(shownPspDialog?.id) {
         if (shownPspDialog != null) {
@@ -385,7 +387,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         }
     }
     shownPspDialog?.let { request ->
-        PspSystemDialog(request, controls, settings.fullScreenMode, onPause = { viewModel.setPause(true) }) {
+        PspSystemDialog(request, controls, settings.fullScreenMode, hotkeys = KeyHandler(gameKeys::onDialogKey)) {
             viewModel.answerPspDialog(it)
         }
     }

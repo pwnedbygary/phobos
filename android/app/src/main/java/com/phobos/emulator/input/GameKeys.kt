@@ -10,7 +10,7 @@ val VOLUME_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN
  * The game screen's controller keys: its key handler, its hat listener and its focus, as EmulatorScreen and the
  * activity's window run them (and the JVM tests, which replay the RP6's events through this). The window hands it
  * every key while the game is on screen, whichever view has focus. Hotkeys come first, then the buttons a key is bound
- * to.
+ * to. A PSP system dialog over the game hands it its keys too, for the hotkeys alone ([onDialogKey]).
  */
 class GameKeys(private val screen: Screen) : KeyHandler {
     /** What the game screen tells its keys, asked at each key. */
@@ -67,6 +67,34 @@ class GameKeys(private val screen: Screen) : KeyHandler {
             }
         }
 
+        if (runHotkeys(keyCode, down)) return true
+        // Paused: mapped buttons navigate the menu (BUTTON_A falls back to DPAD_CENTER).
+        if (screen.paused()) return false
+
+        val bits = InputBindings.of(screen.controls().mappings).bitsForKey(keyCode)
+        if (bits != 0) {
+            GameInputState.setButton(bits, down)
+            return true
+        }
+        return false
+    }
+
+    /**
+     * A key in a dialog over the game, a PSP system dialog (a window of its own, whose keys don't pass the activity's
+     * window): the hotkeys run as they do over the game, and true when they take the key; the rest are the dialog's,
+     * none the game's. A held key's repeats are taken where its press was.
+     */
+    fun onDialogKey(keyCode: Int, down: Boolean, repeatCount: Int): Boolean {
+        if (keyCode in VOLUME_KEYS) return false
+        if (repeatCount > 0) return keyCode in tracker.consumedTokens
+        return runHotkeys(keyCode, down)
+    }
+
+    /** The hotkeys count [keyCode]'s key as held: its press came here, or in a dialog ([onDialogKey]), and no release. */
+    fun holdsKey(keyCode: Int): Boolean = tracker.holdsKey(keyCode)
+
+    /** The hotkeys' part of a key: it pressed or let go of, what that completes run, the holds kept; true if taken. */
+    private fun runHotkeys(keyCode: Int, down: Boolean): Boolean {
         val hotkeys = screen.controls().hotkeys
         // The hat and the axes may have changed since the last key: reconcile them first, so a
         // combo never matches a direction that is no longer held.
@@ -81,16 +109,7 @@ class GameKeys(private val screen: Screen) : KeyHandler {
             if (action !in HotkeyAction.HOLDS && screen.hotkey(action)) consumed = true
         }
         updateHolds(hotkeys, completed)
-        if (consumed) return true
-        // Paused: mapped buttons navigate the menu (BUTTON_A falls back to DPAD_CENTER).
-        if (screen.paused()) return false
-
-        val bits = InputBindings.of(screen.controls().mappings).bitsForKey(keyCode)
-        if (bits != 0) {
-            GameInputState.setButton(bits, down)
-            return true
-        }
-        return false
+        return consumed
     }
 
     /**

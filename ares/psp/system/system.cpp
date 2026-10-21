@@ -72,6 +72,17 @@ auto presenting() -> bool {
   return system.presents;
 }
 
+//The picture presented last kept for shot() at once where it came from a target: the GPU's runs waited for, which
+//keeps each one's shot (a frame or two later otherwise). Between frames alone, the host holding the core: the frame's
+//drawing is done by then (GE::drawer()), and nothing else uses the GPU.
+auto settle() -> void {
+  if(!system.gpu || !system.presents) return;
+  std::lock_guard lock{system.shotMutex};
+  if(!system.presentedFromTarget) return;
+  system.gpu->settle();
+  system.gpu->shot(system.shotPixels, system.shotWidth, system.shotHeight, system.shotFormat);
+}
+
 //(narrowed to its frame buffer's format and widened again, as GPU::picture() makes them)
 auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool {
   std::lock_guard lock{system.shotMutex};
@@ -236,6 +247,7 @@ auto System::present() -> bool {
   if(!gpu->presents() || !gpu->presented()) return false;
   //(the picture presented last: memory's, or the newest the GPU has finished presenting from a target)
   std::lock_guard lock{shotMutex};
+  presentedFromTarget = fromTarget;
   if(!fromTarget) std::swap(shotPixels, pixels), shotWidth = width, shotHeight = height, shotFormat = 3;
   else gpu->shot(shotPixels, shotWidth, shotHeight, shotFormat);
   return true;

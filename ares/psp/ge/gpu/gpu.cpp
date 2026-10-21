@@ -2373,6 +2373,14 @@ auto GPU::show(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bo
   return true;
 }
 
+//(nothing new run: the runs before waited for, each one's shot kept, as Backend::finish() does with nothing recorded)
+auto GPU::settle() -> void {
+  if(!ready()) return;
+  Recorded none;
+  bool wasLost = backend->lost;
+  if(!backend->finish(none) && !wasLost) lose();
+}
+
 auto GPU::shoot(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool {
   if(!ready() || !width || !height) return false;
   Target* t = shownTarget(address, stride, format, width, height);

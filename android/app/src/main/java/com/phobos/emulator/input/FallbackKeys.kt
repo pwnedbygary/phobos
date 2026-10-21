@@ -1,6 +1,11 @@
 package com.phobos.emulator.input
 
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
+
+/** The navigation bar's or gesture's Back, a key with no predictive back (the manifest), and no controller's. */
+fun isSystemBack(keyCode: Int, deviceId: Int): Boolean =
+    keyCode == KeyEvent.KEYCODE_BACK && deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
 
 /**
  * Tells a key Android makes up for one the app left unhandled (a fallback: the Back an unhandled B gives, say) from a

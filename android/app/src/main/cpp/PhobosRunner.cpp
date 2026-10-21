@@ -5128,8 +5128,12 @@ else if (port->type() == "Keyboard") {
     }
     #endif
     // A PSP game presented by its Vulkan renderer: the picture it presented last (red in the low byte, as the
-    // window's are)
+    // window's are), kept at once between frames (runMutex), rather than a frame or two after it's on the window.
     if (root && root->name() == "PlayStation Portable" && ::ares::PlayStationPortable::presenting()) {
+      {
+        lock_guard<recursive_mutex> frame(*runMutex);
+        ::ares::PlayStationPortable::settle();
+      }
       if (!::ares::PlayStationPortable::shot(picture.pixels, picture.width, picture.height)) return false;
       for (auto& p : picture.pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
       return true;

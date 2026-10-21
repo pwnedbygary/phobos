@@ -156,6 +156,9 @@ class HotkeyTracker {
     /** Tokens whose key event must not reach the game. */
     val consumedTokens: Set<Int> get() = consumed
 
+    /** A key event pressed [token], and none has let it go yet. */
+    fun holdsKey(token: Int): Boolean = token in keyTokens
+
     fun reset() {
         order.clear()
         consumed.clear()

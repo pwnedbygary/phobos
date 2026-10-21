@@ -31,9 +31,12 @@ namespace ares::PlayStationPortable {
   //take it back) that the Vulkan renderer shows the screen on itself, straight from the GPU with nothing read back.
   //Any thread, any time: the core keeps a reference of its own while it has it. presenting(): whether the core shows
   //the frames on the window now, so the host mustn't (nor lock the window, which would take it from the core); any
-  //thread. shot(): the picture presented last, at the PSP's size (8888, red in the low byte), for screenshots.
+  //thread. shot(): the picture presented last, at the PSP's size (8888, red in the low byte), for screenshots; kept a
+  //frame or two after it's presented from a target on the GPU, unless settle() keeps it at once, which waits for the
+  //GPU: only between frames, the host holding the core.
   auto window(void* window) -> void;
   auto presenting() -> bool;
+  auto settle() -> void;
   auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool;
 }
 

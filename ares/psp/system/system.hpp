@@ -119,7 +119,8 @@ private:
   bool gpuFailed = false;  //(the hardware renderer couldn't start: not tried again until the next game)
   //Presenting (window()): the host's window, as handed over (a reference held: windowMutex's), and the one the GPU
   //was last given (the emulation thread's); whether the GPU presents the frames (the host's to read); the picture
-  //presented last, for shot() (shotMutex's: its pixels as they were in the target, and its GE format).
+  //presented last, for shot() (shotMutex's: its pixels as they were in the target, and its GE format), and whether it
+  //came from a target, its shot the GPU's to keep (settle()).
   std::mutex windowMutex;
   void* hostWindow = nullptr;
   void* gpuWindow = nullptr;
@@ -127,11 +128,13 @@ private:
   std::mutex shotMutex;
   std::vector<u32> shotPixels;
   u32 shotWidth = 0, shotHeight = 0, shotFormat = 3;
+  bool presentedFromTarget = false;
   auto present() -> bool;
   auto handWindow() -> void;
   static auto hold(void* window, bool held) -> void;
   friend auto window(void* window) -> void;
   friend auto presenting() -> bool;
+  friend auto settle() -> void;
   friend auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool;
   std::mutex noticeLock;
   std::string pendingNotice;  //(notice())

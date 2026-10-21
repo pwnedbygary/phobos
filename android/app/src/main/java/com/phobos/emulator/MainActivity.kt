@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.net.Uri
 import android.util.Log
 import android.view.InputDevice
-import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
@@ -40,6 +39,7 @@ import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.input.KeyHandler
 import com.phobos.emulator.input.WindowKeys
+import com.phobos.emulator.input.isSystemBack
 import com.phobos.emulator.launch.launchRequestOf
 import com.phobos.emulator.ui.ConsoleArtFetcher
 import com.phobos.emulator.ui.ConsoleArtKeyer
@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity() {
     private val windowKeys = WindowKeys(object : WindowKeys.App {
         override fun gameKeys(): KeyHandler? =
             viewModel.gameKeys?.takeIf { viewModel.emulatorScreenVisible.value && viewModel.isLoaded.value }
+        override fun gameKeysHolding(keyCode: Int): KeyHandler? = viewModel.gameKeys?.takeIf { it.holdsKey(keyCode) }
         override fun swappedAway() =
             viewModel.isLoaded.value && viewModel.isPaused.value && !viewModel.emulatorScreenVisible.value
         override fun hotkeys() = viewModel.activeControls.value.hotkeys
@@ -195,7 +196,7 @@ class MainActivity : ComponentActivity() {
                 // neither; the navigation bar's or gesture's Back cancels a capture and goes to no hotkey. With no
                 // predictive back (the manifest), both come here as keys.
                 val fallback = fallbackKeys.isFallback(event.keyCode, event.deviceId, event.scanCode, event.downTime, event.flags)
-                val systemBack = event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
+                val systemBack = isSystemBack(event.keyCode, event.deviceId)
                 // A controller that sends Back, which starts the default hotkeys, is remembered (the Hotkeys page warns
                 // while no controller connected ever has); neither of those Backs is a controller's.
                 if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN && !fallback && !systemBack) {

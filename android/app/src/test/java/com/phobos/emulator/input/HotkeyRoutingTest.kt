@@ -15,7 +15,8 @@ import org.junit.Test
  * them, and a keyboard's second bindings; and on a set led by Mode, as the defaults once were, taps, the hold actions
  * driven from the hat, from a trigger reported only as an axis and from a key that also leads a longer binding of the
  * same hold, a key bound alone beside a longer binding it leads, a button reported both ways, keys let go of while the
- * game is closed or away, and the Library's way back.
+ * game is closed or away, and the Library's way back; and the keys of a PSP system dialog over the game, those a
+ * Reload from it leaves to the window included.
  */
 class HotkeyRoutingTest {
     private val run = mutableListOf<String>()
@@ -53,6 +54,7 @@ class HotkeyRoutingTest {
     /** The window as MainActivity runs it: the game on screen once loaded, or swapped away behind the Library. */
     private val window = WindowKeys(object : WindowKeys.App {
         override fun gameKeys(): KeyHandler? = gameKeys.takeIf { onScreen && loaded }
+        override fun gameKeysHolding(keyCode: Int): KeyHandler? = gameKeys.takeIf { onScreen && it.holdsKey(keyCode) }
         override fun swappedAway() = loaded && !onScreen
         override fun hotkeys() = hotkeys
         override fun heldAxes(): Set<Int> = GameInputState.hotkeyKeys
@@ -416,6 +418,47 @@ class HotkeyRoutingTest {
         assertEquals("once, F5 pressed with X being no tap", listOf(HotkeyAction.SAVE_STATE), run)
         tap(F5)
         assertEquals(listOf(HotkeyAction.SAVE_STATE, HotkeyAction.SAVE_STATE), run)
+    }
+
+    @Test
+    fun inAPspDialogTheHotkeysRunAndKeepTheirKeysTheRestBeingTheDialogsAndNoneTheGames() {
+        hotkeys = DEFAULT_HOTKEYS
+        assertTrue("Back is held back from the dialog", gameKeys.onDialogKey(BACK, down = true, repeatCount = 0))
+        assertTrue("R1 completes Back + R1", gameKeys.onDialogKey(R1, down = true, repeatCount = 0))
+        assertEquals(listOf(HotkeyAction.SAVE_STATE), run)
+        assertTrue("its repeats stay the hotkeys'", gameKeys.onDialogKey(R1, down = true, repeatCount = 1))
+        assertTrue("and its release", gameKeys.onDialogKey(R1, down = false, repeatCount = 0))
+        assertTrue("R2 with Back held", gameKeys.onDialogKey(R2, down = true, repeatCount = 0))
+        assertEquals("starts fast forward", listOf(HotkeyAction.SAVE_STATE, HotkeyAction.FAST_FORWARD_HOLD), run)
+        gameKeys.onDialogKey(R2, down = false, repeatCount = 0)
+        assertEquals("and letting go of it stops it", listOf("fast forward stopped"), events)
+        assertTrue("Back's release is taken too", gameKeys.onDialogKey(BACK, down = false, repeatCount = 0))
+        assertFalse("A alone is the dialog's", gameKeys.onDialogKey(BUTTON_A, down = true, repeatCount = 0))
+        assertFalse("its repeats too", gameKeys.onDialogKey(BUTTON_A, down = true, repeatCount = 1))
+        assertFalse(gameKeys.onDialogKey(BUTTON_A, down = false, repeatCount = 0))
+        assertEquals("the game gets no button", 0, GameInputState.buttons)
+        assertEquals(listOf(HotkeyAction.SAVE_STATE, HotkeyAction.FAST_FORWARD_HOLD), run)
+    }
+
+    @Test
+    fun keysPressedInAPspDialogAndLetGoOfAfterAReloadClosedTheGameStillReachItsHotkeys() {
+        hotkeys = DEFAULT_HOTKEYS
+        // Back + X in the dialog reloads, which closes the game, and the dialog with it, before its keys are let go:
+        // their releases come through the window while the game isn't loaded.
+        assertTrue(gameKeys.onDialogKey(BACK, down = true, repeatCount = 0))
+        assertTrue(gameKeys.onDialogKey(BUTTON_X, down = true, repeatCount = 0))
+        assertEquals(listOf(HotkeyAction.RELOAD), run)
+        assertTrue("X's release is the hotkeys'", key(BUTTON_X, down = false))
+        assertTrue("and Back's", key(BACK, down = false))
+        loaded = true
+        key(BUTTON_A, down = true)
+        assertEquals("A alone is the game's", Input.A, GameInputState.buttons and Input.A)
+        key(BUTTON_A, down = false)
+        tap(BUTTON_X)
+        key(R1, down = true)
+        assertEquals("so is R1, after an X", Input.R1, GameInputState.buttons and Input.R1)
+        key(R1, down = false)
+        assertEquals("nothing else ran", listOf(HotkeyAction.RELOAD), run)
     }
 
     @Test

@@ -35,6 +35,147 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP system dialogs running the hotkeys, the keys they take no longer the dialog's, and a PSP screenshot with the Vulkan renderer presenting having the picture on screen — 2026-10-21
+
+Branch `improved-hotkeys`, on `eb67f4ea7` (the entry below). Three more of the follow-ups the owner asked for on
+2026-10-21 (the plan row's Open): a PSP system dialog holding a hotkey's first key back and running the hotkeys, with
+the stale comment in `PspSystemDialogs.kt`, and a PSP screenshot with the Vulkan renderer presenting that has the
+picture on screen; for these the owner chose "Do both, and use one of my PSP games on the RP6 for the checks (copied
+into the test app's own folder, deleted with it)". Changed: `input/GameKeys.kt` (`onDialogKey`, `holdsKey`),
+`input/WindowKeys.kt`, `input/Hotkeys.kt` (`HotkeyTracker.holdsKey`), `input/FallbackKeys.kt` (`isSystemBack`),
+`MainActivity.kt`, `ui/PspSystemDialogs.kt`, `ui/EmulatorScreen.kt`, `HotkeyRoutingTest`, `FallbackKeysTest`, the PSP
+core's `psp.hpp`, `system/system.cpp` and `system.hpp` (`settle()`) and `ge/gpu/gpu.cpp` and `gpu.hpp`
+(`GPU::settle`), the runner's `captureScreenshot` (`PhobosRunner.cpp`), `docs/psp-gpu-renderers.md`, three entries
+below (The entries below) and the hotkey row of `docs/implementation-plan.md`. Checked on the host and on the RP6
+(Checks).
+- **Hotkeys in a PSP system dialog**: a PSP system dialog over the running game (a message, the keyboard, saving or
+  loading, or a game data install) is a window of its own, so its keys never reach the activity's window, where the
+  hotkeys run. It took its PSP buttons and the Pause hotkey alone, the latter with a tracker of its own, and passed
+  every other key on, a hotkey's first key included: Back let go of backed out of the dialog, Back + R1 saved nothing
+  and backed out, and Back + R3 could confirm (the entry led by Back, Limits). Now the dialog gives each of its keys to
+  the game's hotkeys first (`GameKeys.onDialogKey`, the game screen's own hotkey handling), but for the two keys
+  Android makes up, which the activity's window keeps from the hotkeys too: the navigation bar's or gesture's Back
+  (`isSystemBack`, the window's test and now the dialog's) and a fallback (`FallbackKeys`, the dialog keeping one of its
+  own, as the window never sees the key a fallback there follows). What a press completes or a release taps runs as it
+  does over the game, Back + R1 saving a state and Back + A opening the pause menu, which the dialog waits behind as
+  before; and the keys the hotkeys take (a binding's first key, and its other keys while that's held), with their
+  repeats and releases, aren't the dialog's. The rest are the dialog's as before, the two made-up keys with them, and
+  none reaches the game. So a controller's Back alone does nothing in a dialog, as over the game, while the navigation
+  bar's or gesture's Back does what it did before (backing out of a message, a save or the keyboard), and B, the D-pad
+  and the rest act there as the dialog takes them. A key held as a dialog opens is let go of for the hotkeys, as for the
+  game (as before), so a binding whose first key is down then starts from that key's next press. A key pressed in a
+  dialog and let go of once the dialog is gone is let go of at the activity's window, and there its release goes to the
+  game screen's keys while their hotkeys count it as held (`WindowKeys`, `GameKeys.holdsKey`), the game loaded or not,
+  as a key pressed at the window does: a Reload from a dialog (Back + X) closes the game, and the dialog with it, before
+  the two are let go of. The first review of this entry found both: in a dialog the made-up keys reached the hotkeys,
+  so with the defaults that Back no longer backed out of one; and after a Reload from a dialog the game came back with
+  Back and X held, every other key of a Back binding held back from it, and after one X, R1 alone saving a state.
+- **The stale comment**: the dialog's comment that a release ran "a pause tap (Mode alone, by default)", a default the
+  entry led by Back replaced, went with the code it described.
+- **The PSP's Vulkan screenshots**: where the PSP's Vulkan renderer presents (on Android, by choice; Software is the
+  default), a screenshot is the copy of the picture presented last that the PSP keeps, and for a picture the GPU drew
+  from a target that copy was kept only when the GPU's slot was next waited for, a frame or two later, so a screenshot,
+  paused or not, could be a frame or two behind the window (the frame-advance entry, Limits). Now the runner, holding
+  the core between frames (`runMutex`), has the PSP keep it at once (`PlayStationPortable::settle()`): the GPU's runs
+  waited for, each one's copy kept (`GPU::settle`, what `Backend::finish()` does with nothing new recorded), and the
+  picture presented last taken again. A picture from memory, kept at once already, is left alone, and where the renderer
+  doesn't present (the desktop always reads its frames back) nothing changes. `docs/psp-gpu-renderers.md` says so where
+  it told of the late copy.
+- **The entries below**: the reference's rule for a binding's keys says the hotkeys run in a PSP system dialog on
+  Android too, and its 1192 that a screenshot has the picture on screen where the PSP's Vulkan renderer presents too,
+  since this entry; the frame-advance entry's Limits and Next say that renderer's screenshots have the picture on screen
+  since this entry; and the entry led by Back's PSP system dialog limit says this entry changed it, what of it still
+  holds being under Limits here.
+- **Checks**:
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0's wrapper):
+    BUILD SUCCESSFUL, 454 tests in each flavour (451 before), 0 failures, 54 result files each; the APK 33,679,406
+    bytes (1,082,421 of them unused space between the archive's entries), SHA-256
+    `03e6b5c729b8205b85e23dc5a71826f06e515317e8d82a25584e21cb40fbfe61`, one build of these sources, its native library
+    (arm64, NDK 28.2) built with the change.
+  - New tests: `HotkeyRoutingTest.inAPspDialogTheHotkeysRunAndKeepTheirKeysTheRestBeingTheDialogsAndNoneTheGames`;
+    after the first review, `FallbackKeysTest.theNavigationBarsBackIsTheSystemsAndAControllersIsnt` and
+    `HotkeyRoutingTest.keysPressedInAPspDialogAndLetGoOfAfterAReloadClosedTheGameStillReachItsHotkeys`.
+  - Seven mutants, each compiled from copies outside the repository in place of its file, every output kept outside it,
+    and the whole legacy suite run (454 tests, all passing with the copies unchanged), all on these sources: the dialog
+    given the hotkeys' keys too, which failed the dialog's test and the Reload test (whose presses start in a dialog);
+    a hotkey's repeats given to the dialog, and the dialog's keys given to the game screen's handler, as over the game,
+    each failing the dialog's test and no other; after the first review, the window without its way to the game
+    screen's keys for a release, and `GameKeys.holdsKey` never true, each failing the Reload test and no other; and
+    `isSystemBack` taking every Back, or none, each failing `FallbackKeysTest`'s new test and no other.
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja), the runner and the PSP core compiled again with the
+    change; ctest 1/1, its 209 host checks; the two compiled with `-Wall -Wextra` into a scratch folder with the build's
+    own commands: no warning on a line this change made (1,429 and 793 elsewhere in them). After the first review,
+    which changed nothing the desktop builds, the build was current and ctest the same.
+  - On the RP6 (Android 13), with the owner's copy of Crash Tag Team Racing, against the commit below: two debug builds
+    under application IDs of their own, installed beside the owner's app one after the other and removed afterwards, the
+    game copied into each one's own folder and gone with it, each one's settings written before its first start (the
+    PSP's Vulkan renderer, accurate; Frame Advance on Back + Start), driven by the built-in controls' own events
+    (sendevent): one of `eb67f4ea7` (`com.phobos.emulator.f2base`, APK SHA-256
+    `0ba9c317703630872deb0bef815a1242509920d63950594a54e2169ca476ce18`) and one of this entry's sources as first
+    reviewed (`com.phobos.emulator.f2`, APK SHA-256 `51df49f8d4a11e6d73472204198e6b16ba06604f5824a1965f81a0d53fe736e0`,
+    its native library differing from the other's). The game's save dialog (New Game, the name, Done: the app's Save
+    list of New Data), Back + R1: before, no state saved and the dialog backed out of, the game asking "Continue without
+    saving?"; with this change, "Saved state to internal: …/Crash Tag Team Racing.chd.state0" logged, the dialog still
+    up; then Back + A opened the pause menu, the dialog hidden behind it and Slot 0 showing the state just saved, Back +
+    A again brought the dialog back, and Cross saved to New Data, the game going on. At the game's signpost menu, frame
+    advance on, then eight steps, at each the screen captured and a screenshot taken (Back + R3): each screenshot
+    compared with every step's screen, the game's picture cut out of the capture and shrunk to the PSP's size
+    (`compare-shots.py`, kept outside the repository with the device script). Before, 1 of 8 screenshots was nearest its
+    own step's screen, each of the other seven nearest the step before, a frame behind; with this change, 8 of 8. The
+    scene changed little a step (its siren light, a mean difference of 0.16 to 0.70 a step against about 9.5 from the
+    cut-out's scaling), and the steps still told apart. The dialog's keys don't pass the activity's window, so the input
+    log doesn't show them; the logged save and the screenshots do.
+  - On the RP6 again after the first review, the same game on the PSP's default renderer (Software): the build of this
+    entry as first reviewed (`51df49f8…` above) and one of these sources (`com.phobos.emulator.f2` too, APK SHA-256
+    `142185eb34edf51e47a8a579f084cc056d407f7042eef2d26b09c83cc2aae682`), installed one after the other and removed
+    afterwards, the uninstalls' output kept, the owner's two apps unchanged. In the save dialog, the navigation bar's
+    Back (`input keyevent`, from the virtual keyboard's device): before, the dialog stayed; with this change, it backed
+    out, the game asking "Continue without saving?". Then in the dialog, Back + X, X let go of 80 ms after its press
+    and Back 40 ms later: the game reloaded, the dialog gone, and both releases reached the activity's window before the
+    game was loaded again (the input log); then X and R1, each alone. Before, X reached no game button and R1 ran Back
+    + R1, "Saved state to internal: …state0" logged; with this change, each reached the game (the input log's button
+    changes) and nothing ran. In a first try in the earlier build, Back let go of 0.35 s after X's press came after the
+    game was loaded again, and only X stayed held: X reached no game button, R1 did.
+  - Also seen, in the build of `eb67f4ea7` and not this change's: in its first run, with the owner at the device
+    (presses of its own in the log: the pause menu opened, the performance overlay turned on, the save dialog answered),
+    the GPU stopped answering as the game saved, frames of up to 810 ms, then Adreno's driver noting a GPU snapshot
+    (none kept) and the core's notice "The Vulkan renderer stopped: the GPU stopped answering; the software renderer
+    draws from now on". The emulation went on at 60 FPS, but the screen stayed on the save's "Accessing Memory Stick
+    Duo": every frame the runner's draw on the window was refused ("BufferQueueProducer … connect: already connected
+    (cur=1 req=2)", 60 a second, 12,277 in 205 s), the Vulkan renderer never having let go of the window, as its code
+    reads: a GPU that stops answering turns presenting off, but the swapchain stays on the window, dropped only with its
+    surface (one lost or that couldn't be made, another window or none, the renderer's end), and after a fence wait that
+    timed out dropping it destroys nothing (the GPU may still be using it). Whether this loss was such a timeout is
+    unknown (frames of at most 810 ms against a 5 s wait suggest not). Not seen again in two more runs of the same
+    steps, one in each build, without the owner's presses.
+  - Not run: another device or controller; the desktop's Vulkan renderer, which never presents; a fallback in a dialog
+    (Android makes one of a key the dialog leaves unhandled, such as R3 or L3 alone, and no check pressed one there).
+- **Limits**:
+  - In a dialog, a controller's motion goes to the dialog's window, not to the game's input state: a binding with a
+    trigger reported only as an axis, or a stick direction, can't complete there, nor one with a direction of a D-pad
+    that's a hat. Android makes D-pad keys of an unhandled hat, and of the left stick, in that window (its synthetic
+    joystick events), but marks them as fallbacks (`FLAG_FALLBACK`), which the dialog keeps from the hotkeys as the
+    window does: they move the dialog's choice and run nothing. The RP6's built-in controls give their D-pad as a hat
+    (Android reads them by `Generic.kl`, which maps a hat and no D-pad key), so there Back + a direction, Next or
+    Previous Slot by default, moves a dialog's choice instead. Letting those keys reach the hotkeys would let the left
+    stick's in too, though over the game the stick is no D-pad to them. Derived from Android's input handling, the code
+    and the RP6's layout, not seen; the second review found this limit still saying the hotkeys saw those keys.
+  - Guide or PS, where it starts no hotkey, still goes Home from a dialog; R3 and L3 alone still confirm in a message or
+    a save dialog (their fallback); and the soft keyboard over the PSP keyboard still has Back first (the entry led by
+    Back, Limits).
+  - A hardware keyboard's keys reach the hotkeys before the PSP keyboard's fields: with the defaults Tab starts fast
+    forward there instead of moving to the next field (in a keyboard with several), and F5, F8, F9 and F12 run their
+    actions (derived from the code).
+  - `settle()` waits for the GPU on the screenshot's thread with the core held, so the game waits too, for the GPU's
+    queued work, a frame or two (derived from the code).
+- **Review**: the independent review's record is in the commit that carries this entry.
+- **Next**: the desktop's follow-ups (1810's toggle, the Screenshot hotkey with the menu open, Phobos's abort when its
+  display goes away first, the test target in CI); the PSP's Vulkan renderer letting go of the window when the GPU stops
+  answering, so that the software renderer's frames show (Checks, Also seen), which the owner asked to have looked into;
+  then the RP6's test copy replaced with a build of the finished branch and a draft pull request (the owner's choices);
+  and the hands-on checks.
+
 ## Android follow-ups: the Back warning ended by a Back from any device connected, a button any level gives the game asked about, the settings test's keys written out, taps beside longer bindings tested — 2026-10-21
 
 Branch `improved-hotkeys`, on `89d800605` (the entry below). Four of the follow-ups the reviews left (the plan row's
@@ -127,7 +268,8 @@ entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
     section, each with its levels; on the desktop, the pause menu's Hotkeys row.
   - A binding is one or more keys held together. It runs when exactly those keys are held, its first key pressed first:
     another key held as well keeps it from running. Its first key starts it and is held back from the game, and its
-    other keys are held back while the first is down; pressed alone, they're the game's.
+    other keys are held back while the first is down; pressed alone, they're the game's. On Android the hotkeys run in a
+    PSP system dialog over the game too, the keys they take not reaching it (the PSP follow-ups' entry above).
   - A key bound alone that also starts a longer binding acts when tapped, let go of with nothing else pressed meanwhile,
     so the longer bindings can be pressed past it: the desktop's Guide opens the menu when tapped and starts the
     controller's other hotkeys. A hold's one-key binding isn't made a tap by that hold's own longer bindings: whichever
@@ -237,9 +379,10 @@ entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
     screenshot taken while paused saved only once the game goes on: saved at once, paused or not (the entry below).
     1192, a screenshot taken while paused a frame late: it has the frame on screen (the entry below, checked on the
     desktop), except where the PSP's Vulkan renderer presents (on Android, by choice): there a screenshot can be a frame
-    or two behind, paused or not, short of the current frame 1192 asks for (that entry's Limits). 2224, "Add option to
-    disable auto-setting of N64 Controller Paks": the runner attaches the one pak the player chose, None until one is,
-    never one a game asks for (its N64 Player 1 set-up in `PhobosRunner.cpp`).
+    or two behind, paused or not, short of the current frame 1192 asks for (that entry's Limits); since the PSP
+    follow-ups' entry above it has the picture on screen there too (checked on the RP6). 2224, "Add option to disable
+    auto-setting of N64 Controller Paks": the runner attaches the one pak the player chose, None until one is, never one
+    a game asks for (its N64 Player 1 set-up in `PhobosRunner.cpp`).
   - **Out of scope**: 2463 and 1126, two controllers as two players (every controller drives player 1, on both apps);
     558, controller profiles; 1708, controllers on macOS; 986, an analog stick acting as the D-pad on systems without
     one (neither app maps a stick to the D-pad); and the plan's "fullscreen cluster", the five fullscreen issues named
@@ -374,7 +517,8 @@ Checked on the desktop, on a virtual display; **not** on a device (see Limits).
     wrong).
   - Where the PSP's Vulkan renderer presents (on Android, by choice), a screenshot can be a frame or two behind the
     window, paused or not, a step's included (What was wrong): short of the current frame ares 1192 asks for, as before
-    this change (derived from the code and `docs/psp-gpu-renderers.md`, not run).
+    this change (derived from the code and `docs/psp-gpu-renderers.md`, not run). The PSP follow-ups' entry above has it
+    keep the picture on screen.
 - **Review**: the first independent review (diff `8589a4dc...`) found NEEDS CHANGES, one Minor: the frames were said
   never drawn nor kept for a screenshot, where an N64 game under Vulkan, as N64 games start, took its screenshots from
   the scanout, so with the step's frame, and a PSP game its Vulkan renderer presents showed its steps all along (both
@@ -395,8 +539,8 @@ Checked on the desktop, on a virtual display; **not** on a device (see Limits).
   this entry.
 - **Next**: the hotkey plan's closing docs (a hotkey reference and the issue matrix); frame advance on the RP6, by hand;
   Phobos's abort when its display goes away before it quits (Checks); if wanted, a PSP screenshot with the Vulkan
-  renderer presenting that has the picture on screen (Limits); the pad, window manager, Wayland, Steam, Windows and
-  macOS checks.
+  renderer presenting that has the picture on screen (Limits; done in the PSP follow-ups' entry above); the pad, window
+  manager, Wayland, Steam, Windows and macOS checks.
 
 ## Android hotkeys led by Back: the owner's set from the RP6 as the defaults, none needing C or Z, a warning while no controller has sent Back with a button chosen in its place at every level at once, a controller's Back coming as a key — 2026-10-20
 
@@ -518,7 +662,8 @@ leftovers. Checked on the RP6 with a test copy beside the owner's app; **not** w
     passes every other key on, a hotkey's first key included (derived from `PspSystemDialogs.kt` and Android's dialog,
     fallback-key and soft-keyboard handling, not seen). No other hotkey runs there, and the keys of one act as they
     would with no hotkeys: as the dialog takes them or, where nothing in its window does, as the fallback `Generic.kcm`
-    gives the key.
+    gives the key. The PSP follow-ups' entry above changed this: the hotkeys run in a dialog now, the keys they take no
+    longer the dialog's; what of the rest still holds is in its Limits.
     - Guide or PS, let go of with the dialog still up, goes Home, pressed alone or with another button and even where it
       starts the hotkeys; where Pause is bound to it alone, a press of it alone pauses instead.
     - Back, let go of with the dialog still up, does what the dialog's back button does (from a question about a save

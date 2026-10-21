@@ -571,7 +571,8 @@ frame buffer's colours as memory would keep them. The host's `video()` then neit
 - **Synchronisation**: each slot has its own `acquired` semaphore, each swapchain image its own `rendered` one, so
   nothing waits on the CPU except the acquire (100 ms at most, then the frame isn't presented).
 - **Screenshots**: a presented frame is also blitted (nearest) to the PSP's size into the slot's own buffer and kept
-  when the slot is next waited for (`GPU::shot()`), so the host's screenshot still has the picture.
+  when the slot is next waited for (`GPU::shot()`), so the host's screenshot still has the picture; since the PSP
+  follow-ups of 2026-10-21 (the handoff) a screenshot keeps it at once (`PlayStationPortable::settle()`, below).
 - **Falling back**: a surface or swapchain that can't be made gives presenting up (`failed`): the surface is let go
   so the host can lock the window again, and frames are read back as before. `presents()` doesn't depend on the
   window being there, so the host never locks a window the GPU is about to present on.
@@ -583,8 +584,10 @@ render resolution multiplier) informed the design here as before; none of its co
 
 Presenting reports itself: `Backend::presented` is set only when this frame's `vkQueuePresentKHR` succeeded (or was
 suboptimal), and `System::present` returns false otherwise (no window, as in the background, or an acquire that
-timed out), so that frame is read back and the host draws it. A screenshot taken just after a presented frame may be
-the frame before's: the shrunk copy is kept when its slot is next waited for, a frame or two later.
+timed out), so that frame is read back and the host draws it. The shrunk copy is kept when its slot is next waited for,
+a frame or two later, so a screenshot taken just after a presented frame was the frame before's; since the PSP
+follow-ups of 2026-10-21 the host's screenshot has it kept at once (`settle()`: between frames, the host holding the
+core, the GPU's runs waited for and each one's copy kept), so it has the frame presented last.
 
 ## Shader blending (part 45)
 

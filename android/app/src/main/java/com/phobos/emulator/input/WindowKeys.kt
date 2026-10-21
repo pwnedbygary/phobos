@@ -9,13 +9,20 @@ package com.phobos.emulator.input
  * screens. The repeats and release of a key whose
  * press went to a game, or was taken by the Library hotkey, go the same way, whatever changed meanwhile: a game that
  * reloads or is swapped away with keys down still gets them let go of, so its hotkeys don't count them as held when
- * it's back. Used from the main thread.
+ * it's back. So do those of a key pressed in a PSP dialog over the game, a window of its own whose keys never pass
+ * this one, while the game's hotkeys count it as held: a Reload from the dialog closes the game, and the dialog with
+ * it, before they come. Used from the main thread.
  */
 class WindowKeys(private val app: App) {
     /** What the window's keys ask the app, at each key. */
     interface App {
         /** The keys of the game on screen once it's loaded; null otherwise. */
         fun gameKeys(): KeyHandler?
+        /**
+         * The game screen's keys, loaded or not (null with no game screen), if their hotkeys count [keyCode] as held:
+         * its press came in a PSP dialog over the game ([GameKeys.onDialogKey]), which this window doesn't see.
+         */
+        fun gameKeysHolding(keyCode: Int): KeyHandler?
         /** A game is loaded and paused behind the Library or Settings. */
         fun swappedAway(): Boolean
         fun hotkeys(): Map<String, List<List<Int>>>
@@ -49,6 +56,7 @@ class WindowKeys(private val app: App) {
                 return game.onKey(keyCode, down, repeatCount)
             }
             if (keyCode in taken) return down || letGoOfTaken(keyCode)
+            app.gameKeysHolding(keyCode)?.let { game -> return game.onKey(keyCode, down, repeatCount) }
         }
         app.gameKeys()?.let { game ->
             library.reset()
