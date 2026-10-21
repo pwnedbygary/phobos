@@ -207,9 +207,9 @@ constexpr u32 Words = 0x0940'0000;
 //sceGeDrawSync(1), but also locks a semaphore each turn, which this leaves out): main queues a list of 16 sprites
 //(geSprites()), a finish callback counting the lists done, and asks how the GE is doing till it says done, the clock
 //noted after each; three lists. With the list stalled (at its start, or past its first sprite), a mover thread (every
-//2000 microseconds) sees it pending and moves its stall address to its end, after which the GE draws it. Each turn
+//`every` microseconds) sees it pending and moves its stall address to its end, after which the GE draws it. Each turn
 //reads what traffic says besides.
-auto geWait(KernelMachine& m, Look look, Traffic traffic = Traffic::None) -> void {
+auto geWait(KernelMachine& m, Look look, Traffic traffic = Traffic::None, u32 every = 2000) -> void {
   auto& memory = m.system.memory;
   u32 first = 0, end = geSprites(m, GeList, GeVertices, false, &first, look == Look::Drawing);
   bool stalled = look == Look::Stalled || look == Look::Drawing;
@@ -220,7 +220,7 @@ auto geWait(KernelMachine& m, Look look, Traffic traffic = Traffic::None) -> voi
   memory.write(4, GeCallbacks + 8, 0x0880'4000);
   Assembler mover{m, 0x0880'3000};
   u32 again = mover.here();
-  mover.li(a0, 2000); mover.call("sceKernelDelayThread");
+  mover.li(a0, every); mover.call("sceKernelDelayThread");
   mover.li(t0, Pending); mover.put(lw(a0, 0, t0)); mover.put(lw(t1, 4, t0));
   mover.put(beq(t1, zero, branchTo(mover, again))); mover.put(nop);
   mover.put(sw(zero, 4, t0));
@@ -990,6 +990,160 @@ static auto spinsGeCapped() -> void {
   CHECK(m->kernel.spun > 1000, true);
 }
 
+//With the PSP's GE timing, the GE asked after (sceGeDrawSync(1)) by a poll whose turns move lines of the CPU's caches
+//while its list waits at its stall address past its first sprite (geWait()'s Look::Drawing: sprites textured from RAM,
+//the GE drawing that sprite and then idle, no FINISH due, so the go goes on past the GE's end): a skip whose turns the
+//GE would be done part way through is refused (spinSkip()). Its one stretch would count the share of the turns' lines
+//that fell before the GE's end as it stood, where run one by one each turn's lines push that end back as they come, so
+//that later turns fall before it too. Skips are taken once the GE is idle. The mover comes every 4000 microseconds, so
+//steps end while the GE waits at the stall, its end as the turns left it (moved within the step, the GE's time would
+//start afresh from the clock as it went on: geResume()). Every step's state the same with the skip on as off, and in
+//the end the caches' counts; on both engines (the interpreter's accesses aren't counted).
+static auto spinsGePartway() -> void {
+  for(bool recompile : {false, true}) {
+    for(auto traffic : {Traffic::Uncached, Traffic::Missing}) {
+      u64 skipped = 0;
+      CHECK(bothWays([traffic](KernelMachine& m) { geWait(m, Look::Drawing, traffic, 4000); }, recompile, 48, skipped,
+                     true), true);
+      if(skipped <= 1000) std::printf("  traffic %u skipped %llu turns\n", u32(traffic), (unsigned long long)skipped);
+      CHECK(skipped > 1000, true);
+    }
+  }
+}
+
+//A poll of two calls a turn begun after a sleep beside the GE: main queues a list of count one-pixel sprites whose
+//corners it reads from RAM (geDots()), sleeps 600 microseconds and then, till the list is done, works out 200
+//instructions, asks after the list (sceGeListSync(id, 1)), reads a word of RAM through an uncached mirror and asks its
+//thread's ID. From the list's call, the spin's anchor (the first call after the sleep), the turn's line comes in its
+//first stretch, none in its second.
+auto geTwoCalls(KernelMachine& m, u32 count) -> void {
+  geDots(m, GeList, GeVertices, count);
+  Assembler main{m, 0x0880'1000};
+  main.li(a0, GeList); main.li(a1, 0); main.li(a2, 0xffff'ffff); main.li(a3, 0);
+  main.call("sceGeListEnQueue");
+  main.put(addu(s0, v0, zero));
+  main.li(a0, 600); main.call("sceKernelDelayThread");
+  main.li(s1, (Words + 0x8000) | 0x4000'0000);
+  u32 poll = main.here();
+  main.put(addu(t0, zero, zero));
+  for(u32 n = 0; n < 100; n++) main.put(addiu(t0, t0, 3)), main.put(xor_(t1, t0, s2));
+  main.put(addu(a0, s0, zero)); main.li(a1, 1); main.call("sceGeListSync");
+  main.put(addu(s2, v0, zero));
+  main.put(lw(t5, 0, s1));
+  main.call("sceKernelGetThreadId");
+  main.put(bne(s2, zero, branchTo(main, poll))); main.put(nop);
+  main.call("sceKernelExitGame");
+}
+
+//With the PSP's GE timing, a poll of two calls a turn moving a line (geTwoCalls()), past the kink in its busy window's
+//push: the window's time the CPU's but its cycles passed still mostly the sleep's, so the push it owes rises through
+//each turn's first stretch (its line) and falls through its second (instructions only: the CPU's time growing faster
+//than the cycles passed), rising from turn to turn. Run one by one the turns push the GE back to the most it owes,
+//after the last first stretch; one stretch for the turns a skip would take, to what it owes at their end, after a
+//second stretch: less (the skip below: 38806 cycles pushed against 38827). Such a skip is refused (spinSkip(): several
+//calls a turn with lines moved). Every step's state the same with the skip on as off, and in the end the caches'
+//counts; on both engines (the interpreter's accesses aren't counted: its window owes nothing, and its turns are
+//skipped).
+static auto spinsGeTwoCalls() -> void {
+  for(bool recompile : {false, true}) {
+    u64 skipped = 0;
+    CHECK(bothWays([](KernelMachine& m) { geTwoCalls(m, 40000); }, recompile, 32, skipped, true), true);
+    if(recompile) continue;
+    if(skipped <= 1000) std::printf("  skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+  }
+  //The turns after such a skip would make up what it fell short by, each first stretch's push the most yet, before a
+  //step's end: so at once too, as spinsDirect makes a skip. Two machines run with the skip off to the list's call just
+  //past the kink, the skip then on in one of them for the next five calls (the detector's turns, steady, the last
+  //moving a line with two calls); its next call made in a go of its own with room for 20 turns and the margin, against
+  //the other's running the turns that call skipped: the same at once.
+  Unthreaded unthreaded;  //(a go made by hand: the synchronous GE's, no bound of the GE thread's in it)
+  auto positioned = [](bool spins) {
+    auto m = machine([](KernelMachine& m) { geTwoCalls(m, 40000); }, true, false, true);
+    u32 stub = m->stub("sceGeListSync");
+    auto toStub = [&] { do m->kernel.run(1); while(m->system.ipu.pc != stub); };
+    m->kernel.run(200'000);
+    do toStub(); while(!m->kernel.geContendBound(m->kernel.geWindow));
+    m->kernel.spins = spins;
+    for(u32 visit = 0; visit <= Kernel::SpinTurns; visit++) toStub();
+    return m;
+  };
+  auto go = [](KernelMachine& m, u64 room) {  //(the stub's jr, then its syscall in a go: spinsDirect's anchor())
+    auto& k = m.kernel;
+    m.system.instruction();
+    k.counted = 0, k.going = true;
+    m.system.instructionsRun = 1;  //(the jr, counted as the syscall catches the clock up)
+    m.system.runLimit = room;
+    m.system.instruction();
+    k.going = false;
+    u64 ran = m.system.instructionsRun + 1;  //(and the syscall)
+    k.cycles += ran - k.counted, k.counted = ran;
+  };
+  auto x = positioned(true), y = positioned(false);
+  CHECK(saveState(*x) == saveState(*y), true);
+  u64 room = (20 + Kernel::SpinMargin) * x->kernel.spin.period + 2;  //(as spinsDirect's, and the jr counted)
+  go(*x, room);
+  auto& spin = x->kernel.spin;
+  CHECK(spin.turns == 0 && spin.steady && spin.calls == 2 && spin.moved[2] == 1, true);  //(the try made)
+  u64 turns = x->kernel.spun;
+  go(*y, room);
+  if(turns) y->kernel.run(turns * x->kernel.spin.period);
+  if(saveState(*x) != saveState(*y)) {
+    std::printf("  at once: %llu turns skipped; the GE done at %llu against %llu, pushed %llu against %llu\n",
+                (unsigned long long)turns, (unsigned long long)x->kernel.geDoneAt,
+                (unsigned long long)y->kernel.geDoneAt, (unsigned long long)x->kernel.geWindow.pushed,
+                (unsigned long long)y->kernel.geWindow.pushed);
+  }
+  CHECK(saveState(*x) == saveState(*y), true);
+}
+
+//A poll whose turns settle by its fifth: main queues a list of 16 sprites (geSprites()), then asks the GE how it's
+//doing (sceGeDrawSync(1)) till done, each turn counting k = min(k + 1, 5) in memory (stored every turn, without a
+//branch) and loading a word from a line chosen without a branch: on its fifth turn (k 4 on entry) a line it hasn't
+//read before, else one it reads every turn. The word is 0 either way, and the registers that chose and loaded it are
+//cleared later in the turn, so from the fifth turn on every turn leaves memory and the registers as it found them.
+//Three lists, each with its own fresh line, k cleared before each.
+auto settling(KernelMachine& m) -> void {
+  constexpr u32 K = Spare, Resident = Words, Fresh = Words + 0x3000;
+  geSprites(m, GeList, GeVertices);
+  Assembler main{m, 0x0880'1000};
+  main.li(s4, 0);
+  u32 round = main.here();
+  main.put(addiu(s4, s4, 1));
+  main.li(t0, K); main.put(sw(zero, 0, t0));
+  main.put(sll(s3, s4, 6)); main.li(t1, Fresh); main.put(addu(s3, s3, t1));  //(this list's fresh line)
+  main.li(a0, GeList); main.li(a1, 0); main.li(a2, 0xffff'ffff); main.li(a3, 0);
+  main.call("sceGeListEnQueue");
+  u32 poll = main.here();
+  main.li(a0, 1); main.call("sceGeDrawSync");
+  main.put(addu(s5, v0, zero));
+  main.li(t0, K); main.put(lw(t1, 0, t0));
+  main.put(xori(t2, t1, 4));  //(0 on the fifth turn)
+  main.li(t3, Resident); main.put(movz(t3, s3, t2));
+  main.put(lw(t5, 0, t3));
+  main.put(addiu(t1, t1, 1)); main.li(t6, 5); main.put(min(t1, t1, t6));
+  main.put(sw(t1, 0, t0));
+  main.put(addu(t2, zero, zero)); main.put(addu(t3, zero, zero)); main.put(addu(t5, zero, zero));
+  main.put(bne(s5, zero, branchTo(main, poll))); main.put(nop);
+  main.put(sltiu(t3, s4, Rounds));
+  main.put(bne(t3, zero, branchTo(main, round))); main.put(nop);
+  main.call("sceKernelExitGame");
+}
+
+//With the PSP's GE timing, a poll whose turns settle by its fifth (settling()), its fifth turn reading a line in and
+//none after: its first try comes after that fifth turn, the last two turns unlike, and is refused (spinSkip()): a skip
+//there would count every turn it skips as moving what the fifth did. The next try, the last two turns alike, is taken.
+//Every step's state the same with the skip on as off, and in the end the caches' counts; on both engines (the
+//interpreter's accesses aren't counted: its turns alike from the first).
+static auto spinsGeSettling() -> void {
+  for(bool recompile : {false, true}) {
+    u64 skipped = 0;
+    CHECK(bothWays(settling, recompile, 32, skipped, true), true);
+    if(skipped <= 1000) std::printf("  skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+  }
+}
+
 auto spinTests() -> Tests {
   return {
     {"spins skipped as run", spinsSkipped}, {"spins refused", spinsRefused}, {"a spin skipped directly", spinsDirect},
@@ -1005,6 +1159,11 @@ auto spinTests() -> Tests {
      "skipped as every turn run", spinsGeDrawingThreaded},
     {"the GE's looks polled with the PSP's GE timing beside a window held at the cap: skips refused, then taken",
      spinsGeCapped},
+    {"the GE's looks polled with the PSP's GE timing, its list stalled: no skip past the GE's end", spinsGePartway},
+    {"the GE's looks polled with the PSP's GE timing, two calls a turn moving lines: no skip of a push that zig-zags",
+     spinsGeTwoCalls},
+    {"the GE's looks polled with the PSP's GE timing, its turns settling: no skip till the last two turns move alike",
+     spinsGeSettling},
   };
 }
 
