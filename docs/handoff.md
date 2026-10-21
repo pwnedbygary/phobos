@@ -35,6 +35,182 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Hotkeys: a reference for Android and the desktop, and where each ares issue that shares their surface stands — 2026-10-20
+
+Branch `improved-hotkeys`, on `7817da840` (the entry below). The hotkey plan's closing docs: "Each PR updates the
+handoff. At the end, add a hotkey reference and the issue matrix". Read from the code at that commit, with the files
+each part comes from named. Changed: this entry, the corrections the reviews of the entries below left for it (The
+entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
+- **A hotkey, on both apps** (Android's `input/Hotkeys.kt`, the desktop's `desktop/Hotkeys.cpp`, and the hotkey entries
+  below):
+  - Where: on Android, the Hotkeys row of the settings' Inputs & Hotkeys page and Hotkeys in the pause menu's Controller
+    section, each with its levels; on the desktop, the pause menu's Hotkeys row.
+  - A binding is one or more keys held together. It runs when exactly those keys are held, its first key pressed first:
+    another key held as well keeps it from running. Its first key starts it and is held back from the game, and its
+    other keys are held back while the first is down; pressed alone, they're the game's.
+  - A key bound alone that also starts a longer binding acts when tapped, let go of with nothing else pressed meanwhile,
+    so the longer bindings can be pressed past it: the desktop's Guide opens the menu when tapped and starts the
+    controller's other hotkeys. A hold's one-key binding isn't made a tap by that hold's own longer bindings: whichever
+    is held, the hold is the same, so its key starts it at once.
+  - Fast forward (hold), slow motion and frame advance last while their keys stay held. Slow motion runs at half speed,
+    its sound slowed with it; frame advance stops the game with its picture kept and runs a frame at each press and,
+    held, one every 100 ms after 300 ms, each frame drawn (the entry below).
+  - An action takes up to three bindings, any of which runs it.
+  - Capturing a binding takes every key pressed until 700 ms pass with no new one, a key let go of meanwhile included;
+    with no key for 5 s nothing changes. On the desktop, a capture still taking keys also ends, the binding unchanged,
+    if the window loses focus ("The window lost focus: the binding is unchanged").
+  - Binding keys another action already has asks first: "The selected hotkey combo is already bound to \<function\>,
+    would you like to overwrite?", or, where they only overlap (one binding holding all of the other's keys, or a key
+    that starts one among the other's later keys), "The selected hotkey combo overlaps \<function\>, would you like to
+    overwrite?"; where they're one action's exactly and overlap another's, the first question goes on "It also overlaps
+    \<function\>, which would lose that binding too." ("those bindings" where more than one would go). Overwriting
+    clears only the colliding bindings, each action keeping its others. A key bound alone and the longer bindings it
+    starts aren't asked about, the key acting when tapped, unless its action is a hold.
+  - Levels: all consoles, a console and a game, each storing only the actions it changes, whole, the rest inherited (on
+    Android since `bfff36383`, on the desktop since `f54ae457f`). The pause menu's Hotkeys page offers the running game,
+    its console and all consoles, on both apps; Android's settings page, all consoles or any console.
+  - What can be bound on Android: every key a controller or a keyboard sends the app, the triggers, the stick directions
+    (past half way) and the hat, as the D-pad; not the volume keys, left to the system, nor the navigation bar's or
+    gesture's Back, nor a key Android makes up from another (`FallbackKeys`). On the desktop: keyboard keys, pad
+    buttons, the triggers, stick directions and mouse buttons; Escape can't start a captured binding, as before any key
+    it cancels the capture.
+- **Android's defaults**, from `DEFAULT_HOTKEYS` (`input/Hotkeys.kt`), named as the Hotkeys page names them: the first
+  table below. Every controller hotkey is Back and one other button, the owner's set (the entry led by Back); a
+  keyboard's keys are second bindings. Unbound: Fast Forward (Toggle), Frame Advance, Reset System, and Save State and
+  Load State for each slot, 1 to 9 (rows the page's toggle shows). On a controller with no Back button, most of them,
+  the page warns and offers another button in Back's place, at every level at once.
+- **The desktop's defaults**, from `defaultHotkeys` (`desktop/Hotkeys.cpp`), a pad's buttons named by the Xbox layout,
+  as the page names them: the second table. Guide starts the controller's hotkeys, a Guide tap opening the menu, and a
+  keyboard keeps the desktop's own keys. Unbound: Pause menu, out of fullscreen; Reset; Next disc; Save state and Load
+  state 1 to 9. Besides the hotkeys, Select and Start pressed together, and no other button, open the menu (a Steam
+  Deck's route, its Guide being Steam's), and in the menu B or Backspace closes it. On the ZX Spectrum and the MSX, a
+  default on Tab or on a key the computer's keyboard uses doesn't apply, stored or not (the owner's choice): Tab's on
+  both, and F5's and Escape's on the MSX.
+
+| Android action | Controller | Keyboard |
+|---|---|---|
+| Pause Emulation | Back + A | F12 |
+| Save State | Back + R1 | F5 |
+| Load State | Back + L1 | F9 |
+| Next Slot | Back + D-pad right | |
+| Previous Slot | Back + D-pad left | |
+| Reload Current Game | Back + X | |
+| Quit Emulator (asks first) | Back + B | |
+| Capture Screenshot | Back + R3 | F8 |
+| Mute Audio | Back + Select | |
+| Fast Forward (Hold) | Back + R2 | TAB |
+| Slow Motion (Hold) | Back + L2 | |
+| Cycle N64 Controller Pak | Back + D-pad down | |
+| Toggle PS1 Analog | Back + D-pad up | |
+| Toggle On-Screen Keyboard | Back + L3 | |
+| Swap to Library | Back + Y | |
+
+| Desktop action | Controller | Keyboard |
+|---|---|---|
+| Pause menu | Guide (tapped) | F12, Escape |
+| Save state | Guide + RB | F5 |
+| Load state | Guide + LB | F9 |
+| Next state slot | Guide + Right | |
+| Previous state slot | Guide + Left | |
+| Screenshot | Guide + R3 | F8 |
+| Fullscreen | | F11 |
+| Fast forward (hold) | | Tab |
+| Fast forward (toggle) | Guide + RT | |
+| Slow motion (hold) | Guide + LT | |
+| Frame advance | Guide + Start | |
+| N64 controller pak | Guide + Down | |
+| PS1 analog controller | Guide + Up | |
+| Mute | Guide + A | |
+| Reload game | Guide + X | |
+| Quit game (asks first) | Guide + B | |
+
+- **The ares issues** of the plan's bundle and its lists, by where they stand in Phobos (titles as GitHub had them on
+  2026-10-20, read with `gh api`, all still open upstream):
+  - **Done**: 2212, "Enhanced Hotkey Bindings (key / button combinations)": combos of any length, up to three bindings,
+    the question before overwriting, levels (Android `0e434cd80`, `a41f6644e`, `131351063`, its levels since
+    `bfff36383`; the desktop `f4e0b1b98`, `f54ae457f`). 1191, "Frame Advance doesn't advance multiple frames when held":
+    held, a frame every 100 ms (`0e434cd80`, `f4e0b1b98`), each frame drawn since `7817da840`. 1726, "[n64] Add hotkey
+    to switch between controller (memory) pak and rumble pak": None, Rumble Pak and Controller Pak in turn (`0e434cd80`,
+    `f4e0b1b98`). 1698, "[FEATURE REQUEST] Save State by Hotkeys": Save State and Load State for each slot, 1 to 9,
+    unbound until bound (`0e434cd80`, `f4e0b1b98`). 424, "[Request] Slow motion hotkey": held, at half speed
+    (`68e973d43`). 1018, "[BUG] Steam Overlay doesn't open": on the desktop Shift + Tab no longer fast-forwards
+    (`f4e0b1b98`), not checked with Steam. 2513, the pause on focus loss, reported on macOS: the desktop's Pause when
+    unfocused, on by default (`68f2a2799`), not checked on macOS. 2365, "Don't Register keystrokes when window is not
+    focused in fullscreen": on the desktop nothing that still comes while another window has the keyboard runs a hotkey,
+    SDL holding the pads' presses back, and the game waits by default (`68f2a2799`). 1577, "Computer goes to sleep while
+    playing game": Android keeps the screen on with a game on it (`0e434cd80`), and on the desktop SDL holds the
+    screensaver off from its start while Phobos runs, with no code of Phobos's (seen on KDE, recorded in `68f2a2799`).
+    1368, GNOME 44 blanking the screen when only a controller is used: SDL's hold, as for 1577, not checked on GNOME.
+  - **In part**: 2288, "[Feature Request] Per-game input profiles": Android has had controls for a console and for a
+    game, buttons and hotkeys, since `bfff36383`; the desktop has hotkeys for them (`f54ae457f`) but no button remapping
+    at all, per game or not, the owner agreeing to hotkeys alone there. 1810, a hotkey for "toggle fullscreen and pause"
+    and mouse buttons bindable: on the desktop mouse buttons bind as hotkey keys, and its "Pause menu, out of
+    fullscreen" hotkey leaves fullscreen and then opens the menu, the order the issue asks for, but only one way: it
+    never goes back to fullscreen or to the game, where the issue's toggle would (Fullscreen and closing the menu do
+    that, in two steps) (`f4e0b1b98`). Android's hotkeys take no mouse button and have no such action.
+  - **Already covered**: 2291, an on-screen word for a successful save: saving a state says so, "Saved state to
+    \<slot\>" on Android and "Saved state N" on the desktop. 2194, input settings lost when the controller changes:
+    bindings name keys and buttons, not controllers, on both apps, so a controller going away or another taking its
+    place leaves them as they are. 1495, "SDLGameControllerDB support when using SDL as input driver": the desktop opens
+    pads with SDL 3's gamepad API, which knows the pads in its own list (`SDL_gamepad_db.h`) and takes more mappings,
+    the community database's for one, from `SDL_GAMECONTROLLERCONFIG` or `SDL_GAMECONTROLLERCONFIG_FILE`. 1585, a
+    screenshot taken while paused saved only once the game goes on: saved at once, paused or not (the entry below).
+    1192, a screenshot taken while paused a frame late: it has the frame on screen (the entry below, checked on the
+    desktop), except where the PSP's Vulkan renderer presents (on Android, by choice): there a screenshot can be a frame
+    or two behind, paused or not, short of the current frame 1192 asks for (that entry's Limits). 2224, "Add option to
+    disable auto-setting of N64 Controller Paks": the runner attaches the one pak the player chose, None until one is,
+    never one a game asks for (its N64 Player 1 set-up in `PhobosRunner.cpp`).
+  - **Out of scope**: 2463 and 1126, two controllers as two players (every controller drives player 1, on both apps);
+    558, controller profiles; 1708, controllers on macOS; 986, an analog stick acting as the D-pad on systems without
+    one (neither app maps a stick to the D-pad); and the plan's "fullscreen cluster", the five fullscreen issues named
+    by the planning session the plan came from: 1462, 2287, 2511, 2564 and 1477.
+  - **Not done, unless asked**: 1184, the cursor hidden in fullscreen; 1293, a trigger threshold; 1549, turbo buttons;
+    and an N64 pak per game.
+  - ares's pull request 2462, "chord hotkeys, hotkeys for load/save state to slot 1-9" (open), changes ares's
+    `desktop-ui`, which Phobos doesn't have, and caps a chord at three keys (`ChordKeyLimit`): Phobos's hotkeys are its
+    own.
+- **The entries below**: what their reviews left for this one. The frame-advance entry's record of a probe says "after 7
+  of them" (its fourth review). The entry led by Back has its PSP system dialog limit split into points, with the step
+  Back's release takes after another key's (Back + R1 saving nothing and backing out of the dialog), the install dialog
+  taking the D-pad and doing nothing, and the soft keyboard's part named as assumed of Gboard, the RP6's by its settings
+  (its fifth review). The desktop per-game entry's Limits now say the same game unzipped has the console the library
+  gives it, not always its own, and that a zipped game keeps "Auto" as it runs, so the desktop's hotkeys and menu rows
+  that go by a game's system, and the emulated computers' rule, pass it by (derived); its Review says the scripts' place
+  was recorded, not moved; and the plan's row calls that entry's first review's Minors fixed or recorded (its second
+  review).
+- **Checks**: docs only. The two tables compared with the code by a script kept outside the repository
+  (`check-reference.py`: each action's name, as the page has it, and its default bindings, read from `input/Hotkeys.kt`,
+  `ui/ControllerPages.kt` and `desktop/Hotkeys.cpp`): 35 of 35 pass, the two tables found, a row for each action with a
+  default and no other, each row's bindings, and no direct slot bound by default. The issue titles and states read from
+  GitHub with `gh api` (kept as `ares-issues.tsv`), and 1810's request, 2513's label and comments and 2462's files and
+  chord limit read the same way. The RP6's soft keyboard read from its settings over adb, read-only. Widths (only the
+  headings over 120), the plan row's links, `git diff --check`. The entry rendered by GitHub's Markdown API (`gh api
+  markdown`, its gfm mode), the placeholders it quotes shown as written.
+- **Limits**: the matrix is Phobos's view of these issues, which stay open upstream; "done" means on this branch, not in
+  a release. What was checked by hand is said; the rest comes from the code and the checks of the entries below, and the
+  hands-on checks are still the owner's. The tables give each action's defaults; a player's own bindings, or a level's,
+  replace them.
+- **Review**: the first independent review (diff `c2728e56...`) found NEEDS CHANGES, two Minors: three placeholders this
+  entry quotes, `<function>` twice and `<slot>`, written bare, so that GitHub's rendering dropped them as tags (seen
+  with its Markdown API); and Tab called a key of the ZX Spectrum's keyboard, where it's an exception of its own. Both
+  fixed. Its suggestions are taken, each checked against the code: capture told as keeping every key pressed, those let
+  go of included; the question's third form; a hold's one-key binding not made a tap by that hold's own longer bindings;
+  the levels each page offers; 1810's action told as one way, and 1810 moved to In part for it, its request, read since,
+  being a toggle; the PlayStation's Analog controller row among what passes a zipped game by (the desktop per-game
+  entry's Limits); 1192's sentence; and 2212's credit for Android's levels. Where it couldn't tell where the five
+  fullscreen issues' numbers came from, they're now said to be those named by the planning session the plan came from.
+  The second (diff `fa440ec1...`) found NEEDS CHANGES, one Minor, in the commit's record of the first review: it gave 32
+  issues as read with gh api, where there are 31 besides the pull request, and said every earlier entry's edit was
+  word-diffed, where only the PSP dialog limit's was, the others checked against the code and the commits. Corrected in
+  the commit. Its suggestions are taken: the desktop's "Pause menu, out of fullscreen" in quotes where a verb follows
+  it, here and in the plan's row; the fullscreen issues' source worded as the planning session the plan came from, whose
+  text naming them it found; and a desktop capture ending as the window loses focus, told with the capture rule. The
+  whole record is in the commit that carries this entry.
+- **Next**: the hands-on checks (the RP6 pass, frame advance there included, bound first; a pad, a window manager,
+  Wayland, Steam, Windows and macOS on the desktop); a pull request when the owner wants one; the code changes the
+  reviews left (the plan row's Open), and a comment in `PspSystemDialogs.kt` still naming Mode alone as the default
+  pause; and, if wanted, the desktop's "Pause menu, out of fullscreen" hotkey made the toggle 1810 asks for (In part).
+
 ## Frame advance drawing each frame it runs, and a screenshot taken while paused saved at once with the frame on screen — 2026-10-20
 
 Branch `improved-hotkeys`, on `131351063` (the entry below). Found while checking, for the hotkey plan's closing issue
@@ -131,10 +307,11 @@ Checked on the desktop, on a virtual display; **not** on a device (see Limits).
   APK's size told as seen (Checks), the renderer said to present on Android alone, and, in the commit, the result of the
   first review's probe of saves while stepping. The third (diff `e1c3f7d2...`) found NEEDS CHANGES, one Minor in the
   commit's record of the first review: the trace of a save's missed palette step was credited to the second review,
-  where the first review's own second probe had made it (15 saves: the step after 7 brought no new shade, each next step
-  one frame on). Corrected in the commit. Its suggestions are taken: the plan's row says a screenshot taken while paused
-  is saved at once and, that renderer aside, with the frame on screen; and that renderer's screenshots are called short
-  of the current frame ares 1192 asks for, not its symptom. The whole record is in the commit that carries this entry.
+  where the first review's own second probe had made it (15 saves: the step after 7 of them brought no new shade, each
+  next step one frame on). Corrected in the commit. Its suggestions are taken: the plan's row says a screenshot taken
+  while paused is saved at once and, that renderer aside, with the frame on screen; and that renderer's screenshots are
+  called short of the current frame ares 1192 asks for, not its symptom. The whole record is in the commit that carries
+  this entry.
 - **Next**: the hotkey plan's closing docs (a hotkey reference and the issue matrix); frame advance on the RP6, by hand;
   Phobos's abort when its display goes away before it quits (Checks); if wanted, a PSP screenshot with the Vulkan
   renderer presenting that has the picture on screen (Limits); the pad, window manager, Wayland, Steam, Windows and
@@ -258,20 +435,26 @@ leftovers. Checked on the RP6 with a test copy beside the owner's app; **not** w
     passes every other key on, a hotkey's first key included (derived from `PspSystemDialogs.kt` and Android's dialog,
     fallback-key and soft-keyboard handling, not seen). No other hotkey runs there, and the keys of one act as they
     would with no hotkeys: as the dialog takes them or, where nothing in its window does, as the fallback `Generic.kcm`
-    gives the key. Guide or PS, let go of with the dialog still up, goes Home, pressed alone or with another button and
-    even where it starts the hotkeys; where Pause is bound to it alone, a press of it alone pauses instead. Back, let go
-    of with the dialog still up, does what the dialog's back button does (from a question about a save chosen in a list,
-    back to the list; in the install dialog, nothing), as a controller's Back always has there. Among the defaults'
-    other keys, by the default button mappings: B acts as the dialog's confirm or back button, as its confirm button is
-    set (the install dialog has neither); the D-pad moves; R3 and L3 (Screenshot's and the on-screen keyboard's), which
-    `Generic.kcm` makes the D-pad's centre, confirm in a message or a save dialog, so Back + R3 in a list of saves loads
-    the one highlighted, or saves to new data, at once (saving over a save or deleting one asks first, and a corrupted
-    one shows its notice); and in the PSP keyboard X and Y come as a backspace and a space. So Back + B can take two
-    steps, B's and then, as Back is let go of, Back's. A Pause hotkey hides the dialog until the game goes on (Back + A,
-    or Guide + A where Guide has Back's place), but for Back + A in the PSP keyboard while Android's soft keyboard
-    shows, which it does once the dialog opens: the soft keyboard has Back first and hides as Back is let go of, so
-    there Back + A acts as A alone, entering the text or cancelling as the dialog's confirm button is set, and Back
-    backs out of the dialog only once the soft keyboard is down.
+    gives the key.
+    - Guide or PS, let go of with the dialog still up, goes Home, pressed alone or with another button and even where it
+      starts the hotkeys; where Pause is bound to it alone, a press of it alone pauses instead.
+    - Back, let go of with the dialog still up, does what the dialog's back button does (from a question about a save
+      chosen in a list, back to the list; in the install dialog, nothing), as a controller's Back always has there.
+      After any Back hotkey but Pause it takes that step too, after the other key's: Back + R1 (Save state's) saves
+      nothing and backs out of the dialog, Back + a D-pad direction moves the highlight and then backs out, and Back +
+      R3 where confirming asks first (saving over a save, say) brings the question up and takes it back to the list.
+    - Among the defaults' other keys, by the default button mappings: B acts as the dialog's confirm or back button, as
+      its confirm button is set, and the D-pad moves, but for the install dialog, which takes both and does nothing; R3
+      and L3 (Screenshot's and the on-screen keyboard's), which `Generic.kcm` makes the D-pad's centre, confirm in a
+      message or a save dialog, so Back + R3 in a list of saves loads the one highlighted, or saves to new data, at once
+      (saving over a save or deleting one asks first, and a corrupted one shows its notice); and in the PSP keyboard X
+      and Y come as a backspace and a space. So Back + B can take two steps, B's and then, as Back is let go of, Back's.
+    - A Pause hotkey hides the dialog until the game goes on (Back + A, or Guide + A where Guide has Back's place), but
+      for Back + A in the PSP keyboard while Android's soft keyboard shows, which it does once the dialog opens: the
+      soft keyboard has Back first and hides as Back is let go of, so there Back + A acts as A alone, entering the text
+      or cancelling as the dialog's confirm button is set, and Back backs out of the dialog only once the soft keyboard
+      is down. That assumes the soft keyboard takes Back and passes a controller's other buttons on, as Gboard, the
+      RP6's (its settings name it), is taken to; another keyboard may differ.
   - The Xbox 360 pad's button labelled Back sends Select, by its layout: pressing it doesn't end the warning, and
     choosing it is refused (Select is in Mute's Back + Select), the refusal naming Guide.
   - Back alone does nothing, in play or in the pause menu: it starts the hotkeys. B, through its fallback, goes back in
@@ -530,18 +713,24 @@ and `README.md`. Checked with the keyboard on a virtual display; **not** with a 
   page is in the pause menu), and the page opens on all consoles each time. A zipped game has the library's system
   "Auto" unless a folder it's in names Arcade, Neo Geo or Neo Geo CD (`desktop/Library.cpp`), as its states' folder
   does: all such games, whatever their console, share one console level, named "Auto" on the page, where the same game
-  unzipped has its console's. The level row, 45 characters with a console of the longest names (PlayStation Portable,
-  Neo Geo Pocket Color), is cut short in a window under 632 pixels wide (no minimum size is set), as long values on the
-  other rows are. The test target still isn't in CI, and the virtual-display checks, the window probe and the mutant
-  runs are scripts kept outside the repository, with each change's review evidence.
+  unzipped has the console the library gives it, its own where a folder names it and otherwise its extension's usual one
+  (outside such a folder a .bin is the Mega Drive's, and a .cue, .chd, .iso or .pbp the PlayStation's, the PSP's own
+  games told by what's in them). A zipped game keeps "Auto" while it runs, the runner naming its system for itself
+  (`mia`), so what the desktop does by a game's system passes it by: a zipped N64 or PlayStation game gets no N64
+  controller pak or PS1 analog hotkey (nor the N64's menu rows or the PlayStation's Analog controller row), and a zipped
+  ZX Spectrum or MSX game no emulated computers' rule, its keyboard driving the pad rather than typing (derived from the
+  code, not run). The level row, 45 characters with a console of the longest names (PlayStation Portable, Neo Geo Pocket
+  Color), is cut short in a window under 632 pixels wide (no minimum size is set), as long values on the other rows are.
+  The test target still isn't in CI, and the virtual-display checks, the window probe and the mutant runs are scripts
+  kept outside the repository, with each change's review evidence.
 - **Review**: the first independent review (diff `2e5e10d2...`) found NEEDS CHANGES, three Minors: two wrong references
   here (the emulated computers' rule placed in the entry below; the owner's choice recorded there credited to that
   entry's second review); the Android build skipped as building no changed file, where it reads `CMakeLists.txt` (now
   built, under Checks); and zipped games sharing an "Auto" console level unrecorded (under Levels and Limits now). Its
   suggestions are taken: Left on the level row and all consoles' reset keeping the narrower levels' lines checked, with
   the two mutants those checks catch; the key test described as it is; Tab in the emulated computers' rule; "a line
-  feed" for the escape mutant; and the scripts' place, in Limits. The whole record is in the commit that carries this
-  entry.
+  feed" for the escape mutant; and the scripts' place recorded in Limits, the scripts staying outside the repository.
+  The whole record is in the commit that carries this entry.
 - **Next**: the slow-motion measurement (#424), its own reviewed pull request, then the plan's final docs (a hotkey
   reference and the issue matrix); the pad, window manager, Wayland, Steam, Windows and macOS checks; the RP6 pass for
   the Android changes.
