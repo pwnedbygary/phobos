@@ -67,8 +67,8 @@ auto lockFrame(std::uint32_t width, std::uint32_t height, Frame& frame) -> LockR
   }
   if ((buffer.format != WINDOW_FORMAT_RGBA_8888 && buffer.format != WINDOW_FORMAT_RGBX_8888)
       || (std::uint32_t)buffer.width < width || (std::uint32_t)buffer.height < height) {
-    // The geometry request did not take effect (a buffer smaller than asked for, or not 32-bit: the window's default
-    // format, after a disconnect); writing would overrun the buffer.
+    // The geometry request did not take effect (a buffer smaller than asked for, or in neither format written, as the
+    // window's default after a disconnect can be: 16-bit on the RP6); the frame's rows could overrun it.
     ANativeWindow_unlockAndPost(window);
     geometryWidth = 0;
     geometryHeight = 0;

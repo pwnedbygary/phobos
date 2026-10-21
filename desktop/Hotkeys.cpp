@@ -94,7 +94,7 @@ auto hotkeyActions() -> const std::vector<HotkeyAction>& {
   static const std::vector<HotkeyAction> actions = [] {
     std::vector<HotkeyAction> list = {
       {Hotkey::pause, "Pause menu"},
-      {Hotkey::pauseWindow, "Pause menu, out of fullscreen"},
+      {Hotkey::pauseWindow, "Fullscreen and pause (toggle)"},
       {Hotkey::save, "Save state"},
       {Hotkey::load, "Load state"},
       {Hotkey::nextSlot, "Next state slot"},
@@ -195,8 +195,8 @@ auto parseHotkeyBindings(const std::string& value) -> HotkeyBindings {
 // Guide (Home) leads every controller hotkey, so Select, Start and every other button stay the game's: tapped alone,
 // Guide opens the pause menu; held with one other button, it runs that button's action (Quit's asks first). The
 // keyboard's keys are the desktop's long-standing ones: F12 and Escape for the menu, F5 to save, F9 to load, F8 for a
-// screenshot, F11 for fullscreen, Tab to hold fast forward. Reset, the menu out of fullscreen, the next disc and the
-// direct slots are unbound: the menu has them, and a player can bind them on purpose.
+// screenshot, F11 for fullscreen, Tab to hold fast forward. Reset, fullscreen and pause together, the next disc and
+// the direct slots are unbound: the menu has their like, and a player can bind them on purpose.
 auto defaultHotkeys() -> const HotkeyMap& {
   static const HotkeyMap defaults = [] {
     auto guide = buttonToken(SDL_GAMEPAD_BUTTON_GUIDE);

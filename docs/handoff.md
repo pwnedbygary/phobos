@@ -35,6 +35,118 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Desktop follow-ups: "Fullscreen and pause (toggle)" following fullscreen as ares 1810 asks, Screenshot with the pause menu open, no abort when the display goes away first, the host test in CI — 2026-10-21
+
+Branch `improved-hotkeys`, on `a8d36db7e` (the entry below). The last of the follow-ups the owner asked for on
+2026-10-21 (the plan row's Open), on the desktop: the "Pause menu, out of fullscreen" hotkey made the toggle ares 1810
+asks for, the owner choosing "Follow fullscreen: leaving fullscreen pauses (opens the menu), going back into fullscreen
+closes the menu and plays"; the Screenshot hotkey with the pause menu open; Phobos's abort when its display goes away
+before it quits; and the desktop's host test in CI; with them, the wordings the entry below's third review left.
+Changed: `desktop/Hotkeys.cpp` (the action's name), `desktop/main.cpp`, `.github/workflows/desktop.yml`,
+`android/app/src/main/cpp/PhobosHostAndroid.cpp` (a comment), four entries below (The entries below) and the hotkey row
+of `docs/implementation-plan.md`. Checked on a virtual display; the workflow runs on GitHub, with the pull request.
+- **Fullscreen and pause (toggle)** (ares 1810): the hotkey the desktop had as "Pause menu, out of fullscreen" left
+  fullscreen and opened the menu, one way only. Now named "Fullscreen and pause (toggle)", it follows fullscreen: in
+  fullscreen it leaves it and the game waits in the menu; in a window it goes fullscreen, and from the menu or frame
+  advance the game goes on. It's stored under its old name (`pause_window`), so a binding a player made keeps working,
+  and it's unbound by default as before; Fullscreen (F11), which leaves the game as it is, is unchanged. Whether the
+  window is fullscreen is read from SDL's window flags, which follow what the window manager grants.
+- **Screenshot with the pause menu open**: the Screenshot hotkey (Guide + R3, F8) takes a screenshot with the pause menu
+  open too, the game's picture without the menu over it, as the menu's own Screenshot row does. Before, like every
+  action but fullscreen and the menu's own, it waited for the game to be playing (the frame-advance entry, Screenshots
+  while paused); the others still do.
+- **The display going away first**: when the X display goes away under Phobos (Xvfb stopped first, as earlier checks
+  did, or an X server that ends), Xlib's I/O error handler ends the process with `exit()`, SDL 3.2.30 leaving Xlib's own
+  handler in place (it installs none, by its source). `exit()` then destroyed the runner's audio thread while it ran, a
+  `std::thread` still joinable, so the process ended in `std::terminate`: an abort and a core dump (seen in the
+  frame-advance entry's checks). Now an exit handler, run on the main thread alone, unloads a running game first, as
+  quitting unloads it (its saves written, the runner's threads stopped), with nothing that needs the display; the
+  process then ends as Xlib has it, with exit status 1.
+- **The host test in CI**: `.github/workflows/desktop.yml` configures each job's build with `-DPHOBOS_DESKTOP_TESTS=ON`
+  and runs `ctest --output-on-failure` after it, on Linux, Windows and macOS. The packaging that follows copies the
+  program, its data and the libraries it names (`scripts/package-*.sh`), so the test program isn't packaged.
+- **The entries below**: the reference's 1810 moves from In part to Done, its unbound list naming the action anew; the
+  frame-advance entry's Screenshots while paused, "Also seen" and Next say the Screenshot hotkey works with the menu
+  open and the abort is gone since this entry; the Next of the PSP's lost GPU entry (the entry below) and of the PSP
+  follow-ups' say the desktop's follow-ups are done. The lost GPU entry takes the three wordings its third review left:
+  The fix names the two formats the host writes before the window's default after a disconnect, and says which buffers
+  its rows would have overrun; its last Limit says what `lockFrame` would do with a swapchain's buffers, where it said
+  the frames "could be dropped" (the window wouldn't drop them); and the host's comment on that check
+  (`PhobosHostAndroid.cpp`) says "in neither format written" for "not 32-bit", two lines as before.
+- **Checks**:
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja, SDL 3.2.30); ctest 1/1, its 209 host checks;
+    `main.cpp`, `Hotkeys.cpp` and the Android host's file compiled with `-Wall -Wextra` by their builds' own commands
+    (the NDK's clang for arm64 for the last), no warning on any of the 41 lines this change made.
+  - The virtual-display suite of the entries below: 145 of 145, one check new: F8 in the menu takes a screenshot.
+  - A toggle check (`toggle.sh`, kept outside the repository with the review's evidence), on a 1600x900 virtual display
+    with a stand-in window manager that grants fullscreen (`stubwm.c`, kept with it; with no window manager SDL never
+    marks a window fullscreen), the toggle bound to F10 and Frame Advance to F7: the game starts in a window; F10 goes
+    fullscreen, the game playing on; F10 leaves it, the game waiting in the menu; F8 there takes a screenshot; F10 goes
+    back into fullscreen, the menu closing and the game going on; F10 again, out of it, the menu open; Escape closes the
+    menu, the window kept; F7 stops the game for frame advance; F10 goes fullscreen, frame advance ending and the game
+    going on. 9 of 9.
+  - A display check (`display-gone.sh`, kept with it): Xvfb stopped while a game runs. The build of the entry below:
+    "terminate called without an active exception", exit status 134, a core dump, the game never unloaded. This change:
+    "Saves: flush complete", "System unloaded" and exit status 1, no core dump.
+  - The display check again with AddressSanitizer on the exit path (`build-asan.sh`, kept with it: `main.cpp`, the
+    runner and the Game Boy core, the check's game, compiled with `-fsanitize=address` by the build's own commands, its
+    runtime taking over every allocation): the exit handler unloaded the game with no error; the one error came after
+    it, among the globals' destructors, and a normal quit shows it the same, so it's older than this change (Also seen).
+  - Five `main.cpp` mutants, each built outside the repository with the build's own commands, each failing its checks:
+    the toggle going one way only (five of the toggle check's nine); going fullscreen leaving the menu open (three);
+    going fullscreen leaving frame advance on (one); no screenshot with the menu open (one); nothing unloaded at exit
+    (the display check: exit status 134, a core dump, no unload).
+  - GCC 11.4 in an `ubuntu:22.04` container (the Linux job runs on `ubuntu-22.04`), the tree's tracked files copied
+    afresh: the host test's four sources compiled with the build's own commands (`-Wall -Wextra -Werror`, the
+    sanitizers), and the program's five sources the hotkey work changed (`main.cpp`, `Hotkeys.cpp`, `Input.cpp`,
+    `Settings.cpp`, `PhobosRunner.cpp`) checked for errors with the build's own commands and `-fsyntax-only` (no object
+    written): each passed.
+  - The Android host's comment: both flavors' JVM tests (54 files, 454 tests each, 0 failures) and
+    `:app:assembleLegacyDebug`. The native library came out byte-identical to the entry below's build (`8d0b8659…`,
+    stripped `90aefcb3…`), the comment changing no code; the APK (32,596,847 bytes, `74af99ec…`) differs from that
+    build's as git numbers it, its version code and name taken from the commit it's built on (`a8d36db7e`, where the
+    entry below's build was on `eed1043d3`).
+  - The reference's tables still pass `check-reference.py` (35 of 35; the toggle has no default binding, so no row
+    changed).
+  - After the first review, `runHotkey`'s header comment in `main.cpp` reworded (two lines for two): the build's
+    `main.cpp.o` and program came out byte-identical to those the checks above ran on (`424e5a97…`, `485d855d…`), so
+    they stand; ctest passed again (209 host checks).
+  - Not run: the workflow itself, which runs on GitHub with the pull request (Next); the Windows and macOS builds; a
+    real window manager; Wayland.
+- **Also seen**: after a Game Boy game, Phobos's exit reads memory already freed, in the Game Boy core's APU destructor
+  (AddressSanitizer: heap-use-after-free, the memory allocated by `ares::Thread::create` in `GameBoy::PPU::power()` and
+  freed by another global's destructor before it), on a normal quit as after the display went: the order of ares's
+  globals at exit, older than this change and not part of it (Next). Without AddressSanitizer nothing is seen to come of
+  it.
+- **Limits**:
+  - The toggle goes by SDL's fullscreen flag: where the window manager doesn't grant fullscreen (with none at all, say),
+    it only ever asks for fullscreen and never pauses; and on X11, where the flag changes only as the window manager
+    answers, two presses quicker than its answer ask for the same state twice, as F11 and the menu's Fullscreen row do
+    (derived from the code).
+  - The exit handler covers `exit()` on the main thread, where Xlib calls it from SDL's event poll; an `exit()`
+    elsewhere, or a signal, is as before (derived).
+  - The exit handler, registered as `main` begins, runs after the objects first made since then have been destroyed
+    (C++'s order at exit), and after what the libraries opened since then registered for exit. The unload goes by the
+    runner's and the cores' globals, made before `main`; but a Nintendo 64 game's unload, or a PSP game's with its
+    Vulkan renderer, also goes into the Vulkan loader, opened as Phobos starts (`phobos::host::loadVulkan`, from
+    `Shell::setup`), and into its driver, opened as the game makes its Vulkan instance: the C++ globals' destructors and
+    `atexit` handlers those two registered as they loaded have run by then (derived from the code; AddressSanitizer, run
+    with the Game Boy game, found nothing in the unload). The first review's display check with a Nintendo 64 game under
+    Vulkan, on RADV and on lavapipe, ended as the Game Boy game's does (its save written, "System unloaded", exit status
+    1, no core dump); other drivers are unchecked.
+  - The Windows and macOS jobs run a test so far run only on Linux, with their own compilers (MSYS2's GCC, without the
+    sanitizers, as `CMakeLists.txt` has it on Windows, and Apple's clang for both of the Mac's architectures, with
+    them): the pull request's run is its first check there.
+- **Review**: the first review found two Minors in wording, both fixed: `runHotkey`'s header comment in `main.cpp`, left
+  stale by the toggle and the screenshot, and the third Limit, which left out the Vulkan loader and driver a Nintendo 64
+  game's unload goes into. Of its suggestions, the GCC 11 wording (Checks) and the toggle's quick double press (the
+  first Limit) are taken. The whole record is in the commit that carries this entry.
+- **Next**: master merged into the branch, which conflicts with it (the owner's choice, made with the pull request in
+  mind: GitHub runs no `pull_request` workflow while a pull request has a merge conflict, by its documentation); then
+  the RP6's test copy replaced with a build of the finished branch, and a draft pull request (the owner's choices),
+  whose run of the desktop workflow is the CI change's first; the Game Boy core's read of freed memory at exit (Also
+  seen), if wanted; the hands-on checks (the RP6 pass, a pad, a window manager, Wayland, Steam, Windows and macOS).
+
 ## The PSP's Vulkan renderer letting go of the window when the GPU stops answering, so that the software renderer's frames show where the screen froze — 2026-10-21
 
 Branch `improved-hotkeys`, on `eed1043d3` (the entry below). The owner, during the entry below's device check
@@ -72,14 +184,14 @@ wordings of its first Limit that its last review left for this change) and the h
   undoing the request (the first review's finding, seen on the RP6 below). So `lockFrame` now asks again at the next
   lock after the first that succeeds once the window is set or has refused a lock (by then the window is the CPU's,
   connected at that lock, and no other producer can connect to it), a refused lock having it forget what it asked for;
-  and a buffer in neither of the two formats it writes, `RGBA_8888` and `RGBX_8888` (the window's default format after a
-  disconnect, 16-bit `RGB_565` on the RP6), is posted undrawn, as one too small for the frame already was, where 32-bit
-  rows would have been written into it, past its end. From then the host's frames show. The same covers a surface Vulkan
-  gives up (`giveUp()`) after a refused lock, which left the host's request undone in the same way (derived, the first
-  review's; not run). A loss found by a wait that timed out (five seconds: a run that never ended) still leaves the
-  surface and its swapchain as they are, the GPU perhaps still using them, so the screen still freezes there (Limits).
-  The RP6's, by its log, was the other kind, a call that failed (derived: the emulation thread's longest frame was 810
-  ms, never five seconds, and Adreno's driver logged its fault on that thread).
+  and a buffer in neither of the two formats it writes (`RGBA_8888`, `RGBX_8888`), as the window's default format after
+  a disconnect can be (16-bit `RGB_565` on the RP6), is posted undrawn, as one too small for the frame already was: the
+  host's 32-bit rows would have run past the end of a 16-bit buffer, or of one too small. From then the host's frames
+  show. The same covers a surface Vulkan gives up (`giveUp()`) after a refused lock, which left the host's request
+  undone in the same way (derived, the first review's; not run). A loss found by a wait that timed out (five seconds: a
+  run that never ended) still leaves the surface and its swapchain as they are, the GPU perhaps still using them, so the
+  screen still freezes there (Limits). The RP6's, by its log, was the other kind, a call that failed (derived: the
+  emulation thread's longest frame was 810 ms, never five seconds, and Adreno's driver logged its fault on that thread).
 - **Why the GPU stopped**: not known. Seen once, not in two more runs of the same steps; Adreno's driver wrote no
   snapshot of it (its path not set).
 - **The entries below**: the entry below's Next says this is done, and its first Limit takes the two wordings its third
@@ -156,14 +268,15 @@ wordings of its first Limit that its last review left for this change) and the h
     review's; not run).
   - As before this change, making a swapchain (as presenting starts, or again after the window changes size)
     disconnects the window and connects it again, and a host lock landing between the two would take the window:
-    Vulkan's swapchain then sets its own size on it, and the host's later frames, of another size, could be dropped
-    (derived from Android's source, the second review's; not seen, and not on the lost path, where no swapchain is
-    made).
+    Vulkan's swapchain then sets its own size on it, and the host's later locks would get buffers of that size:
+    `lockFrame` would post each undrawn where it's smaller than the frame (every frame in the RP6's runs above, its
+    window 1712x970 and the frames 1920x1088), and elsewhere draw the frame into its top-left corner (derived from
+    Android's source, the second and third reviews'; not seen, and not on the lost path, where no swapchain is made).
   - Why the GPU stopped in Crash Tag Team Racing is unknown (above).
 - **Review**: the independent review's record is in the commit that carries this entry.
 - **Next**: the desktop's follow-ups (1810's toggle, the Screenshot hotkey with the menu open, Phobos's abort when its
-  display goes away first, the test target in CI); then the RP6's test copy replaced with a build of the finished branch
-  and a draft pull request (the owner's choices); and the hands-on checks.
+  display goes away first, the test target in CI; done in the entry above); then the RP6's test copy replaced with a
+  build of the finished branch and a draft pull request (the owner's choices); and the hands-on checks.
 
 ## PSP system dialogs running the hotkeys, the keys they take no longer the dialog's, and a PSP screenshot with the Vulkan renderer presenting having the picture on screen — 2026-10-21
 
@@ -302,10 +415,10 @@ below (The entries below) and the hotkey row of `docs/implementation-plan.md`. C
     queued work, a frame or two (derived from the code).
 - **Review**: the independent review's record is in the commit that carries this entry.
 - **Next**: the desktop's follow-ups (1810's toggle, the Screenshot hotkey with the menu open, Phobos's abort when its
-  display goes away first, the test target in CI); the PSP's Vulkan renderer letting go of the window when the GPU stops
-  answering, so that the software renderer's frames show (Checks, Also seen), which the owner asked to have looked into
-  (done in the entry above); then the RP6's test copy replaced with a build of the finished branch and a draft pull
-  request (the owner's choices); and the hands-on checks.
+  display goes away first, the test target in CI; done in the desktop follow-ups' entry above); the PSP's Vulkan
+  renderer letting go of the window when the GPU stops answering, so that the software renderer's frames show (Checks,
+  Also seen), which the owner asked to have looked into (done in the entry above); then the RP6's test copy replaced
+  with a build of the finished branch and a draft pull request (the owner's choices); and the hands-on checks.
 
 ## Android follow-ups: the Back warning ended by a Back from any device connected, a button any level gives the game asked about, the settings test's keys written out, taps beside longer bindings tested — 2026-10-21
 
@@ -434,7 +547,7 @@ entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
   the page warns and offers another button in Back's place, at every level at once.
 - **The desktop's defaults**, from `defaultHotkeys` (`desktop/Hotkeys.cpp`), a pad's buttons named by the Xbox layout,
   as the page names them: the second table. Guide starts the controller's hotkeys, a Guide tap opening the menu, and a
-  keyboard keeps the desktop's own keys. Unbound: "Pause menu, out of fullscreen"; Reset; Next disc; Save state and Load
+  keyboard keeps the desktop's own keys. Unbound: "Fullscreen and pause (toggle)"; Reset; Next disc; Save state and Load
   state 1 to 9. Besides the hotkeys, Select and Start pressed together, and no other button, open the menu (a Steam
   Deck's route, its Guide being Steam's), and in the menu B or Backspace closes it. On the ZX Spectrum and the MSX, a
   default on Tab or on a key the computer's keyboard uses doesn't apply, stored or not (the owner's choice): Tab's on
@@ -494,13 +607,13 @@ entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
     playing game": Android keeps the screen on with a game on it (`0e434cd80`), and on the desktop SDL holds the
     screensaver off from its start while Phobos runs, with no code of Phobos's (seen on KDE, recorded in `68f2a2799`).
     1368, GNOME 44 blanking the screen when only a controller is used: SDL's hold, as for 1577, not checked on GNOME.
+    1810, a hotkey for "toggle fullscreen and pause" and mouse buttons bindable: on the desktop mouse buttons bind as
+    hotkey keys (`f4e0b1b98`), and "Fullscreen and pause (toggle)" follows fullscreen, the game waiting in the menu out
+    of it and going on back in it, the toggle the issue asks for (the desktop follow-ups' entry above; unbound by
+    default). Android's hotkeys take no mouse button and have no such action.
   - **In part**: 2288, "[Feature Request] Per-game input profiles": Android has had controls for a console and for a
     game, buttons and hotkeys, since `bfff36383`; the desktop has hotkeys for them (`f54ae457f`) but no button remapping
-    at all, per game or not, the owner agreeing to hotkeys alone there. 1810, a hotkey for "toggle fullscreen and pause"
-    and mouse buttons bindable: on the desktop mouse buttons bind as hotkey keys, and its "Pause menu, out of
-    fullscreen" hotkey leaves fullscreen and then opens the menu, the order the issue asks for, but only one way: it
-    never goes back to fullscreen or to the game, where the issue's toggle would (Fullscreen and closing the menu do
-    that, in two steps) (`f4e0b1b98`). Android's hotkeys take no mouse button and have no such action.
+    at all, per game or not, the owner agreeing to hotkeys alone there.
   - **Already covered**: 2291, an on-screen word for a successful save: saving a state says so, "Saved state to
     \<slot\>" on Android and "Saved state N" on the desktop. 2194, input settings lost when the controller changes:
     bindings name keys and buttons, not controllers, on both apps, so a controller going away or another taking its
@@ -598,8 +711,9 @@ Checked on the desktop, on a virtual display; **not** on a device (see Limits).
   can be a frame or two behind the window, paused or not, short of the current frame ares 1192 asks for (What was wrong;
   Limits). On the desktop the screenshot hotkey runs while a game plays, frame advance included; with the pause menu
   open it does nothing, the menu's Screenshot row taking the shot instead (as the desktop hotkeys entry made it: the
-  actions but fullscreen and the menu wait for the game to be playing, the menu having them too). On Android the hotkeys
-  run with the pause menu open as well, and the menu's Shot button takes one too (by the code; not run).
+  actions but fullscreen and the menu wait for the game to be playing, the menu having them too). The desktop
+  follow-ups' entry above has it take one with the menu open too. On Android the hotkeys run with the pause menu open as
+  well, and the menu's Shot button takes one too (by the code; not run).
 - **Checks**:
   - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja, SDL 3.2.30); ctest 1/1, its 209 host checks;
     `PhobosRunner.cpp` compiled with `-Wall -Wextra` into a scratch folder: no warning on a changed line (12 elsewhere
@@ -631,7 +745,7 @@ Checked on the desktop, on a virtual display; **not** on a device (see Limits).
   - Also seen: the checks' Phobos aborted as they stopped it, in `exit()` called by Xlib's I/O error handler with one of
     Phobos's threads still joinable, wherever the virtual display was stopped before Phobos had quit (triggered by the
     harnesses' order, though the abort is Phobos's own: a thread still joinable as `exit()` runs, left for a later
-    change; the new check lets Phobos quit first, and saw none).
+    change, made in the desktop follow-ups' entry above; the new check lets Phobos quit first, and saw none).
 - **Limits**:
   - Not run on a device: when this was checked, the RP6 had the test copy of the entry below on screen, perhaps in the
     owner's hands-on check, and was left alone. Android's frame advance runs the frame on the main thread and draws it
@@ -669,9 +783,9 @@ Checked on the desktop, on a virtual display; **not** on a device (see Limits).
   called short of the current frame ares 1192 asks for, not its symptom. The whole record is in the commit that carries
   this entry.
 - **Next**: the hotkey plan's closing docs (a hotkey reference and the issue matrix); frame advance on the RP6, by hand;
-  Phobos's abort when its display goes away before it quits (Checks); if wanted, a PSP screenshot with the Vulkan
-  renderer presenting that has the picture on screen (Limits; done in the PSP follow-ups' entry above); the pad, window
-  manager, Wayland, Steam, Windows and macOS checks.
+  Phobos's abort when its display goes away before it quits (Checks; fixed in the desktop follow-ups' entry above); if
+  wanted, a PSP screenshot with the Vulkan renderer presenting that has the picture on screen (Limits; done in the PSP
+  follow-ups' entry above); the pad, window manager, Wayland, Steam, Windows and macOS checks.
 
 ## Android hotkeys led by Back: the owner's set from the RP6 as the defaults, none needing C or Z, a warning while no controller has sent Back with a button chosen in its place at every level at once, a controller's Back coming as a key — 2026-10-20
 

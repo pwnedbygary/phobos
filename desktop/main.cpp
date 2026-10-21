@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -139,6 +140,8 @@ static auto wrap(const std::string& text, size_t columns) -> std::vector<std::st
 
 struct Shell {
   auto run(int argc, char* argv[]) -> int;
+  // The game unloaded as the process ends without quitting (main's exit handler), with nothing that needs the window.
+  auto unloadAtExit() -> void;
 
 private:
   auto setup(int argc, char* argv[]) -> bool;
@@ -595,6 +598,13 @@ auto Shell::unloadGame() -> void {
   SDL_SetWindowTitle(window, "Phobos");
 }
 
+auto Shell::unloadAtExit() -> void {
+  if (!game) return;
+  ares::setEmulationRunning(false);
+  ares::unloadSystem();
+  game.reset();
+}
+
 auto Shell::quitGame() -> void {
   unloadGame();
   if (launchedWithGame) quit = true;
@@ -854,17 +864,23 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   updateHolds(completed);
 }
 
-// A hotkey's action. Fullscreen works anywhere; the Pause menu hotkey opens or closes the menu; the rest wait for the
-// game to be playing (the menu has them too).
+// A hotkey's action. Fullscreen works anywhere; Pause and the toggle open or close the menu, and a screenshot can be
+// taken with the menu open; the rest wait for the game to be playing (the menu has them too).
 auto Shell::runHotkey(const std::string& action) -> void {
   if (action == Hotkey::fullscreen) return toggleFullscreen();
   if (!game) return;
   if (action == Hotkey::pause) return screen == Screen::Menu ? closeMenu() : openMenu();
   if (action == Hotkey::pauseWindow) {
-    setFullscreen(false);
-    if (screen == Screen::Playing) openMenu();
+    // The game follows fullscreen (ares 1810): out of it, it waits in the menu; back in it, the menu closes (or frame
+    // advance ends) and it plays.
+    bool leaving = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN;
+    setFullscreen(!leaving);
+    if (leaving && screen == Screen::Playing) openMenu();
+    else if (!leaving && (screen == Screen::Menu || frameStepping)) closeMenu();
     return;
   }
+  // A screenshot is the game's picture, the menu not in it, so it can be taken with the menu open too.
+  if (action == Hotkey::screenshot && screen == Screen::Menu) return takeScreenshot();
   if (screen != Screen::Playing) return;
   if (int slot = directSlot(action)) {
     return action.compare(0, std::string(Hotkey::saveSlotPrefix).size(), Hotkey::saveSlotPrefix) == 0 ? saveState(slot)
@@ -1656,9 +1672,24 @@ auto Shell::show(const std::string& line) -> void {
   SDL_Log("%s", line.c_str());
 }
 
+// The shell while it runs, and the thread it runs on, for main's exit handler.
+Shell* running = nullptr;
+std::thread::id mainThread;
+
 }
 
 int main(int argc, char* argv[]) {
   Shell shell;
-  return shell.run(argc, argv);
+  running = &shell;
+  mainThread = std::this_thread::get_id();
+  // Xlib ends the process with exit() on the main thread when the X display goes away under it (SDL leaves Xlib's own
+  // handler in place). A game running then is unloaded as quitting unloads it, its saves written and the runner's
+  // threads stopped, with nothing that needs the display: otherwise exit() destroys the runner's audio thread while it
+  // runs, a std::thread still joinable, which ends the process with std::terminate (an abort, and a core dump).
+  std::atexit([] {
+    if (running && std::this_thread::get_id() == mainThread) running->unloadAtExit();
+  });
+  int status = shell.run(argc, argv);
+  running = nullptr;
+  return status;
 }
