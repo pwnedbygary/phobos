@@ -35,6 +35,111 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Frame advance drawing each frame it runs, and a screenshot taken while paused saved at once with the frame on screen — 2026-10-20
+
+Branch `improved-hotkeys`, on `131351063` (the entry below). Found while checking, for the hotkey plan's closing issue
+matrix, ares issues 1585 (a screenshot taken while paused not saved until the game goes on) and 1192 (a screenshot taken
+while paused delayed by a frame). Changed: `android/app/src/main/cpp/PhobosRunner.cpp`, the runner both apps share.
+Checked on the desktop, on a virtual display; **not** on a device (see Limits).
+- **What was wrong**: frame advance runs a frame with the game paused (`frameAdvance()`), and the runner's `video()`
+  returned at once while paused (`isPausedAtomic`, in it since the first commit, `27e1d7574`), so none of the frames
+  frame advance ran was drawn through it: each press moved the game on unseen, the picture staying the one the game had
+  stopped on, on the desktop and, by the same code, on Android, and a screenshot then, a copy of what `video()` drew
+  last, had that picture too. Two cases differ (derived from the code, not run). An N64 game under Vulkan, as N64 games
+  start, has its picture presented by `video()` from the scanout each frame renders, but its screenshot read that
+  scanout itself (`vulkan.readScanout`), so it had the step's frame while the window kept the old one. A PSP game whose
+  Vulkan renderer presents its own pictures (a choice on both apps, Software being the default, presenting on Android
+  alone: the desktop reads its frames back) presents each frame within the run, the stepped ones included, so its steps
+  showed all along; but its screenshot is the copy that renderer keeps of what it presented, and the copy of a picture
+  the GPU drew is kept only a frame or two later, as the slot that showed it is next waited for
+  (`docs/psp-gpu-renderers.md`), so a screenshot taken after a step had an earlier frame, and still has. The hotkey
+  entries below took the frames for drawn: their checks asked for a frame at each press, not for its picture.
+- **The fix**: `video()` draws, though the game is paused, the frames frame advance asks for, counted
+  (`pausedFramesToDraw`): one a step, and two on the first step after a pause. ares's screen thread draws a frame after
+  the run that made it (`Screen::frame` hands it over without waiting), and the emulation thread may have started one
+  more frame as the game stopped, on its way still or run just after the step: of the two, the newer is drawn last. A
+  pause, a game unloading and the 64DD's reload empty the count, so nothing else is drawn while paused, as before. The
+  stepped frames stay silent, as before, and a PSP game its Vulkan renderer presents is as it was, its screenshots too
+  (`video()` leaves its frames to the renderer, as when it plays).
+- **Screenshots while paused** (ares 1585 and 1192): a screenshot copies the frame drawn last and writes its PNG at
+  once, paused or not (`captureScreenshot`, `writeScreenshot`); with frame advance's frames drawn, one taken after a
+  step has that step's frame. Not where the PSP's Vulkan renderer presents (on Android, by choice): there a screenshot
+  can be a frame or two behind the window, paused or not, short of the current frame ares 1192 asks for (What was wrong;
+  Limits). On the desktop the screenshot hotkey runs while a game plays, frame advance included; with the pause menu
+  open it does nothing, the menu's Screenshot row taking the shot instead (as the desktop hotkeys entry made it: the
+  actions but fullscreen and the menu wait for the game to be playing, the menu having them too). On Android the hotkeys
+  run with the pause menu open as well, and the menu's Shot button takes one too (by the code; not run).
+- **Checks**:
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja, SDL 3.2.30); ctest 1/1, its 209 host checks;
+    `PhobosRunner.cpp` compiled with `-Wall -Wextra` into a scratch folder: no warning on a changed line (12 elsewhere
+    in the file).
+  - A new check on a virtual display (`shot-paused.sh`, kept outside the repository with the review's evidence): a Game
+    Boy ROM written for it (`make-cycle-rom.py`: video memory cleared, then the background palette one higher at each
+    vertical blank, so the whole screen changes shade every frame, four shades round), interframe blending off; Frame
+    Advance bound to F10, pressed six times, the window captured and F8 pressed after each; then the pause menu over the
+    sixth frame, F8 there, and the menu's Screenshot row. Its comparison passes 15 of 15: each screenshot one colour and
+    the window's shade just before it; four different shades over the first four steps, and the first two again at the
+    fifth and sixth (one frame a press, each drawn); and the menu's row taking the sixth frame again. Its log adds that
+    each screenshot was saved while paused ("Saved screenshot" logged and the file there within 0.3 s), and that F8 in
+    the menu took none. Before the fix, the same program but for `video()`'s old line (built outside the repository with
+    the build's own commands, the build's files untouched): 14 of 15, every step the same shade. Without the extra frame
+    on the first step: 15 of 15 in three runs here, though the first review's probe, stepping from a pause 40 times, saw
+    that variant show the game a frame behind 5 times, and this change in none of 80.
+  - The full keyboard-and-mouse suite of the entries below on a virtual display: 144 of 144; the slow-motion check: 8 of
+    8.
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0), on the
+    sources the first review saw: 446 tests per flavour, 0 failures, 54 result files each, and the legacy debug APK
+    builds, its native library built with the change. After the runner's comment changed (the only change since, and
+    nothing the unit tests build), `:app:assembleLegacyDebug` again, its native library rebuilt: SHA-256
+    `12e5b99ee953691c79bdfb1a4d9d58af34b30a839f3339536b8e07a3a2ffd419`, one build of these sources, 39,050,266 bytes.
+    That is the first build's 32,594,167 and one more record of the native library: the rebuilt library's record
+    (6,456,099 bytes) comes last, and the earlier one's place is 99 records with no name (6,456,101 bytes, after
+    `libmain_hook.so`'s), listed nowhere, so not among the APK's 998 entries (seen by a script kept outside the
+    repository; the debug build's packaging updates the APK in place, by that layout).
+  - Also seen: the checks' Phobos aborted as they stopped it, in `exit()` called by Xlib's I/O error handler with one of
+    Phobos's threads still joinable, wherever the virtual display was stopped before Phobos had quit (triggered by the
+    harnesses' order, though the abort is Phobos's own: a thread still joinable as `exit()` runs, left for a later
+    change; the new check lets Phobos quit first, and saw none).
+- **Limits**:
+  - Not run on a device: when this was checked, the RP6 had the test copy of the entry below on screen, perhaps in the
+    owner's hands-on check, and was left alone. Android's frame advance runs the frame on the main thread and draws it
+    through the same `video()`; Frame Advance has no default binding there (the entry below), so a check binds one
+    first.
+  - The first step after a pause can draw one frame more than its own: one the emulation thread started as the game
+    stopped, either still on its way (drawn first, the step's own following at once) or run just after the step (drawn
+    last: the game is then a frame further on than the press alone takes it, as before this change, which ran that frame
+    too but didn't draw it). The two at once, a race the first review noted, can leave the picture a frame behind the
+    game.
+  - One frame to draw can stay counted through a frame-stepping session (from that first step's two), so one frame run
+    while paused can be drawn without being asked for; frame advance's are the only ones run then.
+  - Frame advance with an N64 game under Vulkan, or with the PSP's Vulkan renderer, not checked (both under What was
+    wrong).
+  - Where the PSP's Vulkan renderer presents (on Android, by choice), a screenshot can be a frame or two behind the
+    window, paused or not, a step's included (What was wrong): short of the current frame ares 1192 asks for, as before
+    this change (derived from the code and `docs/psp-gpu-renderers.md`, not run).
+- **Review**: the first independent review (diff `8589a4dc...`) found NEEDS CHANGES, one Minor: the frames were said
+  never drawn nor kept for a screenshot, where an N64 game under Vulkan, as N64 games start, took its screenshots from
+  the scanout, so with the step's frame, and a PSP game its Vulkan renderer presents showed its steps all along (both
+  found reading the code). Narrowed under What was wrong, in the plan's row and in the commit. Its suggestions are
+  taken: its probe's count for the first step's race (Checks), the check's own 15 told apart from what its log adds, the
+  abort called Phobos's own (under Next), and the runner's comment saying the newer frame comes last. The second (diff
+  `499ea321...`) found NEEDS CHANGES, one Minor in that answer: the PSP's Vulkan renderer was said to keep each frame it
+  presents for screenshots, where it keeps the copy of a picture the GPU drew only a frame or two later, so a screenshot
+  after a step has an earlier frame (found reading the code, as `docs/psp-gpu-renderers.md` says). Corrected under What
+  was wrong, Screenshots while paused and Limits, in the plan's row and in the commit. Its suggestions are taken: the
+  APK's size told as seen (Checks), the renderer said to present on Android alone, and, in the commit, the result of the
+  first review's probe of saves while stepping. The third (diff `e1c3f7d2...`) found NEEDS CHANGES, one Minor in the
+  commit's record of the first review: the trace of a save's missed palette step was credited to the second review,
+  where the first review's own second probe had made it (15 saves: the step after 7 brought no new shade, each next step
+  one frame on). Corrected in the commit. Its suggestions are taken: the plan's row says a screenshot taken while paused
+  is saved at once and, that renderer aside, with the frame on screen; and that renderer's screenshots are called short
+  of the current frame ares 1192 asks for, not its symptom. The whole record is in the commit that carries this entry.
+- **Next**: the hotkey plan's closing docs (a hotkey reference and the issue matrix); frame advance on the RP6, by hand;
+  Phobos's abort when its display goes away before it quits (Checks); if wanted, a PSP screenshot with the Vulkan
+  renderer presenting that has the picture on screen (Limits); the pad, window manager, Wayland, Steam, Windows and
+  macOS checks.
+
 ## Android hotkeys led by Back: the owner's set from the RP6 as the defaults, none needing C or Z, a warning while no controller has sent Back with a button chosen in its place at every level at once, a controller's Back coming as a key — 2026-10-20
 
 Branch `improved-hotkeys`, on the slow-motion commit `68e973d43` (the entry below). The seventh pull request of the

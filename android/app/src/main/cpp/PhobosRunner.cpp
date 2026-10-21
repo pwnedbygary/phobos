@@ -107,6 +107,20 @@ namespace ares {
     f32 speed = slowMotionAtomic.load(std::memory_order_relaxed);
     return speed > 0.0f && speed < 1.0f && !fastForwardAtomic.load(std::memory_order_relaxed) ? speed : 1.0;
   }
+  // The frames video() draws though the game is paused: those frame advance runs, paused. ares's screen thread draws
+  // a frame after the run that made it, so they're counted rather than flagged, and the first step after a pause counts
+  // one more, for a frame the emulation thread started as the game stopped (on its way still, or run just after the
+  // step): of the two, the newer comes last.
+  std::atomic<int> pausedFramesToDraw{0};
+  std::atomic<bool> steppedSincePause{false};
+  // Takes one of pausedFramesToDraw for the frame video() is drawing; false when none is left.
+  static auto takePausedFrame() -> bool {
+    int left = pausedFramesToDraw.load();
+    while (left > 0) {
+      if (pausedFramesToDraw.compare_exchange_weak(left, left - 1)) return true;
+    }
+    return false;
+  }
   // Per-core refresh rate reported by ares via Screen::refreshRateHint().
   // Most cores are 60 Hz but WonderSwan/NGP run at ~75 Hz and PAL cores at
   // 50 Hz — the old hardcoded 60 FPS cap throttled those cores and caused
@@ -1947,7 +1961,7 @@ namespace ares {
     }
 
     auto video(Node::Video::Screen screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
-      if (width == 0 || height == 0 || isPausedAtomic) return;
+      if (width == 0 || height == 0 || (isPausedAtomic && !takePausedFrame())) return;
       // NOTE: no currentEmuThread gate here — ares Video::Threaded=true means
       // this runs on the ares Screen thread, NOT the emulation thread. Gating
       // on currentEmuThread would reject every frame (black screen regression
@@ -2707,6 +2721,7 @@ namespace ares {
   // (rdram/cartridge.rom/dd.disk) -> SIGSEGV (the 64DD quit->reload crash).
   systemUnloading.store(true);
     isPausedAtomic = true;
+    pausedFramesToDraw = 0;
     fastForwardAtomic = false;
     slowMotionAtomic = 1.0f;
     // Keys held on the on-screen keyboard must not carry into the next game.
@@ -4011,6 +4026,8 @@ else if (port->type() == "Keyboard") {
 
   auto setPause(bool paused) -> void {
     isPausedAtomic = paused;
+    pausedFramesToDraw = 0;
+    steppedSincePause = false;
     // Flush saves when PAUSING (leaving gameplay): the user may back out or
     // swipe the app away, which skips the clean-unload export. The emulation
     // thread is idle at this point (pause gate), so this is race-free.
@@ -4073,7 +4090,13 @@ else if (port->type() == "Keyboard") {
     #endif
     LOGI("System reset requested");
   }
-  auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(*runMutex); if (root) root->run(); }
+  // One frame run with the game paused, and drawn (pausedFramesToDraw), so a screenshot then has it too.
+  auto frameAdvance() -> void {
+    lock_guard<recursive_mutex> lock(*runMutex);
+    if (!root) return;
+    pausedFramesToDraw += steppedSincePause.exchange(true) ? 1 : 2;
+    root->run();
+  }
   auto dumpNgGfx(const char* dir) -> void {
     lock_guard<recursive_mutex> lock(*runMutex);
     ::ares::NeoGeo::system.dumpNgGfx(dir);
@@ -4846,6 +4869,7 @@ else if (port->type() == "Keyboard") {
         // emulationRunning back on until the old thread has confirmed exit,
         // or it resumes with its stale localRoot.
         isPausedAtomic = true;
+        pausedFramesToDraw = 0;
         fastForwardAtomic = false;
         slowMotionAtomic = 1.0f;
         setEmulationRunning(false);
