@@ -35,13 +35,46 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
+
+Branch `cursor/docs-review-followups-cachy`, from master `c837d1868` (#291). `.github/workflows/desktop.yml`,
+docs/psp-core.md (part 115) and this file; no emulation code. Sources: the delta reviews,
+`~/phobos-work/scratch/review-290/REVIEW-r2.md`, `review-291/REVIEW-r2.md` and `review-292/REVIEW-r2.md`. Notes:
+`~/phobos-work/scratch/docs-followups/`.
+- **desktop.yml's N64 dialect check** (#290's I1): GCC's `-ftrapv` and `-fwrapv` override each other, so a later
+  `-ftrapv` undoes the dialect's `-fwrapv`; the "undone later" pattern and its error name it now. The step's run: block
+  as GitHub runs it, on copies of #290's stand-ins: 15 cases as expected, the 13 from before and two new, a later
+  `-ftrapv` failing the step ("1 of 38 N64 compile commands undo a flag") and an earlier one, which `-fwrapv` overrides,
+  passing; master's step passes the later one too. actionlint: master's two desktop.yml warnings only.
+  After this PR's review (its L1) the check also counts a later `-fstrict-overflow`, which GCC's manual says implies
+  `-fno-wrapv`: 18 cases as expected, a later one failing (a22cb99b6's step passes it), an earlier one and a later
+  `-fno-strict-overflow`, which implies `-fwrapv`, passing.
+- **#290's entry** (I2): the recompilers count cycles a little differently in some of a game's blocks of several
+  instructions, while the test's cases, one instruction under test each, count the same.
+- **#292's entry** (nits 1 and 2): the RP6's frames over 20 ms in one order, the control's then the PR's
+  (`~/phobos-work/scratch/n64-adreno/rp6/compare-292.txt`); the structure check names the store at fault, or for the
+  changed module its changed constant.
+- **#291's entry and part 115** (rulings (1) and (2)): master `d82f5db6f` (#292) merged in (`0e4fa0a80`) beside #290's
+  merge, and part 115's checks say what #292 changed; what the runner is built from is #291's PR body's list
+  (`ares/psp/`, `ares/ares/`, `tools/psp-runner/`, `tests/psp/ares/`, `nall/`, `libco/`, `thirdparty/`): the folders of
+  every source tools/psp-runner/build.sh compiles, and of every file its objects depend on (review-291's list for 25
+  objects, 1,004 files) but FFmpeg's built headers and the system's.
+- **After this PR's review** (its suggestion 2): #290's, #291's and #292's entries record their delta reviews' PASS,
+  #291's also how it merged with no macOS runner for its head; #291's Left and part 115's add the GE thread's own
+  refetch charge, which no test catches a slip in (#291's delta review's low finding).
+- **Checks**: `git diff --check` and `git show --check` clean; no added line over 120 columns; the diff is desktop.yml,
+  docs/handoff.md and docs/psp-core.md. CI's runs go in the pull request's body.
+- Independent review: PASS on `a22cb99b6`, read-only (`~/phobos-work/scratch/review-293/REVIEW.md`); one low finding.
+  Taken after it: L1 (a later `-fstrict-overflow`) and suggestion 2 in the next two commits, suggestion 3 in the body.
+
 ## PSP GE timing: the CPU beside the GE refitted, Super Monkey Ball within 15% and its exception gone — 2026-10-20
 
 Branch `cursor/psp-smba-refit-cachy`, from master `0f7c17d8a` (#289), master `1257da75d` (#290) merged in
-(`a2c64338e`). The core (`ares/psp/ge/`, `ares/psp/kernel/`), the runner's counter line, the PSP tests and CI's
-`ge-round10c`, `tools/psp-measure/` (contention12.py, its README, ge-terms.py), `tools/psp-ge-profile/` (gate.py, its
-tests and the README's line on them), docs/psp-core.md part 115 and this file. Notes and logs:
-`~/phobos-work/scratch/psp-ge-profile/smba-refit/` (the design, then step 1's probe to step 6's review fixes).
+(`a2c64338e`), master `d82f5db6f` (#292) merged in (`0e4fa0a80`). The core (`ares/psp/ge/`, `ares/psp/kernel/`), the
+runner's counter line, the PSP tests and CI's `ge-round10c`, `tools/psp-measure/` (contention12.py, its README,
+ge-terms.py), `tools/psp-ge-profile/` (gate.py, its tests and the README's line on them), docs/psp-core.md part 115 and
+this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (the design, then step 1's probe to step
+6's review fixes).
 - **What**: #279's CPU beside the GE (part 113) refitted to the PSP's rounds 10, 10b and 10c in a hybrid form: the
   front end's vertex and list-word reads by #279's rule, texels and transfers a fixed time a line; a cap at 0.75 of a
   window, the spin skip refusing a skip where it binds at either end (counted, as the runner's `ge contention:` line
@@ -65,7 +98,8 @@ tests and the README's line on them), docs/psp-core.md part 115 and this file. N
   fast, none newly failing, every exit line, none newly flat at frames 1,200 and 3,600, none more than 1.5x slower
   (`~/phobos-work/scratch/libcheck/lib-refit.log`, sha256
   `4ca24ff66f9983463d08c53c9a7aa9ea666225a586b218c4f2b32ff9315e76b8`). It stands for the head, which changes nothing
-  the runner is built from (`ares/`, `tools/psp-runner/`, `nall/`, `libco/`, `thirdparty/`).
+  the runner is built from (`ares/psp/`, `ares/ares/`, `tools/psp-runner/`, `tests/psp/ares/`, `nall/`, `libco/`,
+  `thirdparty/`).
 - **The RP6 run**, the coordinator's, 20 Oct 20:03-20:16 (`~/phobos-work/scratch/runner-android/RP6-CHECK-291.txt`,
   `logs/refit-rp6-table.txt`; the headless runner, Vulkan fast, the PSP's timing, two rounds taking turns), fps from
   master to this branch: Super Monkey Ball 141.38 to 151.44 (+7.1%), Killzone 165.10 to 163.13 (−1.2%), Burnout
@@ -84,8 +118,15 @@ tests and the README's line on them), docs/psp-core.md part 115 and this file. N
     and −11.9% (`step1/fit-real2/c12-real-final.txt`, lines 103-104), the menu's frame +9.952% against the owner's
     +10%. A round-11 case would settle it: narrow triangles streaming a RAM texture beside the streaming pattern at
     four rates (the design, r3).
+  - No test catches a slip in the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), the low finding of the
+    delta review (`~/phobos-work/scratch/review-291/REVIEW-r2.md`): its mutation D, which charges a refetch by the
+    memory of the word just taken rather than by the mark's kind, passes CI's GE thread step, the release suite with the
+    thread On and the gate. Today's code is right by reading; a one-way JUMP in a threaded test (a list in RAM that
+    jumps into VRAM and ends there) would catch it.
 - Independent review: PASS on `b753b3b46`, with runs (`~/phobos-work/scratch/review-291/REVIEW.md`); four low findings.
   Taken after it: L1 and L2's tests (`f7d27d438`); L4 and section 6's suggestions 2 to 5 in the docs.
+  Round two passed the whole PR at `0e4fa0a80` (`REVIEW-r2.md`). With no macOS runner for that head in six attempts it
+  merged on the owner's OK on `b753b3b46`'s and `c9a2f7727`'s green macOS builds; the merge's own passed on attempt 2.
 
 ## N64: the rasterizer Qualcomm's stock driver rejects, with its stored spec-constant values computed — 2026-10-20
 
@@ -143,7 +184,8 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   constants, and `-O` followed by cleanup rounds until nothing changes gives the same program (the rounds:
   `--unify-const --eliminate-dead-const --eliminate-dead-code-aggressive -O`). One store left as shipped, a
   changed upstream module (one constant), a wrong rewrite (one `OpBitwiseAnd` made `OpBitwiseOr`), a missing `& 255`
-  and a wrong leaf (SpecId 6 for 5) each fail both commands, the structure naming the store.
+  and a wrong leaf (SpecId 6 for 5) each fail both commands, the structure check naming the store at fault, or for the
+  changed module its changed constant (instruction 1665, `OpConstant 254` against `255`).
 - **Checks** (cachyOS, GCC 16.2.1; an RX 9070 XT with RADV, Mesa 26.3.0-devel; lavapipe): the Linux desktop Release
   build as desktop.yml's preset makes it (FFmpeg off, 2 jobs): exit 0, 510 steps, its only warning SDL3's;
   `rdp_device.cpp` with `-Wall -Wextra`, master's and this: the same 15 warnings, none in the added lines. `--check`
@@ -167,12 +209,13 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   Issue Detected" dialog over black, this PR's the games (Mario Tennis's intro, Ocarina's Hyrule Field and title,
   Paper Mario's logos and stage intro, F-Zero X's title and race demo), with no dialog. From the 10th second, 59.9
   fps median in all eight runs; AvgFrameTime medians 8.83 and 8.56 ms, 7.24 and 7.53, 5.79 and 5.65, 8.04 and 8.39;
-  Phobos running at 55 s in all eight; the saves and states unchanged (md5). One observation: Mario Tennis's intro
-  had 57 frames over 20 ms against the control's 27 (Ocarina 2 and 2, Paper Mario 3 and 2, F-Zero X 7 and 3), the
-  median rate still 59.9 fps; the likely cause, untested, is the patched pipelines compiling on first use (in E2,
-  about 0.5 s for the generic pipeline and 0.28 s for a fill state) where the control's failures took about 6 ms
-  each. Not covered: an upscaled N64 setting; other Qualcomm drivers or devices. The result stands for this head:
-  `rdp_device.cpp` and `rasterizer_patched.hpp` are `3ed0a6731`'s byte for byte.
+  Phobos running at 55 s in all eight; the saves and states unchanged (md5). One observation: the frames over 20 ms, the
+  control's and then this PR's, were 27 and 57 in Mario Tennis's intro, 2 and 2 in Ocarina, 3 and 2 in Paper Mario and 7
+  and 3 in F-Zero X, the median rate still 59.9 fps; the likely cause of Mario Tennis's extra ones, untested, is the
+  patched pipelines compiling on first use (in E2, about 0.5 s for the generic pipeline and 0.28 s for a fill state)
+  where the control's failures took about 6 ms each. Not covered: an upscaled N64 setting; other Qualcomm drivers or
+  devices. The result stands for this head: `rdp_device.cpp` and `rasterizer_patched.hpp` are `3ed0a6731`'s byte for
+  byte.
 - **Left**: the patched module on AMD's and NVIDIA's proprietary drivers and Intel's Windows driver (not here);
   whether Mario Tennis's extra slow frames on the RP6 are the patched pipelines' first compiles (untested).
   Follow-ups: Granite's pipeline blacklist, a Phobos
@@ -182,6 +225,7 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   environment switch to skip the patch, to compare the two modules on a device without a rebuild.
 - Independent review: PASS on `3ed0a6731`, read-only (`~/phobos-work/scratch/review-292/REVIEW.md`); suggestions only.
   Taken after it: Low 1 and Low 2 (per-store structure, random values from all 32 bits, cleanup rounds) and the nit.
+  Round two passed the whole PR at `c9a2f7727` (`REVIEW-r2.md`); its two wording nits went into #293.
 
 ## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
 
@@ -232,7 +276,9 @@ Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLi
   recompiler on against the interpreter at the same frames (a picture every 60 to frame 1800): Super Mario 64 2.3,
   Mario Kart 64 2.0, Ocarina of Time 0.2, Mario Golf 2.0, none above 20; Mario Tennis 7.2, 2 of 29 above 20 (frames
   1140 and 1200): the logo board a few pixels apart as the camera pans, both pictures right (the RSP's recompiler alone
-  gives the same two; the recompilers count cycles a little differently). FINDINGS.md's differential checker on that
+  gives the same two; the recompilers count cycles a little differently in some of a game's blocks of several
+  instructions (the checker below: about 3% of Mario Tennis's), while the test's cases, one instruction under test each,
+  count the same). FINDINGS.md's differential checker on that
   copy: 0 differences in 40,000,000 Mario Tennis blocks and 56,000,000 Super Mario 64 blocks. Speed, the recompiler
   on: 59.9 FPS in every run; with the same work on both sides (round one's recompiler-only fix against this) the
   emulation per frame is 4.16 and 4.09 ms (Mario Tennis), 3.74 and 3.71 ms (Super Mario 64), within the runs' spread.
@@ -246,6 +292,7 @@ Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLi
   `-fwrapv -fno-strict-aliasing` too, and the Android link wasn't traced for the PSP (above).
 - Independent review (fresh session): NEEDS CHANGES for 34dfeb7fa; desktop.yml's N64 dialect check can't fail its step.
   Fixed after it: L1 in 35b6489f5; M1 (each condition fails the step) and L2 and L3 in the commit after it.
+  Round two passed the whole PR at `43917e2ac` (`REVIEW-r2.md`); its two informational points went into #293.
 
 ## Tests and CI: the kernel's tests with the PSP's GE timing, and the skip's contention refusal tested — 2026-10-20
 
