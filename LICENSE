@@ -2858,16 +2858,34 @@ Android and Kotlin libraries
 
 Licensed under the Apache License 2.0, whose text appears above:
   AndroidX (core-ktx, appcompat, activity-compose, navigation-compose,
-  lifecycle-viewmodel-compose, datastore-preferences, documentfile),
-  Jetpack Compose (ui, ui-graphics, material3, material-icons-extended),
+  lifecycle-viewmodel-compose, datastore-preferences, documentfile, and
+  the libraries they use from these AndroidX groups: activity, annotation,
+  appcompat, arch.core, autofill, cardview, collection, concurrent,
+  constraintlayout, coordinatorlayout, core, cursoradapter, customview,
+  datastore, drawerlayout, dynamicanimation, emoji2, exifinterface,
+  fragment, graphics, interpolator, legacy, lifecycle, loader,
+  localbroadcastmanager, navigation, print, profileinstaller,
+  recyclerview, resourceinspection, savedstate, startup, tracing,
+  transition, vectordrawable, versionedparcelable, viewpager and
+  viewpager2),
+  Jetpack Compose (ui, ui-graphics, ui-tooling-preview, material3,
+  material-icons-extended, and the Compose libraries they use: animation,
+  animation-core, foundation, foundation-layout, material-icons-core,
+  material-ripple, runtime, runtime-saveable, ui-geometry, ui-text,
+  ui-unit and ui-util),
+  Accompanist Drawable Painter,
   Material Components for Android and Material Icons
   (including res/drawable/ic_*.xml): Copyright The Android Open Source
   Project and Google LLC.
-  Kotlin standard library, kotlinx.coroutines and atomicfu: Copyright
-  JetBrains s.r.o. and contributors.
+  Kotlin standard library, kotlinx.coroutines, atomicfu, Kotlin's
+  Parcelize and Android Extensions runtimes and JetBrains' Java
+  annotations: Copyright JetBrains s.r.o. and contributors.
   Coil: Copyright Coil Contributors.
   OkHttp and Okio: Copyright Square, Inc.
   AndroidSVG: Copyright Paul LeBeau, Cave Rock Software Ltd.
+  Guava's ListenableFuture: Copyright The Guava Authors.
+  Error Prone annotations: Copyright The Error Prone Authors.
+  JSpecify annotations: Copyright The JSpecify Authors.
 
 Public Suffix List (inside OkHttp, okhttp3/internal/publicsuffix/publicsuffixes.gz),
 compiled from https://publicsuffix.org/list/public_suffix_list.dat and
