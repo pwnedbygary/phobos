@@ -19920,8 +19920,8 @@ are the same byte for byte, and `gate.txt` with them.
   refetch, and a read from VRAM as other work: a layout-35 state of an earlier build loads, its running list's shares
   a little off till the next list starts (`GE::pipeStart()` clears them). A new layout would change every state's
   number, "Fast"'s too, for nothing a state holds. The gate's states, layouts 25, 31 and 32, load as before. The
-  runner's report counts nothing from before a load: a window loaded isn't marked capped, and a refused skip's turns
-  are counted only up to the load.
+  runner's report carries no mark across a load: its counts run from power on, a window loaded isn't marked capped,
+  and a refused skip's turns are counted only up to the load.
 
 ### The host cost and H6
 
@@ -19930,7 +19930,7 @@ PSP's timing), master's runner against this branch's, both built the same way he
 `android/measure.hpp` put in as `build-android.sh` puts it (the runners in `~/phobos-work/bin` print no measure lines),
 master's from `9f2d0633d` (its emulation is `0f7c17d8a`'s). A warm-up run each (the pipelines compile on the
 emulation thread), then two rounds taking turns; the emulation thread's user-mode instructions a frame (its perf
-counters), each runner within 0.004% of itself between rounds:
+counters), each runner within 0.005% of itself between rounds:
 
 | Game | Master | This branch | Change |
 | --- | --- | --- | --- |
@@ -19953,7 +19953,11 @@ counters), each runner within 0.004% of itself between rounds:
 ### Tests
 
 - **ge time, the PSP's: the CPU beside the GE, the list's clocks by where they read**: a list's vertices, words and
-  refetches counted by memory, RAM and VRAM; fails with the vertices counted as RAM's wherever they are.
+  refetches counted by memory, RAM and VRAM; a BEZIER from control points in RAM and one from VRAM, each one's own
+  start counted with its points (the surface's work making its vertices in neither); and a list in RAM that JUMPs into
+  VRAM and ends there, its refetch counted where the list goes on. Fails with the vertices counted as RAM's wherever
+  they are, with a BEZIER's own start from RAM counted as other work, and with a refetch counted by where its command
+  was (the independent review's mutations A and C, which the whole suite passed before).
 - **ge time, the PSP's, with the GE on its thread: the list's words by where they're read, as without it**: the word
   rule on both GEs, bit for bit with the thread on and off, bounding boxes with their vertices in RAM and in VRAM among
   the list; a broken word count on the render GE aborts at its check, and a VRAM vertex counted as RAM's fails two
@@ -19976,7 +19980,7 @@ counters), each runner within 0.004% of itself between rounds:
   round 10c against the PSP's files, within its bounds; CI requires `ge-round10c` in the release job's two lanes.
 - `gate.py`'s tests: the exception's mechanism, with a made-up entry; Super Monkey Ball's frame has none.
 
-The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `step4/r4/r2l1/`.
+The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `step4/r4/r2l1/`, `step6/mut/`.
 
 ### Tools
 
@@ -19995,9 +19999,21 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
   #289's step with the PSP's timing 110, 0; the measure groups sanitized, `ge-round10c` required, 14, 0, no sanitizer
   report; the runner built without a warning. Master's #290, merged after it, changes nothing they build: nothing
   under ares/, tools/, tests/psp/ or psp-core.yml.
+- On the tests' commit after the independent review (`f7d27d438`, the same machine and compiler): the release suite
+  with the GE thread off 646 groups, 0 failures, and on 646, 0; #289's step 110, 0; the measure groups sanitized,
+  `ge-round10c` required, 14, 0, no sanitizer report; "the list's clocks by where they read" sanitized, 1, 0. The
+  review's mutations, each applied to a copy of that tree, fail that group: A with `ramClocks[0]` short by
+  `Cost::Prim` (147.66 against 204.96 by hand), C with `ramClocks[1]` over by `Cost::Jump` (49.09 against 6.69) with
+  the GE thread off and with it on, where CI's GE thread step's 66 groups give that one failure (the group runs the GE
+  itself, off its thread, either way; `smba-refit/step6/`).
 - The code reviewed by reading (`~/phobos-work/scratch/review-smba-code/`): NEEDS CHANGES for `94efa7d33`
   (`REVIEW.md`), its findings fixed; PASS for `ee0e44309` (`REVIEW-r2.md`), its one low finding (R2-L1, the count of
-  a refused skip's turns) fixed in `bb09cefc0`.
+  a refused skip's turns) fixed in `bb09cefc0`; PASS for `b14ef87a0` (`REVIEW-r3.md`, 20 Oct, 19:03).
+- The independent review, with its own runs (`~/phobos-work/scratch/review-291/REVIEW.md`): PASS for `b753b3b46`,
+  four low findings, all taken in: no test caught a BEZIER's own start counted in the wrong memory (L1) or a refetch
+  counted by where its command was (L2), which "the list's clocks by where they read" now does (Tests, above); the
+  pull request's status lines (L3); the Hypothesis on RAM texel reads missing from Left (L4). With its suggestions 2
+  to 5: this part's wording and the tools README's line on gate.py's tests.
 
 ### Left
 
@@ -20007,11 +20023,22 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
 - The polling skip's widening, the owner's order of 19 Oct: the games much slower with the PSP's timing.
 - Killzone's per-frame Vulkan variance, and its fuzz-ahead variance with the GE on its thread: both there before this
   branch (master's runner shows them).
+- The design's open Hypothesis that every RAM texel read costs a fixed time a line: only cache fetches and transfers
+  were seen to behave so, and streamed narrow reads, in no measured list, are 56.5% of Super Monkey Ball's RAM texel
+  clocks and 16.0% of the menu's first list's. The fit gives both readings (`step1/fit-real2/c12-real-final.txt`,
+  lines 103-104): the menu +9.2% as it has them and +9.6% read the other way, Super Monkey Ball −12.6% and −11.9%.
+  The menu's frame is +9.952% against the owner's +10%, so part of its margin rests on it. A round-11 case would
+  settle it: narrow triangles streaming a RAM texture, beside the streaming pattern at four rates (the design, r3).
+- A probe of this head's own windows of the 3D menu (step 1's probe on the refit's code), a follow-up: it would settle
+  where the menu's 0.75-point gap to the fit comes from (the gate, above: an open hypothesis now), while the menu is
+  0.05 points from its limit.
 
 ### Scratch
 
 `~/phobos-work/scratch/psp-ge-profile/smba-refit/`: `DESIGN-smba-refit.md`; `step1/` (the probe's patches and runs,
 `REAL-RUNS.md`, `fit-real2/`); `step2/` (the tool's rounds); `step3/` and `step4/` (the code's rounds: the gate's
 profiles in `gate-*/`, the suites in `final/` and `r4/`, the mutations' logs, "Fast" in `b7/`, On = Off in `r4/4d/`,
-the host cost in `r4/4g/`, the README's recipe in `r4/p6/`); `step5/` (this part's notes). The reviews:
-`scratch/review-smba-design/`, `review-smba-probe/`, `review-smba-step2/`, `review-smba-code/`.
+the host cost in `r4/4g/`, the README's recipe in `r4/p6/`); `step5/` (this part's notes); `step6/` (the independent
+review's fixes: the two tests' mutations in `mut/`, the suites). The reviews:
+`scratch/review-smba-design/`, `review-smba-probe/`, `review-smba-step2/`, `review-smba-code/`, `review-291/` (the
+independent review, with its runs).

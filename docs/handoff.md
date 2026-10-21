@@ -39,9 +39,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 Branch `cursor/psp-smba-refit-cachy`, from master `0f7c17d8a` (#289), master `1257da75d` (#290) merged in
 (`a2c64338e`). The core (`ares/psp/ge/`, `ares/psp/kernel/`), the runner's counter line, the PSP tests and CI's
-`ge-round10c`, `tools/psp-measure/` (contention12.py, its README, ge-terms.py), `tools/psp-ge-profile/decoder/gate.py`,
-docs/psp-core.md part 115 and this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (the
-design, then step 1's probe to step 5's docs).
+`ge-round10c`, `tools/psp-measure/` (contention12.py, its README, ge-terms.py), `tools/psp-ge-profile/` (gate.py, its
+tests and the README's line on them), docs/psp-core.md part 115 and this file. Notes and logs:
+`~/phobos-work/scratch/psp-ge-profile/smba-refit/` (the design, then step 1's probe to step 6's review fixes).
 - **What**: #279's CPU beside the GE (part 113) refitted to the PSP's rounds 10, 10b and 10c in a hybrid form: the
   front end's vertex and list-word reads by #279's rule, texels and transfers a fixed time a line; a cap at 0.75 of a
   window, the spin skip refusing a skip where it binds at either end (counted, as the runner's `ge contention:` line
@@ -58,16 +58,34 @@ design, then step 1's probe to step 5's docs).
   14, 0 (`r4/suite-*.log`, `r4/measure-sanitized.log`, each naming its tree); the gate (`gate-{off,on}-b14ef87a0/`);
   "Fast" against master (`b7/`); #277's On = Off sets, 260 runs (`r4/4d/`); the host cost and H6 (`r4/4g/`); the
   tools README's recipe (`r4/p6/`); the tests' mutations (`step3/mut*.log`, `step4/*-mutation-fail.log`,
-  `r4/r2l1/`). Part 115 has them all.
-- **The coordinator's library check** on `ee0e44309`: GATE: CLEAN, 266 games each in Software and Vulkan fast, none
-  newly failing, every exit line, none newly flat at frames 1,200 and 3,600, none 1.5x slower
-  (`~/phobos-work/scratch/libcheck/lib-refit-ee0e44309.log`). The final code's check and the RP6 run are the
-  coordinator's, recorded in the pull request.
+  `r4/r2l1/`). On `f7d27d438`, the independent review's two tests (logs in `smba-refit/step6/`): the release suite off
+  646, 0, on 646, 0, #289's step 110, 0, the measure groups sanitized 14, 0; the review's mutations A and C fail the
+  new tests, C with the GE thread off and on (`step6/mut/`). Part 115 has them all.
+- **The coordinator's library check** on `b14ef87a0`: "GATE: CLEAN" at 19:42, 266 games each in Software and Vulkan
+  fast, none newly failing, every exit line, none newly flat at frames 1,200 and 3,600, none more than 1.5x slower
+  (`~/phobos-work/scratch/libcheck/lib-refit.log`, sha256
+  `4ca24ff66f9983463d08c53c9a7aa9ea666225a586b218c4f2b32ff9315e76b8`). It stands for the head, which changes nothing
+  the runner is built from (`ares/`, `tools/psp-runner/`, `nall/`, `libco/`, `thirdparty/`).
+- **The RP6 run**, the coordinator's, 20 Oct 20:03-20:16 (`~/phobos-work/scratch/runner-android/RP6-CHECK-291.txt`,
+  `logs/refit-rp6-table.txt`; the headless runner, Vulkan fast, the PSP's timing, two rounds taking turns), fps from
+  master to this branch: Super Monkey Ball 141.38 to 151.44 (+7.1%), Killzone 165.10 to 163.13 (−1.2%), Burnout
+  Dominator 112.11 to 102.50 (−8.6%), Need for Speed: Shift 123.95 to 113.62 (−8.3%), Burnout Legends 79.28 to 73.81
+  (−6.9%); every run of this branch's with 0 windows capped and 0 skips refused. The owner's OK (20 Oct ~22:01):
+  merge once the review passes; the polling skip's widening comes next.
 - **Reviews so far**: the design (three rounds, PASS), the probe (PASS), the fit tool (PASS for `a2b5af99a`), the code
-  by reading (PASS for `ee0e44309`, its one low finding fixed in `bb09cefc0`); part 115 names their files.
+  by reading (PASS for `ee0e44309`, its one low finding fixed in `bb09cefc0`; round three PASS for `b14ef87a0`, 19:03,
+  `REVIEW-r3.md`), the independent review (below); part 115 names their files.
 - **Left** (part 115): Activision Hits' lists 2 and 3; the polling skip's widening; Killzone's per-frame Vulkan variance
-  and its fuzz-ahead variance with the GE on its thread, both there before this branch.
-- Independent review: not yet.
+  and its fuzz-ahead variance with the GE on its thread, both there before this branch; a probe of this head's own
+  windows of the 3D menu.
+  - The design's open Hypothesis that every RAM texel read costs a fixed time a line (only cache fetches and transfers
+    were seen to behave so; streamed narrow reads are 56.5% of Super Monkey Ball's RAM texel clocks and 16.0% of the
+    menu's first list's): the fit's menu +9.2% as it has them and +9.6% read the other way, Super Monkey Ball −12.6%
+    and −11.9% (`step1/fit-real2/c12-real-final.txt`, lines 103-104), the menu's frame +9.952% against the owner's
+    +10%. A round-11 case would settle it: narrow triangles streaming a RAM texture beside the streaming pattern at
+    four rates (the design, r3).
+- Independent review: PASS on `b753b3b46`, with runs (`~/phobos-work/scratch/review-291/REVIEW.md`); four low findings.
+  Taken after it: L1 and L2's tests (`f7d27d438`); L4 and section 6's suggestions 2 to 5 in the docs.
 
 ## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
 

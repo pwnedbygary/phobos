@@ -18,8 +18,9 @@ scenes are captured here as Phobos measures from save states, so the two compare
 - `decoder/geprof.py`: reads a capture and prints, per vblank and per second, what the GE and the CPU did.
 - `decoder/gate.py`: the GE timing's gate (docs/psp-core.md, part 106): Phobos's GE profiles beside the owner's
   captures of the same scenes, each judged scene by its whole frame, within 15% of the PSP's either way.
-- `decoder/test_gate.py`: gate.py's verdict tested: a frame within 15% passes either way and one outside it fails;
-  the owner's accepted exception passes only the way he accepted, no further than its limit.
+- `decoder/test_gate.py`: gate.py's verdict tested: a frame within 15% passes either way and one outside it fails.
+  No exception is accepted now, so every judged frame outside the bar fails the gate; the exception's mechanism is
+  tested on one the tests make up, which passes only the way it was accepted and no further than its limit.
 - `decoder/test_geprof.py`: geprof.py's tests, on synthetic captures written as the plugin writes them, and on the
   plugin's own capture once `make hosttest` has written it.
 
