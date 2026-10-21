@@ -35,6 +35,54 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Tests: the spin skip's untested refusals and the GE thread's refetch charge — 2026-10-21
+
+Branch `cursor/psp-spin-tests-cachy`, from master `c837d1868` (#291), master `8d85eda9a` (#293) merged in
+(`706fc295f`). tests/psp/spins.cpp, tests/psp/ge.cpp, docs/psp-core.md (part 115's Left) and this file; no emulation
+code. The polling skip's widening, phase 2's first step: F1's tests (the design,
+`~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r2.md`), recalibrated for the hybrid. Notes,
+scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
+- **What**: four tests, each passing as written and failing with what it checks taken out, which master's tests all
+  pass without:
+  - "…its list stalled: no skip past the GE's end" (`spinsGePartway`): spinSkip()'s refusal of a skip the GE would be
+    done part way through. geWait()'s list stalled as the GE draws, its mover now every 4000 microseconds (geWait()'s
+    new `every`; 2000 as before for the others), so steps end with the GE waiting at the stall. Master's threaded
+    group of that list passes without the refusal: its mover sets the GE going again within a step, and the GE's time
+    then starts afresh from the clock (geResume()).
+  - "…two calls a turn moving lines: no skip of a push that zig-zags" (`spinsGeTwoCalls`): the refusal of several
+    calls a turn with lines moved (#289's review, suggestion 4). F1's poll, its lines before its first call, would end
+    a skip where the push peaks, which is exact; here the anchor's call ends the turn's instructions-only stretch,
+    where the push dips, past the busy window's kink with the push rising. The turns after such a skip make up what it
+    fell short by before a step ends, so the test also makes a skip at once, as spinsDirect does: without the refusal
+    it pushes the GE back 38,806 cycles where the turns run push it 38,827.
+  - "…its turns settling: no skip till the last two turns move alike" (`spinsGeSettling`): the refusal when the last
+    two turns moved different lines; k = min(k + 1, 5) and movz pick a line not read before on the fifth turn only.
+  - "ge time, the PSP's, with the GE on its thread: a list going one way into VRAM, its refetch where the list goes
+    on" (`geTimePspOneWayThreaded`): the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:762-766`; #291's delta
+    review's low finding): a list in RAM JUMPing into VRAM and ending there, run without the thread and with it, its
+    ramClocks[1] 3 × Cost::Command (6.69) and allClocks 6 × Cost::Command + Cost::Jump (55.78) worked out by hand, on
+    both GEs. The review's mutation D (`~/phobos-work/scratch/review-291/r2/mut/mutD-thread-refetch-by-word.diff`)
+    makes the render GE's ramClocks[1] 49.09.
+- **Reaching them** (`tests/inst.sh`: a copy counting spinSkip()'s refusals by arm, never committed;
+  `tests/logs/inst-*.log`): the stalled list 74,345 refusals part way and 213 skips (5,883,259 turns); two calls a turn
+  1,727 refusals of several calls, the at-once try among them, and 3 skips on the interpreter (5,842 turns); the
+  settling turns 3 refusals unsteady (one a list, on the recompiler) and 36 skips (811,836 turns); the one-way list 1
+  refetch marked as VRAM's.
+- **Mutations** (`tests/mut/`: each diff as made on this tree and each run's log; r2/mut's three made again, D the
+  review's), each run through the release suite with the GE thread off, CI's PSP-timing step and its GE-thread step,
+  groups / failed checks. With master's tests every run passes: 646/0, 110/0 and 66/0 for each. With these, each
+  fails at its own test only, in all three:
+  - partway: 650/2, 114/2, 70/2 (the stalled list's states differ after step 1, with both kinds of traffic);
+  - multicall: 650/1, 114/1, 70/1 (the skip at once: the GE done at 1,520,857 against 1,520,878 with the turns run);
+  - steady: 650/1, 114/1, 70/1 (the settling turns' states differ after step 1, on the recompiler);
+  - D: 650/2, 114/2, 70/2 (ramClocks[1] 49.09 against 6.69 by hand, on the GE folded and on the render GE).
+- **Checks** on `c837d1868` with the two test files as committed in `60810b8ad` (each log in `tests/logs/` starts with
+  the tree, its status lines and the files' hashes): the release suite with the GE thread off 650 groups, 0 failures,
+  on 650, 0; CI's PSP-timing step 114, 0; its GE-thread step 70, 0; the four groups sanitized (ASan and UBSan), the
+  thread off 4, 0 and on 4, 0. `git diff --check` and `git show --check` clean; no added line over 120 columns; the
+  diff from master `8d85eda9a` is the two test files, docs/handoff.md and docs/psp-core.md.
+- Independent review: not yet.
+
 ## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
 
 Branch `cursor/docs-review-followups-cachy`, from master `c837d1868` (#291). `.github/workflows/desktop.yml`,
@@ -123,6 +171,9 @@ this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (t
     memory of the word just taken rather than by the mark's kind, passes CI's GE thread step, the release suite with the
     thread On and the gate. Today's code is right by reading; a one-way JUMP in a threaded test (a list in RAM that
     jumps into VRAM and ends there) would catch it.
+    Done since: the spin tests' entry (above), whose group "ge time, the PSP's, with the GE on its thread: a list going
+    one way into VRAM, its refetch where the list goes on" fails with mutation D in the release suite, CI's PSP-timing
+    step and its GE-thread step.
 - Independent review: PASS on `b753b3b46`, with runs (`~/phobos-work/scratch/review-291/REVIEW.md`); four low findings.
   Taken after it: L1 and L2's tests (`f7d27d438`); L4 and section 6's suggestions 2 to 5 in the docs.
   Round two passed the whole PR at `0e4fa0a80` (`REVIEW-r2.md`). With no macOS runner for that head in six attempts it
