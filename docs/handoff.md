@@ -105,8 +105,25 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   build against itself, the SMALL_TYPES=1 control the same way, no variable once, and on lavapipe once: the same
   pixels in every frame compared (25 to 30 a run). `git diff --check`, `git show --check`, no changed line over 120
   columns; actionlint: no findings.
-- **Left**: the app on the RP6 with this PR's APK (the coordinator's); the patched module on AMD's and NVIDIA's
-  proprietary drivers and Intel's Windows driver (not here). Follow-ups: Granite's pipeline blacklist, a Phobos
+- **The RP6** (the coordinator's check, 21 Oct 08:20-08:29; `~/phobos-work/scratch/n64-adreno/rp6/RP6-CHECK-292.txt`
+  and `compare-292.txt`): the Retroid Pocket 6 on Qualcomm's stock driver (Adreno 740, 0676.53), the app from boot
+  with the N64 recompiler on, 55 s a game, its logcat and screenshots at 5 to 50 s. First the installed 215987, the
+  control (#290's own APK, master `1257da75d`'s tree), then this PR's own APK 215990 over it (CI run 39520621527's
+  Modern APK, built from GitHub's merge `c297f3766` of `3ed0a6731` into `1257da75d`). Mario Tennis, Ocarina of Time,
+  Paper Mario and F-Zero X, the control against this: 34, 41, 32 and 24 "blacklisted" lines against none, and 34,
+  42, 32 and 23 "Shader compilation failed" against none; from 10 s on, the control's pictures are the "GPU Driver
+  Issue Detected" dialog over black, this PR's the games (Mario Tennis's intro, Ocarina's Hyrule Field and title,
+  Paper Mario's logos and stage intro, F-Zero X's title and race demo), with no dialog. From the 10th second, 59.9
+  fps median in all eight runs; AvgFrameTime medians 8.83 and 8.56 ms, 7.24 and 7.53, 5.79 and 5.65, 8.04 and 8.39;
+  Phobos running at 55 s in all eight; the saves and states unchanged (md5). One observation: Mario Tennis's intro
+  had 57 frames over 20 ms against the control's 27 (Ocarina 2 and 2, Paper Mario 3 and 2, F-Zero X 7 and 3), the
+  median rate still 59.9 fps; the likely cause, untested, is the patched pipelines compiling on first use (in E2,
+  about 0.5 s for the generic pipeline and 0.28 s for a fill state) where the control's failures took about 6 ms
+  each. Not covered: an upscaled N64 setting; other Qualcomm drivers or devices. The result stands for this head:
+  `rdp_device.cpp` and `rasterizer_patched.hpp` are `3ed0a6731`'s byte for byte.
+- **Left**: the patched module on AMD's and NVIDIA's proprietary drivers and Intel's Windows driver (not here);
+  whether Mario Tennis's extra slow frames on the RP6 are the patched pipelines' first compiles (untested).
+  Follow-ups: Granite's pipeline blacklist, a Phobos
   addition, writes its function-static set under a read lock and doesn't log the `VkResult` (`command_buffer.cpp:1140`,
   `1547`); the driver dialog's wording; offering the fix upstream (the owner's call); the review's suggestions 3 and
   5, which change `rdp_device.cpp`: the hook's comment naming every SMALL_TYPES=0 device, not only Qualcomm's, and an
