@@ -79,17 +79,24 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   and 0.165 ms with master, 0.162 and 0.166 with this; Super Mario 64 0.149 and 0.149, 0.101 and 0.124: no slowdown
   seen (a shared machine, the GPU's clocks not pinned; not a benchmark).
 - **The CI job** (`N64 Rasterizer`, its own workflow; paths: the parallel-rdp shaders folder, `tools/parallel-rdp`,
-  itself; ubuntu-24.04's apt SPIRV-Tools 2025.1): `patch_rasterizer.py --check`, then `check_rasterizer.py`, reading
-  both modules from the headers on its own: `spirv-val` (Vulkan 1.1 and 1.3); no `OpSpecConstantOp` result stored in
-  the patched `shade_pixel` (24 in the bank's); both modules specialized alike for the app's generic (spec ids 0-2)
-  and fill (0-7) pipelines and 4 random specializations: each of the 24 stores stores the same constant once folded,
-  and `-O` gives the same program. One store left as shipped, a changed upstream module (one constant) and a wrong
-  rewrite (one `OpBitwiseAnd` made `OpBitwiseOr`, a store the optimizer removes) each fail both commands.
+  itself; SPIRV-Tools 2025.1 from ubuntu-24.04's apt, its version printed): `patch_rasterizer.py --check`, then
+  `check_rasterizer.py`, reading both modules from the headers on its own: `spirv-val` (Vulkan 1.1 and 1.3); the
+  structure, the proof for every specialization: the two modules side by side, each id paired, each of the 24 stores
+  of an `OpSpecConstantOp` result in `shade_pixel` preceded by instructions that mirror its tree node for node
+  (opcodes, result types, literals, the same `OpSpecConstant` and `OpConstant` leaves) and store its root, every
+  other instruction the same, none of those stores left. Then, as cross-checks, both modules specialized alike for
+  the app's generic (spec ids 0-2) and fill (0-7) pipelines, 4 random specializations (values from all 32 bits,
+  passed in hex and read back: spirv-opt leaves an `int` it can't read, a decimal above 2^31 - 1, at its default,
+  without an error) and one for which a single `-O` leaves an extra constant: the 24 stores store the same
+  constants, and `-O` followed by cleanup rounds until nothing changes gives the same program (the rounds:
+  `--unify-const --eliminate-dead-const --eliminate-dead-code-aggressive -O`). One store left as shipped, a
+  changed upstream module (one constant), a wrong rewrite (one `OpBitwiseAnd` made `OpBitwiseOr`), a missing `& 255`
+  and a wrong leaf (SpecId 6 for 5) each fail both commands, the structure naming the store.
 - **Checks** (cachyOS, GCC 16.2.1; an RX 9070 XT with RADV, Mesa 26.3.0-devel; lavapipe): the Linux desktop Release
   build as desktop.yml's preset makes it (FFmpeg off, 2 jobs): exit 0, 510 steps, its only warning SDL3's;
   `rdp_device.cpp` with `-Wall -Wextra`, master's and this: the same 15 warnings, none in the added lines. `--check`
   passes; the header's module is byte for byte E2's S2 (`cmp`). The CI job's commands pass with SPIRV-Tools 2025.1
-  (Ubuntu 24.04's package, unpacked) and 2026.4; the three broken inputs fail both. Pictures, from master's and this
+  (Ubuntu 24.04's package, unpacked) and 2026.4; the five broken inputs fail both. Pictures, from master's and this
   branch's desktop builds with the same scratch instrumentation (a picture every 60 emulated frames to frame 1800, no
   input; a stderr line naming the bank's rasterizer by Granite's hash, checked after each run; ares's "Deterministic
   Entropy", without which runs differ from one another: ares seeds the power-on state from the host, Mario Tennis's
@@ -101,8 +108,11 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
 - **Left**: the app on the RP6 with this PR's APK (the coordinator's); the patched module on AMD's and NVIDIA's
   proprietary drivers and Intel's Windows driver (not here). Follow-ups: Granite's pipeline blacklist, a Phobos
   addition, writes its function-static set under a read lock and doesn't log the `VkResult` (`command_buffer.cpp:1140`,
-  `1546`); the driver dialog's wording; offering the fix upstream (the owner's call).
-- Independent review: not yet.
+  `1547`); the driver dialog's wording; offering the fix upstream (the owner's call); the review's suggestions 3 and
+  5, which change `rdp_device.cpp`: the hook's comment naming every SMALL_TYPES=0 device, not only Qualcomm's, and an
+  environment switch to skip the patch, to compare the two modules on a device without a rebuild.
+- Independent review: PASS on `3ed0a6731`, read-only (`~/phobos-work/scratch/review-292/REVIEW.md`); suggestions only.
+  Taken after it: Low 1 and Low 2 (per-store structure, random values from all 32 bits, cleanup rounds) and the nit.
 
 ## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
 
