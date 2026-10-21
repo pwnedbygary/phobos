@@ -35,6 +35,75 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## N64: the rasterizer Qualcomm's stock driver rejects, with its stored spec-constant values computed — 2026-10-20
+
+Branch `cursor/n64-qcom-rasterizer-cachy`, from master `1257da75d` (#290). `rdp_device.cpp`, the new generated
+`shaders/rasterizer_patched.hpp`, `tools/parallel-rdp/` (its script and CI check),
+`.github/workflows/n64-rasterizer.yml` and this file; `slangmosh.hpp` unchanged. Notes and logs:
+`~/phobos-work/scratch/n64-adreno/` (`FINDINGS.md`: the trace in sections 1-2, the RP6 probes E1 and E2 in sections 8
+and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS.txt` section 8).
+- **The fault**: on the RP6's stock driver (Adreno 740, driver 0676.53, compiler E031.41.03.47) N64 games run with
+  sound but a black picture under "GPU Driver Issue Detected". Every pipeline made from parallel-rdp's rasterizer
+  fails to compile (the driver's "Shader compilation failed", `VK_ERROR_UNKNOWN`): the generic one and each
+  specialization, 34 in Mario Tennis, 41-42 in Ocarina of Time. Every draw goes through the rasterizer, clears
+  included, so nothing reaches the frame buffer; each failure is one "Failed to create … blacklisted" line, which the
+  app counts for the dialog. The module is the bank's SMALL_TYPES=0 rasterizer: parallel-rdp turns 8/16-bit
+  arithmetic off on Qualcomm's proprietary driver (`rdp_renderer.cpp:204-208`).
+- **What it rejects** (a standalone probe making the app's pipelines from variants of the module, run on the RP6 by
+  the coordinator, E1 and E2): `shade_pixel`'s 24 stores of `OpSpecConstantOp` results (the static state flags, the
+  dither mode, the 16 combiner inputs, the texture formats and sizes, in its `RASTERIZER_SPEC_CONSTANT` blocks), even
+  where specialization leaves them dead. Those values computed by ordinary instructions (S2): it compiles in the
+  generic and fill pipelines (485.9 and 281.3 ms). Only the 4 spec-constant branches rewritten (S3), or each stored
+  value through `OpCopyObject` (S8): it fails. A plain spec constant stored (S7): it compiles. The combiner's 16 stores
+  are the only group that fails alone. The ubershader compiles there too (862.6 ms).
+- **The change**: `tools/parallel-rdp/patch_rasterizer.py` (Python 3, standard library) reads `slangmosh.hpp`,
+  refuses unless its SMALL_TYPES=0 rasterizer has the SHA-256 the patch was made for (`2787b409…`), rewrites those 24
+  stores and nothing else, and writes `rasterizer_patched.hpp` beside it (the module, `e3b620ef…`, and the offset and
+  size of the bank's resource layout record for it); `--check` re-derives the file and compares it byte for byte. The
+  module is byte for byte E2's S2, the one the RP6 compiled. `CommandProcessor::init_renderer` puts it in the bank's
+  place, with that layout, whenever the bank chose the SMALL_TYPES=0 rasterizer (`resolver("rasterizer",
+  "SMALL_TYPES") == 0`, the bank's own test), right after the bank is built and before the renderer and the VI get it.
+  Pipelines are made at first dispatch from `shader_bank->rasterizer` (`rdp_renderer.cpp:1779`, its only use) and the
+  N64's pipeline cache is a driver blob that replays nothing, so no pipeline is made from the original. No driver
+  check.
+- **Exact**: SPIR-V 1.6 rev. 8, 2.12: "The OpSpecConstantOp instruction is specialized by executing the operation and
+  replacing the instruction with the result." The rewrite executes the same operation as the ordinary instruction on
+  the same operands, each `OpSpecConstantOp` operand computed the same way, down to the specialization constants, so
+  every specialization stores the same bits.
+- **Which devices**: every device on which parallel-rdp chooses SMALL_TYPES=0, which is more than Qualcomm's: its
+  driver rules (`rdp_renderer.cpp:180-211`) turn small types off on AMD's proprietary and open-source drivers (RADV
+  too), NVIDIA's proprietary driver and Intel's Windows driver as well, and a device lacking `shaderInt8` or
+  `shaderInt16` takes SMALL_TYPES=0 too (`PARALLEL_RDP_SMALL_TYPES=1` sets the driver rules aside). So AMD and NVIDIA
+  desktops run the patched module by default; here RADV with no variable did, every frame the same as master's. The
+  render passes' GPU time per frame (parallel-rdp's timestamps, two alternated runs of each build): Mario Tennis 0.261
+  and 0.165 ms with master, 0.162 and 0.166 with this; Super Mario 64 0.149 and 0.149, 0.101 and 0.124: no slowdown
+  seen (a shared machine, the GPU's clocks not pinned; not a benchmark).
+- **The CI job** (`N64 Rasterizer`, its own workflow; paths: the parallel-rdp shaders folder, `tools/parallel-rdp`,
+  itself; ubuntu-24.04's apt SPIRV-Tools 2025.1): `patch_rasterizer.py --check`, then `check_rasterizer.py`, reading
+  both modules from the headers on its own: `spirv-val` (Vulkan 1.1 and 1.3); no `OpSpecConstantOp` result stored in
+  the patched `shade_pixel` (24 in the bank's); both modules specialized alike for the app's generic (spec ids 0-2)
+  and fill (0-7) pipelines and 4 random specializations: each of the 24 stores stores the same constant once folded,
+  and `-O` gives the same program. One store left as shipped, a changed upstream module (one constant) and a wrong
+  rewrite (one `OpBitwiseAnd` made `OpBitwiseOr`, a store the optimizer removes) each fail both commands.
+- **Checks** (cachyOS, GCC 16.2.1; an RX 9070 XT with RADV, Mesa 26.3.0-devel; lavapipe): the Linux desktop Release
+  build as desktop.yml's preset makes it (FFmpeg off, 2 jobs): exit 0, 510 steps, its only warning SDL3's;
+  `rdp_device.cpp` with `-Wall -Wextra`, master's and this: the same 15 warnings, none in the added lines. `--check`
+  passes; the header's module is byte for byte E2's S2 (`cmp`). The CI job's commands pass with SPIRV-Tools 2025.1
+  (Ubuntu 24.04's package, unpacked) and 2026.4; the three broken inputs fail both. Pictures, from master's and this
+  branch's desktop builds with the same scratch instrumentation (a picture every 60 emulated frames to frame 1800, no
+  input; a stderr line naming the bank's rasterizer by Granite's hash, checked after each run; ares's "Deterministic
+  Entropy", without which runs differ from one another: ares seeds the power-on state from the host, Mario Tennis's
+  intro takes one of two courses and Super Mario 64's eight runs all differ): Mario Tennis, Super Mario 64, Mario
+  Kart 64, Ocarina of Time and Mario Golf on RADV with PARALLEL_RDP_SMALL_TYPES=0, master against this twice and each
+  build against itself, the SMALL_TYPES=1 control the same way, no variable once, and on lavapipe once: the same
+  pixels in every frame compared (25 to 30 a run). `git diff --check`, `git show --check`, no changed line over 120
+  columns; actionlint: no findings.
+- **Left**: the app on the RP6 with this PR's APK (the coordinator's); the patched module on AMD's and NVIDIA's
+  proprietary drivers and Intel's Windows driver (not here). Follow-ups: Granite's pipeline blacklist, a Phobos
+  addition, writes its function-static set under a read lock and doesn't log the `VkResult` (`command_buffer.cpp:1140`,
+  `1546`); the driver dialog's wording; offering the fix upstream (the owner's call).
+- Independent review: not yet.
+
 ## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
 
 Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLists.txt`, `tests/rsp-recompiler/`,
