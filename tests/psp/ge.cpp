@@ -2925,15 +2925,16 @@ static auto geTimePspBeside() -> void {
 //With the PSP's GE timing, the push the CPU's traffic beside the GE makes, by geContend()'s rule, at 222/111: a stretch
 //of 100,000 cycles in the GE's busy window, 50,000 instructions, 400 data lines read in and 100 instruction lines, 100
 //written back and 30 uncached accesses, beside a list whose clocks so far are 60% texels read from RAM, pushes the
-//GE's pipeline (gePipeAt, geDoneAt, and with a SIGNAL due geReachAt) back by the window's due, in whole cycles: 100,000
-//x slow / (1 + slow), slow = Contention[texels] x 0.6 x u, u the lines (weighted) over the longer of the cycles passed
-//and the PSP's CPU's time for the instructions and stalls, as a share of StreamLines. A stretch with nothing in it
-//pushes what the window owes by then that it hasn't pushed (no SIGNAL due now: geReachAt stays, for geTime() to work
-//out again): till the cycles passed reach the CPU's time, about as much again; past that, the rest of the lines' cost,
-//which ten million cycles more bring to within 2% of Contention[texels] x 0.6 x the lines' streaming time and never
-//past it (the lines cost the GE once). A stretch begun while the GE is busy and running past its end adds the cycles
-//before it and that share of its instructions and lines, in whole counts; one begun after it starts the window afresh,
-//pushing nothing. The window's sums are whole counts: the same however its stretches are grouped.
+//GE's pipeline (gePipeAt, geDoneAt, and with a SIGNAL due geReachAt) back by the window's due, in whole cycles: the
+//back end's kind, a fixed time a line, so 100,000 x b, b = Contention[texels] x 0.6 x u, u the lines (weighted) over
+//the longer of the cycles passed and the PSP's CPU's time for the instructions and stalls (with 0.6 of the texels'
+//stalls beside the busy GE), as a share of StreamLines. A stretch with nothing in it pushes what the window owes by
+//then that it hasn't pushed (no SIGNAL due now: geReachAt stays, for geTime() to work out again): till the cycles
+//passed reach the CPU's time, about as much again; past that, the rest of the lines' cost, which ten million cycles
+//more bring to Contention[texels] x 0.6 x the lines' streaming time, in whole cycles, and never past it (the lines cost
+//the GE once). A stretch begun while the GE is busy and running past its end adds the cycles before it and that share
+//of its instructions and lines, in whole counts; one begun after it starts the window afresh, pushing nothing. The
+//window's sums are whole counts: the same however its stretches are grouped. No window here reaches the cap.
 static auto geTimePspContendRule() -> void {
   using Cost = GE::Cost;
   KernelMachine m;
@@ -2953,10 +2954,13 @@ static auto geTimePspContendRule() -> void {
     passed += overlap, instructions += n, fills += f, writebacks += w, uncached += c;
     f64 stalls = Cost::FillCycles * f64(fills) + Cost::WritebackCycles * f64(writebacks) +
                  Cost::UncachedCycles * f64(uncached);
+    stalls += 0.6 * (Cost::StallFill[2] * f64(fills) + Cost::StallWriteback[2] * f64(writebacks) +
+                     Cost::StallUncached[2] * f64(uncached));  //(beside the busy GE, at the texels' share)
     f64 time = std::max(f64(passed), (Cost::InstructionCycles * f64(instructions) + stalls) * counted);
     f64 u = lines() * counted / (time * Cost::StreamLines);
-    f64 slow = Cost::Contention[2] * 600 / 1000 * u;
-    u64 due = u64(f64(passed) * slow / (1 + slow));
+    f64 back = Cost::Contention[2] * 600 / 1000 * u;
+    CHECK(back < Cost::Cap, true);
+    u64 due = u64(f64(passed) * back);
     if(due <= owed) return 0;
     u64 pushed = due - owed;
     owed = due;
@@ -2971,7 +2975,7 @@ static auto geTimePspContendRule() -> void {
   CHECK(k.geDoneAt, 3'000'000 + first);
   u64 done = k.geDoneAt, reach = k.geReachAt;
   k.geSignalDue = false;
-  u64 pushed = expect(100'000, 0, 0, 0, 0);  //(the CPU's time, 168,150 cycles, not yet passed)
+  u64 pushed = expect(100'000, 0, 0, 0, 0);  //(the CPU's time, 206,472 cycles, not yet passed)
   k.geContend(1'100'000, 1'200'000, 0);
   CHECK(pushed > first / 2, true);
   CHECK(k.geDoneAt, done + pushed);
@@ -2982,7 +2986,7 @@ static auto geTimePspContendRule() -> void {
   k.geContend(1'200'000, 11'200'000, 0);
   CHECK(k.geDoneAt, done + 10'000'000 + pushed);
   f64 cost = Cost::Contention[2] * 0.6 * lines() * counted / Cost::StreamLines;  //(the lines' cost, once)
-  CHECK(f64(owed) <= cost && f64(owed) > 0.98 * cost, true);
+  CHECK(f64(owed) <= cost && f64(owed) > cost - 2, true);
   done = k.geDoneAt;
   u64 from = done - 50'000;
   data.fills += 1000;
@@ -2995,6 +2999,334 @@ static auto geTimePspContendRule() -> void {
   k.geContend(done + 10, done + 100'000, 20'000);
   CHECK(k.geDoneAt, done);
   CHECK(k.geWindow.passed == 0 && k.geWindow.fills == 0 && k.geWindow.instructions == 0, true);
+}
+
+//With the PSP's GE timing, the CPU's stalls beside the busy GE in the window's time (Kernel::geContendTime()), at
+//222/111: a stretch of 100,000 cycles, 30,000 instructions and 300 data lines read in takes the PSP's CPU 66,000 of
+//its cycles alone (99,000 of the kernel's), under the cycles passed; beside a list whose clocks so far are half
+//vertices read from RAM, each line stalls it StallFill[vertices] x 0.5 cycles more, which puts the window's time past
+//the cycles passed (geContendBound()), and the window owes the front end's push, passed x a / (1 + a), a =
+//Contention[vertices] x 0.5 x u, u its lines over that time as a share of StreamLines. Beside a list reading nothing
+//from RAM the stalls add nothing (the window bound by the cycles passed), and it owes nothing.
+static auto geTimePspStalls() -> void {
+  using Cost = GE::Cost;
+  for(bool ram : {true, false}) {
+    KernelMachine m;
+    m.pspTiming();
+    CHECK(m.call("scePowerSetClockFrequency", {222, 222, 111}), 0);
+    auto& k = m.kernel;
+    k.cycles = 1'000'000, k.gePipeAt = 1'000'000, k.geReachAt = 2'000'000, k.geDoneAt = 3'000'000;
+    k.geSeeCaches();
+    m.system.ge.ramClocks[0] = ram ? 500 : 0, m.system.ge.allClocks = 1000;
+    m.system.dataCache.fills += 300;
+    k.geContend(1'000'000, 1'100'000, 30'000);
+    f64 counted = 333.0 / 222, alone = Cost::InstructionCycles * 30'000 + Cost::FillCycles * 300;
+    CHECK(alone * counted < 100'000, true);
+    f64 time = (alone + (ram ? 500.0 / 1000 * (Cost::StallFill[0] * 300) : 0)) * counted;
+    CHECK(k.geContendBound(k.geWindow), ram);
+    f64 u = 300 * counted / (std::max(100'000.0, time) * Cost::StreamLines);
+    f64 a = Cost::Contention[0] * (ram ? 500 : 0) / 1000 * u;
+    u64 due = u64(100'000 * (a / (1 + a)));
+    CHECK(k.geWindow.pushed, due);
+    CHECK(k.geDoneAt, 3'000'000 + due);
+    CHECK(due > 0, ram);
+  }
+}
+
+//With the PSP's GE timing, the hybrid's two parts and its cap (Kernel::geContendOwing()), at 222/111: beside a list
+//whose clocks so far are all texels read from RAM, a stretch of 100,000 cycles with 1,000 instructions and 1,000 data
+//lines read in (the CPU's time, with the texels' stalls beside the GE, about 220,000 cycles) owes the GE more than the
+//cap's share of its time: it pushes Cap x 100,000 cycles, and the window is counted once (Kernel::geCapped, the
+//runner's report), not again as a stretch more, still past it, pushes Cap x its cycles too. A window afresh beside the
+//same list with the same lines over ten million cycles owes only the lines' fixed cost (the back end's kind, a time a
+//line), short of the cap, and isn't counted. Beside a list of 40% vertices and 30% texels read from RAM, a long
+//window's push is the two parts' sum, passed x (a / (1 + a) + b), in whole cycles.
+static auto geTimePspHybrid() -> void {
+  using Cost = GE::Cost;
+  KernelMachine m;
+  m.pspTiming();
+  CHECK(m.call("scePowerSetClockFrequency", {222, 222, 111}), 0);
+  auto& k = m.kernel;
+  auto& ge = m.system.ge;
+  f64 counted = 333.0 / 222;
+  auto afresh = [&](u64 at, f64 vertices, f64 texels) {  //(the GE busy past every stretch below, its window empty)
+    k.cycles = at, k.gePipeAt = at, k.geReachAt = at, k.geDoneAt = at + 100'000'000;
+    k.geWindow = {}, k.geSeeCaches();
+    ge.ramClocks[0] = vertices, ge.ramClocks[1] = 0, ge.ramClocks[2] = texels, ge.ramClocks[3] = 0;
+    ge.allClocks = 1000;
+  };
+  afresh(1'000'000, 0, 1000);
+  m.system.dataCache.fills += 1000;
+  k.geContend(1'000'000, 1'100'000, 1000);
+  f64 time = (Cost::InstructionCycles * 1000 + Cost::FillCycles * 1000 + Cost::StallFill[2] * 1000) * counted;
+  f64 b = Cost::Contention[2] * 1000 / 1000 * (1000 * counted / (time * Cost::StreamLines));
+  CHECK(b > Cost::Cap && b < 1, true);
+  CHECK(k.geWindow.pushed, u64(100'000 * Cost::Cap));
+  CHECK(k.geContendCapped(k.geWindow), true);
+  CHECK(k.geCapped, 1u);
+  k.geContend(1'100'000, 1'110'000, 0);  //(the CPU's time not yet passed: as far past the cap)
+  CHECK(k.geWindow.pushed, u64(110'000 * Cost::Cap));
+  CHECK(k.geCapped, 1u);
+  afresh(200'000'000, 0, 1000);
+  m.system.dataCache.fills += 1000;
+  k.geContend(200'000'000, 210'000'000, 1000);
+  b = Cost::Contention[2] * 1000 / 1000 * (1000 * counted / (10'000'000 * Cost::StreamLines));
+  CHECK(k.geWindow.pushed, u64(10'000'000 * b));
+  f64 cost = Cost::Contention[2] * 1000 * counted / Cost::StreamLines;  //(the lines' fixed cost)
+  CHECK(f64(k.geWindow.pushed) <= cost && f64(k.geWindow.pushed) > cost - 2, true);
+  CHECK(k.geContendCapped(k.geWindow), false);
+  CHECK(k.geCapped, 1u);
+  afresh(400'000'000, 400, 300);
+  m.system.dataCache.fills += 2000;
+  k.geContend(400'000'000, 410'000'000, 1000);
+  f64 u = 2000 * counted / (10'000'000 * Cost::StreamLines);
+  f64 a = Cost::Contention[0] * 400 / 1000 * u;
+  b = Cost::Contention[2] * 300 / 1000 * u;
+  CHECK(k.geWindow.pushed, u64(10'000'000 * (a / (1 + a) + b)));
+  CHECK(k.geContendCapped(k.geWindow), false);
+  CHECK(k.geCapped, 1u);
+}
+
+//With the PSP's GE timing, which of a list's front end's clocks read RAM (GE::ramClocks, GE::readsRam()), in one run:
+//a list in RAM draws a PRIM from vertices in RAM (their clocks and the PRIM's own start, Cost::Prim, in ramClocks[0])
+//and one from vertices in VRAM (theirs and its own in allClocks alone), a BEZIER from control points in RAM and one
+//from points in VRAM as those PRIMs (its points' clocks and its own start, Cost::Prim, where its points are;
+//Cost::Patch and PatchVertex, the surface's work making its vertices, in neither), CALLs a list in VRAM (Cost::Call in
+//allClocks alone: the list fetched afresh from VRAM) whose RET comes back into RAM (Cost::Call in ramClocks[1]), and
+//JUMPs into VRAM (Cost::Jump in allClocks alone) and from there back into RAM (in ramClocks[1]): its words, each by
+//where it was read, those from RAM Cost::Command in ramClocks[1], those from VRAM in allClocks alone. Nothing else
+//(its PRIMs and surfaces draw no pixel); and with "Fast", nothing at all. Then a run one way: a list in RAM JUMPs into
+//VRAM and ends there, the refetch counted where the list goes on (Cost::Jump in allClocks alone), not where the JUMP's
+//word was, which the round trips above can't tell apart (each trip's two refetches would swap memories).
+static auto geTimePspClassified() -> void {
+  using Cost = GE::Cost;
+  constexpr u32 VramList = VRAM + 0x10'0000, VramBlock = VRAM + 0x10'2000, VramEnd = VRAM + 0x10'4000;
+  constexpr u32 VramVertices = VRAM + 0x18'0000, OneWay = ListA + 0x1000;
+  constexpr u32 Across = 4, Down = 4;  //(each BEZIER's control points, at 0,0,0 as the PRIMs' vertices)
+  for(bool psp : {true, false}) {
+    System s;
+    s.threadGE(false);  //(run by calling the GE directly)
+    s.ge.pspTiming = psp;
+    auto& memory = s.memory;
+    for(u32 at : {Vertices, VramVertices}) for(u32 n = 0; n < Across * Down * 3; n++) memory.write(2, at + n * 2, 0);
+    ListWriter list{memory, ListA};
+    list.put(GE::VertexType, 0x80'0100);  //(through: 16-bit x, y, z, 6 bytes a vertex; two at 0,0,0: no pixel)
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.to(GE::VertexAddress, VramVertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::PatchPrimitive, 0), list.put(GE::PatchDivision, 1 | 1 << 8);  //(triangles, of 2 x 2 vertices made)
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Bezier, Across | Down << 8);
+    list.to(GE::VertexAddress, VramVertices);
+    list.put(GE::Bezier, Across | Down << 8);
+    list.to(GE::Call, VramList);
+    list.to(GE::Jump, VramBlock);
+    ListWriter back{memory, ListB};
+    back.put(GE::Nop), back.put(GE::Finish), back.put(GE::End);
+    u32 ramWords = (list.address - ListA) / 4 + (back.address - ListB) / 4;
+    ListWriter called{memory, VramList};
+    called.put(GE::Nop), called.put(GE::Nop), called.put(GE::Return);
+    ListWriter block{memory, VramBlock};
+    block.put(GE::Nop), block.to(GE::Jump, ListB);
+    u32 vramWords = (called.address - VramList) / 4 + (block.address - VramBlock) / 4;
+    ListWriter going{memory, OneWay};
+    going.put(GE::Nop), going.to(GE::Jump, VramEnd);
+    ListWriter ending{memory, VramEnd};
+    ending.put(GE::Nop), ending.put(GE::Finish), ending.put(GE::End);
+    u32 goingWords = (going.address - OneWay) / 4, endingWords = (ending.address - VramEnd) / 4;
+    auto near = [](f64 x, f64 y) { return std::abs(x - y) <= 1e-9 * std::max(1.0, std::abs(y)); };
+    //(a run from start, of fromRam words from RAM and fromVram from VRAM, its clocks against those worked out by hand)
+    auto run = [&](u32 start, u32 fromRam, u32 fromVram, const f64 (&ram)[4], f64 all) {
+      s.ge.pipeStart();
+      s.ge.list = {}, s.ge.list.address = start;
+      u64 ran = 0;
+      CHECK(u32(s.ge.run(1000, ran)), u32(GE::Stop::Finished));
+      CHECK(ran, u64(fromRam + fromVram));
+      CHECK(s.ge.ramWordsAt(ran), psp ? u64(fromRam) : 0u);
+      if(!psp) {
+        CHECK(s.ge.ramClocks[0] == 0 && s.ge.ramClocks[1] == 0 && s.ge.allClocks == 0, true);
+        return;
+      }
+      s.ge.pipeStop(ran, s.ge.ramWordsAt(ran));
+      for(u32 kind : range(4)) {
+        if(!near(s.ge.ramClocks[kind], ram[kind])) {
+          std::printf("  ramClocks[%u] %.6f, by hand %.6f\n", kind, s.ge.ramClocks[kind], ram[kind]);
+        }
+        CHECK(near(s.ge.ramClocks[kind], ram[kind]), true);
+      }
+      if(!near(s.ge.allClocks, all)) std::printf("  allClocks %.6f, by hand %.6f\n", s.ge.allClocks, all);
+      CHECK(near(s.ge.allClocks, all), true);
+    };
+    f64 each = std::max(Cost::VertexFloor, 6 * Cost::VertexByte);  //(a vertex's fetch, or a control point's)
+    f64 drawn = 2 * each + Cost::Prim + Across * Down * each + Cost::Prim;  //(a PRIM's and a BEZIER's, from one memory)
+    f64 ram[4] = {drawn, ramWords * Cost::Command + Cost::Call + Cost::Jump, 0, 0};
+    run(ListA, ramWords, vramWords, ram, ram[0] + ram[1] + drawn + vramWords * Cost::Command + Cost::Call + Cost::Jump);
+    f64 oneWay[4] = {0, goingWords * Cost::Command, 0, 0};
+    run(OneWay, goingWords, endingWords, oneWay, oneWay[1] + endingWords * Cost::Command + Cost::Jump);
+  }
+}
+
+//With the PSP's GE timing, the list words' rule on both GEs (GE::segment(), the render GE's count beside its words,
+//RunEnd's RAM words checked): a list in RAM draws PRIMs from vertices in RAM and in VRAM, checks a bounding box of each
+//(on the GE thread the control pass's check, its vertices' work handed to the render GE as a mark of their memory),
+//loads a palette, starts a transfer among its other words, and CALLs a list in VRAM that draws from both memories and
+//loads a palette too, then
+//RETs; then a Bezier patch and a PRIM too big for the GE thread's ring (drawn by the emulation thread: GeThread's
+//primitiveEnd()), both from RAM, and a JUMP within RAM. The list is queued stalled in the middle of the VRAM list's
+//words, its stall moved to the middle of a stretch of RAM words, then to its end, the program writing beside it all
+//the while and ending as the GE still draws (its busy window still open). With the GE on its thread as without it: the
+//program's time, the kernel's (the GE's done, reach and pipeline times, its busy window and its push), the list's
+//clocks by kind after the fold, and memory once the GE is done. And without the thread its words' clocks in
+//ramClocks[1] are its RAM words' (Cost::Command each) and the refetches into RAM (the RET's, the JUMP's); with "Fast"
+//nothing counted.
+static auto geTimePspWordsThreaded() -> void {
+  using Cost = GE::Cost;
+  constexpr u32 Code = 0x0880'4000, Data = 0x0940'0000, Times = KernelMachine::Results;
+  constexpr u32 VramList = VRAM + 0x10'0000, VramVertices = VRAM + 0x18'0000, Palette = Saved;
+  constexpr u32 Points = Vertices + 0x1000, BigVertices = 0x0960'0000, BigCount = 0xffff, BigSize = 36;
+  constexpr u32 BoxRam = Vertices + 0x2000, BoxVram = VRAM + 0x18'1000;  //(the second on a page nothing draws on)
+  static_assert(BigCount * BigSize > (4u << 20) / 2);
+  struct Outcome {
+    u32 time = 0;
+    u64 cycles = 0, doneAt = 0, reachAt = 0, pipeAt = 0, window[6] = {};
+    f64 ramClocks[4] = {}, allClocks = 0, timedClocks[5] = {};
+    u32 ramWords = 0;
+    std::vector<u8> ram, vram;
+  };
+  auto run = [&](bool threaded, bool psp) -> Outcome {
+    KernelMachine m;
+    if(psp) m.pspTiming();
+    m.system.threadGE(threaded);
+    auto& memory = m.system.memory;
+    auto vertices = [&](u32 at, u32 x) {  //(through, 16-bit x, y, z: a sprite of 8x8 pixels)
+      for(u32 half : {x, 0u, 0u, x + 8, 8u, 0u}) memory.write(2, at, half), at += 2;
+    };
+    vertices(Vertices, 0), vertices(Vertices + 12, 16), vertices(VramVertices, 32), vertices(VramVertices + 12, 48);
+    for(u32 n = 0; n < 16; n++) {  //(the patch's 4x4 points, 16-bit x, y, z, a pixel apart)
+      memory.write(2, Points + n * 6, 64 + n % 4), memory.write(2, Points + n * 6 + 2, n / 4);
+      memory.write(2, Points + n * 6 + 4, 0);
+    }
+    for(u32 n = 0; n < 16; n++) memory.write(4, Palette + n * 4, 0xff00'0000 | n * 0x11'1111);
+    for(u32 n = 0; n < 16; n++) memory.write(4, VRAM + 0x1f'0000 + n * 4, 0xff00'0000 | n * 0x01'0101);
+    for(u32 n = 0; n < 16 * 4; n++) memory.write(4, Image + n * 4, 0xff00'0000 | n * 0x0305'0709);
+    for(u32 n = 0; n < BigCount; n++) {  //(sprites of two pixels square, each its own color, as geThreadBigPrimitive's)
+      u32 at = BigVertices + n * BigSize, sprite = n / 2, far = n & 1 ? 2 : 0;
+      float x = float(sprite % 60 + far), y = float(100 + sprite / 60 % 44 + far);
+      for(float value : {0.0f, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+      memory.write(4, at, 0xff00'0000 | sprite * 0x01'0203), at += 4;
+      for(float value : {0.0f, 0.0f, 1.0f, x, y, 0.0f}) {
+        u32 word;
+        std::memcpy(&word, &value, 4);
+        memory.write(4, at, word), at += 4;
+      }
+    }
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0), list.put(GE::Scissor2, 271 << 10 | 479), list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'0100);  //(through: 16-bit x, y, z)
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.to(GE::VertexAddress, VramVertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    for(u32 at : {BoxRam, BoxVram}) {
+      for(u32 n = 0; n < 8; n++) {  //(a box's corners, 16-bit x, y, z: an 8x8 square)
+        for(u32 half : {n & 1 ? 8u : 0u, n & 2 ? 8u : 0u, 0u}) memory.write(2, at, half), at += 2;
+      }
+    }
+    list.to(GE::VertexAddress, BoxRam), list.put(GE::BoundingBox, 8);
+    list.to(GE::VertexAddress, BoxVram), list.put(GE::BoundingBox, 8);
+    list.to(GE::ClutAddress, Palette), list.put(GE::ClutAddressUpper, Palette >> 8 & 0xf'0000);
+    list.put(GE::ClutFormat, 3 | 0x0f << 8), list.put(GE::ClutLoad, 2);
+    list.put(GE::TransferSource, Image & 0xff'fff0), list.put(GE::TransferSourceWidth, (Image >> 24) << 16 | 16);
+    list.put(GE::TransferSourcePosition, 0);
+    list.put(GE::TransferDestination, 0x1e'0000), list.put(GE::TransferDestinationWidth, 0x04 << 16 | 16);
+    list.put(GE::TransferDestinationPosition, 0);
+    list.put(GE::TransferSize, 15 | 3 << 10), list.put(GE::TransferStart, 1);
+    list.put(GE::Nop);
+    list.to(GE::Call, VramList);
+    list.put(GE::Nop), list.put(GE::Nop);
+    u32 stallRam = list.address;
+    list.put(GE::Nop), list.put(GE::Nop);
+    list.put(GE::PatchPrimitive, 2), list.put(GE::PatchDivision, 1 | 1 << 8);
+    list.to(GE::VertexAddress, Points);
+    list.put(GE::Bezier, 4 | 4 << 8);
+    list.put(GE::VertexType, 0x80'01ff);  //(through: float u, v, 8888 color, a float normal, float x, y, z)
+    list.to(GE::VertexAddress, BigVertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | BigCount);
+    list.to(GE::Jump, ListB);
+    ListWriter back{memory, ListB};
+    back.put(GE::Nop), back.put(GE::Finish), back.put(GE::End);
+    u32 end = back.address;
+    ListWriter called{memory, VramList};
+    called.put(GE::VertexType, 0x80'0100);
+    called.to(GE::VertexAddress, Vertices + 12);
+    called.put(GE::Primitive, GE::Sprites << 16 | 2);
+    u32 stallVram = called.address;
+    called.to(GE::VertexAddress, VramVertices + 12);
+    called.put(GE::Primitive, GE::Sprites << 16 | 2);
+    called.put(GE::ClutAddress, 0x1f'0000), called.put(GE::ClutAddressUpper, 0x04 << 16), called.put(GE::ClutLoad, 2);
+    called.put(GE::Return);
+    Outcome o;
+    o.ramWords = (list.address - ListA) / 4 + (back.address - ListB) / 4;
+    Assembler a{m, Code};
+    a.li(a0, ListA), a.li(a1, stallVram), a.li(a2, 0xffff'ffff), a.li(a3, 0);
+    a.call("sceGeListEnQueue");
+    a.put(addu(s0, v0, zero));
+    wordLoop(a, Data, 64_KiB, 1, true);
+    a.put(addu(a0, s0, zero)), a.li(a1, stallRam);
+    a.call("sceGeListUpdateStallAddr");
+    wordLoop(a, Data, 64_KiB, 1, true);
+    a.put(addu(a0, s0, zero)), a.li(a1, end);
+    a.call("sceGeListUpdateStallAddr");
+    wordLoop(a, Data, 64_KiB, 1, true);
+    a.call("sceKernelGetSystemTimeLow");
+    a.li(t4, Times), a.put(sw(v0, 0, t4));
+    a.call("sceKernelExitGame");
+    m.runProgram(Code, true, Kernel::CPUFrequency);
+    CHECK(m.kernel.exited, true);
+    auto& k = m.kernel;
+    k.geFold(true);
+    o.time = memory.read(4, Times);
+    o.cycles = k.cycles, o.doneAt = k.geDoneAt, o.reachAt = k.geReachAt, o.pipeAt = k.gePipeAt;
+    auto& w = k.geWindow;
+    o.window[0] = w.passed, o.window[1] = w.instructions, o.window[2] = w.fills, o.window[3] = w.writebacks;
+    o.window[4] = w.uncached, o.window[5] = w.pushed;
+    for(u32 kind : range(4)) o.ramClocks[kind] = m.system.ge.ramClocks[kind];
+    o.allClocks = m.system.ge.allClocks;
+    auto& timed = m.system.timedGE();
+    for(u32 kind : range(4)) o.timedClocks[kind] = timed.ramClocks[kind];
+    o.timedClocks[4] = timed.allClocks;
+    timed.settleAll();
+    o.ram.assign(memory.ram.begin(), memory.ram.end()), o.vram.assign(memory.vram.begin(), memory.vram.end());
+    return o;
+  };
+  Outcome plain = run(false, true), threaded = run(true, true);
+  Outcome fast = [&] {
+    FastTimed fastTimed;  //("Fast"'s machine, which counts nothing)
+    return run(false, false);
+  }();
+  CHECK(plain.time, threaded.time);
+  CHECK(plain.cycles, threaded.cycles);
+  CHECK(plain.doneAt, threaded.doneAt);
+  CHECK(plain.reachAt, threaded.reachAt);
+  CHECK(plain.pipeAt, threaded.pipeAt);
+  for(u32 n : range(6)) CHECK(plain.window[n], threaded.window[n]);
+  for(u32 kind : range(4)) CHECK(plain.ramClocks[kind] == threaded.ramClocks[kind], true);
+  CHECK(plain.allClocks == threaded.allClocks, true);
+  for(u32 n : range(5)) CHECK(plain.timedClocks[n] == threaded.timedClocks[n], true);
+  CHECK(plain.ram == threaded.ram, true);
+  CHECK(plain.vram == threaded.vram, true);
+  f64 words = plain.ramWords * Cost::Command + Cost::Call + Cost::Jump;  //(the RET's refetch, the JUMP's)
+  if(std::abs(plain.ramClocks[1] - words) > 1e-9 * words) {
+    std::printf("  ramClocks[1] %.6f, the RAM words' and refetches' %.6f\n", plain.ramClocks[1], words);
+  }
+  CHECK(std::abs(plain.ramClocks[1] - words) <= 1e-9 * words, true);
+  CHECK(plain.ramClocks[0] > 0 && plain.allClocks > plain.ramClocks[0] + plain.ramClocks[1], true);
+  CHECK(plain.doneAt > plain.cycles, true);  //(the GE still drawing as the program ended)
+  CHECK(plain.window[5] > 0, true);  //(the writes beside the list pushed it back)
+  for(u32 kind : range(4)) CHECK(fast.ramClocks[kind], 0.0);
+  CHECK(fast.allClocks, 0.0);
 }
 
 //With the PSP's GE timing, a state saved while the CPU writes beside a list (its caches holding lines, the GE's busy
@@ -5877,6 +6209,11 @@ auto geTests() -> Tests {
     {"ge time, the PSP's: the CPU's caches", geTimePspCaches},
     {"ge time, the PSP's: the CPU beside the GE", geTimePspBeside},
     {"ge time, the PSP's: the CPU beside the GE, by its rule", geTimePspContendRule},
+    {"ge time, the PSP's: the CPU beside the GE, its stalls in its time", geTimePspStalls},
+    {"ge time, the PSP's: the CPU beside the GE, the hybrid's two parts and its cap", geTimePspHybrid},
+    {"ge time, the PSP's: the CPU beside the GE, the list's clocks by where they read", geTimePspClassified},
+    {"ge time, the PSP's, with the GE on its thread: the list's words by where they're read, as without it",
+     geTimePspWordsThreaded},
     {"ge time, the PSP's: a state saved with the CPU beside the GE", geTimePspBesideState},
     {"ge time, the PSP's: a state keeps the list's clocks by kind, loaded with the GE on its thread or not",
      geTimePspStateClocks},

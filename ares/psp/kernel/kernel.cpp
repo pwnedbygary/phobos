@@ -1005,6 +1005,8 @@ auto Kernel::power() -> void {
   geFinishDue = false;
   geSignalDue = false;
   geWindow = {}, geBusyCycles = geBusyLines = 0;
+  geCapped = geSkipsRefused = geRefusedInstructions = geRefusedFrom = geRefusedUntil = geInstructions = 0;
+  geRefusing = false;
   for(auto& seen : geCacheSeen) seen = 0;  //(the CPU's caches start afresh with the program: Allegrex::power())
   startTime = u64(std::time(nullptr)) * 1'000'000;
   trampoline();

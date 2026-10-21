@@ -7,7 +7,9 @@ the back end's ("F."/"B." before the term). Besides: "S" as a list starts (GE::C
 callbacks" as one is queued, "U" as a stall address is moved, and "O path" as the program creates a file (psp-measure
 writes each test's results so: what ends one test and starts the next).
 
-Its places follow master since #277 (part 111), for the GE thread Off (option "GE Thread", its default): with it On,
+Its places follow master since #277 (part 111) and the Super Monkey Ball refit (the vertices' terms beside their
+charge by memory in GE::oweVertices(), the words' beside pipeStop()'s two counts in Kernel::geTime()), for the GE
+thread Off (option "GE Thread", its default): with it On,
 Kernel::geTime() and geOwe() take the thread's branches, so no "R" or "S" line is written, and the emulation thread and
 the GE thread both add to the counts, unguarded.
 
@@ -113,8 +115,10 @@ edit("ares/psp/ge/draw.cpp", '''  pipe.pending += pipe.vertices + Cost::Prim;
   pipe.vertices = 0;
   geterms::add("F", "Prim", 1);''')
 edit("ares/psp/ge/draw.cpp", '''  pipe.vertices += work;
-  ramRead(0, work);''', '''  pipe.vertices += work;
-  ramRead(0, work);
+  if(ram) ramRead(0, work);
+  else otherWork(work);''', '''  pipe.vertices += work;
+  if(ram) ramRead(0, work);
+  else otherWork(work);
   if(format.indexFormat) geterms::add("F", "IndexedVertex", count);
   else if(format.size == 3) geterms::add("F", "Vertex3", count);
   else if(format.size * Cost::VertexByte < Cost::VertexFloor) geterms::add("F", "VertexFloor", count);
@@ -151,10 +155,10 @@ edit("ares/psp/ge/curves.cpp", '''    pipe.vertices = f64(columns * rows) * Cost
     drawVertices(drawn, format, vertices, columns * 2);
     if(culls && owedPixels == pixels) pipe = kept, geterms::counts() = termsKept;''')
 edit("ares/psp/kernel/ge.cpp", '''  if(gePspTiming) {
-    ge.pipeStop(commands);''', '''  if(gePspTiming) {
+    ge.pipeStop(commands, ge.ramWordsAt(commands));''', '''  if(gePspTiming) {
     geterms::add("F", "Command", f64(commands));
     geterms::run();
-    ge.pipeStop(commands);''')
+    ge.pipeStop(commands, ge.ramWordsAt(commands));''')
 edit("ares/psp/kernel/ge.cpp", '''    ge.pipeStart(), ge.pipe.front = clocks;''',
      '''    ge.pipeStart(), ge.pipe.front = clocks;
     geterms::line("S", "");''')

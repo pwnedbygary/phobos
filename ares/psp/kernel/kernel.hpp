@@ -385,6 +385,8 @@ struct Kernel {
   static constexpr u32 SpinTurns = 4, SpinLongest = 2048, SpinMargin = 2, SpinWaitMost = 4096;
   auto spinTurn() -> void;
   auto spinSkip() -> void;
+  auto spinRefused(u64 skipped) -> void;
+  auto spinRefusalsEnd() -> void;
   auto spinProve(SpinShadow& shadow) -> bool;
   auto spinCall(SpinShadow& shadow, u32 code) -> bool;
   auto spinStorable(u32 address, u32 size) -> bool;
@@ -1143,19 +1145,34 @@ struct Kernel {
   //read in, wrote back and reached uncached, and the cycles it has pushed the GE back; and the CPU's caches' counts as
   //last seen (Allegrex::Cache: the data cache's lines read in, written back and uncached accesses, the instruction
   //cache's lines read in). Then, for the runner's report alone (not saved), the cycles the GE was busy beside the CPU
-  //since power on and the lines moved in them. (Mutable, as is gePipeAt: with the GE on its thread, geFold() takes the
-  //stretches that waited.)
+  //since power on and the lines moved in them; the windows whose push has reached the cap (GE::Cost::Cap), each once
+  //(GeWindow::capped); the spin skips refused because the cap binds at either end of the turns they would skip
+  //(spinRefused()) and the instructions run in their place, from each refusal till the next try or the spin's end but
+  //no further than the turns that skip would have skipped, each once (from geRefusedFrom to at most geRefusedUntil
+  //while geRefusing, by geInstructions' count; geRefusedRun() counts one still open to now); and the CPU's
+  //instructions since power on, every stretch's (geContend()). (Mutable, as is gePipeAt: with the GE on its thread,
+  //geFold() takes the stretches that waited.)
   struct GeWindow {
     u64 passed = 0, instructions = 0, fills = 0, writebacks = 0, uncached = 0, pushed = 0;
+    u64 capped = 0;  //(0 or 1; a word, not a bool, so that a window has no padding: tests compare two byte for byte)
   };
   mutable GeWindow geWindow;
   mutable u64 geCacheSeen[4] = {};
   mutable f64 geBusyCycles = 0, geBusyLines = 0;
+  mutable u64 geCapped = 0, geSkipsRefused = 0, geRefusedInstructions = 0, geRefusedFrom = 0, geRefusedUntil = 0;
+  mutable u64 geInstructions = 0;
+  mutable bool geRefusing = false;
+  auto geRefusedRun() const -> u64 {
+    return geRefusedInstructions + (geRefusing ? std::min(geInstructions, geRefusedUntil) - geRefusedFrom : 0);
+  }
   auto geContend(u64 from, u64 to, u64 instructions) -> void;
   auto geContendThreaded(u64 from, u64 to, u64 instructions) -> void;
   auto geContendNow(u64 from, u64 to, u64 instructions, const u64 (&counts)[4], bool signal, u32 cpu) const -> void;
+  auto geContendTime(const GeWindow& window) const -> f64;
+  auto geContendOwing(const GeWindow& window, u32 cpu) const -> f64;
   auto geContendDue(const GeWindow& window, u32 cpu) const -> u64;
   auto geContendBound(const GeWindow& window) const -> bool;
+  auto geContendCapped(const GeWindow& window) const -> bool;
   auto geSeeCaches() -> void;
   auto geCacheCounts(u64 (&counts)[4]) const -> void;
   //With the GE on its thread (GeRun, below), a stretch ended while runs handed over aren't folded yet: kept, with its
@@ -1168,6 +1185,8 @@ struct Kernel {
   //was, the stretches after it left out (GeLimit::stretches). No more than GeStretchesKept wait: past that many the
   //oldest are folded with the run they wait on, the GE thread waited for to count it, as runs past GeThread::RunsKept
   //are (a list left at its stall address, nothing due that folds its runs, while the program makes call after call).
+  //Whatever else geContendNow() comes to read must likewise be carried with the stretch, or set only after a fold of
+  //every stretch waiting: the stalls' and the cap's are the window's sums and the list's clocks by kind, both so.
   struct GeStretch {
     u64 from, to, instructions;
     u64 caches[4] = {};

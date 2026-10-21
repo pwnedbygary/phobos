@@ -60,14 +60,9 @@ ROWS = [
 #The owner's accepted exceptions: a judged scene's frame that may miss the bar one way without failing the gate, with
 #the reason, the date and his words, and a limit past which it fails all the same, so it can't get worse unseen. Any
 #other miss of that frame (the other way) fails it.
-EXCEPTED = {
-    "ULES00364-1": ("too fast", -0.21,
-                    "accepted by the owner on 2026-10-18 (21:57-22:02) as a known exception for now, then -29.6%: the "
-                    "CPU beside the GE, held at none (part 106; his words: \"fixing SMBA is the priority even though we "
-                    "are moving on past it\"); -20.6% since the CPU's traffic with RAM is counted (part 113), the rest "
-                    "the GE's own reads of RAM in lists like its small trilinear strips (round 10's list H), limited "
-                    "at -21%"),
-}
+#(None now: Super Monkey Ball's, accepted on 2026-10-18 at -29.6% and limited at -21% by part 113, went once the
+#refit's hybrid form put its frame within the bar.)
+EXCEPTED = {}
 #Capture headers whose clocks aren't the scene's: read as the capture began, before the game set its own.
 CLOCKS_NOTE = {
     "ULUS10186-boot2": "the capture's header has 333/166, read before the game set its clocks; the copyright screen "

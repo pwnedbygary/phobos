@@ -24,12 +24,11 @@ xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS
 `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another folder), and
 `tests/psp/measured6.cpp` compares the core's run of round 6 with them.
 
-Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8`, `PSP_GE_ROUND9`, `PSP_GE_ROUND10` or
-`PSP_GE_ROUND10b` set empty, or, without `run-tests.sh`, unset), every group comparing with them says so as a skip of
-`ge-round3`, `ge-round6`, `ge-round8`, `ge-round9`, `ge-round10` or `ge-round10b`; where `PHOBOS_TESTS_REQUIRE` names
-it, as CI's does, that's a failure instead. Where one of rounds 6 to 10b's variables names a folder without a file a
-group compares with, that group fails, required or not: the PSP's file is missing. Round 10c's files have no variable
-or requirement yet: no test reads them.
+Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8`, `PSP_GE_ROUND9`, `PSP_GE_ROUND10`,
+`PSP_GE_ROUND10b` or `PSP_GE_ROUND10c` set empty, or, without `run-tests.sh`, unset), every group comparing with them
+says so as a skip of `ge-round3`, `ge-round6`, `ge-round8`, `ge-round9`, `ge-round10`, `ge-round10b` or `ge-round10c`;
+where `PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead. Where one of rounds 6 to 10c's variables
+names a folder without a file a group compares with, that group fails, required or not: the PSP's file is missing.
 
 ## `ge-round8/`
 
@@ -70,8 +69,9 @@ the courtyard Friday's -1 is of) and `ULUS10186-r9-1` (Activision Hits' 3D menu 
 interrupts and times, the disc ID, title and thread names; no game code or data), packed with xz (`xz -9e`);
 `SHA256SUMS` holds the unpacked files' sums. `tools/psp-ge-profile/decoder/gate.py` sets them beside Phobos's profiles
 of the same scenes with the GE timing "PSP" (the owner's bar since 2026-10-18: each judged scene's whole frame within
-15% of the PSP's, none more than 15% too slow, each list reported; Super Monkey Ball's frame, too fast, his accepted
-exception for now, in `gate.py`'s `EXCEPTED` with his words; part 106 has the table and how the profiles are made).
+15% of the PSP's, none more than 15% too slow, each list reported; Super Monkey Ball's frame, too fast, was his
+accepted exception till the Super Monkey Ball refit put it within the bar; part 106 has the table and how the profiles
+are made).
 
 ## `ge-round10/`
 
@@ -109,8 +109,9 @@ Hits' lists (30 KB)"), run on the same PSP on the evening of 2026-10-19 (pulled 
 records; `time-contention4`'s runs two words longer, as `time-contention`'s), at 222/111 and 333/166 MHz; nothing
 stalled. He ran `9bcaff348`'s `pspmeasure.elf` (its EBOOT `243aa27d…`), the one in `tests/psp/programs`, its arrays on
 1 KiB boundaries. Part 114 says what each test is for and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`,
-21 KB as 5.3 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). No test reads them yet: they're
-for Super Monkey Ball's refit and Activision Hits' menu's lists (part 114).
+21 KB as 5.3 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). `tests/psp/run-tests.sh` unpacks
+them (`PSP_GE_ROUND10c`) and `tests/psp/measured8.cpp` compares the core's run of `time-contention4` with them (Super
+Monkey Ball's refit); the other four are for Activision Hits' menu's lists (part 114).
 
 ## `ge-reruns-round10/`
 

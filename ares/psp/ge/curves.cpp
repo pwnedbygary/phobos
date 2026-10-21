@@ -167,6 +167,7 @@ auto GE::patch(bool spline, u32 argument) -> void {
   if(!drawing.deferring) settle();  //(as primitive())
   auto format = vertexFormat();
   u32 ucount = argument & 0xff, vcount = argument >> 8 & 0xff;
+  u32 own = vertexAddress;  //(where the surface's own start reads, as a PRIM's: pipePrimitive())
   readVertices(ucount * vcount, format);
   if(!format.positionFormat) return;
   u32 divisionsU = std::max(commands[PatchDivision] & 0x7f, 1u);
@@ -248,6 +249,10 @@ auto GE::patch(bool spline, u32 argument) -> void {
     //(BEZIER's or SPLINE's own work and the patch's go first, then its vertices' are shared out among the primitives
     //it may draw; one that PATCH_CULL_ENABLE leaves undrawn takes its own work alone: Cost, Pipe)
     pipe.pending += pipe.vertices + Cost::Prim + Cost::Patch, pipe.vertices = 0;
+    //(its own start counted where its points are; Cost::Patch and PatchVertex, the surface's work making its vertices,
+    //in neither, as the contention fit's shares leave them out: Cost)
+    if(readsRam(own)) ramRead(0, Cost::Prim);
+    else otherWork(Cost::Prim);
     bool culls = commands[PatchCullEnable] & 1;
     u64 pixels = owedPixels;
     Pipe kept;

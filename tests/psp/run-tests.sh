@@ -7,7 +7,7 @@
 #PSP_AUTOTESTS: a pspautotests checkout, whose sample files atrac.cpp and mp3.cpp decode with FFmpeg; PHOBOS_JOBS:
 #compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here,
 #a group that needs it failing rather than skipping, as vulkan,programs,ge-round3,ge-round6,ge-round8,ge-round9,
-#ge-round10,ge-round10b
+#ge-round10,ge-round10b,ge-round10c
 #(tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities); PHOBOS_TESTS_REPORT: a file for each
 #group's result, pass, FAIL or skip with why, a tab between)
 set -euo pipefail
@@ -18,8 +18,9 @@ export PSP_TEST_PROGRAMS=${PSP_TEST_PROGRAMS-$ROOT/tests/psp/programs}
 export PSP_GE_RESULTS=${PSP_GE_RESULTS-$ROOT/tests/psp/measurements/ge-round3}
 OUT=${TMPDIR:-/tmp}/phobos-psp-tests
 source "$ROOT/tests/objects.sh"
-#rounds 6, 8, 9, 10 and 10b of the PSP's GE measurements (packed with xz, as tests/allegrex/measured's are), each
-#unpacked once into this checkout's folder, unless PSP_GE_ROUND6 (8, 9, 10, 10b) names another folder (empty: none);
+#rounds 6, 8, 9, 10, 10b and 10c of the PSP's GE measurements (packed with xz, as tests/allegrex/measured's are), each
+#unpacked once into this checkout's folder, unless PSP_GE_ROUND6 (8, 9, 10, 10b, 10c) names another folder (empty:
+#none);
 #each file through a temporary one, so one cut short isn't kept, and all of them again if they don't match SHA256SUMS
 #(another commit's, after a checkout, say)
 unpackRound() {  #round [all]
@@ -41,7 +42,7 @@ roundSums() {  #round
   if command -v sha256sum > /dev/null; then sum=(sha256sum); fi
   (cd "$BUILD/ge-round$1" && "${sum[@]}" -c "$HERE/measurements/ge-round$1/SHA256SUMS") > "$BUILD/ge-round$1.sums" 2>&1
 }
-for round in 6 8 9 10 10b; do
+for round in 6 8 9 10 10b 10c; do
   variable=PSP_GE_ROUND$round
   [[ -n ${!variable+set} ]] && continue
   export "$variable=$BUILD/ge-round$round"

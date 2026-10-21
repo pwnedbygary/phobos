@@ -847,25 +847,40 @@ struct GE {
     //sceGeListUpdateStallAddr's about 510 (ge-statuses: nine of them took the PSP 21 microseconds more than the core
     //at 222 MHz).
     static constexpr u64 EnqueueCycles = 5200, StallCycles = 510;
-    //The CPU beside the GE (Kernel::geContend()): a list's reads of RAM, of each kind [the front end's vertices, its
-    //words, the back end's texels, transfers], make its work take 1 + Contention[kind] x that kind's share of its
-    //clocks x u as long, u the CPU's traffic with RAM while the GE is busy as a share of a thread streaming RAM flat
-    //out's: the lines its caches move (Allegrex::Cache: each data or instruction line read in one, each written back
-    //WritebackLine of one, each uncached access UncachedLine) over the time a PSP's CPU would take for its
-    //instructions and their stalls (InstructionCycles an instruction, FillCycles a line read in, WritebackCycles a line
-    //written back, UncachedCycles an uncached access) or the time passed if longer, against streaming's StreamLines
-    //lines a CPU cycle. Round 8's cpu-contention: a thread streaming RAM beside the GE made its RAM-textured drawing
-    //2.12 times as long; round 10's time-contention and its patterns' pace, round 10b's polling, work before the list
-    //and a writer beside it (contention11.py, docs/psp-core.md part 113). The PSP's GE draws beside a CPU busy with
-    //arithmetic, the cache or polling as fast as alone: a loop waiting on a cached word moves no lines.
-    static constexpr f64 Contention[4] = {0.34, 0.27, 1.16, 0.57};
-    static constexpr f64 StreamLines = 1 / 164.4, WritebackLine = 0, UncachedLine = 0.2;
+    //The CPU beside the GE (Kernel::geContend()): a list's reads of RAM, of each kind [the front end's vertices (with
+    //their PRIM's own start), its words (with a JUMP's, CALL's or RET's refetch), the back end's texels, transfers],
+    //each counted where it reads (GE::ramRead(): one from VRAM is other work), are weighed by u, the CPU's traffic with
+    //RAM while the GE is busy as a share of a thread streaming RAM flat out's: the lines its caches move
+    //(Allegrex::Cache: each data or instruction line read in one, each written back WritebackLine of one, each uncached
+    //access UncachedLine) over the time a PSP's CPU would take for its instructions and their stalls (InstructionCycles
+    //an instruction, FillCycles a line read in, WritebackCycles a line written back, UncachedCycles an uncached access,
+    //and the more each line stalls it beside the busy GE, StallFill, StallWriteback and StallUncached cycles of each
+    //kind weighed by its share of the list's clocks) or the time passed if longer, against streaming's StreamLines
+    //lines a CPU cycle. The front end's two kinds make its work take 1 + a as long, a the sum of Contention[kind] x
+    //its share of the list's clocks x u; the back end's two cost it a fixed time a line, b the same sum over them: the
+    //busy window owes the GE a / (1 + a) + b of its time, at most Cap of it (a list at most 4 times as long; the PSP's
+    //longest beside its CPU, 3.2 times). The hybrid form of the Super Monkey Ball refit, fitted by
+    //tools/psp-measure/contention12.py (its README's command) on the PSP's rounds 10, 10b and 10c, never on a game's
+    //frames: round 10's lists beside its CPU's patterns, round 10b's polling, work before the list and a writer beside
+    //it, round 10c's list H beside three patterns, its vertices in RAM and in VRAM; the line weights fitted with them,
+    //the stalls from the CPU's turns beside each list, the measuring loop's time checks a term of their own. The PSP's
+    //GE draws beside a CPU busy with arithmetic, the cache or polling as fast as alone: a loop waiting on a cached word
+    //moves no lines.
+    static constexpr f64 Contention[4] = {0.773, 0.720, 0.683, 0.487};
+    static constexpr f64 StreamLines = 1 / 164.4, WritebackLine = 0.45, UncachedLine = 0.85, Cap = 0.75;
     static constexpr f64 InstructionCycles = 1.41, FillCycles = 79, WritebackCycles = 9, UncachedCycles = 40;
+    static constexpr f64 StallFill[4] = {207, 213, 66, 68}, StallWriteback[4] = {227, 264, 64, 82};
+    static constexpr f64 StallUncached[4] = {284, 295, 106, 110};
     static constexpr bool Contended = Contention[0] > 0 || Contention[1] > 0 || Contention[2] > 0 || Contention[3] > 0;
   };
   //The list's clocks so far that read RAM, by Cost::Contention's kinds, and all of them (pipeStart() clears them; with
-  //Cost::Contended alone).
+  //Cost::Contended alone; every call with the PSP's timing, pspTiming, so that "Fast" counts none).
   f64 ramClocks[4] = {}, allClocks = 0;
+  //Whether a list word, a vertex or a PRIM at address reads RAM: its physical address outside VRAM's window.
+  static auto readsRam(u32 address) -> bool {
+    u32 physical = address & 0x1fff'ffff;
+    return physical < Memory::VRAMBase || physical >= Memory::VRAMBase + Memory::VRAMWindow;
+  }
   auto ramRead(u32 kind, f64 clocks) -> void {
     if constexpr(Cost::Contended) ramClocks[kind] += clocks, allClocks += clocks;
   }
@@ -881,7 +896,8 @@ struct GE {
     f64 front = 0, back = 0;  //clocks from Kernel::gePipeAt: the front end done with its last item, the back end with
                               //all of them
     f64 pending = 0;          //the front end's work since its last item (words, state, a PRIM's own): with the next
-    u64 words = 0;            //the run's words charged so far (run()'s count: the rest are the next item's)
+    u64 words = 0;            //the run's words charged so far (run()'s count: the rest are the next item's),
+    u64 ramWords = 0;         //and of them those that read RAM (ramWordsAt())
     f64 vertices = 0;         //a PRIM's vertices' work, shared out among its primitives as they come,
     u32 left = 0;             //as many as it may still draw
     static constexpr u32 Room = 128;  //(more items than Cost::Queue's entries can hold, each taking one at least)
@@ -891,9 +907,24 @@ struct GE {
   } pipe;
   bool pspTiming = false;  //the option "GE Timing" "PSP", as the kernel runs the GE (Kernel::geRun())
   const u64* wordsRun = nullptr;  //the words run() has run (its ran), while it runs
+  //With the PSP's timing, the run's words that read RAM (readsRam(): by each word's own address; one from no list
+  //never does), kept a segment at a time, a stretch of words in one memory: those of its finished segments, the run's
+  //count where the one under way began, and whether it reads RAM. The kernel's GE begins a segment where its list
+  //enters a page of the other memory (runList()'s page test: VRAM's window is whole pages), the render GE as it takes
+  //each word (GeThread's replay); so at every charge, on both, the RAM words so far are the finished segments' and,
+  //if it reads RAM, the current one's so far.
+  u64 segmentsRam = 0, segmentFrom = 0;
+  bool segmentRam = false;
+  auto segmentsStart() -> void { segmentsRam = segmentFrom = 0, segmentRam = false; }
+  auto segment(bool ram, u64 at) -> void {  //(at: the run's words before the one the segment begins with)
+    if(ram == segmentRam) return;
+    if(segmentRam) segmentsRam += at - segmentFrom;
+    segmentFrom = at, segmentRam = ram;
+  }
+  auto ramWordsAt(u64 words) const -> u64 { return segmentsRam + (segmentRam ? words - segmentFrom : 0); }
   auto pipeStart() -> void {
     pipe.front = pipe.back = pipe.pending = pipe.vertices = pipe.entries = 0;
-    pipe.left = pipe.first = pipe.count = 0, pipe.words = 0;
+    pipe.left = pipe.first = pipe.count = 0, pipe.words = pipe.ramWords = 0;
     if constexpr(Cost::Contended) ramClocks[0] = ramClocks[1] = ramClocks[2] = ramClocks[3] = allClocks = 0;
   }
   auto pipeFront(f64 clocks) -> void { if(pspTiming) pipe.pending += clocks; }
@@ -901,12 +932,14 @@ struct GE {
   auto pipePrimitive(u32 kind, u32 count) -> void;
   auto pipeReach() const -> f64 { return pipe.front + pipe.pending + pipe.vertices; }  //the front end's, all of it
   auto pipeTime() const -> f64 { return std::max(pipeReach(), pipe.back); }
-  //A run's end (words: run()'s count): the front end's work in hand, done; what it has handed on goes on being drawn,
-  //into the list's next run (Kernel::geResume()).
-  auto pipeStop(u64 words) -> void {
-    ramRead(1, f64(words - pipe.words) * Cost::Command);  //(the words read since the last item: a list of NOPs' all)
+  //A run's end (words: run()'s count, ramWords those of them that read RAM): the front end's work in hand, done; what
+  //it has handed on goes on being drawn, into the list's next run (Kernel::geResume()).
+  auto pipeStop(u64 words, u64 ramWords) -> void {
+    //(the words read since the last item, a list of NOPs' all: from RAM, and from VRAM or no list)
+    ramRead(1, f64(ramWords - pipe.ramWords) * Cost::Command);
+    otherWork(f64(words - pipe.words - (ramWords - pipe.ramWords)) * Cost::Command);
     pipe.front += pipe.pending + f64(words - pipe.words) * Cost::Command + pipe.vertices;
-    pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
+    pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = pipe.ramWords = 0;
   }
   //Its times moved on by clocks: what was done by then gone from the queue.
   auto pipeShift(f64 clocks) -> void {
@@ -937,7 +970,8 @@ struct GE {
                     f64 entries, bool sprite = false) -> void;
   auto texelClocks(const Look& look, u64 pixels, f64 texels, const TexelsRead& box, bool sprite) -> f64;
   auto pipeDrain() -> void;  //draw.cpp
-  auto oweVertices(u32 count, const VertexFormat& format) -> void;  //(readVertices()'s vertices, as they come in)
+  //(readVertices()'s vertices, as they come in, from their first or, through indices, their base address)
+  auto oweVertices(u32 count, const VertexFormat& format, u32 from) -> void;
   //The GE's reciprocal (draw.cpp's geReciprocal()), and one of its chords' start and slope, for the tests.
   static auto reciprocal(float x) -> float;
   static auto reciprocalChord(u32 chord) -> std::pair<s32, s32>;

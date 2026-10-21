@@ -1147,7 +1147,7 @@ auto Kernel::serialize(serializer& s) -> bool {
       //(more items than the rest of the state holds: a state cut short, or read out of step, refused unread)
       if(u64(count) * 2 * sizeof(f64) > s.capacity() - s.size()) check(false), count = 0;
       pipe.first = 0, pipe.count = 0, pipe.entries = 0;
-      pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
+      pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = pipe.ramWords = 0;
     }
     auto dropOldest = [&] {
       pipe.entries -= pipe.items[pipe.first].entries;
@@ -1170,9 +1170,16 @@ auto Kernel::serialize(serializer& s) -> bool {
   //hold (Allegrex::Cache) and the counts they made that the window hasn't seen yet, and the list's clocks so far that
   //read RAM, by kind, and all of them (layout 35 on: an older state's window starts afresh, with the caches empty).
   //(The clocks the timed GE's: with the GE on its thread, the render GE's, which the kernel's GE keeps a copy of as the
-  //runs folded leave them: Kernel::geFold().)
+  //runs folded leave them: Kernel::geFold().) Those clocks count a PRIM's own start and a JUMP's, CALL's or RET's
+  //refetch too, each in its kind, and what's read from VRAM as other work (GE::ramRead()), since the Super Monkey Ball
+  //refit, still layout 35: a state of it from an earlier build loads, its running list's shares a little off till the
+  //next list starts (GE::pipeStart() clears them). A new layout would change every state's number, "Fast"'s too,
+  //against master's, for nothing a state holds. The runner's report counts none of it: a window loaded isn't marked
+  //capped (GeWindow::capped, cleared), and the turns run in place of a skip refused before the load are counted only
+  //to it (spinRefusalsEnd()).
   auto& data = cpu.dataCache;
   auto& code = cpu.instructionCache;
+  if(s.reading()) spinRefusalsEnd();
   if(s.reading() && stateLayout < 35) {
     geWindow = {};
     for(auto* cache : {&data, &code}) {
@@ -1185,6 +1192,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   } else {
     auto& w = geWindow;
     s(w.passed), s(w.instructions), s(w.fills), s(w.writebacks), s(w.uncached), s(w.pushed);
+    if(s.reading()) w.capped = 0;
     s(data.recent), s(data.older), s(code.recent), s(code.older);
     u64 unseen[4] = {data.fills - geCacheSeen[0], data.writebacks - geCacheSeen[1], data.uncached - geCacheSeen[2],
                      code.fills - geCacheSeen[3]};
