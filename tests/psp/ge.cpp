@@ -3089,26 +3089,37 @@ static auto geTimePspHybrid() -> void {
 
 //With the PSP's GE timing, which of a list's front end's clocks read RAM (GE::ramClocks, GE::readsRam()), in one run:
 //a list in RAM draws a PRIM from vertices in RAM (their clocks and the PRIM's own start, Cost::Prim, in ramClocks[0])
-//and one from vertices in VRAM (theirs and its own in allClocks alone), CALLs a list in VRAM (Cost::Call in allClocks
-//alone: the list fetched afresh from VRAM) whose RET comes back into RAM (Cost::Call in ramClocks[1]), and JUMPs into
-//VRAM (Cost::Jump in allClocks alone) and from there back into RAM (in ramClocks[1]): its words, each by where it was
-//read, those from RAM Cost::Command in ramClocks[1], those from VRAM in allClocks alone. Nothing else (its PRIMs draw
-//no pixel); and with "Fast", nothing at all.
+//and one from vertices in VRAM (theirs and its own in allClocks alone), a BEZIER from control points in RAM and one
+//from points in VRAM as those PRIMs (its points' clocks and its own start, Cost::Prim, where its points are;
+//Cost::Patch and PatchVertex, the surface's work making its vertices, in neither), CALLs a list in VRAM (Cost::Call in
+//allClocks alone: the list fetched afresh from VRAM) whose RET comes back into RAM (Cost::Call in ramClocks[1]), and
+//JUMPs into VRAM (Cost::Jump in allClocks alone) and from there back into RAM (in ramClocks[1]): its words, each by
+//where it was read, those from RAM Cost::Command in ramClocks[1], those from VRAM in allClocks alone. Nothing else
+//(its PRIMs and surfaces draw no pixel); and with "Fast", nothing at all. Then a run one way: a list in RAM JUMPs into
+//VRAM and ends there, the refetch counted where the list goes on (Cost::Jump in allClocks alone), not where the JUMP's
+//word was, which the round trips above can't tell apart (each trip's two refetches would swap memories).
 static auto geTimePspClassified() -> void {
   using Cost = GE::Cost;
-  constexpr u32 VramList = VRAM + 0x10'0000, VramBlock = VRAM + 0x10'2000, VramVertices = VRAM + 0x18'0000;
+  constexpr u32 VramList = VRAM + 0x10'0000, VramBlock = VRAM + 0x10'2000, VramEnd = VRAM + 0x10'4000;
+  constexpr u32 VramVertices = VRAM + 0x18'0000, OneWay = ListA + 0x1000;
+  constexpr u32 Across = 4, Down = 4;  //(each BEZIER's control points, at 0,0,0 as the PRIMs' vertices)
   for(bool psp : {true, false}) {
     System s;
     s.threadGE(false);  //(run by calling the GE directly)
     s.ge.pspTiming = psp;
     auto& memory = s.memory;
-    for(u32 at : {Vertices, VramVertices}) for(u32 n = 0; n < 6; n++) memory.write(2, at + n * 2, 0);
+    for(u32 at : {Vertices, VramVertices}) for(u32 n = 0; n < Across * Down * 3; n++) memory.write(2, at + n * 2, 0);
     ListWriter list{memory, ListA};
     list.put(GE::VertexType, 0x80'0100);  //(through: 16-bit x, y, z, 6 bytes a vertex; two at 0,0,0: no pixel)
     list.to(GE::VertexAddress, Vertices);
     list.put(GE::Primitive, GE::Sprites << 16 | 2);
     list.to(GE::VertexAddress, VramVertices);
     list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::PatchPrimitive, 0), list.put(GE::PatchDivision, 1 | 1 << 8);  //(triangles, of 2 x 2 vertices made)
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Bezier, Across | Down << 8);
+    list.to(GE::VertexAddress, VramVertices);
+    list.put(GE::Bezier, Across | Down << 8);
     list.to(GE::Call, VramList);
     list.to(GE::Jump, VramBlock);
     ListWriter back{memory, ListB};
@@ -3119,29 +3130,40 @@ static auto geTimePspClassified() -> void {
     ListWriter block{memory, VramBlock};
     block.put(GE::Nop), block.to(GE::Jump, ListB);
     u32 vramWords = (called.address - VramList) / 4 + (block.address - VramBlock) / 4;
-    s.ge.pipeStart();
-    s.ge.list = {}, s.ge.list.address = ListA;
-    u64 ran = 0;
-    CHECK(u32(s.ge.run(1000, ran)), u32(GE::Stop::Finished));
-    CHECK(ran, u64(ramWords + vramWords));
-    CHECK(s.ge.ramWordsAt(ran), psp ? u64(ramWords) : 0u);
-    if(psp) s.ge.pipeStop(ran, s.ge.ramWordsAt(ran));
-    if(!psp) {
-      CHECK(s.ge.ramClocks[0] == 0 && s.ge.ramClocks[1] == 0 && s.ge.allClocks == 0, true);
-      continue;
-    }
-    f64 vertices = 2 * std::max(Cost::VertexFloor, 6 * Cost::VertexByte);
-    f64 ram[4] = {vertices + Cost::Prim, ramWords * Cost::Command + Cost::Call + Cost::Jump, 0, 0};
-    f64 all = ram[0] + ram[1] + vertices + Cost::Prim + vramWords * Cost::Command + Cost::Call + Cost::Jump;
+    ListWriter going{memory, OneWay};
+    going.put(GE::Nop), going.to(GE::Jump, VramEnd);
+    ListWriter ending{memory, VramEnd};
+    ending.put(GE::Nop), ending.put(GE::Finish), ending.put(GE::End);
+    u32 goingWords = (going.address - OneWay) / 4, endingWords = (ending.address - VramEnd) / 4;
     auto near = [](f64 x, f64 y) { return std::abs(x - y) <= 1e-9 * std::max(1.0, std::abs(y)); };
-    for(u32 kind : range(4)) {
-      if(!near(s.ge.ramClocks[kind], ram[kind])) {
-        std::printf("  ramClocks[%u] %.6f, by hand %.6f\n", kind, s.ge.ramClocks[kind], ram[kind]);
+    //(a run from start, of fromRam words from RAM and fromVram from VRAM, its clocks against those worked out by hand)
+    auto run = [&](u32 start, u32 fromRam, u32 fromVram, const f64 (&ram)[4], f64 all) {
+      s.ge.pipeStart();
+      s.ge.list = {}, s.ge.list.address = start;
+      u64 ran = 0;
+      CHECK(u32(s.ge.run(1000, ran)), u32(GE::Stop::Finished));
+      CHECK(ran, u64(fromRam + fromVram));
+      CHECK(s.ge.ramWordsAt(ran), psp ? u64(fromRam) : 0u);
+      if(!psp) {
+        CHECK(s.ge.ramClocks[0] == 0 && s.ge.ramClocks[1] == 0 && s.ge.allClocks == 0, true);
+        return;
       }
-      CHECK(near(s.ge.ramClocks[kind], ram[kind]), true);
-    }
-    if(!near(s.ge.allClocks, all)) std::printf("  allClocks %.6f, by hand %.6f\n", s.ge.allClocks, all);
-    CHECK(near(s.ge.allClocks, all), true);
+      s.ge.pipeStop(ran, s.ge.ramWordsAt(ran));
+      for(u32 kind : range(4)) {
+        if(!near(s.ge.ramClocks[kind], ram[kind])) {
+          std::printf("  ramClocks[%u] %.6f, by hand %.6f\n", kind, s.ge.ramClocks[kind], ram[kind]);
+        }
+        CHECK(near(s.ge.ramClocks[kind], ram[kind]), true);
+      }
+      if(!near(s.ge.allClocks, all)) std::printf("  allClocks %.6f, by hand %.6f\n", s.ge.allClocks, all);
+      CHECK(near(s.ge.allClocks, all), true);
+    };
+    f64 each = std::max(Cost::VertexFloor, 6 * Cost::VertexByte);  //(a vertex's fetch, or a control point's)
+    f64 drawn = 2 * each + Cost::Prim + Across * Down * each + Cost::Prim;  //(a PRIM's and a BEZIER's, from one memory)
+    f64 ram[4] = {drawn, ramWords * Cost::Command + Cost::Call + Cost::Jump, 0, 0};
+    run(ListA, ramWords, vramWords, ram, ram[0] + ram[1] + drawn + vramWords * Cost::Command + Cost::Call + Cost::Jump);
+    f64 oneWay[4] = {0, goingWords * Cost::Command, 0, 0};
+    run(OneWay, goingWords, endingWords, oneWay, oneWay[1] + endingWords * Cost::Command + Cost::Jump);
   }
 }
 
