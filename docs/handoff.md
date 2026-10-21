@@ -35,6 +35,56 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
+
+Branch `cursor/license-notices-cachy`, from master `8d85eda9a` (#293). LICENSE and this file; no code or packaging
+change. Notes, listings and checksums: `~/phobos-work/scratch/license-notices/` (the brief:
+`~/phobos-work/scratch/prompts/license-notices.txt`).
+- **What**: LICENSE gains SDL 3.2.30's notice (the zlib license, from its LICENSE.txt at `release-3.2.30`) and
+  MoltenVK 1.4.2's (its copyright line, as its sources give it at `v1.4.2`, and the Apache License 2.0 already in
+  LICENSE, whose "Used by" line names it), both after MinGW-w64's block; and its "Android and Kotlin libraries" notice
+  names the rest of the Maven libraries the APKs carry.
+- **Why**: the owner's choice (21 Oct, ~18:27): "LICENSE: a small PR adding the notices for whatever the builds
+  actually include." Building the website, its author had found LICENSE naming none of SDL 3, MoltenVK, VMA, jansson or
+  GLFW.
+- **How it was established**: from the build files (CMakeLists.txt, the packaging scripts, desktop.yml, android.yml,
+  build.gradle.kts) and from the artifacts: v2.4.0's AppImage, Windows zip, macOS zip and APKs and nightly-216017's
+  APKs, downloaded with gh (each file's sha256 GitHub's), read as archives (the AppImage's squashfs from its offset,
+  944,632, with 7z), their binaries by strings and symbols. Nothing was run.
+- **Added**: SDL 3.2.30, linked statically into all three desktop programs (FetchContent, `SDL3::SDL3-static`): each
+  carries `SDL-3.2.30-release-3.2.30`. MoltenVK 1.4.2: `Contents/Frameworks/libMoltenVK.dylib` in the macOS app, whose
+  `Resources/LICENSE-MoltenVK` is MoltenVK's LICENSE at `v1.4.2` byte for byte (the Apache text). SDL's block is its
+  file word for word, without the spaces three of its lines end with (git diff --check rejects them).
+- **In the repository, in no build**: VMA (nothing includes `vk_mem_alloc.h`), jansson (`thirdparty/jansson` holds only
+  `jansson_config.h`, an include path nothing uses), librashader (two headers nothing includes; no library in any
+  package), GLFW (`thirdparty/GLFW` is a five-function stub Phobos wrote, no GLFW code, and no binary keeps it); none
+  of their strings in any binary. Also unbuilt though LICENSE has their notices: the OpenGL and EGL registry headers
+  (no compiled source includes them) and zlib (Android links the system's `libz.so`; of what ships, only the
+  AppImage's runtime has zlib, below).
+- **Shipping, with notices already**: in every build, sljit, libchdr with LZMA, miniz and Zstandard, xxHash (inline),
+  volk, paraLLEl-RDP, Vulkan-Headers, TZXFile (`ZXTape!` in every binary), ymfm, qon with `qoi2.h`, MAME's portions,
+  puff, FFmpeg, the firmware, C-BIOS and the ZX Spectrum ROMs; sse2neon in the APKs and the Mac's arm64 half; MinGW-w64
+  and winpthreads in Phobos.exe; libadrenotools, the ten fonts (equal by sha256 to `res/font`'s), the console icons
+  and font-rs's translation in the APKs.
+- **Android's libraries**: build.gradle.kts's 16 implementation lines, and in every APK 80 META-INF version files and
+  the classes the dex files define. The notice named the direct AndroidX and Compose libraries (not
+  ui-tooling-preview), Material, Kotlin's, Coil, OkHttp, Okio, AndroidSVG, Protocol Buffers and the Public Suffix List;
+  now also the AndroidX libraries those use (by group), Compose's others, Accompanist's Drawable Painter, Kotlin's
+  Parcelize and Android Extensions runtimes, JetBrains' annotations, Guava's ListenableFuture, Error Prone's and
+  JSpecify's annotations, each with its holder from its sources. All Apache-2.0.
+- **The Windows zip** carries `LICENSE.txt` and `COPYING.txt` (scripts/package-windows.sh:48-49; v2.4.0's has both),
+  so no packaging change.
+- **Left for the coordinator**: code inside what ships that LICENSE doesn't name: SPIRV-Cross, SPIRV-Tools and cereal
+  in libMoltenVK.dylib (its symbols); SDL's own bundled code in the Linux program (hidapi, yuv2rgb, X11's EDID parser,
+  Wayland's protocol tables); the AppImage's runtime (type2-runtime with musl, libfuse, squashfuse, zstd and zlib,
+  whose `--appimage-help` names their licenses); the NDK's libc++, static in the APKs' libraries (Apache 2.0 with the
+  LLVM exception, which asks for no notice).
+- **Checks**: LicensesScreen's split re-implemented (python3 -B): 38 notices before, 40 after (41 in the APK with
+  COPYING's), the new "SDL 3.2.30 (...)" and "MoltenVK 1.4.2 (...)"; master's assembly equals nightly-216017's
+  `assets/licenses/LICENSE.txt` byte for byte; LicenseNoticesTest holds by reading (and its assertions mirrored in
+  Python); `git diff --check` and `git show --check` clean. CI runs the unit tests; its runs go in the PR's body.
+- Independent review: not yet.
+
 ## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
 
 Branch `cursor/docs-review-followups-cachy`, from master `c837d1868` (#291). `.github/workflows/desktop.yml`,
