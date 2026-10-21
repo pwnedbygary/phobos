@@ -207,8 +207,8 @@ constexpr u32 Words = 0x0940'0000;
 //sceGeDrawSync(1), but also locks a semaphore each turn, which this leaves out): main queues a list of 16 sprites
 //(geSprites()), a finish callback counting the lists done, and asks how the GE is doing till it says done, the clock
 //noted after each; three lists. With the list stalled (at its start, or past its first sprite), a mover thread (every
-//`every` microseconds) sees it pending and moves its stall address to its end, after which the GE draws it. Each turn
-//reads what traffic says besides.
+//`every` microseconds, 2000 unless asked) sees it pending and moves its stall address to its end, after which the GE
+//draws it. Each turn reads what traffic says besides.
 auto geWait(KernelMachine& m, Look look, Traffic traffic = Traffic::None, u32 every = 2000) -> void {
   auto& memory = m.system.memory;
   u32 first = 0, end = geSprites(m, GeList, GeVertices, false, &first, look == Look::Drawing);

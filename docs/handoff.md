@@ -81,7 +81,17 @@ scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
   on 650, 0; CI's PSP-timing step 114, 0; its GE-thread step 70, 0; the four groups sanitized (ASan and UBSan), the
   thread off 4, 0 and on 4, 0. `git diff --check` and `git show --check` clean; no added line over 120 columns; the
   diff from master `8d85eda9a` is the two test files, docs/handoff.md and docs/psp-core.md.
-- Independent review: not yet.
+- **Departures from F1's constructions** (the review's L1 and its suggestion 3):
+  - The settling group reads its new line on the fifth turn, not on the fourth as F1's construction does (phase 1's
+    DESIGN-spin-widening.md:206-212). spinTurn() counts turns from the spin's third call, so the first try compares
+    the fourth and fifth turns; with F1's construction the fifth turn moves nothing, so a skip would be exact without
+    the steady refusal (the review ran F1's construction with the refusal taken out, and it passed). F4's hole test
+    (DESIGN-spin-widening.md:214-217) needs the same shift: Y on the fourth turn, X on the fifth.
+  - The part-way group's poll differs from F1's: F1 polled sceKernelGetThreadId() with one uncached read; the group
+    polls sceGeDrawSync(1) through geWait(), with uncached and missing-line traffic. The change is harmless: the
+    refusal is reached 74,345 times and its mutation is caught.
+- Independent review: PASS on `45eb68d3c`, with runs (`~/phobos-work/scratch/review-295/REVIEW.md`); one low finding.
+  Taken after it: L1 and suggestions 3 and 4 in the next commit; 1 and 2 left for the widening's rework of spinSkip().
 
 ## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
 
