@@ -167,6 +167,23 @@ class ControlLevelsTest {
     }
 
     @Test
+    fun theGameButtonsEverywhereAreAllConsolesAndEachConsolesAndGamesOwn() {
+        val overrides = ControlOverrides(
+            mappings = mapOf(
+                n64.scope!! to mapOf(a to "k:108"),  // Start on the N64's A
+                tennis.scope!! to mapOf(b to "a:17:1", x to ""),  // the left trigger on B, and X unbound, in one game
+            ),
+            hotkeys = mapOf(kart.scope!! to hotkeysOf("save" to listOf(MODE, R1))),
+        )
+        assertEquals(
+            "a hotkey isn't a game button",
+            setOf(96, 97, 99, START, L2),
+            Controls.gameTokensEverywhere(global, overrides),
+        )
+        assertEquals(setOf(96, 97, 99), Controls.gameTokensEverywhere(global, ControlOverrides()))
+    }
+
+    @Test
     fun consoleButtonNamesJoinTheButtonsOneBitPresses() {
         // Neo Geo: pad R1 presses A and B together.
         val names = Controls.buttonNames(listOf("64\tA", "512\tA", "1024\tA", "128\tB", "512\tB", "512\tB", "junk", "16\t", "\tC"))
@@ -188,7 +205,9 @@ class ControlLevelsTest {
         const val BACK = 4
         const val Y = 100
         const val R1 = 103
+        const val L2 = 104
         const val R3 = 107
+        const val START = 108
         const val MODE = 110
         const val F5 = 135
         const val F8 = 138

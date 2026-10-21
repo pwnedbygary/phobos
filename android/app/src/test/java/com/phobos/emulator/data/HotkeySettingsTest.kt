@@ -8,7 +8,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.HotkeyAction
-import com.phobos.emulator.input.ScopedKeys
+import com.phobos.emulator.ui.DIRECT_SLOT_HOTKEY_ACTIONS
+import com.phobos.emulator.ui.HOTKEY_ACTIONS
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,8 +24,10 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 /**
- * Hotkeys in the settings file: the values builds from before several bindings wrote, the bindings written now, a key in
- * Back's place written at every level, and the controllers seen sending Back.
+ * Hotkeys in the settings file: the values builds from before several bindings wrote, every action the Hotkeys page
+ * binds read from its name, the bindings written now, a key in Back's place written at every level, and the controllers
+ * seen sending Back. The keys are written out as the file holds them, so a renamed prefix, scope or action, which would
+ * lose what players stored, fails here.
  */
 class HotkeySettingsTest {
     @get:Rule
@@ -45,18 +48,16 @@ class HotkeySettingsTest {
         }
     }
 
-    private fun global(action: String) = stringPreferencesKey(SettingsStore.HOTKEYS_PREFIX + action)
-
-    private fun scoped(scope: String, action: String) = stringPreferencesKey(ScopedKeys.hotkey(scope, action))
+    private fun key(name: String) = stringPreferencesKey(name)
 
     @Test
     fun aValueAnEarlierBuildWroteIsTheFirstBindingInPlaceOfTheActionsDefaults() {
         withStore { store, dataStore ->
             dataStore.edit {
-                it[global(HotkeyAction.SAVE_STATE)] = "109,103"  // Select + R1: one combo, as those builds wrote it
-                it[global(HotkeyAction.MUTE)] = "109,-1"  // Select + the left stick pushed right, an axis token
-                it[global(HotkeyAction.PAUSE)] = ""  // unbound
-                it[scoped(console, HotkeyAction.LOAD_STATE)] = "109,102"
+                it[key("hotkey_combo_save")] = "109,103"  // Select + R1: one combo, as those builds wrote it
+                it[key("hotkey_combo_mute")] = "109,-1"  // Select + the left stick pushed right, an axis token
+                it[key("hotkey_combo_pause")] = ""  // unbound
+                it[key("scoped_hotkey|n64|load")] = "109,102"
             }
             val settings = store.settings.first()
             assertEquals(
@@ -76,6 +77,26 @@ class HotkeySettingsTest {
     }
 
     @Test
+    fun everyActionTheHotkeysPageBindsIsReadFromTheNameItIsStoredUnder() {
+        val names = listOf(
+            "ff_hold", "ff_toggle", "slow_motion", "save", "load", "inc_slot", "dec_slot", "pause", "reset", "reload",
+            "quit", "screenshot", "mute", "frame_advance", "n64_pak", "analog_toggle", "keyboard", "library",
+            "save_slot_1", "load_slot_1", "save_slot_2", "load_slot_2", "save_slot_3", "load_slot_3",
+            "save_slot_4", "load_slot_4", "save_slot_5", "load_slot_5", "save_slot_6", "load_slot_6",
+            "save_slot_7", "load_slot_7", "save_slot_8", "load_slot_8", "save_slot_9", "load_slot_9",
+        )
+        withStore { store, dataStore ->
+            dataStore.edit { p -> names.forEachIndexed { i, name -> p[key("hotkey_combo_$name")] = "${i + 1}" } }
+            val hotkeys = store.settings.first().hotkeys
+            assertEquals(
+                "the page's actions, then the direct slots, each with the value stored under its name",
+                names.indices.map { listOf(listOf(it + 1)) },
+                (HOTKEY_ACTIONS + DIRECT_SLOT_HOTKEY_ACTIONS).map { hotkeys[it.second] },
+            )
+        }
+    }
+
+    @Test
     fun bindingsAreWrittenJoinedBySemicolonsAndComeBackInTheirSlotsAtTheNextStart() {
         withStore { store, dataStore ->
             store.setHotkeys(
@@ -88,11 +109,11 @@ class HotkeySettingsTest {
             store.setScopedHotkey(game, HotkeyAction.LOAD_STATE, listOf(emptyList(), listOf(F9)))
             store.setScopedHotkey(game, HotkeyAction.MUTE, emptyList())
             val stored = dataStore.data.first()
-            assertEquals("109,103;;135", stored[global(HotkeyAction.SAVE_STATE)])
-            assertEquals(";138", stored[global(HotkeyAction.SCREENSHOT)])
-            assertEquals("", stored[global(HotkeyAction.PAUSE)])
-            assertEquals(";139", stored[scoped(game, HotkeyAction.LOAD_STATE)])
-            assertEquals("", stored[scoped(game, HotkeyAction.MUTE)])
+            assertEquals("109,103;;135", stored[key("hotkey_combo_save")])
+            assertEquals(";138", stored[key("hotkey_combo_screenshot")])
+            assertEquals("", stored[key("hotkey_combo_pause")])
+            assertEquals(";139", stored[key("scoped_hotkey|n64/Mario Tennis (USA).z64|load")])
+            assertEquals("", stored[key("scoped_hotkey|n64/Mario Tennis (USA).z64|mute")])
         }
         withStore { store, dataStore ->
             val settings = store.settings.first()
@@ -103,7 +124,7 @@ class HotkeySettingsTest {
             assertEquals(listOf(emptyList(), listOf(F9)), atGame?.get(HotkeyAction.LOAD_STATE))
             assertEquals("unbound at the game", emptyList<List<Int>>(), atGame?.get(HotkeyAction.MUTE))
             store.setScopedHotkey(game, HotkeyAction.LOAD_STATE, null)
-            assertNull("inherited again", dataStore.data.first()[scoped(game, HotkeyAction.LOAD_STATE)])
+            assertNull("inherited again", dataStore.data.first()[key("scoped_hotkey|n64/Mario Tennis (USA).z64|load")])
         }
     }
 
@@ -118,9 +139,9 @@ class HotkeySettingsTest {
                 ),
             )
             val stored = dataStore.data.first()
-            assertEquals("110,103;135", stored[stringPreferencesKey("hotkey_combo_save")])
-            assertEquals("110,97", stored[stringPreferencesKey("scoped_hotkey|n64|quit")])
-            assertEquals(";110,102", stored[stringPreferencesKey("scoped_hotkey|n64/Mario Tennis (USA).z64|load")])
+            assertEquals("110,103;135", stored[key("hotkey_combo_save")])
+            assertEquals("110,97", stored[key("scoped_hotkey|n64|quit")])
+            assertEquals(";110,102", stored[key("scoped_hotkey|n64/Mario Tennis (USA).z64|load")])
         }
     }
 

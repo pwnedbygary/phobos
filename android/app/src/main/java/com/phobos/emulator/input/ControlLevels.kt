@@ -77,6 +77,13 @@ object Controls {
     fun hotkeys(level: ControlLevel, global: Map<String, List<List<Int>>>, overrides: ControlOverrides): Map<String, List<List<Int>>> =
         resolve(level, global) { overrides.hotkeys[it] }.filterValues { bindings -> bindings.any { it.isNotEmpty() } }
 
+    /**
+     * The keys and axis directions ([bindingTokens]) every level's button bindings hold between them: all consoles' and
+     * each console's and game's own, a level's bindings being its own over those it inherits.
+     */
+    fun gameTokensEverywhere(global: Map<Int, String>, overrides: ControlOverrides): Set<Int> =
+        (global.values + overrides.mappings.values.flatMap { it.values }).flatMap(::bindingTokens).toSet()
+
     private fun <K, V> resolve(level: ControlLevel, global: Map<K, V>, changes: (String) -> Map<K, V>?): Map<K, V> {
         val result = global.toMutableMap()
         for (l in chain(level)) l.scope?.let(changes)?.let(result::putAll)

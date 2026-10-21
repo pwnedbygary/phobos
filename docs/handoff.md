@@ -35,6 +35,86 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Android follow-ups: the Back warning ended by a Back from any device connected, a button any level gives the game asked about, the settings test's keys written out, taps beside longer bindings tested — 2026-10-21
+
+Branch `improved-hotkeys`, on `89d800605` (the entry below). Four of the follow-ups the reviews left (the plan row's
+Open), which the owner asked for on 2026-10-21: "Please address the follow ups as well as finishing anything remaining
+on this". Changed: `input/Hotkeys.kt` (`backSeen`), `input/ControlLevels.kt` (`Controls.gameTokensEverywhere`),
+`ui/ControllerPages.kt`, the tests `HotkeyComboTest`, `ControlLevelsTest`, `HotkeyRoutingTest` and
+`data/HotkeySettingsTest`, two entries below (The entries below) and the hotkey row of `docs/implementation-plan.md`.
+Checked on the host; not run on a device.
+- **The Back warning**: the Hotkeys page's warning that no controller has sent Back now goes once any device connected
+  has been seen sending Back, a gamepad or not, while a gamepad is connected (with none connected, no warning, as
+  before). Before, only gamepads counted, though a Back press was remembered from whichever device sent it (the
+  navigation bar's Back and a fallback's aside). Android can list one physical device as several, its `InputDevice`
+  documentation says ("a single human input device registers multiple InputDevice instances (HID collections) that
+  describe separate features of the device"), there giving them one descriptor. A controller whose Back came from one
+  that isn't a gamepad, under a descriptor of its own, would have kept the warning however often Back was pressed
+  (derived from the code; whether any controller comes so is unknown here, none such being at hand). The check is
+  `backSeen` (`input/Hotkeys.kt`), the page passing it the devices connected now (its `connectedPadSentBack`, renamed
+  `connectedDeviceSentBack`). The first review of the entry led by Back raised it.
+- **A button in Back's place, asked about at any level**: choosing a button for Back's place asks "Use Start in Back's
+  place? Start is also a game button: once it starts the hotkeys, the game no longer gets it." when any level's button
+  bindings give the game that button, all consoles' or a console's or game's own (`Controls.gameTokensEverywhere`), as
+  the button then takes Back's place at every level at once. Before, only the level shown counted, so a button that only
+  a console's or game's own bindings gave the game went in unasked from another level's page. The rows' notes that a
+  binding's first key is also a game button still go by the level shown, the rows being its. The same review raised it.
+- **Tests**: `HotkeySettingsTest` writes its keys out as the settings file holds them (`hotkey_combo_save`,
+  `scoped_hotkey|n64|load`), where two of its three hotkey-file tests built them from the store's own constants, and a
+  new test of it reads every action the Hotkeys page binds, the direct slots included, from the name it is stored under,
+  the 36 names written out; so a renamed prefix, scope or action, which would lose what players stored, fails there. The
+  first review of this entry found that claim held for six actions only (the three tests write out Save, Load, Mute,
+  Pause, Screenshot and Quit; Reset renamed passed every test), hence the new test. Two routing tests: another action's
+  key bound alone beside a hold's longer binding waits for its release, the hold still starting from the longer binding;
+  and an action's key bound alone beside its own longer binding runs it once, as a tap. Before, only the tap rule's unit
+  test failed with either condition of that rule taken out. The second review of the entry of up to three bindings
+  suggested both.
+- **The entries below**: the reference's Review now says three of its second review's suggestions were taken, the fourth
+  being for the report, and its unbound list quotes "Pause menu, out of fullscreen" (its third review's two notes). The
+  entry led by Back now says its warning goes once a device connected has sent Back, a gamepad or not, and that a button
+  any level's bindings give the game is asked about; its Review, that what it left for a later change is taken in this
+  entry.
+- **Checks**:
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0's wrapper):
+    BUILD SUCCESSFUL, 451 tests in each flavour (446 before), 0 failures, 54 result files each; the APK 32,595,539
+    bytes, SHA-256 `137de909b24dfc395073c76220f71e45c8febc583bd31fabea14678dc2be4db4`, one build of these sources.
+  - New tests: `HotkeyComboTest.backIsSeenFromAnyConnectedDeviceThatSentItAndAskedAboutOnlyWithAGamepadConnected`,
+    `ControlLevelsTest.theGameButtonsEverywhereAreAllConsolesAndEachConsolesAndGamesOwn`, and `HotkeyRoutingTest`'s
+    `anotherActionsKeyAloneBesideAHoldsLongerBindingWaitsForItsReleaseAndTheHoldStillStarts` and
+    `anActionsKeyAloneBesideItsOwnLongerBindingRunsItOnceAsATap`; after the first review,
+    `HotkeySettingsTest.everyActionTheHotkeysPageBindsIsReadFromTheNameItIsStoredUnder`.
+  - Six mutants, each made by hand in the worktree, the input package's tests and `HotkeySettingsTest` run (116 then),
+    then undone and each file's SHA-256 checked; each failed its test or tests: the warning counting gamepads alone, the
+    new warning test; the game buttons taken from all consoles' bindings alone, the new levels test; the tap rule's hold
+    condition widened to every hold's longer binding, its unit test and the first new routing test; that condition taken
+    out, its unit test and the second; Mute stored under another name, the defaults' test and two of
+    `HotkeySettingsTest`'s, where with that test as it was the defaults' test alone failed; and the global prefix
+    renamed, all three of `HotkeySettingsTest`'s hotkey-file tests, where with that test as it was only the one that
+    already wrote its keys out failed.
+  - After the first review, two more mutants, each compiled from copies outside the repository in place of its files,
+    every output kept outside it, and the whole legacy suite run (451 tests, all passing with the copies unchanged):
+    Reset stored under another name, and the direct slots' saves under another prefix. Each failed the new settings test
+    and no other; with that test as it was (450 tests), neither failed any.
+  - Not run: a device (the RP6's controls are one gamepad that sends Back, so they can't show the new case), or a
+    controller sending its Back from a device that isn't a gamepad.
+- **Limits**: only the functions are tested on the host; that the page passes `backSeen` every device connected now and
+  asks with `Controls.gameTokensEverywhere` is read from the code. Any device's Back counts, a keyboard's with a Back
+  key for one: with a controller without Back connected, such a press ends the warning, though Back + A then needs that
+  keyboard's Back held with the controller's A (derived). The warning's "Choose another button" goes with it, and the
+  devices seen sending Back are kept for good (through a reset of the hotkeys too), so one Back from a device that isn't
+  a gamepad ends both for as long as that device stays connected; a mouse's back button or a TV remote might, if Android
+  sends their Back as a key from a device it doesn't count as a gamepad (a hypothesis, not checked).
+- **Review**: the independent review's record is in the commit that carries this entry.
+- **Next**: the other follow-ups, which the owner asked for too: the PSP system dialogs running hotkeys (the stale
+  comment in `PspSystemDialogs.kt` going with them) and the PSP's Vulkan screenshots having the picture on screen,
+  checked on the RP6 with a PSP game of the owner's ("copied into the test app's own folder, deleted with it", the
+  owner's choice); on the desktop, 1810's toggle ("Follow fullscreen: leaving fullscreen pauses (opens the menu), going
+  back into fullscreen closes the menu and plays", the owner's choice), the Screenshot hotkey with the menu open,
+  Phobos's abort when its display goes away first, and the test target in CI; then the RP6's test copy replaced with a
+  build of the finished branch and a draft pull request (the owner's choices); and the hands-on checks (the RP6 pass, a
+  pad, a window manager, Wayland, Steam, Windows and macOS).
+
 ## Hotkeys: a reference for Android and the desktop, and where each ares issue that shares their surface stands — 2026-10-20
 
 Branch `improved-hotkeys`, on `7817da840` (the entry below). The hotkey plan's closing docs: "Each PR updates the
@@ -81,7 +161,7 @@ entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
   the page warns and offers another button in Back's place, at every level at once.
 - **The desktop's defaults**, from `defaultHotkeys` (`desktop/Hotkeys.cpp`), a pad's buttons named by the Xbox layout,
   as the page names them: the second table. Guide starts the controller's hotkeys, a Guide tap opening the menu, and a
-  keyboard keeps the desktop's own keys. Unbound: Pause menu, out of fullscreen; Reset; Next disc; Save state and Load
+  keyboard keeps the desktop's own keys. Unbound: "Pause menu, out of fullscreen"; Reset; Next disc; Save state and Load
   state 1 to 9. Besides the hotkeys, Select and Start pressed together, and no other button, open the menu (a Steam
   Deck's route, its Guide being Steam's), and in the menu B or Backspace closes it. On the ZX Spectrum and the MSX, a
   default on Tab or on a key the computer's keyboard uses doesn't apply, stored or not (the owner's choice): Tab's on
@@ -202,10 +282,11 @@ entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
   The second (diff `fa440ec1...`) found NEEDS CHANGES, one Minor, in the commit's record of the first review: it gave 32
   issues as read with gh api, where there are 31 besides the pull request, and said every earlier entry's edit was
   word-diffed, where only the PSP dialog limit's was, the others checked against the code and the commits. Corrected in
-  the commit. Its suggestions are taken: the desktop's "Pause menu, out of fullscreen" in quotes where a verb follows
-  it, here and in the plan's row; the fullscreen issues' source worded as the planning session the plan came from, whose
-  text naming them it found; and a desktop capture ending as the window loses focus, told with the capture rule. The
-  whole record is in the commit that carries this entry.
+  the commit. Three of its suggestions are taken: the desktop's "Pause menu, out of fullscreen" in quotes where a verb
+  follows it, here and in the plan's row; the fullscreen issues' source worded as the planning session the plan came
+  from, whose text naming them it found; and a desktop capture ending as the window loses focus, told with the capture
+  rule. Its fourth, telling the owner that 1810 had left the plan's fixed bundle, was for the report. The whole record
+  is in the commit that carries this entry.
 - **Next**: the hands-on checks (the RP6 pass, frame advance there included, bound first; a pad, a window manager,
   Wayland, Steam, Windows and macOS on the desktop); a pull request when the owner wants one; the code changes the
   reviews left (the plan row's Open), and a comment in `PspSystemDialogs.kt` still naming Mode alone as the default
@@ -346,22 +427,24 @@ leftovers. Checked on the RP6 with a test copy beside the owner's app; **not** w
   Home button is Mode (the Switch Pro's Home is Android's own Home). Of the layouts read, only Logitech's F310 sends a
   button as Back; the RP6's Back button sends it too (Linux key 158).
 - **The warning, and a button in Back's place**: the Hotkeys page warns, at the level it shows, while Back starts a
-  hotkey there and no connected controller has been seen sending it: "No controller here has sent Back yet, and Back
-  starts these hotkeys: press it once to show it works, or, with no Back button (most controllers have none), choose
-  another button to start every hotkey in its place, on every console and game." A controller is remembered (its
-  InputDevice descriptor, stored as `back_seen_pads` and kept through a reset) once a Back press of its reaches the
-  window, a fallback's or the navigation bar's not counting. **Choose another button** captures one key or axis
-  direction, which then starts, in Back's place, every binding Back starts: at all consoles (a default included, stored
-  then as the player's) and in each console and game storing hotkeys of its own, in one edit
+  hotkey there, a gamepad is connected and no device connected has been seen sending it, a gamepad or not (since the
+  Android follow-ups' entry; before, gamepads alone counted): "No controller here has sent Back yet, and Back starts
+  these hotkeys: press it once to show it works, or, with no Back button (most controllers have none), choose another
+  button to start every hotkey in its place, on every console and game." A controller is remembered (its InputDevice
+  descriptor, stored as `back_seen_pads` and kept through a reset) once a Back press of its reaches the window, a
+  fallback's or the navigation bar's not counting. **Choose another button** captures one key or axis direction, which
+  then starts, in Back's place, every binding Back starts: at all consoles (a default included, stored then as the
+  player's) and in each console and game storing hotkeys of its own, in one edit
   (`Controls.replaceHotkeyLeadEverywhere`, `SettingsStore.setHotkeysEverywhere`). Nothing changes, and the actions in
   the way are named with the level that sets them, when the button is already in a hotkey Back starts (it would lose a
   key: Select is in Mute's Back + Select) or would collide anew with another binding at any level; a collision there
   already doesn't count: "Select can't take Back's place: Mute Audio uses it already. Choose another button (on Xbox and
-  PlayStation pads, Guide or PS), or bind that again first." A button the game uses is asked about: "Use Start in Back's
-  place? Start is also a game button: once it starts the hotkeys, the game no longer gets it." Back itself pressed there
-  changes nothing, its press having shown it works. Resetting all consoles' hotkeys to the defaults brings Back back
-  there, though not in a console's or game's own hotkeys (under Limits). This replaces the draft's Replace Mode row,
-  which changed one level at a time and which the owner found confusing.
+  PlayStation pads, Guide or PS), or bind that again first." A button any level's bindings give the game is asked about
+  (since the Android follow-ups' entry; before, the level shown's): "Use Start in Back's place? Start is also a game
+  button: once it starts the hotkeys, the game no longer gets it." Back itself pressed there changes nothing, its press
+  having shown it works. Resetting all consoles' hotkeys to the defaults brings Back back there, though not in a
+  console's or game's own hotkeys (under Limits). This replaces the draft's Replace Mode row, which changed one level at
+  a time and which the owner found confusing.
 - **A controller's Back as a key**: the manifest now sets `android:enableOnBackInvokedCallback="false"`. With predictive
   back on (set in the app's first configuration, `27e1d7574`), Android 13 and later hand Back to the back callback
   rather than the window, so a controller's Back never reached the hotkeys; Compose's BackHandlers still get the Backs
@@ -463,8 +546,8 @@ leftovers. Checked on the RP6 with a test copy beside the owner's app; **not** w
     false opting out for now. A later Android may drop it, and a controller's Back would stop reaching the hotkeys.
   - On a pad whose only Select-like button sends Back (Logitech's F310, by its layout), Mute's Back + Select can't be
     pressed.
-  - The warning goes once any connected controller has sent Back; each new controller is remembered by its own first
-    Back press.
+  - The warning goes once any connected device has sent Back, a gamepad or not (since the Android follow-ups' entry);
+    each new controller is remembered by its own first Back press.
   - The button in Back's place is the player's own then, at all consoles and in each console's or game's own hotkeys.
     Choosing another needs Back's hotkeys back first, the warning showing only while Back starts one, and Reset hotkeys
     to the defaults puts Back back at all consoles alone: a console or game with hotkeys of its own keeps the chosen
@@ -502,7 +585,7 @@ leftovers. Checked on the RP6 with a test copy beside the owner's app; **not** w
   keys acting as they would with no hotkeys. Its suggestions are taken: Android's soft keyboard over the PSP keyboard
   having Back first (which keeps Back + A from pausing there, found answering it), the install dialog's buttons doing
   nothing, and Back + B taking two steps where B's leaves the dialog up. The whole record is in the commit that carries
-  this entry.
+  this entry. The two suggestions left for a later change are taken in the Android follow-ups' entry.
 - **Next**: the plan's closing docs (a hotkey reference and the issue matrix); if the owner wants it, a PSP system
   dialog holding a hotkey's first key back and running its hotkeys (Limits); the RP6 pass by hand; the pad, window
   manager, Wayland, Steam, Windows and macOS checks.

@@ -64,6 +64,7 @@ import com.phobos.emulator.input.HotkeyBindings
 import com.phobos.emulator.input.HotkeyConflict
 import com.phobos.emulator.input.HotkeyTokens
 import com.phobos.emulator.input.andList
+import com.phobos.emulator.input.backSeen
 import com.phobos.emulator.input.bindingTokens
 import com.phobos.emulator.input.existingHotkeyConflicts
 import com.phobos.emulator.input.hotkeyConflictMessage
@@ -275,6 +276,10 @@ fun ControllerHotkeysList(
     val gameTokens = remember(settings.inputMappings, overrides, level) {
         Controls.mappings(level, settings.inputMappings, overrides).values.flatMap(::bindingTokens).toSet()
     }
+    // A button in Back's place starts the hotkeys at every level at once: one any level gives the game is asked about.
+    val gameTokensEverywhere = remember(settings.inputMappings, overrides) {
+        Controls.gameTokensEverywhere(settings.inputMappings, overrides)
+    }
     val collisions = remember(resolved) { existingHotkeyConflicts(resolved) }
     // Controllers come and go while the page is open: the Back check is made again when they do.
     val context = LocalContext.current
@@ -290,7 +295,8 @@ fun ControllerHotkeysList(
         onDispose { inputManager.unregisterInputDeviceListener(listener) }
     }
     val backMissing = remember(resolved, padsChanged, settings.backSeenPads) {
-        resolved.values.flatten().any { it.firstOrNull() == KeyEvent.KEYCODE_BACK } && !connectedPadSentBack(settings.backSeenPads)
+        resolved.values.flatten().any { it.firstOrNull() == KeyEvent.KEYCODE_BACK } &&
+            !connectedDeviceSentBack(settings.backSeenPads)
     }
     val capture = viewModel.controlCapture
     // The unbinding that would leave Pause with no binding, run once the question about it is answered.
@@ -328,7 +334,7 @@ fun ControllerHotkeysList(
                     "${if (names.size > 1) "use" else "uses"} it already. Choose another button (on Xbox and PlayStation " +
                     "pads, Guide or PS), or bind ${if (names.size > 1) "those" else "that"} again first."
             }
-            to in gameTokens -> pendingLead = to
+            to in gameTokensEverywhere -> pendingLead = to
             else -> viewModel.replaceHotkeyLeadEverywhere(back, to)
         }
     }
@@ -472,14 +478,11 @@ private data class PendingHotkey(
 fun hotkeyName(action: String): String =
     (HOTKEY_ACTIONS + DIRECT_SLOT_HOTKEY_ACTIONS).firstOrNull { it.second == action }?.first ?: action
 
-/**
- * Whether a connected controller has been seen sending Back, [seen] naming those that have; true with none connected,
- * as nothing says otherwise yet. A controller declaring the key doesn't say: one may declare keys it has no button for.
- */
-private fun connectedPadSentBack(seen: Set<String>): Boolean {
-    val pads = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
-        .filter { device -> (device.sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD }
-    return pads.isEmpty() || pads.any { it.descriptor in seen }
+/** [backSeen] for the devices connected now. */
+private fun connectedDeviceSentBack(seen: Set<String>): Boolean {
+    val devices = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
+        .map { it.descriptor to ((it.sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD) }
+    return backSeen(devices, seen)
 }
 
 /** The level after an action's name, " (Game Boy)" or " (Tetris.gb)"; nothing for all consoles. */

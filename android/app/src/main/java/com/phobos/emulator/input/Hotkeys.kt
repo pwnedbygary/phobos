@@ -365,6 +365,15 @@ fun leadReplacement(hotkeys: Map<String, List<List<Int>>>, from: Int, to: Int): 
 }
 
 /**
+ * Whether a connected controller has been seen sending Back, [seen] holding the descriptors of the devices that have;
+ * true with no gamepad among [devices] (each one's descriptor, and whether it's a gamepad), as nothing says otherwise
+ * yet. A device seen counts whether it's a gamepad or not: a controller can come as more than one device, its Back on
+ * one that isn't a gamepad. A controller declaring the key doesn't say: one may declare keys it has no button for.
+ */
+fun backSeen(devices: List<Pair<String, Boolean>>, seen: Set<String>): Boolean =
+    devices.none { it.second } || devices.any { it.first in seen }
+
+/**
  * The hotkey tokens that hold a button binding ("k:<keycode>" or "a:<axis>:<dir>", as InputBindings reads them): a
  * trigger's L2/R2 key, a hat's D-pad key, a stick direction's axis token. A combo whose first key is among them
  * takes that button from the game.

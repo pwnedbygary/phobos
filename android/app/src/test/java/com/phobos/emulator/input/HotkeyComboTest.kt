@@ -460,6 +460,18 @@ class HotkeyComboTest {
         assertEquals(setOf(HotkeyAction.QUIT, HotkeyAction.SCREENSHOT), leadReplacement(hotkeys, BACK, MODE).blockers.toSet())
     }
 
+    @Test
+    fun backIsSeenFromAnyConnectedDeviceThatSentItAndAskedAboutOnlyWithAGamepadConnected() {
+        // One controller as two devices: its gamepad, and a part of it that isn't one, its Back coming from that part.
+        val pad = "pad" to true
+        val padsKeys = "pad's keys" to false
+        assertTrue("no gamepad connected: nothing to ask about yet", backSeen(listOf(padsKeys), emptySet()))
+        assertFalse("a gamepad connected, no Back seen", backSeen(listOf(pad, padsKeys), emptySet()))
+        assertTrue("the gamepad sent it", backSeen(listOf(pad, padsKeys), setOf("pad")))
+        assertTrue("its part that isn't a gamepad sent it", backSeen(listOf(pad, padsKeys), setOf("pad's keys")))
+        assertFalse("a device that sent it once, not connected now", backSeen(listOf(pad), setOf("pad's keys")))
+    }
+
     companion object {
         // KeyEvent and MotionEvent constants (android.view).
         const val BACK = 4

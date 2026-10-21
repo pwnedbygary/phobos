@@ -14,7 +14,8 @@ import org.junit.Test
  * (GameKeys), joystick moves through GameInputState, which records what the core is sent. The defaults, Back leading
  * them, and a keyboard's second bindings; and on a set led by Mode, as the defaults once were, taps, the hold actions
  * driven from the hat, from a trigger reported only as an axis and from a key that also leads a longer binding of the
- * same hold, a button reported both ways, keys let go of while the game is closed or away, and the Library's way back.
+ * same hold, a key bound alone beside a longer binding it leads, a button reported both ways, keys let go of while the
+ * game is closed or away, and the Library's way back.
  */
 class HotkeyRoutingTest {
     private val run = mutableListOf<String>()
@@ -379,6 +380,42 @@ class HotkeyRoutingTest {
         assertTrue("Tab is still held: $events", events.isEmpty())
         key(TAB, down = false)
         assertEquals(listOf("fast forward stopped"), events)
+    }
+
+    @Test
+    fun anotherActionsKeyAloneBesideAHoldsLongerBindingWaitsForItsReleaseAndTheHoldStillStarts() {
+        hotkeys = mapOf(
+            HotkeyAction.SAVE_STATE to listOf(listOf(TAB)),
+            HotkeyAction.FAST_FORWARD_HOLD to listOf(listOf(TAB, BUTTON_X)),
+        )
+        assertTrue(key(TAB, down = true))
+        assertTrue("Save waits for Tab's release, Tab leading the hold's binding: $run", run.isEmpty())
+        assertTrue(key(BUTTON_X, down = true))
+        assertEquals(listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
+        key(BUTTON_X, down = false)
+        assertEquals(listOf("fast forward stopped"), events)
+        key(TAB, down = false)
+        assertEquals("Tab pressed with X is no tap", listOf(HotkeyAction.FAST_FORWARD_HOLD), run)
+        tap(TAB)
+        assertEquals(
+            "Tab alone saves as it's let go of",
+            listOf(HotkeyAction.FAST_FORWARD_HOLD, HotkeyAction.SAVE_STATE),
+            run,
+        )
+    }
+
+    @Test
+    fun anActionsKeyAloneBesideItsOwnLongerBindingRunsItOnceAsATap() {
+        hotkeys = mapOf(HotkeyAction.SAVE_STATE to listOf(listOf(F5), listOf(F5, BUTTON_X)))
+        key(F5, down = true)
+        assertTrue("F5 waits for its release: $run", run.isEmpty())
+        key(BUTTON_X, down = true)
+        assertEquals(listOf(HotkeyAction.SAVE_STATE), run)
+        key(BUTTON_X, down = false)
+        key(F5, down = false)
+        assertEquals("once, F5 pressed with X being no tap", listOf(HotkeyAction.SAVE_STATE), run)
+        tap(F5)
+        assertEquals(listOf(HotkeyAction.SAVE_STATE, HotkeyAction.SAVE_STATE), run)
     }
 
     @Test
