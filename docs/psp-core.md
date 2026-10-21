@@ -20033,6 +20033,13 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
 - A probe of this head's own windows of the 3D menu (step 1's probe on the refit's code), a follow-up: it would settle
   where the menu's 0.75-point gap to the fit comes from (the gate, above: an open hypothesis now), while the menu is
   0.05 points from its limit.
+- A test of the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), a follow-up from the independent review's
+  second round (`~/phobos-work/scratch/review-291/REVIEW-r2.md`, its low finding): no test catches a slip there. Its
+  mutation D, which charges a refetch by the memory of the word the thread has just taken (`render.segmentRam`) rather
+  than by the mark's kind, passes CI's GE thread step (66 groups), the release suite with the thread On (646 groups) and
+  the gate (the seven profiles unchanged). Today's code is right by reading: `front()` (list.cpp:61-71) decides once,
+  for both GEs, whether a refetch reads RAM, and the thread charges the mark's kind the same way (thread.cpp:762-766). A
+  one-way JUMP in a threaded test (a list in RAM that jumps into VRAM and ends there) would catch it.
 
 ### Scratch
 

@@ -46,6 +46,9 @@ docs/psp-core.md (part 115) and this file; no emulation code. Sources: the delta
   as GitHub runs it, on copies of #290's stand-ins: 15 cases as expected, the 13 from before and two new, a later
   `-ftrapv` failing the step ("1 of 38 N64 compile commands undo a flag") and an earlier one, which `-fwrapv` overrides,
   passing; master's step passes the later one too. actionlint: master's two desktop.yml warnings only.
+  After this PR's review (its L1) the check also counts a later `-fstrict-overflow`, which GCC's manual says implies
+  `-fno-wrapv`: 18 cases as expected, a later one failing (a22cb99b6's step passes it), an earlier one and a later
+  `-fno-strict-overflow`, which implies `-fwrapv`, passing.
 - **#290's entry** (I2): the recompilers count cycles a little differently in some of a game's blocks of several
   instructions, while the test's cases, one instruction under test each, count the same.
 - **#292's entry** (nits 1 and 2): the RP6's frames over 20 ms in one order, the control's then the PR's
@@ -56,9 +59,13 @@ docs/psp-core.md (part 115) and this file; no emulation code. Sources: the delta
   (`ares/psp/`, `ares/ares/`, `tools/psp-runner/`, `tests/psp/ares/`, `nall/`, `libco/`, `thirdparty/`): the folders of
   every source tools/psp-runner/build.sh compiles, and of every file its objects depend on (review-291's list for 25
   objects, 1,004 files) but FFmpeg's built headers and the system's.
+- **After this PR's review** (its suggestion 2): #290's, #291's and #292's entries record their delta reviews' PASS,
+  #291's also how it merged with no macOS runner for its head; #291's Left and part 115's add the GE thread's own
+  refetch charge, which no test catches a slip in (#291's delta review's low finding).
 - **Checks**: `git diff --check` and `git show --check` clean; no added line over 120 columns; the diff is desktop.yml,
   docs/handoff.md and docs/psp-core.md. CI's runs go in the pull request's body.
-- Independent review: not yet.
+- Independent review: PASS on `a22cb99b6`, read-only (`~/phobos-work/scratch/review-293/REVIEW.md`); one low finding.
+  Taken after it: L1 (a later `-fstrict-overflow`) and suggestion 2 in the next two commits, suggestion 3 in the body.
 
 ## PSP GE timing: the CPU beside the GE refitted, Super Monkey Ball within 15% and its exception gone — 2026-10-20
 
@@ -111,8 +118,15 @@ this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (t
     and −11.9% (`step1/fit-real2/c12-real-final.txt`, lines 103-104), the menu's frame +9.952% against the owner's
     +10%. A round-11 case would settle it: narrow triangles streaming a RAM texture beside the streaming pattern at
     four rates (the design, r3).
+  - No test catches a slip in the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), the low finding of the
+    delta review (`~/phobos-work/scratch/review-291/REVIEW-r2.md`): its mutation D, which charges a refetch by the
+    memory of the word just taken rather than by the mark's kind, passes CI's GE thread step, the release suite with the
+    thread On and the gate. Today's code is right by reading; a one-way JUMP in a threaded test (a list in RAM that
+    jumps into VRAM and ends there) would catch it.
 - Independent review: PASS on `b753b3b46`, with runs (`~/phobos-work/scratch/review-291/REVIEW.md`); four low findings.
   Taken after it: L1 and L2's tests (`f7d27d438`); L4 and section 6's suggestions 2 to 5 in the docs.
+  Round two passed the whole PR at `0e4fa0a80` (`REVIEW-r2.md`). With no macOS runner for that head in six attempts it
+  merged on the owner's OK on `b753b3b46`'s and `c9a2f7727`'s green macOS builds; the merge's own passed on attempt 2.
 
 ## N64: the rasterizer Qualcomm's stock driver rejects, with its stored spec-constant values computed — 2026-10-20
 
@@ -211,6 +225,7 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   environment switch to skip the patch, to compare the two modules on a device without a rebuild.
 - Independent review: PASS on `3ed0a6731`, read-only (`~/phobos-work/scratch/review-292/REVIEW.md`); suggestions only.
   Taken after it: Low 1 and Low 2 (per-store structure, random values from all 32 bits, cleanup rounds) and the nit.
+  Round two passed the whole PR at `c9a2f7727` (`REVIEW-r2.md`); its two wording nits went into #293.
 
 ## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
 
@@ -277,6 +292,7 @@ Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLi
   `-fwrapv -fno-strict-aliasing` too, and the Android link wasn't traced for the PSP (above).
 - Independent review (fresh session): NEEDS CHANGES for 34dfeb7fa; desktop.yml's N64 dialect check can't fail its step.
   Fixed after it: L1 in 35b6489f5; M1 (each condition fails the step) and L2 and L3 in the commit after it.
+  Round two passed the whole PR at `43917e2ac` (`REVIEW-r2.md`); its two informational points went into #293.
 
 ## Tests and CI: the kernel's tests with the PSP's GE timing, and the skip's contention refusal tested — 2026-10-20
 
