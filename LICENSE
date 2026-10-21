@@ -180,8 +180,8 @@ You can contact the author at:
 
 Apache License 2.0
 
-Used by Vulkan-Headers, MoltenVK, font-rs and the Android and Kotlin
-libraries listed near the end of this file.
+Used by Vulkan-Headers, MoltenVK, SPIRV-Cross, SPIRV-Tools, font-rs and
+the Android and Kotlin libraries listed near the end of this file.
 
                                  Apache License
                            Version 2.0, January 2004
@@ -2745,6 +2745,164 @@ https://github.com/KhronosGroup/MoltenVK
 
 Copyright (c) 2015-2026 The Brenwill Workshop Ltd. (http://www.brenwill.com)
 Licensed under the Apache License 2.0, whose text appears above.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SPIRV-Cross (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/KhronosGroup/SPIRV-Cross
+
+At 6c09849fe88c48eaed08413aa022aaa136a3a057, the revision MoltenVK 1.4.2
+pins: its parser and its GLSL, MSL and reflection compilers.
+
+Copyright 2015-2021 Arm Limited
+Copyright 2016-2021 Arm Limited
+Copyright 2018-2021 Arm Limited
+Copyright 2016-2021 The Brenwill Workshop Ltd.
+Copyright 2018-2021 Bradley Austin Davis
+Copyright 2019-2021 Hans-Kristian Arntzen
+SPDX-License-Identifier: Apache-2.0 OR MIT, used here under the Apache
+License 2.0, whose text appears above. Its copy of Khronos's spirv.hpp is
+under SPIRV-Headers' notice, after SPIRV-Tools'.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SPIRV-Tools (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/KhronosGroup/SPIRV-Tools
+
+At 0d6fd73ca73830ccab5fa1f00ed5ed40124e2c55, the revision MoltenVK 1.4.2
+pins: its core library (its instruction tables, binary parser,
+disassembler and text assembler), none of its optimizer, validator,
+reducer, linker, linter or differ.
+
+Copyright (c) 2015-2016 The Khronos Group Inc.
+Copyright (c) 2015-2020 The Khronos Group Inc.
+Copyright (c) 2015-2022 The Khronos Group Inc.
+Copyright (c) 2025 The Khronos Group Inc.
+Copyright (c) 2016 Google Inc.
+Copyright (c) 2017 Google Inc.
+Copyright (c) 2018 Google Inc.
+Copyright (c) 2023 Google Inc.
+Copyright (c) 2024 Google LLC
+Copyright (c) 2025 Google LLC
+Copyright 2025 Google LLC
+Modifications Copyright (C) 2020 Advanced Micro Devices, Inc. All rights reserved.
+Modifications Copyright (C) 2020-2024 Advanced Micro Devices, Inc. All rights reserved.
+Modifications Copyright (C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Licensed under the Apache License 2.0, whose text appears above. Its
+instruction tables are generated from SPIRV-Headers' grammar files (the
+next notice).
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SPIRV-Headers (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/KhronosGroup/SPIRV-Headers
+
+At 29981f65241605e08b0ede4cfeb999fe3b723c6a, the revision MoltenVK 1.4.2
+pins. SPIRV-Tools generates its instruction tables from the grammar files
+in its include/spirv/unified1, and SPIRV-Cross compiles the inline
+functions of its own copy of spirv.hpp. Its LICENSE's notice for its
+files:
+
+Copyright (c) 2015-2024 The Khronos Group Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and/or associated documentation files (the
+"Materials"), to deal in the Materials without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Materials, and to
+permit persons to whom the Materials are furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Materials.
+
+MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS
+KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS
+SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
+   https://www.khronos.org/registry/
+
+THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+The grammar files that ship also state their own copyright and license:
+the core grammar and extinst.opencl.std.100 (and SPIRV-Cross's spirv.hpp),
+extinst.glsl.std.450, extinst.debuginfo,
+extinst.nonsemantic.shader.debuginfo.100 and extinst.opencl.debuginfo.100,
+and extinst.nonsemantic.shader.debuginfo, in that order:
+
+Copyright: 2014-2024 The Khronos Group Inc.
+Copyright (c) 2014-2024 The Khronos Group Inc.
+Copyright: 2017-2024 The Khronos Group Inc.
+Copyright: 2018-2024 The Khronos Group Inc.
+Copyright: 2018-2026 The Khronos Group Inc.
+License: MIT
+
+MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS
+KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS
+SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
+https://www.khronos.org/registry/
+
+and extinst.tosa.001000.1 and extinst.arm.motion-engine.100, then
+extinst.nonsemantic.graph.debuginfo:
+
+SPDX-FileCopyrightText: 2022-2025 Arm Ltd.
+SPDX-FileCopyrightText: 2022-2026 Arm Ltd.
+SPDX-License-Identifier: MIT
+
+The MIT License, as SPIRV-Headers' LICENSES/MIT.txt gives it:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+cereal (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/USCiLab/cereal
+
+At a56bad8bbb770ee266e930c95d37fff2a5be7fea, the revision MoltenVK 1.4.2
+pins: its binary archives, none of the JSON or XML code it bundles.
+
+Copyright (c) 2013-2022, Randolph Voorhies, Shane Grant
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the
+      names of its contributors may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
