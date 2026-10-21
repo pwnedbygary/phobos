@@ -1501,9 +1501,9 @@ static auto fontsGlyphStates() -> void {
   while(vaudio < now.size() && now[vaudio] == withVaudio[vaudio]) vaudio++;
   //(layout 34's: the GE's texture cache's texels, its front end's time, a SIGNAL met and its pipeline, the queue
   //empty: 46 bytes)
-  f.m.kernel.ge.texelCache.u0 = 1;
+  f.m.system.timedGE().texelCache.u0 = 1;
   auto withCached = kernelState(f.m);
-  f.m.kernel.ge.texelCache.u0 = 0;
+  f.m.system.timedGE().texelCache.u0 = 0;
   u32 cached = 0;
   while(cached < now.size() && now[cached] == withCached[cached]) cached++;
   f.m.kernel.display.nextFrameBuffer = 1;  //(layout 33's: a frame buffer set for the next vertical sync, 13 bytes)
@@ -1511,17 +1511,20 @@ static auto fontsGlyphStates() -> void {
   f.m.kernel.display.nextFrameBuffer = 0;
   u32 latched = 0;
   while(latched < now.size() && now[latched] == withLatched[latched]) latched++;
+  //(layout 35's: the CPU beside the GE, its window, caches' tags, unseen counts and the list's clocks by kind, the
+  //2,168 bytes right after the GE's pipeline)
   CHECK(variables + 4 <= at && at + 8 <= now.size() && vaudio + 15 <= now.size() && latched + 13 <= cached &&
-        cached + 46 <= now.size(), true);
+        cached + 46 + 2168 <= now.size(), true);
   if(variables + 4 > at || at + 8 > now.size() || vaudio + 15 > now.size() || latched + 13 > cached ||
-     cached + 46 > now.size()) return;
+     cached + 46 + 2168 > now.size()) return;
   //(each field taken out from the last, so the places before it hold: sceVaudio's 15 bytes are layout 31's)
   auto without = [](std::vector<u8> bytes, std::vector<std::pair<u32, u32>> fields) {
     std::sort(fields.begin(), fields.end(), [](auto& x, auto& y) { return x.first > y.first; });
     for(auto [place, size] : fields) bytes.erase(bytes.begin() + place, bytes.begin() + place + size);
     return bytes;
   };
-  auto older = without(now, {{at, 8}, {vaudio, 15}, {variables, 4}, {latched, 13}, {cached, 46}});
+  auto older = without(now, {{at, 8}, {vaudio, 15}, {variables, 4}, {latched, 13}, {cached, 46},
+                             {cached + 46, 2168}});
   KernelMachine n;
   prepare(n);
   u32 current = n.kernel.stateLayout;
@@ -1535,7 +1538,7 @@ static auto fontsGlyphStates() -> void {
   //layout 26 with a call part way through (sceFontNewLib, waiting in its alloc): no glyph's fields of the call's (32
   //bytes), nor of the font it would be opening (8), nor the program's count of imported variables (4), nor sceVaudio
   //(15), nor a frame buffer set for the next vertical sync (13), nor the GE's texture cache's texels,
-  //front end's time, SIGNAL met and pipeline (46)
+  //front end's time, SIGNAL met and pipeline (46), nor the CPU beside the GE (2,168)
   KernelMachine p;
   prepare(p);
   memoryFunctions(p);
@@ -1568,10 +1571,11 @@ static auto fontsGlyphStates() -> void {
   });
   vaudio = where([&](bool on) { p.kernel.audio.vaudio.reserved = on; });
   latched = where([&](bool on) { p.kernel.display.nextFrameBuffer = on; });
-  cached = where([&](bool on) { p.kernel.ge.texelCache.u0 = on; });
+  cached = where([&](bool on) { p.system.timedGE().texelCache.u0 = on; });
   CHECK(variables + 4 <= opening && opening < fields && fields + 32 <= now.size() && vaudio + 15 <= now.size(), true);
   if(!(variables + 4 <= opening && opening < fields && fields + 32 <= now.size() && vaudio + 15 <= now.size())) return;
-  older = without(now, {{fields, 32}, {opening, 8}, {vaudio, 15}, {variables, 4}, {latched, 13}, {cached, 46}});
+  older = without(now, {{fields, 32}, {opening, 8}, {vaudio, 15}, {variables, 4}, {latched, 13}, {cached, 46},
+                        {cached + 46, 2168}});
   KernelMachine q;
   prepare(q);
   q.kernel.stateLayout = 26;

@@ -1122,8 +1122,11 @@ auto Kernel::serialize(serializer& s) -> bool {
   else s(geDoneAt), s(geFinishDue);
   //the texels the GE's texture cache holds since the last TEX_FLUSH, for the PSP's GE timing (GE::texelClocks(); layout
   //34 on: none in older states)
-  if(s.reading() && stateLayout < 34) ge.texelCache = {};
-  else s(ge.texelCache.u0), s(ge.texelCache.v0), s(ge.texelCache.u1), s(ge.texelCache.v1), s(ge.texelCache.fetched);
+  //(with the GE on its thread, its timing the render GE's, drained: System::serialize(), restore())
+  GE& timed = ge.render ? *ge.render : ge;
+  if(s.reading() && stateLayout < 34) timed.texelCache = {};
+  else s(timed.texelCache.u0), s(timed.texelCache.v0), s(timed.texelCache.u1), s(timed.texelCache.v1),
+       s(timed.texelCache.fetched);
   //when the GE's front end will have got through what it was given, and whether, with the PSP's timing, the list it
   //runs has met a SIGNAL whose interrupt waits for that (layout 34 on: an older layout's were taken the moment the
   //GE met them)
@@ -1135,16 +1138,16 @@ auto Kernel::serialize(serializer& s) -> bool {
   //queue held more (GE::Cost::Queue is measured and refits move it; Pipe::Room) keeps the newest items this build's
   //holds, the oldest dropped as if drawn: it loads, and the list runs on.
   if(s.reading() && stateLayout < 34) {
-    gePipeAt = 0, ge.pipeStart();
+    gePipeAt = 0, timed.pipeStart();
   } else {
-    auto& pipe = ge.pipe;
+    auto& pipe = timed.pipe;
     u32 count = pipe.count;
     s(gePipeAt), s(pipe.front), s(pipe.back), s(count);
     if(s.reading()) {
       //(more items than the rest of the state holds: a state cut short, or read out of step, refused unread)
       if(u64(count) * 2 * sizeof(f64) > s.capacity() - s.size()) check(false), count = 0;
       pipe.first = 0, pipe.count = 0, pipe.entries = 0;
-      pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = 0;
+      pipe.pending = pipe.vertices = 0, pipe.left = 0, pipe.words = pipe.ramWords = 0;
     }
     auto dropOldest = [&] {
       pipe.entries -= pipe.items[pipe.first].entries;
@@ -1162,6 +1165,51 @@ auto Kernel::serialize(serializer& s) -> bool {
       while(pipe.count && pipe.entries > GE::Cost::Queue) dropOldest();
       check(pipe.front >= 0 && pipe.back >= 0 && pipe.entries >= 0);
     }
+  }
+  //with the PSP's timing, the CPU beside the GE (geContend()): the GE's busy window so far, the lines the CPU's caches
+  //hold (Allegrex::Cache) and the counts they made that the window hasn't seen yet, and the list's clocks so far that
+  //read RAM, by kind, and all of them (layout 35 on: an older state's window starts afresh, with the caches empty).
+  //(The clocks the timed GE's: with the GE on its thread, the render GE's, which the kernel's GE keeps a copy of as the
+  //runs folded leave them: Kernel::geFold().) Those clocks count a PRIM's own start and a JUMP's, CALL's or RET's
+  //refetch too, each in its kind, and what's read from VRAM as other work (GE::ramRead()), since the Super Monkey Ball
+  //refit, still layout 35: a state of it from an earlier build loads, its running list's shares a little off till the
+  //next list starts (GE::pipeStart() clears them). A new layout would change every state's number, "Fast"'s too,
+  //against master's, for nothing a state holds. The runner's report counts none of it: a window loaded isn't marked
+  //capped (GeWindow::capped, cleared), and the turns run in place of a skip refused before the load are counted only
+  //to it (spinRefusalsEnd()).
+  auto& data = cpu.dataCache;
+  auto& code = cpu.instructionCache;
+  if(s.reading()) spinRefusalsEnd();
+  if(s.reading() && stateLayout < 35) {
+    geWindow = {};
+    for(auto* cache : {&data, &code}) {
+      for(u32 set : range(Allegrex::Cache::Sets)) cache->recent[set] = cache->older[set] = Allegrex::Cache::Empty;
+    }
+    geCacheSeen[0] = data.fills, geCacheSeen[1] = data.writebacks, geCacheSeen[2] = data.uncached;
+    geCacheSeen[3] = code.fills;
+    for(auto& clocks : timed.ramClocks) clocks = 0;
+    timed.allClocks = 0;
+  } else {
+    auto& w = geWindow;
+    s(w.passed), s(w.instructions), s(w.fills), s(w.writebacks), s(w.uncached), s(w.pushed);
+    if(s.reading()) w.capped = 0;
+    s(data.recent), s(data.older), s(code.recent), s(code.older);
+    u64 unseen[4] = {data.fills - geCacheSeen[0], data.writebacks - geCacheSeen[1], data.uncached - geCacheSeen[2],
+                     code.fills - geCacheSeen[3]};
+    if(geDoneAt <= cycles) for(auto& count : unseen) count = 0;  //(the GE idle: seen afresh as it gets busy)
+    s(unseen);
+    if(s.reading()) {
+      geCacheSeen[0] = data.fills - unseen[0], geCacheSeen[1] = data.writebacks - unseen[1];
+      geCacheSeen[2] = data.uncached - unseen[2], geCacheSeen[3] = code.fills - unseen[3];
+    }
+    s(timed.ramClocks), s(timed.allClocks);
+    auto counted = [](f64 value) { return std::isfinite(value) && value >= 0; };
+    check(w.pushed <= w.passed && counted(timed.allClocks));
+    for(f64 clocks : timed.ramClocks) check(counted(clocks));
+  }
+  if(s.reading() && &timed != &ge) {
+    for(u32 kind : range(4)) ge.ramClocks[kind] = timed.ramClocks[kind];
+    ge.allClocks = timed.allClocks;
   }
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue

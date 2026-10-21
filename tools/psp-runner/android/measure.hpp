@@ -16,6 +16,14 @@
 //                      (refused while the SoC keeps the fastest core parked); fastest: the fastest alone, every frame;
 //                      none: left as it starts (and no nice); or a list of CPUs ("7", "4-7", "3,7"), every frame
 //  PHOBOS_NICE         the nice value to take (-10 by default, but none with PHOBOS_PIN=none)
+//  PHOBOS_GE_PIN       a list of CPUs for the GE's own thread (option "GE Thread" On; the core names it
+//                      psp-ge-thread), asked for every frame as the emulation thread's are; unset: left as it is, with
+//                      the affinity of the thread that loaded the game. The CPU it was on is kept every frame, either
+//                      way
+//  PHOBOS_GE_PLACE     1: the GE's own thread and the emulation thread placed as the app places them with its "PSP
+//                      thread placement" on (android/app/src/main/cpp/GeThreadPlacement.hpp): the GE's on the fastest
+//                      core the runner may run on as it starts, the emulation thread on the next, every frame, in
+//                      place of PHOBOS_PIN's and PHOBOS_GE_PIN's (which go on where nothing could be placed)
 //  PHOBOS_PERF         0: no hardware counters (they're tried by default)
 //  PHOBOS_FREQ_EVERY   the emulation thread's CPU's clock read every N frames (30 by default; 0: never)
 //  PHOBOS_MEASURE      0: nothing measured, nothing pinned (the runner as it is)
@@ -50,6 +58,7 @@
 #if defined(__ANDROID__)
   #include <sys/system_properties.h>
 #endif
+#include "../../../android/app/src/main/cpp/GeThreadPlacement.hpp"
 
 //The build, for the JSON (build-android.sh names them)
 #if !defined(PHOBOS_MEASURE_SOURCE)
@@ -348,11 +357,35 @@ inline auto affinity() -> std::vector<int> {
   return cpus;
 }
 
-inline auto setAffinity(const std::vector<int>& cpus) -> int {  //errno, or 0
+inline auto setAffinity(const std::vector<int>& cpus, long tid = 0) -> int {  //errno, or 0 (tid 0: this thread)
   cpu_set_t set;
   CPU_ZERO(&set);
   for(int cpu : cpus) if(cpu >= 0 && cpu < CPU_SETSIZE) CPU_SET(cpu, &set);
-  return sched_setaffinity(0, sizeof(set), &set) ? errno : 0;
+  return sched_setaffinity((pid_t)tid, sizeof(set), &set) ? errno : 0;
+}
+
+inline auto affinityOf(long tid) -> std::vector<int> {
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  if(sched_getaffinity((pid_t)tid, sizeof(set), &set)) return {};
+  std::vector<int> cpus;
+  for(int cpu = 0; cpu < CPU_SETSIZE; cpu++) if(CPU_ISSET(cpu, &set)) cpus.push_back(cpu);
+  return cpus;
+}
+
+//(the GE's own thread's ID, by the name the core gives it; 0 while there's none)
+inline auto geThreadId() -> long {
+  long found = 0;
+  if(DIR* folder = opendir("/proc/self/task")) {
+    while(auto entry = readdir(folder)) {
+      char* end = nullptr;
+      long tid = std::strtol(entry->d_name, &end, 10);
+      if(end == entry->d_name || *end) continue;
+      if(readLine(std::string("/proc/self/task/") + entry->d_name + "/comm") == "psp-ge-thread") found = tid;
+    }
+    closedir(folder);
+  }
+  return found;
 }
 #endif
 
@@ -586,6 +619,19 @@ struct State {
   int niceValue = 0, niceBefore = 0, niceAfter = 0, niceError = 0;
   u64 pinAsked = 0, pinRefused = 0;
   int pinError = 0;
+  //the GE's own thread (option "GE Thread"), found by its name; its pinning (PHOBOS_GE_PIN) and the CPU it was on
+  long geTid = 0;
+  std::vector<int> gePin, geAffinityBegin, geAffinityEnd;
+  std::map<int, unsigned> geFramesByCpu;
+  u64 gePinAsked = 0, gePinRefused = 0;
+  int gePinError = 0;
+  //the app's placement of the two (PHOBOS_GE_PLACE): asked as the pinning is (before each frame's run), and how often
+  //both were placed
+  bool gePlace = false;
+  #if defined(__linux__)
+  phobos_placement::Placement placement;
+  #endif
+  u64 placeAsked = 0, placed = 0;
   //the system
   std::string cpuset, cgroup, kernel, android, model, soc, harden;
   long long paranoid = -1000;
@@ -600,9 +646,29 @@ inline auto state() -> State& {
 
 inline auto pinFrame(State& s) -> void {
   #if defined(__linux__)
+  if(s.gePlace) s.placeAsked++;
+  if(s.gePlace && s.placement.place()) {
+    s.placed++;
+    s.geTid = s.placement.geTid;
+    return;
+  }
   if(s.target.empty()) return;
   s.pinAsked++;
   if(int error = setAffinity(s.target)) s.pinRefused++, s.pinError = error;
+  #else
+  (void)s;
+  #endif
+}
+
+//(the GE's own thread each frame, if there's one: pinned where PHOBOS_GE_PIN asks, and the CPU it was on kept)
+inline auto geFrame(State& s) -> void {
+  #if defined(__linux__)
+  if(!s.geTid) return;
+  if(!s.gePin.empty() && !(s.gePlace && s.placement.geCore >= 0)) {
+    s.gePinAsked++;
+    if(int error = setAffinity(s.gePin, s.geTid)) s.gePinRefused++, s.gePinError = error;
+  }
+  s.geFramesByCpu[taskTime("/proc/self/task/" + std::to_string(s.geTid)).lastCpu]++;
   #else
   (void)s;
   #endif
@@ -640,6 +706,8 @@ inline auto begin() -> void {
   s.pinMode = environment("PHOBOS_PIN", "app");
   #if defined(__linux__)
   s.affinityBefore = affinity();
+  s.gePlace = environment("PHOBOS_GE_PLACE", "0") == "1";
+  if(s.gePlace) s.placement.start();  //(the cores it may run on, before the pinning below narrows them)
   errno = 0;
   s.niceBefore = getpriority(PRIO_PROCESS, 0);
   if(s.pinMode != "none") {
@@ -663,6 +731,13 @@ inline auto begin() -> void {
                                       s.pinMode.c_str());
   }
   pinFrame(s);  //(the app asks before each frame's run, the first one's too)
+  //(the GE's own thread, there from the game's load if "GE Thread" is On: looked for once)
+  s.gePin = parseCpus(environment("PHOBOS_GE_PIN", ""));
+  s.geTid = geThreadId();
+  if(s.geTid) s.geAffinityBegin = affinityOf(s.geTid);
+  if(s.geTid && !s.gePin.empty() && !(s.gePlace && s.placement.geCore >= 0)) {
+    s.gePinAsked++, setAffinity(s.gePin, s.geTid);
+  }
   #endif
 
   s.clocksBegin = policyClocks(s.cpuList);
@@ -698,6 +773,7 @@ inline auto frame() -> void {
     }
   }
   pinFrame(s);
+  geFrame(s);
 }
 
 inline auto end() -> void {
@@ -709,8 +785,9 @@ inline auto end() -> void {
   perfStop(s.perf);
   #if defined(__linux__)
   if(s.threadUsage) getrusage(RUSAGE_THREAD, &s.usageEnd);
-  else getrusage(RUSAGE_SELF, &s.usageEnd);
+  else   getrusage(RUSAGE_SELF, &s.usageEnd);
   s.affinityEnd = affinity();
+  if(s.geTid) s.geAffinityEnd = affinityOf(s.geTid);
   #else
   getrusage(RUSAGE_SELF, &s.usageEnd);
   #endif
@@ -865,6 +942,34 @@ inline auto print() -> void {
     std::printf("; kept to %s at the end (%s before)\n", cpuList(s.affinityEnd).c_str(),
                 cpuList(s.affinityBefore).c_str());
   }
+  if(s.geTid) {
+    std::string where;
+    for(auto& [cpu, frames] : s.geFramesByCpu) {
+      char item[96];
+      auto kind = cpu < 0 ? std::string() : kindOf(s, cpu);
+      std::snprintf(item, sizeof(item), "%scpu%d%s%s %u (%.1f%%)", where.empty() ? "" : ", ", cpu,
+                    kind.empty() ? "" : " ", kind.c_str(), frames, s.frames ? 100.0 * frames / s.frames : 0.0);
+      where += item;
+    }
+    std::printf("measure ge thread: tid %ld, %s (frames by the CPU it was on after each)", s.geTid, where.c_str());
+    if(!s.gePin.empty()) {
+      std::printf(", pinned to %s every frame (%llu asked, %llu refused%s%s)", cpuList(s.gePin).c_str(), s.gePinAsked,
+                  s.gePinRefused, s.gePinRefused ? ": " : "", s.gePinRefused ? std::strerror(s.gePinError) : "");
+    }
+    std::printf("; kept to %s at the end (%s at the start)\n", cpuList(s.geAffinityEnd).c_str(),
+                cpuList(s.geAffinityBegin).c_str());
+  }
+  #if defined(__linux__)
+  if(s.gePlace) {
+    auto& p = s.placement;
+    std::printf("measure ge placement: cores ranked %s (of %s); both placed %llu of the %llu times asked",
+                cpuList(p.cores).c_str(), cpuList(p.allowed).c_str(), s.placed, s.placeAsked);
+    if(p.geCore >= 0) {
+      std::printf(", the GE's thread last on cpu%d and the emulation thread on cpu%d", p.geCore, p.emulationCore);
+    }
+    std::printf(" (%llu cores refused)\n", p.refused);
+  }
+  #endif
   if(!r.clocks.empty()) {
     std::string clocks;
     for(auto& [cpu, clock] : r.clocks) {
@@ -981,6 +1086,35 @@ inline auto writeJson(State& s) -> void {
          ", \"target\": " + list(s.target) + ", \"asked\": " + std::to_string(s.pinAsked) + ", \"refused\": " +
          std::to_string(s.pinRefused) + ", \"affinity before\": " + list(s.affinityBefore) +
          ", \"affinity at end\": " + list(s.affinityEnd) + "},\n";
+  out += "  \"ge thread\": ";
+  if(!s.geTid) {
+    out += "null,\n";
+  } else {
+    out += "{\"tid\": " + std::to_string(s.geTid) + ", \"pin\": " + list(s.gePin) + ", \"asked\": " +
+           std::to_string(s.gePinAsked) + ", \"refused\": " + std::to_string(s.gePinRefused) +
+           ", \"affinity at start\": " + list(s.geAffinityBegin) + ", \"affinity at end\": " + list(s.geAffinityEnd) +
+           ", \"frames by cpu\": {";
+    bool firstCpu = true;
+    for(auto& [cpu, frames] : s.geFramesByCpu) {
+      out += std::string(firstCpu ? "" : ", ") + "\"" + std::to_string(cpu) + "\": " + std::to_string(frames);
+      firstCpu = false;
+    }
+    out += "}},\n";
+  }
+  out += "  \"ge placement\": ";
+  #if defined(__linux__)
+  if(s.gePlace) {
+    auto& p = s.placement;
+    out += "{\"cores\": " + list(p.cores) + ", \"allowed\": " + list(p.allowed) + ", \"asked\": " +
+           std::to_string(s.placeAsked) + ", \"placed\": " + std::to_string(s.placed) + ", \"ge core\": " +
+           std::to_string(p.geCore) + ", \"emulation core\": " + std::to_string(p.emulationCore) + ", \"refused\": " +
+           std::to_string(p.refused) + "},\n";
+  } else {
+    out += "null,\n";
+  }
+  #else
+  out += "null,\n";
+  #endif
   out += "  \"window\": {\"frames\": " + std::to_string(s.frames) + ", \"seconds\": " + number(r.window) +
          ", \"frames a second\": " + number(r.fps) + "},\n";
   out += "  \"emulation thread\": {\"tid\": " + std::to_string(s.tid) + ", \"cpu seconds\": " + number(r.threadCpu) +

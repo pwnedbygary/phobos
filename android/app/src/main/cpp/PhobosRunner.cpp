@@ -1,5 +1,6 @@
 #include "PhobosRunner.hpp"
 #include "PhobosHost.hpp"
+#include "GeThreadPlacement.hpp"
 #include <mia/mia.hpp>
 #include <android/log.h>
 #if defined(__ANDROID__)
@@ -1021,6 +1022,10 @@ namespace ares {
   static std::atomic<s32> pspRenderer{0};
   // How many times over Vulkan's draws each of the PSP's pixels (Settings' "PSP Resolution"): 1, Native, to 10.
   static std::atomic<s32> pspResolution{1};
+  // Whether the PSP's pictures are drawn on a thread of their own (Settings' "PSP Graphics Overlap"): 0 Off, 1 On.
+  static std::atomic<s32> pspGraphicsOverlap{0};
+  // With it On, its thread on the fastest core and the emulation thread on the next (GeThreadPlacement.hpp).
+  static std::atomic<bool> pspThreadPlacement{false};
   // The GE timed as a real PSP's, not by Sony's peak rates (Settings' "PSP GE Timing", on by default).
   static std::atomic<bool> pspGeTiming{true};
   // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
@@ -1341,6 +1346,9 @@ namespace ares {
   auto emulationLoop(u32 generation) -> void {
     #if defined(__ANDROID__)
     setpriority(PRIO_PROCESS, 0, -10);
+    phobos_placement::Placement placement;
+    placement.start();  //(the cores this thread may run on, before it's narrowed to the last four)
+    bool placed = false;
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     s32 num_cores = sysconf(_SC_NPROCESSORS_CONF);
@@ -1415,9 +1423,15 @@ namespace ares {
         // core paused under light load (Qualcomm core control), leaving the scheduler's choice.
         #if defined(__ANDROID__)
         bool pinFastest = pinFastestCore.load(std::memory_order_relaxed);
-        if (pinFastest) sched_setaffinity(0, sizeof(cpu_set_t), &fastestSet);
-        else if (pinnedToFastest) sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
-        pinnedToFastest = pinFastest;
+        bool placing = pspThreadPlacement.load(std::memory_order_relaxed) && placement.place();
+        if (placed && !placing) placement.release();
+        placed = placing;
+        if (placing) pinnedToFastest = true;  //(left: widened again, or pinned to the fastest, below)
+        else {
+          if (pinFastest) sched_setaffinity(0, sizeof(cpu_set_t), &fastestSet);
+          else if (pinnedToFastest) sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+          pinnedToFastest = pinFastest;
+        }
         emuThreadCore.store((s32)sched_getcpu(), std::memory_order_relaxed);
         #endif
         {
@@ -3628,6 +3642,22 @@ else if (port->type() == "Keyboard") {
     } else if (identifiedSystem == "PlayStation") {
       success = ::ares::PlayStation::load(root, getRegion("[Sony] PlayStation (NTSC-U)", "[Sony] PlayStation (NTSC-J)", "[Sony] PlayStation (PAL)"));
     } else if (identifiedSystem == "PlayStation Portable") {
+      // A PSP emulation thread an unload left stuck inside root->run() (in a GPU driver call) is joined first, as an
+      // N64 one is; and the core's own GE thread, if an unload left it stuck the same way (its unwedge()). While either
+      // remains, the core's one machine is still theirs: no game is loaded, and the user is asked to restart the app.
+      joinAbandonedThreads(2000);
+      bool zombies = false;
+      {
+        std::lock_guard<std::mutex> lock(zombieThreadsMutex);
+        zombies = !zombieThreads.empty();
+      }
+      if (zombies || !::ares::PlayStationPortable::unwedge(2000)) {
+        LOGE("PSP: a thread of the last game is still stuck (in the GPU's driver?): restart the app to play again");
+        loadProblem = "A thread of the last PSP game is still stuck in the GPU's driver: restart the app to play "
+                      "again.";
+        currentMedium.reset();
+        return false;
+      }
       // Every game shares one memory stick (saves in PSP/SAVEDATA, as on a PSP) unless the user picked a folder.
       string memoryStick = pspMemoryStickPath;
       if (!memoryStick && savesPath) memoryStick = {savesPath, "/PlayStation Portable/Memory Stick"};
@@ -3649,6 +3679,9 @@ else if (port->type() == "Keyboard") {
       ::ares::PlayStationPortable::option("Renderer", rendererName);
       LOGI("PSP: resolution %dx", pspResolution.load());
       ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      // The GE on a thread of its own: its pictures drawn while the game goes on (the same pictures either way).
+      LOGI("PSP: graphics overlap %s", pspGraphicsOverlap.load() == 1 ? "on" : "off");
+      ::ares::PlayStationPortable::option("GE Thread", pspGraphicsOverlap.load() == 1 ? "On" : "Off");
       LOGI("PSP: GE timing %s", pspGeTiming.load() ? "PSP" : "Fast");
       ::ares::PlayStationPortable::option("GE Timing", pspGeTiming.load() ? "PSP" : "Fast");
       // The Vulkan renderer's pipelines kept between sessions, beside the N64's (the Vulkan cache folder, or saves').
@@ -4777,6 +4810,8 @@ else if (port->type() == "Keyboard") {
   auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
   auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 || renderer == 2 ? renderer : 0; }
   auto setPspResolution(s32 scale) -> void { pspResolution = std::clamp(scale, 1, 10); }
+  auto setPspGraphicsOverlap(s32 mode) -> void { pspGraphicsOverlap = mode == 1 ? 1 : 0; }
+  auto setPspThreadPlacement(bool enabled) -> void { pspThreadPlacement = enabled; }
   auto setPspGeTiming(bool psp) -> void { pspGeTiming = psp; }
   auto takePspNotice() -> std::string {
     std::string text = (const char*)::ares::PlayStationPortable::notice();

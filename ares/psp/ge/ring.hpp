@@ -38,6 +38,8 @@ struct RecordRing {
     wakes.fetch_add(1, std::memory_order_release);
     wakes.notify_one();
   }
+  //(whether reserve() takes a record of size bytes: none past half the ring)
+  auto fits(u32 size) const -> bool { return ((size + sizeof(u32) + 7) & ~7u) <= ring.size() / 2; }
   //Whether the reader has taken everything published; the bytes published and not yet taken, of the ring's size.
   auto empty() const -> bool { return taken.load(std::memory_order_acquire) == published.load(std::memory_order_acquire); }
   auto backlog() const -> u64 {

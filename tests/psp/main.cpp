@@ -1,8 +1,10 @@
 //The PSP system's tests: ares/psp beyond the CPU (which tests/allegrex covers), built on the host the same way.
 #include "system.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 int main() {
   using namespace allegrex_test;
@@ -51,9 +53,21 @@ int main() {
   for(auto& test : measured8Tests()) tests.push_back(test);
   for(auto& test : gpuTests()) tests.push_back(test);
   checkRequired();
-  //(PHOBOS_TESTS_ONLY: only the tests whose names have it in them, for a quicker run while one is worked on)
-  const char* only = std::getenv("PHOBOS_TESTS_ONLY");
-  if(only && *only) std::erase_if(tests, [&](auto& test) { return std::string{test.first}.find(only) == std::string::npos; });
+  //(PHOBOS_TESTS_ONLY: only the tests whose names have it in them, or one of its parts between "|"s, for a quicker run
+  //while one is worked on, or CI's run of the GE thread's tests with the thread on)
+  if(const char* only = std::getenv("PHOBOS_TESTS_ONLY"); only && *only) {
+    std::vector<std::string> parts;
+    for(std::string rest = only;;) {
+      auto bar = rest.find('|');
+      parts.push_back(rest.substr(0, bar));
+      if(bar == std::string::npos) break;
+      rest = rest.substr(bar + 1);
+    }
+    std::erase_if(tests, [&](auto& test) {
+      std::string name = test.first;
+      return std::none_of(parts.begin(), parts.end(), [&](auto& part) { return name.find(part) != std::string::npos; });
+    });
+  }
   for(auto& [name, run] : tests) {
     currentTest = name;
     int before = failures;

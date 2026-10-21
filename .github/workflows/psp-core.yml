@@ -7,9 +7,10 @@ name: PSP Core Tests
 # (tools/psp-runner/build-android.sh). Their paths are what those builds compile or read: the core, nall, ares's
 # framework and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the
 # desktop's disc reader, the tests, and the files the PSP's tests share with the app's
-# (android/app/src/test/resources/psp-*: the dialogs' byte form, the keyboard's cases). The CPU's suite runs on an
-# ARM64 host too, and again built as the app's release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized
-# runs; the system's, built so, is a lane of its own.
+# (android/app/src/test/resources/psp-*: the dialogs' byte form, the keyboard's cases) and the runner with the app's
+# native code (android/app/src/main/cpp/GeThreadPlacement.hpp: where the PSP's two threads run). The CPU's suite runs
+# on an ARM64 host too, and again built as the app's release builds are (PHOBOS_TESTS_MODE=release), beside the
+# sanitized runs; the system's, built so, is a lane of its own.
 # A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
 # GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the run's summary
 # with the commit; the x86-64 Allegrex lane's sanitized run and both system lanes keep their groups' results (pass,
@@ -24,13 +25,13 @@ on:
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
              'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
-             'android/app/src/test/resources/psp-*',
+             'android/app/src/test/resources/psp-*', 'android/app/src/main/cpp/GeThreadPlacement.hpp',
              '.github/workflows/psp-core.yml' ]
   pull_request:
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
              'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
-             'android/app/src/test/resources/psp-*',
+             'android/app/src/test/resources/psp-*', 'android/app/src/main/cpp/GeThreadPlacement.hpp',
              '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
@@ -50,7 +51,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # tests/objects.sh, which keeps every suite's objects, on its own small program (seconds)
       - name: Check the build scripts' object keeping
@@ -99,7 +100,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: The host
         run: |
@@ -139,7 +140,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
       # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
@@ -163,8 +164,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
 
       # Required: a Vulkan GPU (lavapipe) with each capability of it the tests use that lavapipe has (not
-      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3, 6, 8, 9 and
-      # 10)
+      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3, 6, 8, 9, 10,
+      # 10b and 10c)
       - name: Run the tests
         shell: bash
         env:
@@ -172,7 +173,7 @@ jobs:
           PHOBOS_TESTS_REQUIRE: >-
             vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
             vulkan-stencil-export, vulkan-depth-clamp, programs, ge-round3, ge-round6, ge-round8, ge-round9,
-            ge-round10
+            ge-round10, ge-round10b, ge-round10c
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
@@ -204,7 +205,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
       # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
@@ -228,8 +229,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
 
       # Required: a Vulkan GPU (lavapipe) with each capability of it the tests use that lavapipe has (not
-      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3, 6, 8, 9 and
-      # 10).
+      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3, 6, 8, 9, 10,
+      # 10b and 10c).
       # Four compiles at once: then a failed one lets the others finish, so one run shows every file's errors.
       - name: Run the tests
         shell: bash
@@ -240,9 +241,49 @@ jobs:
           PHOBOS_TESTS_REQUIRE: >-
             vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
             vulkan-stencil-export, vulkan-depth-clamp, programs, ge-round3, ge-round6, ge-round8, ge-round9,
-            ge-round10
+            ge-round10, ge-round10b, ge-round10c
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report-release.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      # The GE thread's tests again with every test machine's GE on its thread (PHOBOS_TESTS_GE_THREAD=On, as the
+      # option "GE Thread" On): the thread's own groups, the GPU's with it, the GE's times (the PSP's timing's with
+      # the thread among them) and the measured rounds' GE time, the CPU beside the GE (measured rounds 10, 10b and
+      # 10c's among them), the versions, the GE's looks polled. The objects the run above built, linked again.
+      - name: Run the GE thread's tests with the thread on
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PHOBOS_TESTS_MODE: release
+          PHOBOS_JOBS: 4
+          PSP_GPU_ON_CPU: 1
+          PHOBOS_TESTS_GE_THREAD: "On"
+          PHOBOS_TESTS_ONLY: >-
+            ge on its own thread|with the GE on its thread|ge time|GE time|ge versions|looks polled|the CPU beside the
+            GE
+          PHOBOS_TESTS_REQUIRE: vulkan, programs, ge-round6, ge-round8, ge-round9, ge-round10, ge-round10b, ge-round10c
+        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-on.log"
+
+      # The kernel's GE tests again with every test machine that doesn't choose its GE timing on the PSP's
+      # (PHOBOS_TESTS_GE_TIMING=PSP, as the option "GE Timing" has it by default; tests that pin "Fast"'s times keep
+      # it): the spin skip's groups and the GE's looks polled, the kernel's GE groups (their lists, callbacks, breaks
+      # and states, the GE thread's among them) and the sample programs, every result as with "Fast". "ge " also
+      # picks 12 groups that aren't the GE's (message pipes x5, the memory page table, dialogs front end: message
+      # aborted, desktop disc image files, two draw3d groups and two gpu groups): harmless breadth. Left out for
+      # time: the measured rounds' groups, and the GPU's that "ge " doesn't catch. The objects the first run built,
+      # linked again.
+      - name: Run the kernel's GE tests with the PSP's GE timing
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PHOBOS_TESTS_MODE: release
+          PHOBOS_JOBS: 4
+          PSP_GPU_ON_CPU: 1
+          PHOBOS_TESTS_GE_TIMING: PSP
+          PHOBOS_TESTS_ONLY: >-
+            spin|looks polled|ge |gu program|copy sample|blit sample|doublelist sample|clut sample|blend sample|cube
+            sample|celshading sample|envmap sample|curves on several threads
+          PHOBOS_TESTS_REQUIRE: vulkan, programs
+        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-psp-timing.log"
 
       - name: Keep the groups' results
         if: ${{ !cancelled() }}
@@ -260,6 +301,12 @@ jobs:
           at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
           last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
           echo "- tests/psp, release build, at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+          last=$(tail -1 "$RUNNER_TEMP/suite-on.log" 2> /dev/null || true)
+          echo "- tests/psp, release build, the GE thread's tests with the thread on: ${last:-no output: they did not run}" \
+            >> "$GITHUB_STEP_SUMMARY"
+          last=$(tail -1 "$RUNNER_TEMP/suite-psp-timing.log" 2> /dev/null || true)
+          echo "- tests/psp, release build, the kernel's GE tests with the PSP's GE timing:" \
+            "${last:-no output: they did not run}" >> "$GITHUB_STEP_SUMMARY"
 
   # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
   # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
@@ -269,7 +316,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Name the FFmpeg build
         id: ffmpeg
@@ -305,7 +352,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Name the FFmpeg build
         id: ffmpeg
@@ -341,7 +388,7 @@ jobs:
     steps:
       # (the history, for the build's name: git describe)
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           filter: blob:none
@@ -407,7 +454,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Test the measurements
         run: |

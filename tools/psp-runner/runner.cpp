@@ -23,13 +23,14 @@
 //    --wav FILE                 the sound, as a 16-bit stereo WAV at the PSP's 44.1 kHz
 //    --save-state-at F FILE     the machine's state at frame F, as a save-state file
 //    --load-state FILE          start from a save-state file (the game booted, then the state loaded at once)
-//    --interpreter              run the CPU's interpreter (the recompiler is the default)
+//    --interpreter              run the CPU's interpreter (the recompiler is the default; with --ge-timing psp its
+//                                accesses aren't counted in the CPU's caches, so the GE takes less time beside it than
+//                                the recompiler's: docs/psp-core.md part 113)
 //    --spin-skip on|off         skip through loops that only poll (spins.cpp), every register, byte and cycle as running
 //                                them gives: on by default, off with --ge-profile unless given (so a profile counts
 //                                every poll, as the PSP's plugin records them)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
-//    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on (with
-//                                --ge-timing fast: the PSP's timing keeps the GE on the emulation thread)
+//    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on
 //    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
 //                                system's Vulkan loader; the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
@@ -65,7 +66,9 @@
 //own thread to present a new picture (with a timeout), then writes it as a PNG named by the frame run. A PNG whose
 //wait ran out (no picture presented since the last PNG) shows the last one: the runner says so on standard error and
 //counts it. The screen's thread drops pictures it doesn't take in time, so on a busy host a PNG can be older than its
-//name: the report's captures give, for each, the frame that was running when its picture arrived. Captures (PNGs and
+//name: the report's captures give, for each, the frame that was running when its picture arrived. With the GE on its
+//thread (whose pictures the screen shows a frame late) a PNG's frame and the one before it get their own pictures, so
+//a PNG a frame older than its name shows that frame's own picture, as with the thread off. Captures (PNGs and
 //the save state) are in the frame loop's time; the summary gives the speed without them too where there were any.
 
 #include <psp/psp.hpp>
@@ -649,10 +652,6 @@ auto main(int argc, char** argv) -> int {
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
   if(!geThread.empty()) PlayStationPortable::option("GE Thread", geThread == "on" || geThread == "On" ? "On" : "Off");
-  if(gePspTiming && (geThread == "on" || geThread == "On")) {
-    std::fprintf(stderr, "--ge-thread on: the PSP's GE timing keeps the GE on the emulation thread (--ge-timing fast "
-                         "for the thread)\n");
-  }
   //(the core's names, "Vulkan (accurate)" and "Vulkan (fast)", as one word each for a shell)
   if(renderer == "Vulkan-accurate") renderer = "Vulkan";
   if(renderer == "Vulkan-fast") renderer = "Vulkan (fast)";
@@ -784,11 +783,16 @@ auto main(int argc, char** argv) -> int {
     }
     if(saveStateAt == frame) captured += std::chrono::steady_clock::now() - stateStarted;
     if(!geProfileFile.empty() && frame == geProfileFrom) psp.kernel.geProfileStart(geProfile);
+    //(a frame written as a PNG gets its own picture on the screen, the GE thread waited for where it takes them; so
+    //does the frame before it, whose picture the PNG takes where the screen's thread hasn't presented its own yet,
+    //as it would be with the thread off)
+    auto png = [&](u32 at) { return host.pngEvery ? at % host.pngEvery == 0 : host.pngAt.count(at) > 0; };
+    psp.exactFrame = png(frame) || png(frame + 1);
     root->run();
     if(!geProfileFile.empty() && frame >= geProfileFrom && geProfileTo == frames && !psp.kernel.geProfile) {
       geProfileTo = frame;  //the program started again (Kernel::loadExec()), ending the profile
     }
-    if(host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame)) {
+    if(png(frame)) {
       auto pngStarted = std::chrono::steady_clock::now();
       auto deadline = pngStarted + std::chrono::seconds(2);
       while(true) {
@@ -831,16 +835,22 @@ auto main(int argc, char** argv) -> int {
   auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
   psp.kernel.geProfileStop();
+  //(with the GE on its thread, that thread done with its last frame first: the renderer is its till then)
+  auto& drawing = psp.ge.drawer();
   //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
   std::optional<PlayStationPortable::GPU::Statistics> gpu;
   if(psp.gpu) gpu = psp.gpu->statistics;
   u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
+  psp.kernel.geFold(true);  //(with the GE on its thread, the stretches the CPU ended after its runs taken first)
+  f64 geBusyCycles = psp.kernel.geBusyCycles, geBusyLines = psp.kernel.geBusyLines;  //(so too)
+  u64 geCapped = psp.kernel.geCapped, geSkipsRefused = psp.kernel.geSkipsRefused;  //(the CPU beside the GE's counts)
+  u64 geRefusedInstructions = psp.kernel.geRefusedRun(), geInstructions = psp.kernel.geInstructions;
   //what ran, for the report, before unloading lets the renderer go
   std::string ranRenderer = psp.gpu ? (psp.gpu->fast ? "Vulkan (fast)" : "Vulkan") : "Software";
   std::string ranDevice = psp.gpu ? psp.gpu->backend->name() : "";
   bool gpuLost = psp.gpu && !psp.gpu->ready();  //(it stopped answering: the software renderer drew from then on)
-  u32 ranResolution = psp.gpu ? psp.gpu->resolution() : 1, ranThreads = psp.ge.drawing.threads;
+  u32 ranResolution = psp.gpu ? psp.gpu->resolution() : 1, ranThreads = drawing.drawing.threads;
   root->unload();
 
   //The sound, as a WAV (a WAV that can't be written fails the run, once the GE profile is written too).
@@ -896,6 +906,21 @@ auto main(int argc, char** argv) -> int {
                 frames / std::max(elapsed - capturedSeconds, 1e-9));
   }
   if(staleCaptures) std::printf("stale captures: %u\n", staleCaptures);
+  if(auto& cache = psp.cpu.dataCache; cache.enabled && frames) {  //(the PSP's GE timing: Allegrex::Cache)
+    std::printf("caches: %.0f data lines a frame read in from RAM, %.0f written back, %.0f uncached accesses, %.0f "
+                "instruction lines read in; %.0f moved while the GE was busy, %.1f%% of the time\n",
+                double(cache.fills) / frames, double(cache.writebacks) / frames, double(cache.uncached) / frames,
+                double(psp.cpu.instructionCache.fills) / frames, geBusyLines / frames,
+                100 * geBusyCycles / (double(frames) * ares::PlayStationPortable::Kernel::VblankCycles));
+  }
+  //(with the PSP's timing, the CPU beside the GE: its busy windows whose push reached the cap, GE::Cost::Cap; the spin
+  //skips the cap refused, and the instructions run in their place, any still running at the end counted to it; and all
+  //the CPU's instructions)
+  if(gePspTiming) {
+    std::printf("ge contention: %llu windows capped; %llu spin skips refused, %llu instructions run in them, of %llu\n",
+                (unsigned long long)geCapped, (unsigned long long)geSkipsRefused,
+                (unsigned long long)geRefusedInstructions, (unsigned long long)geInstructions);
+  }
   if(!geProfileFile.empty()) {
     std::printf("ge profile: %zu records, frames %u to %u%s (%.3f s of the PSP's time), %s\n", geProfile.records.size(),
                 geProfileFrom, geProfileTo, geProfileTo < frames ? ", where the program started again" : "",

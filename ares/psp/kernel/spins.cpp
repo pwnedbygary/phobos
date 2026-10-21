@@ -133,17 +133,31 @@ auto Kernel::spinTurn() -> void {
   u32 site = cpu.pipeline.address, back = cpu.ipu.pc;
   if(site != spin.site || back != spin.back) {
     if(spin.site && cycles - spin.last <= SpinLongest) return;
+    spinRefusalsEnd();
     spin = {site, back, cycles};
     return;
   }
   u64 period = cycles - spin.last;
   spin.last = cycles;
   if(period != spin.period || !period) {  //(none: called from outside the CPU's go, as tests call functions)
+    spinRefusalsEnd();
     spin.period = period;
     spin.turns = 0;
     return;
   }
-  if(++spin.turns < SpinTurns + spin.wait) return;
+  u32 due = SpinTurns + spin.wait;  //(the turn whose end tries a skip)
+  if(++spin.turns + 2 >= due && gePspTiming) {  //(what it and the turn before it move in the CPU's caches)
+    u64 counts[4];
+    spinCounts(counts);
+    u32 calls = u32(std::min<u64>(syscalls - spin.called, ~0u));
+    if(spin.turns == due) {
+      spin.steady = calls == spin.calls;
+      for(u32 n : range(4)) spin.steady &= counts[n] - spin.counts[n] == spin.moved[n];
+    }
+    for(u32 n : range(4)) spin.moved[n] = counts[n] - spin.counts[n], spin.counts[n] = counts[n];
+    spin.calls = calls, spin.called = syscalls;
+  }
+  if(spin.turns < due) return;
   spin.turns = 0;
   spinSkip();
 }
@@ -153,16 +167,61 @@ auto Kernel::spinTurn() -> void {
 //last skipped one's bytes the time decides written as its calls would have written them. A proof that fails waits
 //longer each time before the next.
 auto Kernel::spinSkip() -> void {
+  spinRefusalsEnd();  //(a try, whatever comes of it, ends the turns run in place of a skip refused before)
   //(in a go of the CPU's, whose limit and count these are; nothing else may come in meanwhile: no call into the
   //program waiting or running, no vertical blank's handlers)
   if(!going || interrupting || !current || current->status != Status::Running || !calls.empty() || vblankPending) return;
+  //(with the CPU's work beside the GE counted, the go's limit exactly, as the synchronous GE's go has it, where the GE
+  //thread's bound set it short: as many turns skipped, GE::Cost::Contended, below)
+  if constexpr(GE::Cost::Contended) if(ge.thread && !geLimits.empty()) {
+    for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
+    geLimits.clear(), geFolded.clear();
+    cpu.runLimit = goExact;
+  }
   //the skipped turns' blocks all end before the go's limit: the last at the count the anchor's syscall ends on
   u64 room = cpu.runLimit > counted + 1 ? cpu.runLimit - counted - 1 : 0;
   if(room / spin.period <= SpinMargin) return;
   u64 turns = room / spin.period - SpinMargin, skipped = turns * spin.period;
   //a list's FINISH (or, with the PSP's GE timing, its SIGNAL) taken at the first system call once it's due: none comes
   //by within the turns skipped
-  if((geFinishDue && geBound() <= cycles + skipped) || (geSignalDue && geReachAt <= cycles + skipped)) return;
+  //(with the CPU's work beside the GE counted, the time exactly: skipped turns end one stretch for all of them, run
+  //ones one each, GE::Cost::Contended, so a skip must be the synchronous GE's; the GE thread waited for where the
+  //bound doesn't decide)
+  auto due = [&](u64 bound, const u64& at) {
+    if(bound > cycles + skipped) return false;
+    if constexpr(GE::Cost::Contended) geFold(true), bound = at;
+    return bound <= cycles + skipped;
+  };
+  if((geFinishDue && due(geBound(), geDoneAt)) || (geSignalDue && due(geReachBound(), geReachAt))) return;
+  //With the PSP's GE timing, the GE busy for all of the turns or idle for all of them, not done part way: their one
+  //stretch then adds to its busy window what theirs would (its sums whole counts). It pushes the GE back as far as
+  //theirs would have by the last turn's end if the push the window owes (geContendDue()) is at its most there, or no
+  //more than before the first turn: so it is where that push falls and then rises at most along the turns, which it
+  //does with each turn one stretch (one system call), or with the turns moving no lines (then any number: a spin's
+  //turn makes no waits, so its stretches are all instructions), the window's time the same kind throughout
+  //(geContendBound()): along the turns the cycles passed, the lines and the CPU's time with its stalls grow evenly and
+  //the list's shares stay, so what the window owes is monotone along them, and each of its parts (geContendOwing():
+  //the front end's a / (1 + a), the back end's b) times the cycles passed is convex, or concave and rising. The one
+  //mix that could peak, the front's concave and the back's convex as what the window owes falls, doesn't: the ratio of
+  //their curvatures rises along the turns, so the push's slope turns only from falling to rising, and the sum has no
+  //maximum within them. The cap can make one, the push following it up and then falling with the sum: a cap binding
+  //at either end refuses the skip, counted (spinRefused()). Only one binding at the start and not at the end can make
+  //a skip inexact, so refusing at either end refuses more than it must, never less. With no lines in the window nor
+  //the turns' the window owes nothing. And the last two turns run moved the same lines with as many system calls
+  //(spinTurn()): each turn skipped moves what they did (below).
+  if(gePspTiming && !spin.steady) return;
+  if(gePspTiming && ge.thread) geFold(true);  //(the window and the GE's time as the synchronous GE has them)
+  if(gePspTiming && geDoneAt > cycles) {
+    if(geDoneAt <= cycles + skipped) return;
+    bool moving = spin.moved[0] || spin.moved[1] || spin.moved[2] || spin.moved[3];
+    GeWindow end = geWindow;
+    end.passed += skipped, end.instructions += skipped;
+    end.fills += turns * (spin.moved[0] + spin.moved[3]), end.writebacks += turns * spin.moved[1];
+    end.uncached += turns * spin.moved[2];
+    bool lines = moving || geWindow.fills || geWindow.writebacks || geWindow.uncached;
+    if(lines && ((moving && spin.calls > 1) || geContendBound(geWindow) != geContendBound(end))) return;
+    if(lines && (geContendCapped(geWindow) || geContendCapped(end))) return spinRefused(skipped);
+  }
   SpinShadow shadow{*this, memory};
   if(!spinProve(shadow) || shadow.period != spin.period) {
     spin.wait = std::min(spin.wait * 2 + SpinTurns, SpinWaitMost);
@@ -181,6 +240,41 @@ auto Kernel::spinSkip() -> void {
   counted += skipped;
   cpu.instructionsRun += skipped;
   spun += turns;
+  if(gePspTiming) {
+    //Each turn skipped moves the lines in the CPU's caches the last one run did: the turns are alike, the same
+    //accesses in the same order, and after one such turn the caches hold what any later one leaves them holding, each
+    //set its turn's last two lines (or, touched by one line or none, as it was), so every turn from there counts the
+    //same and changes nothing. (The last two turns run moving the same lines, the one before the last was such a
+    //turn, and the last counted what each turn from there does.)
+    auto& data = cpu.dataCache;
+    data.fills += turns * spin.moved[0], data.writebacks += turns * spin.moved[1];
+    data.uncached += turns * spin.moved[2], cpu.instructionCache.fills += turns * spin.moved[3];
+    geContend(cycles - skipped, cycles, skipped);
+  }
+}
+
+//A skip refused because the cap binds at either end of its turns (spinSkip()), for the runner's report: counted, and
+//the turns that run in its place counted from here, by geInstructions' count, till the next try or the spin's end
+//(spinRefusalsEnd()), each instruction once, and no further than the turns it would have skipped (skipped, their
+//instructions: a turn's cycles are its instructions). A try with less room than the turns to the next try has no next
+//try in its go: what the go's end brings (an interrupt's handler, a thread woken) runs before the spin goes on, and
+//isn't the spin's.
+auto Kernel::spinRefused(u64 skipped) -> void {
+  geSkipsRefused++;
+  if(!geRefusing) geRefusing = true, geRefusedFrom = geInstructions, geRefusedUntil = geInstructions + skipped;
+}
+
+//The instructions run in place of a refused skip, from its refusal till now or its own turns' end, into the report's
+//count.
+auto Kernel::spinRefusalsEnd() -> void {
+  if(geRefusing) geRefusedInstructions += std::min(geInstructions, geRefusedUntil) - geRefusedFrom, geRefusing = false;
+}
+
+//The CPU's caches' counts as they are (data lines read in, written back, uncached accesses, instruction lines read in).
+auto Kernel::spinCounts(u64 (&counts)[4]) const -> void {
+  auto& data = cpu.dataCache;
+  counts[0] = data.fills, counts[1] = data.writebacks, counts[2] = data.uncached;
+  counts[3] = cpu.instructionCache.fills;
 }
 
 //One turn on the shadow from the CPU as it is, after the anchor's call: true if it comes back to the anchor with every

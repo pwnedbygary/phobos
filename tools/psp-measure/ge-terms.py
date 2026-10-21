@@ -7,8 +7,14 @@ the back end's ("F."/"B." before the term). Besides: "S" as a list starts (GE::C
 callbacks" as one is queued, "U" as a stall address is moved, and "O path" as the program creates a file (psp-measure
 writes each test's results so: what ends one test and starts the next).
 
-usage: ge-terms.py SRC   (SRC: e.g. git archive HEAD ares nall libco thirdparty tools/psp-runner tests/psp/ares | tar -x)
-Then build tools/psp-runner from SRC, run psp-measure's rounds (README.md, "The GE's time") and give ge-fit.py the
+Its places follow master since #277 (part 111) and the Super Monkey Ball refit (the vertices' terms beside their
+charge by memory in GE::oweVertices(), the words' beside pipeStop()'s two counts in Kernel::geTime()), for the GE
+thread Off (option "GE Thread", its default): with it On,
+Kernel::geTime() and geOwe() take the thread's branches, so no "R" or "S" line is written, and the emulation thread and
+the GE thread both add to the counts, unguarded.
+
+usage: ge-terms.py SRC   (SRC: a copy of the checkout, e.g. mkdir -p SRC && git archive HEAD | tar -x -C SRC)
+Then build tools/psp-runner from SRC, run psp-measure's rounds (README.md, "The GE timing's fit") and give ge-fit.py the
 files."""
 import os
 import sys
@@ -108,12 +114,15 @@ edit("ares/psp/ge/draw.cpp", '''  pipe.pending += pipe.vertices + Cost::Prim;
   pipe.vertices = 0;''', '''  pipe.pending += pipe.vertices + Cost::Prim;
   pipe.vertices = 0;
   geterms::add("F", "Prim", 1);''')
-edit("ares/psp/ge/draw.cpp", '''    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : count * each;''',
-     '''    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : count * each;
-    if(format.indexFormat) geterms::add("F", "IndexedVertex", count);
-    else if(format.size == 3) geterms::add("F", "Vertex3", count);
-    else if(format.size * Cost::VertexByte < Cost::VertexFloor) geterms::add("F", "VertexFloor", count);
-    else geterms::add("F", "VertexByte", f64(count) * format.size);''')
+edit("ares/psp/ge/draw.cpp", '''  pipe.vertices += work;
+  if(ram) ramRead(0, work);
+  else otherWork(work);''', '''  pipe.vertices += work;
+  if(ram) ramRead(0, work);
+  else otherWork(work);
+  if(format.indexFormat) geterms::add("F", "IndexedVertex", count);
+  else if(format.size == 3) geterms::add("F", "Vertex3", count);
+  else if(format.size * Cost::VertexByte < Cost::VertexFloor) geterms::add("F", "VertexFloor", count);
+  else geterms::add("F", "VertexByte", f64(count) * format.size);''')
 edit("ares/psp/ge/draw.cpp", '''      f64 each = t.weights * Cost::Weight;
       u32 shining = 0;
       for(auto& light : t.lights) {
@@ -132,8 +141,8 @@ edit("ares/psp/ge/draw.cpp", '''      f64 each = t.weights * Cost::Weight;
           geterms::add("F", light.directional ? "DirectionalShine" : "PointShine", count);
       }
       if(shining == 1) each += Cost::OneShine, geterms::add("F", "OneShine", count);''')
-edit("ares/psp/ge/list.cpp", "pipeFront(Cost::Jump);", "pipeFront(Cost::Jump), geterms::add(\"F\", \"Jump\", 1);", count=2)
-edit("ares/psp/ge/list.cpp", "pipeFront(Cost::Call);", "pipeFront(Cost::Call), geterms::add(\"F\", \"Call\", 1);", count=2)
+edit("ares/psp/ge/list.cpp", " front(Cost::Jump);", " front(Cost::Jump), geterms::add(\"F\", \"Jump\", 1);", count=2)
+edit("ares/psp/ge/list.cpp", " front(Cost::Call);", " front(Cost::Call), geterms::add(\"F\", \"Call\", 1);", count=2)
 edit("ares/psp/ge/transform.cpp", "  pipeFront(Cost::Cut);\n", "  pipeFront(Cost::Cut);\n  geterms::add(\"F\", \"Cut\", 1);\n")
 edit("ares/psp/ge/curves.cpp", '''    pipe.pending += pipe.vertices + Cost::Prim + Cost::Patch, pipe.vertices = 0;''',
      '''    pipe.pending += pipe.vertices + Cost::Prim + Cost::Patch, pipe.vertices = 0;
@@ -145,15 +154,14 @@ edit("ares/psp/ge/curves.cpp", '''    pipe.vertices = f64(columns * rows) * Cost
     geterms::add("F", "PatchVertex", f64(columns * rows));
     drawVertices(drawn, format, vertices, columns * 2);
     if(culls && owedPixels == pixels) pipe = kept, geterms::counts() = termsKept;''')
-edit("ares/psp/kernel/ge.cpp", '''  if(gePspTiming) {  //(never with the GE on its thread: System::threadGE())
-    ge.pipeStop(commands);''', '''  if(gePspTiming) {  //(never with the GE on its thread: System::threadGE())
+edit("ares/psp/kernel/ge.cpp", '''  if(gePspTiming) {
+    ge.pipeStop(commands, ge.ramWordsAt(commands));''', '''  if(gePspTiming) {
     geterms::add("F", "Command", f64(commands));
     geterms::run();
-    ge.pipeStop(commands);''')
-edit("ares/psp/kernel/ge.cpp", '''  gePipeAt = std::max(geDoneAt, cycles);
-  ge.pipeStart();''', '''  gePipeAt = std::max(geDoneAt, cycles);
-  ge.pipeStart();
-  geterms::line("S", "");''')
+    ge.pipeStop(commands, ge.ramWordsAt(commands));''')
+edit("ares/psp/kernel/ge.cpp", '''    ge.pipeStart(), ge.pipe.front = clocks;''',
+     '''    ge.pipeStart(), ge.pipe.front = clocks;
+    geterms::line("S", "");''')
 edit("ares/psp/kernel/ge.cpp", "auto Kernel::geEnqueue(bool head) -> void {\n", r'''auto Kernel::geEnqueue(bool head) -> void {
   {
     char t[96];

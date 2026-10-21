@@ -18381,6 +18381,411 @@ above, `build-fix/` the fix round's program, `EBOOT-run-2026-10-18.PBP` the one 
 owner's run as the coordinator pulled it, with the device's sums, his first look and the captures). Nothing was run on
 the RP6.
 
+## Part 111: the GE thread made useful — the frame shown from it, the emulation thread's work for it cut, its two threads placed, and the PSP's GE timing with it, exact (GE round 4, part B, second PR)
+
+On branch `cursor/psp-ge-thread2-2b67` (PR #277), from master `d428d91f9` (part 110, #276), with master `08801ab60`
+(#269: part 106, the PSP's GE timing the default, `46922a9d9` (#278, part 112) with it) merged in (`e73bf401c`). The
+design is GE round 4's, revision 4 (part 109 took its steps 1 and 2); this PR takes steps 3a, 3c and 3d, cuts the
+emulation thread's work for the thread, places the two threads, and runs the PSP's GE timing with the thread. Clean
+room: our code; uOFW for the GE driver's behaviour; no PPSSPP (its threaded GPU code included) or JPCSP. Save states:
+layout 34, as #269 left it; with the thread On the GE's timing state is the render GE's, drained first, so a state is
+the same file with the thread on or off.
+
+**What it is.** With "GE Thread" On the frame is shown from the GE thread (G), so the emulation thread (E) no longer
+drains G at every frame's end and the two threads overlap across frames, at most two frames in flight:
+- **The frame shown from G (step 3a).** A frame's end is a record (`GeThread::Frame`): the frame's number and what the
+  screen shows then (`Kernel::showing()`, taken under `kernel.presentedFrameBuffer()` as #271 has it, so pictures stay
+  On == Off). G takes the picture when it reaches the record, everything before it drawn (`System::frameEnded()`):
+  from `present()` on the host's window, the GPU's picture, a late frame, or memory's picture as of the record through
+  VRAM's versions (`GeThread::frameBytes()`), and hands it to E as the newest. E waits only when G is two frames behind
+  (`waitFrames(1)`) and shows the newest picture taken: this frame's or the one before. The runner's PNG frames
+  (`exactFrame`) wait for the frame's own picture. A frame buffer in main memory, or in VRAM's swizzled copies, E takes
+  itself after draining G, as before. Screenshots keep #273's contract (`shot()`: the picture presented last, set by
+  whichever thread presented it, under `shotMutex`). The settings G reads at a frame's end are set as a game loads,
+  before G starts, so step 3b's records aren't needed; `keepPipelines()` still drains G, every 600 frames.
+- **The window handed over through G (3c)**: the GPU takes the host's window on the thread that owns it, and
+  `handWindow()` calls it after letting go of `windowMutex`, so the UI thread never waits for G.
+- **Bounded drains, and unloading with G stuck (3d, R18)**: saving or loading a state waits at most 2 s for G
+  (`drainBy()`) and fails rather than freezing the app; an unload still waiting after 2 s abandons G (it takes no
+  record after the one it's in; `wedged()`, `unwedge()` join it when it comes back and finish the unload), and `load()`
+  is refused till then. The app joins a stuck emulation thread (`PhobosRunner`'s zombie list, as the N64 does), then a
+  stuck GE thread, before a PSP load, and asks for a restart while either remains.
+- **The option**: the core's "GE Thread", the runner's `--ge-thread`, and in the app "PSP Graphics Overlap" (Off, On;
+  Restart to Apply till Auto's handover exists), which says what On costs: each picture a frame later on the screen,
+  about 17 ms more between a press and seeing it at 60 frames a second. Built, and not offered in Settings or the
+  in-game menu till On is faster than Off on the RP6 (`4c368271c`).
+
+**The value rule's costs with the thread On** (`fd6b964b7`). `GeThread::listWord()` looked through a list's whole page
+after every PRIM, thousands of times a frame in God of War; it keeps pages found clean now, 64 by page number, and the
+last 32-byte piece found clean (a piece only once all its bytes are: `de0daaa9f`), keyed on everything that can make
+bytes dirtier (a page's newest rectangles, the model's put points, hulls and clears, the renderer's scale and depth
+moves). `Rects::paint()` paints 32-byte pieces row by row, not bytes. God of War's menu: 0.98x of Off, from 0.47x.
+
+**The emulation thread's work for each PRIM, cut (A).** On `6202d98f3` the RP6 ran On slower than Off in all eight
+scenes measured (0.56x to 0.88x), and no placement of the two threads got On past Off (`ge2x-rp6.sh`, seven of them):
+E's new work was the gap. Its instructions a frame with the thread On (the M1, Vulkan fast, 300 frames, "Fast"),
+before and after: Chains of Olympus 92M to 50M, Ghost of Sparta 222M to 118M, Super Monkey Ball 303M to 238M, Army of
+Two 44M to 36M, Killzone 149M to 74M, Hot Wheels 258M to 206M. What went: VRAM vertices copied a byte at a time
+(`143841b1e`); the texture worked out twice for each PRIM, a model rectangle for each PRIM where a target's run of
+PRIMs takes one, list words through vectors (`ae6848101`); each PRIM's state words a record of their own (a PRIM's
+record takes the words before it now), its vertices copied twice (straight into the ring now; a PRIM whose copies
+pass half the ring's 4 MiB is drawn by E once G has drained, as its record would have been, the words before it gone
+first as a record of their own), and a record, with a wake of G, for every CPU store into VRAM: Hot Wheels makes
+59,000 such stores a frame, which go as one record now (`89105079c`).
+
+**The two threads placed (B, `dbfec9b1f`).** With the app's setting "PSP thread placement" (off by default, not
+offered), G runs on the fastest core the app may run on and E on the next
+(`android/app/src/main/cpp/GeThreadPlacement.hpp`, shared by the app's loop and the runner's measurements): the cores
+ranked by the kernel's capacity for each (`cpu_capacity`, else `cpuinfo_max_freq`; nothing placed unless every core
+has one) among those the app's cpuset allows, asked for again every frame (Android resets affinities as it moves the
+app between cpusets), a core refused passed over for the next. On the RP6 that's 7 and 3: ge2x had G on 7 with E on 4,
+3's twin, the best of its seven placements. The runner places them the same with `--ge-place` (`PHOBOS_GE_PLACE`), and
+its measurements count the placements asked and made (`97506b13b`). The RP6 with "Fast" (ge2y, `97506b13b`'s runner,
+600 frames from each scene's state, Vulkan fast at 1x, against Off with E on 7): with the placement Killzone 1.02x,
+Army of Two 0.96x, Ghost of Sparta 0.92x, Chains of Olympus 0.87x, Disaster Report 3 0.83x, Super Monkey Ball 0.76x,
+as fast as G on 7 and E on 4 pinned by hand; On unplaced 0.60x to 0.89x (G sharing core 7 with E, or on the small
+cores); placed 601 times of 601 in every scene, the cores ranked 7, 3, 4, then 6 or 5 (the cpuset left out the other),
+0, 1, 2. What was left of the gap with "Fast" was the clock: E waiting in `Kernel::geFold()` for G's counts before a
+FINISH's time, which "Fast" makes short.
+
+**The PSP's GE timing with the GE on its thread (C, `690030497`).** #269 made "PSP" the default and had
+`System::threadGE()` refuse the thread with it: its pipeline took each run's time as the run ended on E
+(`Kernel::geTime()`), and a SIGNAL's due time with it (`geRun()`), where the thread's counts come later. C lifts the
+refusal, splitting the work by who knows what:
+- **G keeps the pipeline, in the GE's clocks.** `GE::Pipe` and the texel cache are the render GE's while the thread
+  runs (`System::threadGE()` hands them over each way). G takes, in the synchronous GE's order: a list's start (an
+  `Owe` record, from `Kernel::geOwe()`: the pipeline begun afresh with the list's own clocks); each run's shift as it
+  starts (`RunStart` carries it, from `geResume()`); the run's words, counted as `run()` counts them, so each item
+  takes the synchronous GE's words (`wordsRun`); the control pass's own front-end work (JUMP, CALL, RET, a bounding
+  box's vertices) as marks after the words handed over before it, before the next word where a record has just
+  taken those (a box's check, below), in a record of their own where no words wait (`GeThread::front()`; checking,
+  each one taken or the thread aborts); its primitives, block transfers (at the
+  transfer's start word) and palettes (`replayClut()`, timed as `loadClut()` times them); the vertices it reads from
+  the copies (`readCopiedVertices()` charges them as `readVertices()` does: `GE::oweVertices()`); and the run's end
+  (`RunEnd`, with the run's words, checked against G's count: `GE::pipeStop()`). Each run's two times go back with
+  its counts (`GeThread::Owed`: the pipeline's time and its front end's, in clocks).
+- **E keeps the times, in cycles.** `gePipeAt` stays E's (`geResume()` and `geOwe()` need only cycles), each run in
+  the ring carries its `pipeAt`, bus and words, and as E folds a run it sets `geDoneAt` and `geReachAt` from the run's
+  clocks by `geTime()`'s arithmetic (`Kernel::geCycles()`): the synchronous GE's run end, in the same order.
+- **Where a time decides something, a bound first.** A FINISH's interrupt, a SIGNAL's, the go's limits,
+  `sceGeSaveContext` and a spin's skip ask whether the GE's time has come. With runs pending the last run's bound
+  answers where it can: its pipeline's two ends so far, which only grow within a run (G publishes them after each
+  item), or half its words' work, which no run's time comes in under (past any rounding of the clocks summed), from its
+  `pipeAt` (`geBound()`, `geReachBound()`). Only where the bound doesn't decide does E wait for the fold (`geReached()`,
+  `geReachReached()`). A SIGNAL met at a run's end is always due later (its words' work alone puts the front end past
+  now), so E never waits there. A go's limit worked out from a bound is worked out exactly once G has counted, from the
+  folded runs' times as they were (`geExactLimit()`), as part 109's FINISH limits are.
+- **The CPU beside the GE, carried** (`GE::Cost::Contended`: part 113's term, on since #279; below, "C on part 113").
+  The term pushes the GE's pipeline back by the lines the CPU's caches move during each stretch between syscalls
+  while the GE is busy, weighed by the list's clocks of each kind (`GE::ramClocks`). A stretch ended while runs are
+  pending can't be taken yet: it's kept (`Kernel::GeStretch`, numbered) with its instructions, the caches' four counts
+  as it ended, whether a SIGNAL was due (the push moves `geReachAt` only then) and the CPU's clock (which weighs the
+  lines against the cycles passed: since the port's review, below), and taken as the fold reaches the run it followed,
+  with that run's clocks by kind (`Owed`) and the times the fold leaves (`geContendNow()`): the synchronous GE's order,
+  the same whenever the fold comes. No more than 65,536 wait (`GeStretchesKept`): past that, the oldest are folded with
+  the run they wait on, as runs past `GeThread::RunsKept` are. Each run keeps the caches' counts as it
+  ended (`GeRun::caches`), for the window that a stalled list going on starts there. The fold keeps the times after each
+  stretch, so a go's limit worked out later stops at the stretches it was decided with (`GeLimit`'s count). The push
+  moves `gePipeAt`, which the next run's shift counts from, so a run's start folds first while stretches wait
+  (`geResume()`): E waits there for G. A go the bound cut short counts its instructions across its parts
+  (`Allegrex::run()` going on from a count), so its syscalls' stretches and its last are the single go's
+  (`goThreaded()`). A spin's skip decides from the exact time and skips as many turns as the synchronous go would, its
+  limit worked out first (`spinSkip()`): skipped turns end one stretch for all of them and run ones one each, so the
+  count must match. Part 113's skip also decides from the busy window (`geContendBound()`): with the PSP's timing the
+  threaded skip folds every run handed over first.
+- The runner's warning for `--ge-thread on` with the PSP's timing goes, and the app's text says the overlap works with
+  either timing.
+
+**Speed with the PSP's timing (C).** The M1, Vulkan fast, late frames, 600 frames from each scene's state, Off and On
+in turn, medians, `690030497`'s core with the counters, load 3 to 5 at each run's start:
+
+| Scene | Off fps | On fps | On/Off | E's instructions a frame, Off → On |
+|---|---|---|---|---|
+| Ghost of Sparta's menu | 216.3 | 249.0 | 1.15x | 59.2M → 20.9M |
+| Chains of Olympus' difficulty menu | 290.0 | 286.5 | 0.99x | 33.5M → 14.1M |
+| Super Monkey Ball's story | 196.3 | 212.7 | 1.08x | 69.7M → 33.7M |
+| Army of Two's play | 226.8 | 248.9 | 1.10x | 44.3M → 10.3M |
+| Killzone's play | 253.0 | 254.4 | 1.01x | 42.0M → 15.4M |
+| Disaster Report 3's play | 321.7 | 445.5 | 1.38x | 42.0M → 22.0M |
+| Hot Wheels' race | 263.4 | 287.4 | 1.09x | 51.5M → 38.6M |
+
+Three rounds each; Ghost of Sparta and Chains of Olympus five, from a rerun, Ghost of Sparta's Off spreading from 190
+to 229 fps (its first three rounds, a cold Off run at 121 among them, read 1.37x). The frame rates aren't the "Fast"
+table's: with the PSP's timing a game draws at a PSP's pace, so each emulated frame carries less work (Ghost of
+Sparta's E, Off: 59M instructions a frame, against 300M with "Fast"). With the PSP's timing a run takes 4 to 12 times
+as long, so E reaches a FINISH's time after G has counted the run, where with "Fast" it waited: Hot Wheels 1.09x, from
+0.78x. Chains of Olympus stays even: E's work drops by more than half, but the rest of the process with the thread On
+(51M less E's 14M, mostly G) is about the whole process's with it Off (37M).
+
+The RP6 with the PSP's timing (the coordinator's run of `ge3-rp6.sh`, CI run 39233220893's runner, 2026-10-19 06:22;
+600 frames from each scene's state after a 120-frame warm-up, Vulkan fast at 1x with late frames; On/Off against Off
+with E on core 7; the threads' CPU milliseconds a frame):
+
+| Scene | Off fps | On, unplaced | On, E 4 and G 7 by hand | On, placed (E 3, G 7) | E's ms, Off → placed | G's ms |
+|---|---|---|---|---|---|---|
+| Ghost of Sparta's menu | 171.8 | 0.77x | 0.96x | 0.95x | 4.9 → 3.4 | 4.7 |
+| Chains of Olympus' difficulty menu | 277.9 | 0.28x | 0.87x | 0.87x | 2.9 → 2.5 | 2.9 |
+| Super Monkey Ball's story | 170.1 | 0.73x | 0.92x | 0.91x | 5.8 → 5.2 | 6.0 |
+| Army of Two's play | 180.3 | 0.94x | 1.03x | 1.03x | 5.1 → 2.1 | 4.3 |
+| Killzone's play | 247.2 | 0.69x | 0.86x | 0.86x | 4.0 → 3.1 | 2.7 |
+| Disaster Report 3's play | 270.8 | 0.87x | 0.99x | 0.99x | 3.7 → 3.5 | 2.6 |
+| Hot Wheels' race | 77.9 | 0.46x | 0.83x | 0.82x | 9.7 → 10.2 | 9.5 |
+
+The placement did what it's for (placed 601 times of 601, as fast as the best pinned by hand; unplaced, G shares core 7
+with E or lands on small cores: Chains of Olympus 0.28x), but On stays under Off but in Army of Two (1.03x), Disaster
+Report 3 even. Two things show in the threads' times. In Ghost of Sparta, Chains of Olympus and Super Monkey Ball G's
+CPU time a frame (the drawing and the records' replay) is about E's whole time with the thread Off (4.7 ms against
+4.9, 2.9 against 2.9, 6.0 against 5.8), so there's little left to overlap. And E moves from the X3 (core 7, 3.2 GHz)
+to an A715 (core 3, 2.8 GHz), where its smaller share of the work saves little time: Killzone 3.1 ms a frame against
+4.0 Off, Disaster Report 3 3.5 against 3.7 (its E busy 94% of the time), and Hot Wheels more than Off's, 10.2 against
+9.7 (its 59,000 stores a frame). Against "Fast" (ge2y, the same placement): Killzone 1.02x to 0.86x, Army of Two
+0.96x to 1.03x, Ghost of Sparta 0.92x to 0.95x, Chains of Olympus 0.87x as it was, Disaster Report 3 0.83x to 0.99x,
+Super Monkey Ball 0.76x to 0.91x.
+
+**Speed with "Fast"** (before C: `b4i`, `97506b13b`'s core, the same way, load 3 to 7): On/Off Ghost of Sparta 1.01x,
+Chains of Olympus 1.01x, Super Monkey Ball 0.93x, Army of Two 1.03x, Killzone 1.00x, Hot Wheels 0.78x, Colin McRae
+0.96x, Disaster Report 3 1.13x. Part 109's slow three, each from its start as the library check runs it (Software, two
+drawing threads, 3,600 frames; C's runner, two rounds each), Off and On, the wall seconds: BlazBlue 2 and 7 with
+either timing, SSX on Tour 4 and 11, Aces of War 5 to 6 and 25 to 26 (one "Fast" On round at 62); part 109's were 4
+and 20, 8 and 43, 10 and 41. Still 2.8 to 4.6 times Off's (part 109 put it to these games' CPU accesses to VRAM,
+each on the slow path with the thread On; not profiled again here).
+
+**Off costs nothing.** E's retired instructions a frame with the thread Off against master (the M1, Vulkan fast, late
+frames, 300 frames, two rounds in turn): at `f3d37b5b2` against `fe3deab82`, Ghost of Sparta -0.02%, Chains of Olympus
+-0.03%, Super Monkey Ball -0.01%; at C against `08801ab60`, with "Fast" -0.15%, -0.16% and -0.26%, with the PSP's
+timing -0.04%, -0.09% and -0.15%. Two functions only the thread uses are kept out of line for it: `listWord()`, whose
+caches inlined into the list's loop changed what the compiler made of it with the thread Off (+0.1%), and
+`controlRead()`, which inlined into `GE::drawnFirst()` (every PRIM's reads) cost +0.12 to +0.28% once the model's
+checks grew: found by halving the commits, then the files.
+
+**Exactness, measured** (the M1, MoltenVK; the thread On with `PHOBOS_GE_CHECK=1` against Off, the same runner; settled
+hashes: every frame's picture and VRAM with the drawing settled, then RAM and the machine's state):
+- after the review's fix (C's front-end marks, below), on `df88b37ee`, the checks now aborting on any mark not taken:
+  the gate's scenes 14 of 14, section 9's sets 240 of 240, the contention term carried 12 of 12, "Fast" 3 of 3, and
+  part 109's slow three from their start 6 of 6, all the same again (as each was before it, item by item below);
+- with the PSP's timing, C's runner: the gate's scenes (Killzone's play, Activision Hits' menu and copyright screen,
+  Super Monkey Ball's story, Ghost of Sparta's menu, Chains of Olympus' difficulty menu, Army of Two's play), 600
+  frames (the copyright 360), Vulkan fast and Software: 14 of 14 the same;
+- part 109's section 9 sets with the PSP's timing: the 26 scenes 600 frames with only the end hashed, a state every
+  150, and each shown frame compared: 26 of 26; each shown frame in Software, 300 frames: 26 of 26; schedule fuzzing,
+  10 scenes three ways (delay, behind, ahead), states every 100: 30 of 30; Vulkan accurate and 2x, 10 scenes each: 20
+  of 20; the 78 settled hashes (the 26 scenes in Vulkan fast, Software and Vulkan accurate, 100 frames): 78 of 78; the
+  stress mode (a finish at every kick's end and every 97th PRIM), the 26 at 1x and 2x and eight at 4x: 60 of 60;
+- the CPU beside the GE carried: a scratch build with round 10's slopes on (`Contention` 0.20, 0.16, 0.77, 0.34), the
+  gate's six scenes, 300 frames, Vulkan fast and Software: 12 of 12;
+- "Fast" unchanged: On against Off with C's runner, and C's runner against the merge's (`e73bf401c`), Off and On, Ghost
+  of Sparta, Super Monkey Ball and Hot Wheels, 300 frames: 3 of 3 and 6 of 6;
+- part 109's slow three from their start, as the library check runs them (Software, its presses, 3,600 frames; the
+  clock started at a fixed time, `--start-time`), with the PSP's timing and with "Fast": every frame's picture and
+  VRAM, then RAM and the state, the same Off and On, 6 of 6 (a booted game's clock otherwise starts at the host's
+  time, which moves on from one run to the next, as part 109 found: there RAM and the state differed, every frame
+  the same);
+- the suite with the thread Off and On, 625 groups, 0 failures (with the thread On the measure rounds' machines and the
+  GE profile's flag test now run threaded with the PSP's timing: they turned the thread off as the system did); the
+  ares lane, 391 checks, 0 failures; CI on `690030497`, all green;
+- ThreadSanitizer over C, nothing suppressed, the GPU on MoltenVK, run alone: the suite's threaded groups with the
+  thread On (the GE thread's 17, C's two with the PSP's timing, the held-back spin skip's, the versions', the measured
+  rounds 6, 8, 9 and 10's GE time, threaded with the PSP's timing now, and the GPU's 78, pspsdk's samples among them):
+  103 groups, 0 failures, no report; a sanitized runner with the thread On and the PSP's timing (Ghost of Sparta, Army
+  of Two, Super Monkey Ball, Hot Wheels in Software, Killzone at 2x, 200 frames each) and the ares lane: no report
+  from C's code, two from elsewhere, both fixed (below), after which the ares lane (391 checks) and the two runs that
+  had reported are clean;
+- with "Fast", before C: the 26 settled-hash scenes in Vulkan fast, 100 frames, 26 of 26; Army of Two 400 frames,
+  Software and Vulkan fast, the same; each frame's picture from G against Off's for that frame, run free, the same, 99%
+  of frames shown a frame behind.
+
+**The tests** (each on an explicitly threaded machine where the thread matters, failing with its rule taken out):
+`geThreadFrame` (a frame's end taken as of its record, at most a frame behind, reaching a sprite still waiting to be
+drawn); `geThreadFrames` (cube.elf, 90 frames, On exact and a frame behind against Off); `geThreadFrameBound` (the ares
+lane: with the program ended and G held, a frame's end waits two behind, not one, and for its own picture with
+`exactFrame`; a frame buffer in main memory shown from E at once); `geThreadStuck` (the ares lane: G held at its
+gate as a driver call that never returns would: saving or loading a state gives up after two seconds, an unload leaves
+it with the machine under it, a load is refused while it's stuck; let go, it's joined and a game loads and runs
+again); `geThreadListPages`
+(each thing that can make a kept clean page or piece dirty, through `GE::modelPrimitive()`); `geThreadBigPrimitive` (a
+PRIM too big for the ring, the words before it); `geThreadStoresBatched` (the CPU's stores as one record, read by a
+texture as of its place); with C, "ge time, the PSP's, with the GE on its thread: the same times" and "...: a SIGNAL's
+lead through stall updates" (the synchronous tests' exact times, the runs folded before each look), and "the GE's
+thread and the PSP's GE timing" (the ares lane: the thread starts with either timing, and off and on again keeps the
+list's pipeline).
+
+**Found and fixed on the way** (each with a test that fails without its fix, or the proof that found it):
+- Found by the independent review (C, item 1): a front-end mark made right after a record had taken the words
+  waiting was lost, and every mark after it in the same record with it. A BOUNDING_BOX's word goes over before the
+  box runs; where its vertices (or indices) lie on a VRAM page with drawing pending, or dirty, its check goes to G as a
+  record of its own (`GeThread::controlRead()`, `drawnFirst()`), which hands the words waiting over first, so the
+  box's vertices' work was marked after word −1 (`wordCount - 1`, unsigned), which the replay never reached; and a
+  box followed by a PRIM at once left its marks out of the PRIM's record, which carried none with no words. G's front
+  end then ended early: `geReachAt` (a SIGNAL's time) earlier than with the thread off, `geDoneAt` too where the front
+  end decides it. Only with the thread On, the PSP's timing and such a box (the proofs below matched before the fix
+  too, and were run again after it). Marks now count the words before them (none: before the next word), go in a
+  record with no words where none wait, and with the checks on the thread aborts on any not taken (`716171da0`).
+  The test ("ge time, the PSP's, with the GE on its thread: a bounding box's work after a record", from the review's:
+  the box in RAM; on a busy page then a JUMP, the review's case; then a PRIM at once; then the list's stall address)
+  failed on `4ee2e5acf`, `geReachAt` with the thread 7601 cycles against 7875 without it, 7574 against 7722, and 7345
+  against 7493 at the stall (`geDoneAt` the same: sprite A's drawing ends later), and passes after; each part of the
+  fix taken out fails it (the count, the marks carried and flushed with no words, taken before the first word: three
+  by the checks' abort, one by the stall's case). The second review found one part it didn't pin: the PRIM's record
+  made to carry no marks with no words waiting (the marks then taken in the next record, used, so no abort) passed it,
+  sprite A's drawing outlasting sprite B's start either way. The four cases run with sprite A a single pixel too,
+  sprite B's drawing then starting as its front end hands it over, and that removal fails the PRIM's case: `geDoneAt`
+  7889 with the thread against 8036 without it.
+- The review's nits (`df88b37ee`): `unwedge()` freed the stuck thread's object before unhooking memory from it
+  (nothing called it in between; unhooked first now); quitting the desktop app with the GE thread still stuck joined
+  it and hung (the system's destructor lets it go now, its object left to it); the placement kept the GE thread's ID
+  up to 60 frames after it had gone (checked each frame now, by its name). And CI runs the GE thread's tests with the
+  thread on: the release-mode job, `PHOBOS_TESTS_GE_THREAD=On`, the thread's groups, the GPU's with it, the GE's times
+  and the measured rounds' (`PHOBOS_TESTS_ONLY` takes several names between `|`s for it).
+- The piece cache in `listWord()` kept a 32-byte piece clean after checking only the word asked for: a word after a
+  rectangle's edge in the same piece could be read without waiting for the PRIM drawing it (`de0daaa9f`).
+- With the checks on, the thread's copy of the model kept every put point it had passed, and MX vs ATV crawled
+  (`6202d98f3`).
+- C under the contention term: the scratch build with round 10's slopes first differed in every gate scene, from frame
+  4 to 7 (Army of Two from 228), three ways. A go's limit worked out later took in stretches made after it was decided
+  (each stretch is numbered now, the times after it kept); the go the bound cut short never ended the CPU's stretch at
+  its end, as `run()` does after the one go, and lost the instructions of each part but the last (`goThreaded()` ends
+  it once now, its parts counted as one go); and spin skips were decided from a bound and sized by the part's shorter
+  limit, exact without the term (a skipped turn is a run one) but not with it (decided from the exact time now, and as
+  long as the synchronous go's).
+- With C, the thread On lane's state layout checks ("older layouts load", "fonts glyph states") set the kernel's GE's
+  texel cache where the render GE's is saved: they set the timing GE's now (the test machine's `timedGE()`).
+- Found by ThreadSanitizer over the ares lane and the runner: the screen's passthrough flag (`Screen::setPassthrough()`,
+  a Phobos addition to ares's screen) set by the PSP on the emulation thread, without the lock under which the
+  screen's own thread reads it while it may still be refreshing the frame before (master's runner reports it too, the
+  thread Off); it takes that lock now, as the screen's other settings do (the N64 sets it inside the refresh, under the
+  same lock, which it may take again). And the ares lane's save states check hashed VRAM as it is, not through memory,
+  while the software renderer's drawing threads could still be drawing into it: it settles them first now
+  (`5cb2ae354`, as the next).
+- The runner's PNGs with the thread On, found timing the slow three: at a sparse PNG's frame (the library check's 60,
+  300, 1200 and 3600) the PNG takes the screen's newest picture, often the frame before's, as the screen's thread
+  presents a step behind the run (the runner's README says so). With the thread Off that's the frame before's own;
+  with it On it was the one the screen showed then, a frame late, so On's PNGs differed from Off's wherever the
+  picture moves (BlazBlue at 300, 1200 and 3600, SSX at 300, Aces of War at 3600), the emulation the same (the settled
+  hashes, below). The frame before a PNG's gets its own picture now too (`exactFrame`): the slow three's PNGs, 24 of
+  24 the same Off and On with either timing, and Off's PNGs as they were.
+
+**C on part 113** (#279: the CPU's cache models and the traffic-driven contention term, merged into this branch at
+`0c4baeb4f`, `8a0a04b7f`, with its review's fixes at `69ea2650d`, `0ab56c774`, and master with it, `ba1a19896`, at
+`a335937a9`). #279's code is as it was with the thread Off; with it On, its term carries as C's stretches did (above,
+"The CPU beside the GE, carried"). Where the two met:
+- `geTime()`: C's clocks into cycles (`geCycles()`) and #279's window counting afresh as a stalled list goes on, both;
+  a run handed to G keeps the caches' counts as it ends, for the fold to do the same there. `geOwe()`: both, C's fold
+  first.
+- `geContend()`: #279's with the thread Off; On, a stretch waits on the runs pending or is taken at once
+  (`geContendThreaded()`), `geContendNow()` being #279's arithmetic (the window's whole counts and its push,
+  `geContendDue()`) from the counts, the SIGNAL due and (since the port's review) the CPU's clock given, const over
+  mutable members (the window, the counts seen, the busy sums, and `gePipeAt`, which its push moves).
+- `spinSkip()`: C's exact limit and FINISH and SIGNAL checks, #279's steady turns', then its busy window's, after a fold
+  with the thread.
+- #279 removed the stretch's end C's `goThreaded()` called: a go the bound cut short counts its instructions on across
+  its parts now (`Allegrex::run(limit, from)`) and ends its stretch once, as `run()` ends the single go's.
+- The list's clocks by kind, with the thread On, are the render GE's; the kernel's GE keeps a copy as each fold
+  leaves them (it draws nothing meanwhile) and clears it at a list's start; `threadGE()` hands them over both ways; a
+  state saves the timed GE's. No layout of its own: 35, #279's (the stretches and the runs' counts are folded before a
+  state is saved).
+- The tests: both sides'. #279's test machine `pspTiming()` (the caches on, as the system has them with the PSP's
+  timing) no longer turns the GE thread off, so its tests run threaded in the thread On lane, which runs the CPU beside
+  the GE's groups now too (measured rounds 10 and 10b's among them); the bigger queue's state test turns it off
+  itself, as before. #279's runner line of the caches' counts folds first.
+
+**Exact on part 113** (`a335937a9`'s runner, master `ba1a19896` with #279 merged in, and before it `0ab56c774`'s and
+`bee76daa1`'s, each the same: the M1, MoltenVK; the thread On with `PHOBOS_GE_CHECK=1` against Off, the same runner, the
+PSP's timing, #279's term live in every run, the runner's line of the caches' counts the same On and Off): the gate's
+scenes in Vulkan fast and Software, settled, 600 frames (14 of 14); part 109's section 9 sets (240 of 240, as above);
+"Fast" unchanged, On against Off (3 of 3); part 109's slow three from their start, the clock fixed, every frame and then
+RAM and the state, either timing (6 of 6); Off against master's own runner (`ba1a19896`; before, #279's `69ea2650d` and
+`0c4baeb4f`), the gate's scenes in both renderers (12 of 12). The suite Off, 633 groups, and the thread On lane, 53
+(#279's tests, its measured rounds 10 and 10b and its spin test of lines moved each turn among them, threaded), 0
+failures; the ares lane, 391 checks. The test ("ge time, the PSP's, with the GE on its thread: the CPU's stretches
+beside the GE": a list textured from RAM given a sprite at a time, the program writing beside it before each stall
+update, a quiet call between two writes ending a stretch that waits on the run before it and is folded only after more
+lines have moved, some writes outlasting the GE's sprite) gives the same program times, GE times, busy window, counts
+seen, busy sums and memory On as Off, and with the caches off the list is done sooner. It fails with each part taken
+out: the stretch's counts taken at the fold, its instructions dropped, a run's counts at its end not kept, a run's start
+not folding the stretches waiting, the folds not keeping the clocks by kind, stretches never waiting (each: the
+program's own times differ).
+
+**Speed on part 113** (the M1, Vulkan fast, late frames, 600 frames from each scene's state, Off and On in turn, five
+rounds, medians, `a335937a9`'s core with the counters, load 5 to 8 at each run's start; `bee76daa1`'s, #279 before its
+review's fixes, gave the same within 0.05x):
+
+| Scene | Off fps | On fps | On/Off | E's instructions a frame, Off → On | On/Off before #279 (above) |
+|---|---|---|---|---|---|
+| Ghost of Sparta's menu | 209.2 | 261.4 | 1.25x | 60.4M → 23.5M | 1.15x |
+| Chains of Olympus' difficulty menu | 269.9 | 264.0 | 0.98x | 35.5M → 17.0M | 0.99x |
+| Super Monkey Ball's story | 188.8 | 218.8 | 1.16x | 66.7M → 33.9M | 1.08x |
+| Army of Two's play | 184.6 | 227.1 | 1.23x | 48.8M → 14.6M | 1.10x |
+| Killzone's play | 197.1 | 198.1 | 1.00x | 46.7M → 20.7M | 1.01x |
+| Disaster Report 3's play | 245.6 | 344.4 | 1.40x | 48.5M → 28.5M | 1.38x |
+| Hot Wheels' race | 247.3 | 300.4 | 1.21x | 48.3M → 36.5M | 1.09x |
+
+#279's caches count on E either way (part 113's host cost: E's instructions Off here up to 15% over the table above) and
+its term moves the GE's times, so these frames aren't the table above's work; On/Off is what compares (Army of Two's
+runs spread from 96 to 234 fps, Killzone's On from 162 to 210, the others within 8%). The runs' starts that fold first
+while stretches wait (a scratch count): Super Monkey Ball 0.9 a frame, each of them waiting for G; Army of Two 0.5, none
+waiting; the other five none. E's waits for G in all: 0.2 to 2.8 a frame, the same on each head (the threaded spin
+skip's fold adds none in these scenes).
+
+**The port's review and its fixes** (an independent review of `b56fa5010` on the owner's Linux desktop: NEEDS CHANGES,
+four findings; fixed in `99e067692`, `5a29bcc1d`, `216a89cf9` and `d62faaaa0`):
+- **The CPU's clock, carried** (finding 1). A stretch waiting on G's runs didn't keep the CPU's clock: `geContendDue()`
+  read it as the fold took the stretch, and `scePowerSetCpuClockFrequency` and `scePowerSetClockFrequency` change it
+  without folding. With the clock set while stretches waited, the review's program ended 82 µs early with the thread
+  On (6876 against 6958 µs; `geDoneAt` 2,290,006 against 2,317,196): every stretch taken at the last clock. A stretch
+  now keeps the clock it ended at (`GeStretch::cpu`), which `geContendNow()` hands to `geContendDue()`; Off passes
+  `powerState.cpu`, the same arithmetic as before. What a waiting stretch's fold reads is now its own (its
+  instructions, the caches' counts, the SIGNAL flag, the clock), its run's (`GeRun`'s `pipeAt`, bus, cycles and counts,
+  and G's `Owed` for it), brought to it by the fold's order (`geDoneAt`, `geReachAt`, `gePipeAt`, the window, the
+  counts seen, the kernel GE's clocks by kind and the busy sums, each changed only by the fold or after a fold of every
+  stretch waiting), or constant while it waits (`GE::Cost`, and `gePspTiming`, set only as the system powers on,
+  after the kernel's power on has folded them): its push is the same whenever the fold comes. The clock was the one
+  input left. Carrying it, rather than folding before it changes, covers its other writers too (a power on's
+  `powerState = {}` and a state's load set it before they fold) and adds no wait for G. `geContendBound()` still reads
+  the clock as it is: only the spin skip asks it, after folding every run. The test ("ge time, the PSP's, with the GE
+  on its thread: the CPU's clock set while stretches wait", the review's probe as a group: either function, the GE
+  thread run free and held back at each step, against Off) fails on `b56fa5010`'s code for both functions, free and
+  held, and passes after.
+- **Four port items pinned** (finding 2), each with a test that fails with it taken out (the review's mutations, debug
+  with ASan and UBSan):
+  - the threaded spin skip's fold before its busy-window refusals: "the GE's looks polled with the PSP's GE timing,
+    its list stalled as the GE draws, with the GE on its thread: skipped as every turn run", a poll moving lines while
+    its list of sprites textured from RAM waits at a stall address past its first: with no FINISH due nothing in a
+    turn folds the run, so without the fold the skip crosses the GE's done time unrefused (the states differ from step
+    21). Its first version's sprites were untextured fills, whose clocks hardly read RAM: the lines barely pushed the
+    GE, and the test passed without the fold (textured since `d62faaaa0`);
+  - a stretch's SIGNAL flag: "...: a stretch's SIGNAL due kept past sceGeBreak(0)". `sceGeBreak()` clears a due SIGNAL
+    without folding first, the one way the SIGNAL due changes between a stretch's end and its fold (a run's start
+    folds first, as does an interrupt taken); without the flag the SIGNAL's time misses the stretch's push (48,154
+    cycles against 54,560);
+  - a state's clocks by kind from the timed GE: "ge time, the PSP's: a state keeps the list's clocks by kind, loaded
+    with the GE on its thread or not", sprites textured from RAM before the save and untextured after; saving the
+    kernel's GE's copy and loading into it, the render GE's left as it was, has the list loaded with the thread On done
+    at 7589 µs against 7972;
+  - the exact limit's entries for stretches: "...: a go's limit takes the stretches decided before it", a limit
+    decided from the bound after one stretch and before another, worked out exactly, against the synchronous go's
+    limit decided at the same point: without the entries it falls 6,406 cycles short. White-box, as a program can't
+    show it: a go's first limit after a run is handed over is decided before any stretch waits on that run, and a later
+    limit only shortens the go, so a limit short of its time ends a go early and the next go makes it up, the window's
+    sums in whole counts.
+- **Waiting stretches bounded** (finding 3): no more than 65,536 (`GeStretchesKept`, about 5 MiB). Past that the
+  oldest are folded with the run they wait on, G waited for to count it, as `geFoldKept()` does past `RunsKept` runs.
+  It's exact (a stretch's push doesn't depend on when it's folded), and the wait ends: a run's end goes to G as the
+  run stops, at a stall address too. Before, a list left at its stall address with nothing due that folds its runs,
+  while the program made calls, grew them without end (the review's probe: 100,002 after 100,000 calls). The test
+  ("...: stretches waiting on a stalled list, no more than it keeps": 100,000 polls of the clock, an uncached access
+  each, beside a list stalled after a sprite textured from RAM, the spin skip off, free and held back): at most 65,536
+  waiting at a step's end, and the times and the window Off's; with the fold taken out, 95,495 wait.
+- **Checks** (this host's GCC 16.2, debug with ASan and UBSan): the clock test on `b56fa5010`'s code, 20 failures
+  (both functions, free and held), and passing after; "ge time, the PSP's" and the looks polled groups, 22, on
+  `216a89cf9`, and the looks polled 6 on `d62faaaa0`, 0 failures; six mutations (the four above, the clock read at the
+  fold, the bound's fold taken out), each failing its test, each file put back and checked by its hash.
+
+**Not yet**: Auto with its handover both ways (design step 4, R17), a stacked PR; the app's option offered once On beats
+Off on the RP6; Hot Wheels' remaining store cost (the recompiler's check, four times a store, and the model's write);
+with part 113's term E waits more: each spin skip with a limit from a bound works the limit out exactly, and a run's
+start folds first while stretches wait (Super Monkey Ball 0.9 a frame). The way past the second: the busy window kept
+on G, the stretches handed over as records, so that G takes each run's shift from its own `gePipeAt`.
+
 ## Part 112: psp-measure round 10 — lights by kind, CLUT32 triangles, wide triangles into 16-bit, perspective and turned, mipmaps, narrow strips, the CPU beside the GE
 
 On branch `cursor/psp-measure-round10-2b67` (PR #278), from master `d428d91f9` (#276, part 110: round 9 and its
@@ -18774,3 +19179,874 @@ here (`r10.py`); #278's review decoded it too and agrees with every figure below
 `build/` (the program as tested), `EBOOT.PBP` and its sha256, `measure-r10.log` (the local test), `r10.py` (the decoder
 the results above came from); `results-r10/` and `results-r10b/` (the owner's runs as the coordinator pulled them, with
 the device's sums). Nothing was run on the RP6.
+
+## Part 113: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%)
+
+On branch `cursor/psp-cpu-traffic-2b67` (draft PR #279), from master `08801ab60` (#269, part 106: the PSP's GE timing
+the default). The goal set for it: by the whole frame, Super Monkey Ball within 15% of the owner's capture and its
+exception gone from `gate.py`, no other judged scene worse than today and none more than 15% too slow. Part 106 held the
+CPU beside the GE at none: its term needed the CPU's traffic with RAM, and the emulated CPU can't tell a game waiting
+without syscalls (Activision Hits' menu) from one working. This part counts that traffic the way a PSP's CPU makes it,
+through models of its two caches, and slows the GE by the lines they move while it draws. Super Monkey Ball's frame goes
+from −29.6% to −20.6%: its exception stays, with a limit (−21%) so it can't get worse unseen. Two decisions are the
+owner's (below, "Not yet"). Sources: the owner's rounds 8 (cpu-memory, cpu-contention: part 107), 10 (time-contention:
+part 112) and 10b (time-contention3). Clean room: our own code; no PPSSPP or JPCSP. Save states: layout 35.
+
+### The CPU's caches (`Allegrex::Cache`, cpu/cache.cpp; recompiler.cpp, recompiler-memory.cpp)
+
+- **What they are.** A data cache and an instruction cache, each 16 KiB of 64-byte lines in 128 sets of two ways, the
+  least recently used replaced. Round 8's cpu-memory gives the size and the line (a chain of pointers 64 bytes apart
+  takes 5 cycles a step within 16 KiB, 74 over 32 KiB); the ways aren't measured (two, as a MIPS core of its kind has).
+  A data line's key is its address's bits 6–31, so a cached mirror's lines and an uncached mirror's never meet; a store
+  marks its line dirty. Loads and stores that miss read their line in (the PSP's streaming writes take 183.5 cycles a
+  line, its reads 164: a write reads its line first).
+- **What's counted**: data lines read in from RAM, dirty ones written back to it, accesses to RAM through an uncached
+  mirror (each one), and instruction lines read in. VRAM's and the scratchpad's lines are held like RAM's but not
+  counted: telling them apart as compiled code runs would cost what the look itself costs, and they're few (of every
+  compiled load and store, Chains of Olympus's scene sends 0.46% to the scratchpad, Burnout Legends from boot 0.26% to
+  VRAM, Super Monkey Ball's and Activision Hits' scenes none).
+- **Where.** Only compiled code looks, and only in blocks compiled for a system started with the PSP's timing
+  (`System::power()` turns the caches on with it): "Fast" compiles none of it, and what its code does is master's (the
+  caches' 2,112 bytes come before the CPU's registers in `Allegrex`, so the offsets compiled code reaches them by moved
+  and its bytes aren't master's; no cost to measure). A load or store looks its line up in its set's most recently
+  used way, inline after the alignment test (seven host instructions), the rest out of line (`dataCacheMiss()`: the
+  other way, a miss, a write-back). The look comes before the page is looked up, so hardware's accesses and stores to
+  compiled code, which go on to the interpreter, are looked up too (counted where they're RAM's); a misaligned access
+  leaves for the interpreter before it. An instruction line is looked up as a block starts and wherever its code
+  reaches a line's first word: on ARM64 three instructions for code in RAM (`codeKey()`'s keys fit a compare's
+  immediate), the rest out of line (`instructionCacheMiss()`). A block going on to itself goes back past its first
+  line's look (`lineHeld`): nothing can have replaced that line in between, so the look would only hit. A delay slot's
+  line isn't looked up. Keys are virtual addresses, so a line seen through both cached mirrors of the same memory
+  (0x0… and 0x8…) is two lines to the model (games use one).
+- **The interpreter isn't counted**: neither the CPU's other engine nor the instructions compiled code hands it. Under
+  the PSP's timing the two engines, alike in all else, so give the GE other times: the runner's `--interpreter` sees
+  less contention than its recompiler (the app always compiles: players aren't affected). Counting it alike would mean
+  looking up exactly what compiled code looks up, each load's and store's address once, a hardware access not again
+  after its compiled look, a delay slot's line passed over: left for when the interpreter needs it.
+- **What it counts in the gate's scenes** (lines a frame, the PSP's timing): Super Monkey Ball 8,218 data lines read in,
+  3,033 written back, 1,206 uncached accesses, 3,439 instruction lines; Killzone 9,047, 2,529, 2,885, 9,354; Ghost of
+  Sparta 4,657, 2,068, 1,829, 5,924; Chains of Olympus 3,187, 1,422, 1,873, 4,625; Army of Two 5,400, 2,036, 13,240,
+  5,637; Activision Hits' menu 3,517, 1,196, 3,564, 1,372. The GE is busy 98 to 100% of the time in all but Army of
+  Two's (79%) and the copyright screen's (45%): the games queue their next frame's list while the GE draws.
+
+### The CPU beside the GE (`Kernel::geContend()`, kernel/ge.cpp; `GE::Cost`)
+
+- **The window.** From the GE getting busy to its being idle, each stretch of the CPU's (to a syscall, a go's end, an
+  idle wait, a spin skipped) begun while the GE is busy adds its cycles until the GE is done, its instructions and the
+  lines its caches moved (data lines read in, written back, uncached accesses, instruction lines read in; with the GE
+  done part way through it, their share that fell before). The sums are whole counts, so they come out the same however
+  the stretches are grouped (a spin's skipped turns as one stretch: below). The CPU's work before a list costs it
+  nothing: the window starts afresh when the GE is idle, the caches' counts seen again as it gets busy (`geSeeCaches()`:
+  `geOwe()`, and `geTime()` for a stalled list going on).
+- **The traffic.** u = lines / max(passed, T), the lines weighted (`WritebackLine` of one a line written back,
+  `UncachedLine` an uncached access), as a share of a thread streaming RAM flat out (`StreamLines`, 1/164.4 a CPU
+  cycle: round 10's streaming at 222 and 333 MHz alike); T, the PSP's CPU's time for the window's instructions and its
+  lines' stalls (`InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40), spreads a burst
+  of the emulated CPU's (which runs several times a PSP's speed) over the time a PSP's would take.
+- **The slowdown.** slow = sum(`Contention[kind]` x the kind's share of the list's clocks so far) x u, the kinds the
+  GE's reads of RAM: the front end's vertices and list words (a run's last words too: `pipeStop()`), the back end's
+  texels from RAM, transfers' reads. The window owes passed x slow / (1 + slow) in whole cycles (rounded down,
+  `geContendDue()`); what it hasn't pushed of that moves the GE's pipeline back (`gePipeAt`, which its times count from,
+  so the list's next run keeps it; `geDoneAt`; and a due SIGNAL's `geReachAt`, which `geTime()` works out from
+  `gePipeAt` otherwise). A line so costs the GE its share once: over a long window, `Contention` x share x the line's
+  streaming time, never more (the window's push P(W) = aW / (W + a), a that cost). The first version pushed slow / (1 +
+  slow) of every cycle passed, the window's average u falling only as 1/W after a burst, so a burst cost the GE again
+  and again (a·ln W): Super Monkey Ball, a burst of the CPU's work then a wait, came out at −14.5%. The writer test
+  caught it.
+- **What doesn't slow it**: polling through syscalls (a loop waiting on a cached word moves no lines), arithmetic, the
+  cache's own hits, the CPU's work before a list. As round 10b's PSP has it.
+- **Spins skipped** (`spins.cpp`, parts 91 and 105). A turn may move lines (an uncached word read each turn, or lines
+  one set can't hold): each turn skipped is counted as moving what the last turn run moved. The turns are alike, the
+  same accesses in the same order, and after one of them the caches hold what any later one leaves them holding (each
+  set its turn's last two lines, or as it was if one line or none touched it), so every turn from there counts the same
+  and changes nothing. A skip comes after `SpinTurns` turns in a row, and only if the last two moved the same lines with
+  as many syscalls: the one before the last brought the caches to where every such turn leaves them, the last counted
+  what each turn from there does. The kernel takes the caches' counts over those two turns alone (taken at every turn,
+  they cost the polling games up to 0.9% more host instructions, the emulation the same: Dante's Inferno 0.9%, Burnout
+  Dominator and Need for Speed: Shift 0.5%, whose loop is never skipped and paid them at every call). The skipped turns'
+  one stretch adds to the window what theirs would if the GE is busy for all of them or idle for all (no turns are
+  skipped with it done part way), and pushes the GE back as far as theirs would by the last one's end if what the window
+  owes is at its most there, or no more than before the first: so it is where it falls and then rises at most along the
+  turns (each of them all instructions: a spin turn makes no waits). It does so for turns of one stretch each (one
+  syscall), and for turns of any number moving no lines, with the window's time the same kind throughout (its cycles
+  passed or the CPU's time, `geContendBound()`). So with lines in the window or the turns, no other turns are skipped:
+  none that make more than one syscall each and move lines, none over which the window's time would change kind. With no
+  lines in either, the window owes nothing, and neither refusal applies. The review found the first version counting no
+  skipped turn's lines, exact only while turns moved none; the test it asked for (the GE's looks polled, each turn
+  reading an uncached word or three lines one set can't hold, `tests/psp/spins.cpp`) then found the window's sums,
+  floats, differing in their last bits from the turns': hence the whole counts.
+
+### The fit (`tools/psp-measure/contention11.py`)
+
+- **Each pattern's traffic a turn, as the model counts it**: streaming reads and the chain a line read in; streaming
+  writes a line read in and one written back; copies 2048 read in (each line written is read in first) and 1024 written
+  back; uncached reads 16 uncached accesses; the mixes two random lines of their set, each missing as often as a set
+  past 16 KiB does over two ways (1 − 16 KiB / its size) and written back in turn; the rest none.
+- **Fitted together over both clocks' 680 list-pattern pairs**: `Contention` vertices 0.34, words 0.27, texels 1.16,
+  transfers 0.57, `WritebackLine` 0, `UncachedLine` 0.2: the median miss 5.3% (round 10's own fit, its traffic counted
+  four lines a mix's turn, one a write's and a line for 16 uncached words, 8.4%). The mixes' slowdowns, about the same
+  whatever their write-backs, hold `WritebackLine` at 0; a saturating form (u / (1 + βu)) fits no better (5.2%). Its
+  worst: list A beside the writers and copies (−45%: their alternating rows, which a line count can't see?) and list H,
+  Super Monkey Ball's small trilinear strips (−19%).
+- **The CPU's pace**, from round 10's patterns alone (the PSP's cycles a turn against the core's instructions for it and
+  its traffic): `InstructionCycles` 1.41, `FillCycles` 79, `WritebackCycles` 9, `UncachedCycles` 40; the arithmetic and
+  cached reads 14 to 23% over, the slowed streaming 12 to 47% under.
+- **In the core** (`contention11.py --core`: the core's own run of rounds 10 and 10b against the PSP's): round 10's 680
+  pairs, the core's slowdowns within 5.7% of the PSP's at the median (15.5% with the term held at none), 94.0% within
+  25% (list E1, all NOPs, slowed only once a run's last words counted as reads of RAM: x1.24 beside streaming, the PSP's
+  x1.28); round 10b's 144, 1.0%. Polling (three ways) x1.00 (the PSP 0.96 to 1.06); writing before the list x1.00 (1.00
+  to 1.07); a writer beside it once: list A x1.91 (2.02), C x1.00 (1.00), D x1.33 (1.28), E2 x1.69 (1.36), H x1.17
+  (1.28), I x1.13 (1.07).
+
+### The gate
+
+The gate scenes' profiles made with this branch's runner as part 106's (900 frames from each state, the profile from
+frame 301; the copyright screen 360 from frame 1), `gate.py` against the owner's captures. Master's (`08801ab60`) beside
+it:
+
+| Scene | Capture | List | PSP | Master | Against the PSP | This branch | Against the PSP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Chains of Olympus, difficulty menu | UCUS98653-5 | frame (1 list) | 27.60 ms | 26.21 ms | −5.0% | 27.67 ms | +0.3% |
+| Ghost of Sparta, main menu | UCUS98737-1 | frame (1 list) | 29.62 ms | 27.52 ms | −7.1% | 28.96 ms | −2.2% |
+| Super Monkey Ball Adventure, Story Mode | ULES00364-1 | frame (1 list) | 23.64 ms | 16.64 ms | −29.6% | 18.76 ms | −20.6% (excepted) |
+| Killzone, the courtyard | UCUS98646-1 | 1 of 2 | 24.31 ms | 21.15 ms | −13.0% | 21.79 ms | −10.4% |
+| | | 2 of 2 | 1.72 ms | 1.67 ms | −2.9% | 1.67 ms | −2.9% |
+| | | frame | 26.03 ms | 22.82 ms | −12.3% | 23.46 ms | −9.9% |
+| Killzone, the courtyard | UCUS98646-r9-1 | 1 of 2 | 23.89 ms | 21.15 ms | −11.5% | 21.79 ms | −8.8% |
+| | | 2 of 2 | 1.72 ms | 1.67 ms | −3.0% | 1.67 ms | −3.0% |
+| | | frame | 25.61 ms | 22.82 ms | −10.9% | 23.46 ms | −8.4% |
+| Activision Hits Remixed, 3D main menu | ULUS10186-menu | 1 of 3 | 21.20 ms | 18.95 ms | −10.6% | 20.28 ms | −4.4% |
+| | | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | 5.17 ms | +48.5% |
+| | | 3 of 3 | 5.40 ms | 6.85 ms | +26.7% | 6.88 ms | +27.2% |
+| | | frame | 30.30 ms | 30.97 ms | +2.2% | 32.32 ms | +6.7% |
+| Activision Hits Remixed, 3D main menu, idle | ULUS10186-r9-1 | 1 of 3 | 21.25 ms | 18.95 ms | −10.8% | 20.28 ms | −4.6% |
+| | | 2 of 3 | 3.48 ms | 5.17 ms | +48.5% | 5.17 ms | +48.5% |
+| | | 3 of 3 | 5.47 ms | 6.85 ms | +25.1% | 6.88 ms | +25.6% |
+| | | frame | 30.39 ms | 30.97 ms | +1.9% | 32.32 ms | +6.4% |
+| Activision Hits Remixed, copyright screen | ULUS10186-boot2 | 1 of 2 | 0.96 ms | 0.90 ms | −7.3% | 0.90 ms | −7.2% |
+| | | 2 of 2 | 8.14 ms | 7.68 ms | −5.7% | 7.68 ms | −5.7% |
+| | | frame | 9.10 ms | 8.57 ms | −5.8% | 8.57 ms | −5.8% |
+
+Frames judged: 8, all within 15% but Super Monkey Ball's (excepted), none too slow by more than 6.7%; the median miss
+6.5% (master's 7.0%). Lists reported: 10 of 15 within 15% (master's 10). Five of the eight frames move closer to the
+PSP's; Activision Hits' copyright screen doesn't move; its menu's frame moves away (+2.2% to +6.7%, the idle capture
++1.9% to +6.4%), its first list closer (−10.6% to −4.4%) but its second and third as they were, too slow by 48.5% and
+27% (the CPU barely touches them). Its frame matched only by the first list's shortfall making up for the others'
+excess.
+
+- **Super Monkey Ball** keeps its exception (`gate.py`'s `EXCEPTED`, now with a limit: −21%, past which it fails; 0.4
+  points from today's −20.6%, so any change to the model that moves it trips the gate, as meant). Its rest points at the
+  GE's side: round 10's list H, the small trilinear strips modelled on its own (CLUT4 mipmaps), is
+  predicted about 16% short beside any of the CPU's patterns; the model has it reading RAM for 37% of its clocks (its
+  vertices 32%, its words 5%, its texels 0.6%: its little textures stay in the texture cache), and the PSP slows it as
+  if it read more. List E2, its CALLed lists, comes out over (x1.69 beside the writer against the PSP's x1.36).
+
+### The host cost
+
+The emulation thread's instructions a frame on the Mac (its counters; the milliseconds too noisy on a shared machine to
+quote), the PSP's timing both sides, master's bench runner (`08801ab60`) against this branch's in three forms: the
+counting alone (`Contention` held at none: master's emulation exactly, so the difference is the looks' and the kernel's
+work), the same without the self-loop skip, and the branch as players get it (the GE slowed too, which changes how much
+the games wait and poll). The gate's scenes, 600 frames from their states (the copyright screen 360):
+
+| Scene | master | the counting alone | without the self-loop skip | this branch |
+| --- | --- | --- | --- | --- |
+| Chains of Olympus, difficulty menu | 33.5 M | +9.6% | +9.0% | +6.1% |
+| Ghost of Sparta, main menu | 59.2 M | +6.2% | +6.2% | +2.1% |
+| Super Monkey Ball Adventure, story | 69.8 M | +5.8% | +5.8% | −4.2% |
+| Killzone, the courtyard | 42.4 M | +12.6% | +13.1% | +10.7% |
+| Activision Hits Remixed, 3D menu | 58.6 M | +14.4% | +18.3% | +11.7% |
+| Army of Two, gameplay | 44.4 M | +10.7% | +10.0% | +10.7% |
+| Activision Hits Remixed, copyright | 25.4 M | +16.7% | +22.5% | +16.8% |
+
+The library check's polling games, 3600 frames from boot with its presses:
+
+| Game | master | the counting alone | this branch |
+| --- | --- | --- | --- |
+| Dante's Inferno | 95.8 M | +39.5% | +41.6% |
+| Burnout Dominator | 77.8 M | +21.5% | +33.1% |
+| Need for Speed: Shift | 76.0 M | +19.0% | +28.7% |
+| Super Stardust Portable | 27.4 M | +12.6% | +12.3% |
+| Midnight Club: L.A. Remix | 80.0 M | +12.2% | −12.6% |
+| Burnout Legends | 139.7 M | +11.8% | +18.1% |
+| Shepherd's Crossing | 64.3 M | +4.3% | +4.3% |
+| Dragon Ball Z: Shin Budokai – Another Road | 43.9 M | +0.8% | +0.7% |
+
+- **Where it goes.** The data looks: seven instructions each, about 190,000 a frame in Super Monkey Ball's scene,
+  885,000 in Activision Hits' menu (a spin reading memory without syscalls), 1.8 million in Dante's Inferno from boot
+  (its loading streams through memory: many looks miss, and a miss is a call); then the instruction looks (three
+  instructions each on ARM64, 114,000 to 930,000 a frame) and the kernel's sums at each syscall while the GE is busy.
+- **Cut before this measurement**: a block going on to itself skips its own first line's look (Activision Hits' menu
+  +18.3% to +14.4%, its copyright screen +22.5% to +16.7%); an instruction line's key small enough for an ARM64
+  compare's immediate (two instructions fewer a look); the kernel's sums skipped while the GE is idle (the counts seen
+  as it gets busy instead). The counting before these cost Activision Hits' menu +21.4% and its copyright screen +25.3%.
+- **Measured and left**: skipping VRAM's and the scratchpad's looks (of every look, 0 to 2.2% reach them: Dante's 2.2%
+  VRAM's, Chains of Olympus 0.46% the scratchpad's; nothing to save, and the test itself would cost what the look
+  costs); a shorter data look: the set's tags indexed from the CPU's own base register with no add would need them at
+  `Allegrex`'s very start, where its vtable pointer is (sljit's indexed loads take no displacement, so at any other
+  place the add stays).
+- **What would take more**: spins without syscalls pay a data look every turn (the spin skip's widening, a pull request
+  of its own, takes the turns away); a miss's call (the other way looked at inline would spare the calls of lines in the
+  older way).
+- **On the RP6**: `smba-rp6.sh` in the runner-android scratch folder: master's runner from CI against this branch's, the
+  PSP's timing both, the gate's scenes and the three games whose instructions grew most here (Dante's Inferno, Burnout
+  Dominator, Need for Speed: Shift), 2 rounds taking turns.
+
+### Save states: layout 35
+
+A state keeps the window (cycles passed, instructions, the four kinds of lines, the cycles pushed: whole counts), both
+caches' tags (2 KiB), the counts the window hasn't seen (none while the GE is idle) and the list's clocks by kind: 2,168
+bytes more than layout 34, all in one place (the review's round turned the window's five floats and its carry into six
+whole counts, the same 48 bytes). An older state loads with the caches empty and the window
+afresh. A state saved while the CPU writes beside a list carries on in another machine exactly as in the one it came
+from (the test). "Fast" keeps the same bytes (the caches empty, the window afresh): its state is layout 34's with them
+put in.
+
+### Tests
+
+- **ge time, the PSP's: the CPU's caches**: a loop reading 64 KiB reads in 1,024 lines; 16 KiB twice reads its 256 once;
+  32 KiB twice every line each time (1,024); storing over 32 KiB reads in 512 and writes back 256; 1 KiB read through an
+  uncached mirror counts 256 uncached accesses and reads in nothing; a loop polling a function and a word reads in that
+  word's line alone; 32 KiB of straight code run twice reads in its 512 lines each time; "Fast" counts nothing.
+- **the CPU beside the GE**: a list textured from RAM takes as long with the CPU polling beside it, and after the CPU
+  has written 1 MiB before it, as alone (within 0.2%); with the CPU writing 1 MiB beside it, over 10% longer, and
+  untextured sprites under 3% longer (five times less).
+- **the CPU beside the GE, by its rule**: the push of a stretch by the rule's sum, at 222/111; a stretch with nothing in
+  it before and after the CPU's time has passed; ten million cycles more bring the window's push to within 2% of the
+  lines' cost and never past it; a stretch running past the GE's end counts its share; one after it starts the window
+  afresh.
+- **a state saved with the CPU beside the GE** (above); the system test's refused layouts (36 now) and loaded ones (27,
+  28 and 31 to 34).
+- **the GE's looks polled with the PSP's GE timing, each turn moving lines of the CPU's caches**
+  (`tests/psp/spins.cpp`): sceGeListSync(id, 1) polled, and sceGeDrawSync(1) with the list stalled, each turn also
+  reading a word through an uncached mirror or a word from each of three lines one set can't hold; on both engines,
+  more than a thousand turns skipped, every step's state and in the end the caches' counts the same as with every turn
+  run.
+- **measured rounds 10 and 10b: the CPU beside the GE** (`measured8`): the core's own run of the two rounds' contention
+  tests against the PSP's files. Round 10's 680 pairs, half within 7%, nine in ten within 25%; round 10b's 144, half
+  within 1.5%: beside a CPU polling or writing before the list within 8%, beside a writer the untextured list within 1%,
+  the RAM-textured one within 10% (30% at twice its length: see "Not yet"). CI requires round 10b's files now
+  (`ge-round10b`).
+- `gate.py`'s tests: the exception passes the way it was accepted within its limit, fails past it and the other way.
+
+### Checks
+
+- "Fast" against master (`--ge-timing fast` both sides, six gate scenes, 300 frames; Vulkan fast and Software before the
+  cheap cuts, Vulkan fast after): every frame's picture and VRAM and the RAM after, the same; each state master's with
+  layout 35's 2,168 bytes put in, at one place.
+- "Fast"'s cost: none to measure (its instructions a frame, master's against this branch's, 600 frames twice each:
+  Chains of Olympus −0.01%, Super Monkey Ball +0.02%, Activision Hits' menu −0.64%, its runs 0.28% apart on master).
+- The cheap cuts change nothing the games see: the PSP's timing before and after them (three scenes, 300 frames), every
+  frame's hashes the same; the states differ only in the instruction cache's tags, kept in their new keys.
+- GitHub's checks: the first push failed GCC's `-Wparentheses` (a set's index, clang silent) and two state tests that
+  build older layouts from this one (layout 35's bytes not taken out); with those put right, the new groups pass in both
+  PSP jobs, the sanitized one finding nothing.
+- The review (approve, with should-fixes): "Fast" exact (12 of 12) at no cost to measure; under the PSP's timing the
+  caches deterministic (six scenes run twice) and states saved mid-run carried on byte for byte; both fits and the gate
+  reproduced from the tree; the spin skip on and off the same in Resistance, Burnout Dominator and the gate's scenes.
+  Its should-fixes: the skipped turns' lines (now counted, with the test "the GE's looks polled with the PSP's GE
+  timing"), and the interpreter (documented, above).
+- After the review's fixes: the gate run again moves Ghost of Sparta's frame alone, 28.95 to 28.96 ms; "Fast" against
+  master again (six scenes, 300 frames, Vulkan fast) the same in every frame and the RAM, each state master's with the
+  2,168 bytes; the PSP's timing against the reviewed head (three scenes, 300 frames): every frame's picture and VRAM
+  the same, the RAM after them not in Super Monkey Ball's and Killzone's (the whole-cycle pushes and the window's end
+  move the GE by a few cycles).
+
+### Not yet
+
+- **The owner's decisions** (2026-10-19, 11:08): Activision Hits' menu frame at +6.7% accepted (its first list now
+  nearly right, its others as they were); the host cost accepted; and round 10c (draft PR #280) times list H's kind
+  (small strips of a CLUT4 mipmapped texture, trilinear) beside the CPU's streaming, taken apart, to find what the GE
+  reads there that its clocks don't show: its refit follows this pull request.
+- **A threaded GE** (#277's, ported onto this): its runs' counts folded later, each stretch of the CPU's has to keep, as
+  it ends, its instructions and the caches' four counts' deltas (data lines read in, written back, uncached accesses,
+  instruction lines read in), the live counts moving on while it waits for its run's fold; the window's pushes
+  (`gePipeAt`, `geDoneAt`, a due SIGNAL's `geReachAt`) have to agree with the folds and the go's limits; a state saves
+  the drawing GE's clocks by kind, not the kernel's GE's; and the measured rounds' machines keep
+  `KernelMachine::pspTiming()`, which turns the caches on.
+- The interpreter's accesses and instructions (above).
+- The kernel's cache calls (`sceKernelDcacheWritebackRange` and its kin) and the `cache` instruction change nothing in
+  the model: a PSP's would write lines back and make them miss again.
+- The CPU's traffic with VRAM (round 10's VRAM patterns slow VRAM-textured and untextured lists 1.5 to 2.4 times) isn't
+  counted: no gate scene shows it yet.
+- The CPU slowed beside the GE (round 10: its turns up to seven times as long beside a list of vertices) isn't counted:
+  the model times the CPU's work as if alone, so a burst ends early. A writer of 1 MiB beside list A at twice its length
+  slows it x1.56 here and x2.0 on the PSP, whose writer, slowed itself, goes on writing as long as the list.
+- Spins without syscalls (Activision Hits' screens) pay a data look every turn: the spin skip's widening (a pull request
+  of its own) takes them.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/refit/`: `contention11-a.txt` (the fit), `core/` (the core's rounds 10 and 10b),
+`gate-final3.txt`, `scenes/final3-*` (the gate's profiles), `bench/runs/` (the cost runs), `dcbuild.sh`,
+`termbuilds.sh`, `builds4.sh`, `contend-core.sh`, `bench/polls.sh`, `bench/final-checks.sh`; NOTES.md's entry of
+2026-10-19 01:37.
+
+## Part 114: psp-measure round 10c — Super Monkey Ball's small strips beside the CPU taken apart, Activision Hits' menu's second and third lists, round 10's game-style strips taken apart
+
+On branch `cursor/psp-measure-round10c-2b67` (draft PR #280), from master `08801ab60` (#269, part 106: the PSP's GE
+timing the default, refitted with round 10; #278, part 112: rounds 10 and 10b), with master `d9bfbefb4` merged in
+(#279, part 113: the CPU's traffic beside the GE; #282; #281). Round 10c of `tools/psp-measure`, for the owner's PSP,
+which he ran on the evening of 2026-10-19 (the results below, and `tests/psp/measurements/ge-round10c`). Part 111 is
+#277's. Synthetic, as rounds 10 and 10b: no game's lists, textures or vertices in the program, only the parameters the
+logs show. Nothing in the core changes: the program, its test, the test programs' copy of it, the PSP's files. Clean
+room as part 107: our own code; pspsdk's headers and uOFW's reading of the driver; no PPSSPP or JPCSP.
+
+### What's still missed
+
+- **Super Monkey Ball's remaining gap.** #279's model of the CPU's traffic (part 113) leaves the story scene within its
+  exception's limit and points what's left at the GE's side: round 10's list H, the game's small trilinear strips
+  (time-mipmaps 14: a CLUT4 64x64 texture with 7 levels, 3D strips of 6 vertices tiling 512x256), comes out about 16%
+  short beside any of the CPU's patterns. The model has H reading RAM for 37% of its clocks (its vertices 32%, its words
+  5%, its texels 0.6%: the little textures stay in the texture cache), and the PSP slows it as if it read more: ×1.31
+  to 1.55 beside round 10's patterns, ×1.28 beside round 10b's writer (the model ×1.17).
+- **Activision Hits' menu's second list, +48.5% by #269's refit**: round 10's tiles (time-clut32 0, 3.23 ms of the
+  PSP's 3.48 for the whole list) and then 60 sprites shrinking an 8888 512x512 VRAM picture 2:1, bilinear, into an 8888
+  buffer: the refit charges the sprites 1.64 ms, where the PSP's list leaves them 0.22 to 0.25 (1fd9133c's
+  `SPECS-10c-1fd9133c.md`, in `~/phobos-work/scratch/psp-ge-profile/round10/`, its A).
+- **Its third list, +26.7%**: 63 3D strips of 4 vertices magnifying an 8888 256x512 RAM texture (swizzled) about 1.9
+  times, bilinear, blended, the alpha test on, into 5650. The refit reads a triangle's narrow rows wide into 16-bit
+  (from round 10's copyright pass), where part 112 reads that pass's miss as bilinear on wide reads; the nearest and
+  bilinear pair at each magnification decides between them (its B).
+- **Round 10's game-style strips** (time-lights 37 and 38): the same lit or not on the PSP, 2.1 times the refit's
+  pixels (its C, optional).
+
+### What round 10c measures
+
+Every test is round 8's kind (`timeCases8`: each list queued alone, timed to its finish callback, every run kept), at
+222/111 and 333/166 MHz, 8 runs a size unless said; `manifest10c.txt` lists every case. In the order they run:
+
+- **`time-contention4`** (31 cases): round 10's time-contention (`runContention10`: the thread above the program's
+  priority, released after the enqueue, stopping at the finish callback's flag or its deadline; a run's four words; 4
+  runs a size) with list H and six lists of its kind, at 4,096 and 8,192 triangles: H as round 10 drew it; nearest
+  within the level chosen (time-mipmaps 15); bilinear without levels (16); nearest without levels (17); untextured (the
+  same strips, vertices and depth test); H with its vertices in VRAM's last 256 KiB (written through the uncached
+  mirror); untextured with them there. Each alone and beside round 10's streaming reads over 1 MiB, flat out and at a
+  half, and its game's mix over 256 KiB (12 additions, 2 reads and 2 writes a turn at random words); each pattern alone
+  first (10 ms). time-contention's layout: the first list's case 3, rows of 4. What each list takes away (the levels'
+  blend, bilinear's four texels, the texels, the vertices' RAM reads) against how much less the CPU then slows it says
+  which of H's reads the PSP slows.
+- **`time-shrink`** (9): the menu's second list. The whole list as logged, in one list: time-clut32 0's tiles (15 x 8
+  of 32x34, three passes, 240 palette loads a layer, into 5650), then the 60 sprites: 2D, 10-byte vertices (16-bit
+  texture coordinates and positions), a draw of 2 vertices each, 15 x 4 sprites of 16x34 pixels over 240x136 of an 8888
+  buffer (VRAM's 0x150000), each over 32x68 texels of the picture (VRAM 8888 512x512, not swizzled, buffer width 512),
+  bilinear, not blended, no depth or alpha test; 1 and 2 layers. Then the sprites alone (1 and 4 layers); nearest; 1:1
+  (32x68 over 480x272); 4:1 (8x17 over 120x68); 2:1 from the picture swizzled in VRAM, and from RAM swizzled and not;
+  one sprite 240x136 over the 480x272 texels (rows 240 wide).
+- **`time-magnify`** (14): the menu's third list, bilinear and nearest each: as logged, 9 x 7 quads (3D strips of 4
+  vertices of 24 bytes) over 480x272 reading an 8888 256x512 RAM texture, swizzled, 256 texels over 480 pixels (×1.875
+  both ways), modulated, blended (source alpha, 1 − source alpha), the alpha test (greater than 0), into 5650; 1:1 and
+  4 times (8 x 8 quads over 256x256: 256 and 64 texels across); into 8888; neither blended nor alpha-tested; the texture
+  512x256; CLUT8 256x512 (time-widetri's palette). 1 and 4 layers, a layer every quad once. The log's 24 bytes have
+  16-bit texture coordinates; here they're floats (`FloatVertex`, 24 bytes too: 252 vertices a layer against about
+  130,000 pixels).
+- **`time-gamestrips`** (6): round 10's game-style strips unlit (time-lights 38: strips of 9 vertices of 12 bytes,
+  16x20-pixel triangles over a CLUT4 64x64 RAM texture swizzled, bilinear, modulated; the depth test passing and
+  writing; the alpha test; into 8888), then without one thing at a time: nearest; no alpha test; no depth test; into
+  5650; untextured; 256 and 1,024 strips.
+- **`time-anchors3`** (7, last): round 10's time-anchors2 6 (round 8's time-strips 37 on a 1 KiB boundary),
+  time-clut32 0, time-widetri 0, time-perspective 3, time-mipmaps 1, time-vram8 1 and time-lights 38, built by round
+  10's code at its sizes: this session against round 10's evening.
+
+### How it runs
+
+- About half a minute on the PSP: some 7 seconds of the GE's time by round 10's rates (H's lists beside the CPU, the
+  game-style strips and the lights anchor the most) and some 1,600 runs' own overhead; about 30 KB.
+- The same safety as rounds 10 and 10b: its own menu line (the first: "Round 10c: Monkey Ball's strips, Activision
+  Hits' lists (30 KB)"); new names in `results/ge` (`time-contention4`, `time-shrink`, `time-magnify`,
+  `time-gamestrips`, `time-anchors3`, `manifest10c.txt`), nothing earlier overwritten; the clocks put back after each
+  test; every GE wait 5 s with the reset; the thread's own deadline (5 s, 10 ms alone), its lines written back and
+  invalidated after each run; the program's arrays on 1 KiB boundaries. H's VRAM vertices (at most 240 KiB) sit in
+  VRAM's last 256 KiB, past the depth buffer; this round's thread patterns touch only their own 1 MiB in RAM.
+- The two functions round 10c reuses are callable within a list now (the small strips, `smallStrips10`, with a
+  texture or not and their vertices in RAM or VRAM; time-clut32's tiles, `tilesInto`, which `drawTiles` wraps): rounds
+  8 to 10b's lists are drawn as before.
+- The owner: copy `EBOOT.PBP` over the old one in `PSP/GAME/PSPMEASURE`, keeping `results/`; ARK's clock settings at
+  Auto; the charger in; the GE profiler plugin off; run "Round 10c" (the menu's first line); send `results/ge` back.
+
+### The test
+
+"psp measure" (tests/psp/measure.cpp) runs round 10c after round 10b, through the menu (every line one further down),
+and checks its five files as round 10b's: whole records, as many as the tables give (time-contention4 118,
+time-shrink 36, time-magnify 56, time-gamestrips 24, time-anchors3 28), each test's settings in turn, every run
+finished; the contention thread's turns and their time wherever it ran, and nothing where it didn't; and
+`manifest10c.txt`. measured8's groups run rounds 8, 9, 10 and 10b (#279's group) from the new build (their lines one
+further down). No test reads round 10c's PSP files yet.
+
+### What the PSP showed (the owner's run, 2026-10-19 evening)
+
+The owner ran round 10c (EBOOT `243aa27d…`) on the evening of 2026-10-19; the coordinator pulled `results/ge` from the
+RP6 at 20:18 (`~/phobos-work/scratch/psp-ge-profile/results-r10c`: the five files and `manifest10c.txt`, each one's
+sha256 the device's). They hold the records the tables give (time-contention4 118, time-shrink 36, time-magnify 56,
+time-gamestrips 24, time-anchors3 28), every run finished, nothing stalled. Their dates on the RP6 read 2026-10-18
+18:57, before the EBOOT was built (2026-10-19 13:06): the PSP's clock is most likely a day behind (not checked).
+Decoded with `r10c.py` (round 10's `r10.py` underneath). Times are microseconds at 222/111 unless said, bus clocks the
+microseconds times the bus's MHz; 333/166 agrees within a few percent unless said. Activision Hits' menu runs at
+222/111 (part 104), so its lists are set beside the 222/111 times.
+
+- **Repeatability** (time-anchors3's medians against round 10's evening): round 10's time-anchors2 6 (its texture on a
+  1 KiB boundary in both builds), time-vram8 1 (VRAM) and time-lights 38 within 0.2% at both sizes and clocks. The
+  cases reading a swizzled texture or a palette from RAM, whose arrays round 10's build put 64 bytes past 1 KiB
+  boundaries (part 112), are cheaper now that the arrays sit on them: time-clut32 0 (its 240 palette loads a layer)
+  2%, time-widetri 0 (a swizzled CLUT8 texture and its palette) 6.3 to 7.2%, time-perspective 3 and time-mipmaps 1
+  (swizzled 8888) 6.1 to 7.6%, as round 10b's time-placement has such offsets cost. List H as round 10's
+  time-contention drew it, alone: 1,181 and 2,279 µs at 4,096 and 8,192 triangles (round 10: 1,163.5 and 2,263.5),
+  737.5 and 1,436 at 333/166 (738.5 and 1,438); its slowdowns beside the same three patterns 0.00 to 0.03 below round
+  10's. The thread's patterns alone make 1.6 to 2.0% fewer turns than in round 10's session (streaming reads, flat out
+  and at a half) and 7.7 to 8.3% fewer (the mix over 256 KiB).
+- **Super Monkey Ball's small strips beside the CPU** (time-contention4):
+  - Alone, H's variants with their vertices in RAM take the same within 2% (the filter, the levels, the texture) but
+    for H as drawn at 4,096 triangles and 222/111, 4 to 5% over the others (its four runs 1,140 to 1,238 µs): at 8,192
+    triangles 2,236.5 to 2,279 µs, about 30 bus clocks a triangle (1,414.5 to 1,439.5 µs at 333/166, about 29). With
+    their vertices in VRAM they take longer: 2,890.5 µs textured and 2,749 untextured at 8,192 triangles, 27 and 22%
+    more (31 and 26% at 333/166), 39 and 37 bus clocks a triangle.
+  - Beside the CPU, each list's time beside a pattern over its time alone (both sizes, both clocks):
+
+    | H | Streaming reads | At a half | The mix over 256 KiB |
+    | --- | --- | --- | --- |
+    | as round 10 drew it (trilinear, 7 levels) | ×1.29–1.33 | ×1.24–1.28 | ×1.43–1.51 |
+    | nearest within the level chosen | ×1.31–1.33 | ×1.26–1.29 | ×1.47–1.51 |
+    | bilinear without levels | ×1.31–1.33 | ×1.27–1.29 | ×1.48–1.50 |
+    | nearest without levels | ×1.31–1.33 | ×1.27–1.29 | ×1.48–1.51 |
+    | untextured | ×1.29–1.33 | ×1.24–1.29 | ×1.45–1.51 |
+    | its vertices in VRAM | ×1.01–1.02 | ×1.01 | ×1.01 |
+    | untextured, its vertices in VRAM | ×1.00 | ×1.00 | ×0.99 |
+
+  - The slowdown is the same textured or not, trilinear, nearest, with levels or without. With the vertices in VRAM
+    it's 2% at most, though the list's own words are still read from RAM.
+  - It isn't in proportion to the CPU's traffic: streaming reads at a half of flat out (55% of its turns) slow H ×1.24
+    to 1.29, flat out ×1.29 to 1.33 (round 10's quarter and eighth: ×1.11 to 1.16 and ×1.06 to 1.09). The mix over
+    256 KiB (2 reads and 2 writes at random words a turn) slows it most.
+- **Activision Hits' menu's second list** (time-shrink):
+  - The whole list as logged takes 4,516.5 µs a layer (2,968 at 333/166): its tiles 3,166 (time-anchors3's
+    time-clut32 0, a layer), its 60 sprites about 1,350. The game's own list takes 3.48 ms in the capture: as the log
+    has it, the list takes the PSP 30% longer.
+  - The 60 sprites alone (2:1, bilinear): 1,387 µs a layer (906 at 333/166), nearest the same (1,386.5). They cost by
+    the texels they span more than by the pixels they draw: 1.18 bus clocks for each texel of the 480x272 picture at
+    2:1 (4.7 a pixel), 1.66 at 1:1 (1,949.5 µs), 1.02 at 4:1 (1,199 µs; 16.3 a pixel). One sprite 240 wide over the same
+    texels (its rows 480 texels wide) takes 3.4 times the strips (4,661.5 µs). The picture swizzled in VRAM costs 5%
+    more (1,462); from RAM, swizzled, 1.51 times (2,098.7), not swizzled 6.5 times (9,003).
+- **Its third list** (time-magnify):
+  - As logged (9 x 7 quads magnifying the 8888 256x512 RAM texture 1.875 times into 5650, blended, alpha-tested):
+    1,351.8 µs a layer bilinear, 1,289 nearest (1.15 and 1.10 bus clocks a pixel), a quarter of the game's third list
+    (5.40 ms in the capture). Neither blended nor alpha-tested the same (1,352); into 8888 23 and 22% more (1,661.5,
+    1,577.8); the texture 512x256 within 2%; CLUT8 256x512 0.43 and 0.44 times (585.7, 572.3).
+  - Bilinear over nearest: 5% at 1.875 times (5 to 7% into 8888, unblended and from 512x256; 2% in CLUT8), 10% at 4
+    times (305.5 against 277.8 µs over 256x256), 36% at 1:1 (1,726 against 1,273.3: 2.92 and 2.16 bus clocks a pixel).
+    Every quad's rows are narrow: 8 to 32 texels.
+- **Round 10's game-style strips** (time-gamestrips): 22.87 µs a strip unlit as round 10 drew them (2,539 bus clocks;
+  round 10's 2,538), the same nearest (22.86), without the alpha test (22.86) and untextured (22.87). Without the depth
+  test 7.82 µs (868 bus clocks), and into 5650 with it 7.57 (840): taking away either the depth test or the 8888 target
+  leaves a third of the time, and the texture, its filter and the alpha test cost nothing.
+
+### The core beside the PSP
+
+The core's own run of round 10c with the GE timing "PSP": this branch's runner (`tools/psp-runner/build.sh`, built
+from the merged tree) running the owner's EBOOT from a memory-stick folder, round 10c's line chosen
+(`--ge-timing psp --frames 7200 --press 60:Cross,66:Cross! --start-time 1791290096`), as the tools README's fit runs
+the program; and the same with a runner built from `eadbf8924`, this branch before the merge (master `08801ab60`'s
+core, before #279). Every file whole and every run finished in both; decoded as the PSP's.
+
+| Case, 222/111 | PSP | The core | Before #279 |
+| --- | --- | --- | --- |
+| H as round 10 drew it, alone (8,192 triangles) | 2,279 µs | 2,384 µs (+4.6%) | 2,384 µs |
+| … beside streaming reads | ×1.29–1.30 | ×1.16 | ×1.00 |
+| … beside streaming reads at a half | ×1.24–1.25 | ×1.11 | ×1.00 |
+| … beside the mix over 256 KiB | ×1.43–1.46 | ×1.20–1.21 | ×1.00 |
+| H untextured, beside streaming reads | ×1.29–1.33 | ×1.15 | ×1.00 |
+| H with its vertices in VRAM, alone (8,192 triangles) | 2,890.5 µs | 2,385 µs (−17.5%) | 2,385 µs |
+| … beside streaming reads | ×1.01 | ×1.16 | ×1.00 |
+| time-shrink: the whole list as logged | 4,516.5 µs a layer | 4,723 (+4.6%) | 4,722 |
+| … its 60 sprites alone, 2:1 | 1,387 | 1,357 (−2.2%) | 1,356.8 |
+| … 1:1 | 1,949.5 | 1,658.3 (−14.9%) | 1,658.7 |
+| … 4:1 | 1,199 | 653.3 (−45.5%) | 653.3 |
+| … one sprite 240 wide | 4,661.5 | 4,722.7 (+1.3%) | 4,722.7 |
+| time-magnify: as logged, bilinear | 1,351.8 µs a layer | 1,402.3 (+3.7%) | 1,402.3 |
+| … as logged, nearest | 1,289 | 1,402.2 (+8.8%) | 1,402.3 |
+| … 1:1, bilinear | 1,726 | 1,498.7 (−13.2%) | 1,498.7 |
+| … 1:1, nearest | 1,273.3 | 1,498.7 (+17.7%) | 1,498.7 |
+| … as logged into 8888, bilinear | 1,661.5 | 1,648 (−0.8%) | 1,648 |
+| time-gamestrips: as round 10 drew them | 22.87 µs a strip | 10.83 (−52.7%) | 10.83 |
+| … without the depth test | 7.82 | 6.90 (−11.8%) | 6.90 |
+| … into 5650 | 7.57 | 6.90 (−8.9%) | 6.90 |
+
+- **Beside the CPU.** Before #279 the core slows H beside no pattern (×1.00: its term for the CPU beside the GE was
+  held at none, part 106). With #279's model it slows every variant alike, at both clocks: ×1.15 to 1.16 beside
+  streaming reads, ×1.10 to 1.11 at a half, ×1.20 to 1.21 beside the mix. Set against the PSP's, the core's slowdowns
+  with the vertices in RAM are 10 to 13% short beside streaming reads, 11 to 14% at a half and 16 to 20% beside the
+  mix (the core's over the PSP's), as part 113 predicted from round 10 (about 16%). It slows H as much with the
+  vertices in VRAM, where the PSP doesn't slow it, so there it's 14 to 16% over the PSP's beside streaming reads, 9 to
+  11% at a half and 19 to 21% beside the mix: `GE::readVertices` (`ge/draw.cpp`) counts every vertex as a read of RAM,
+  at one rate, wherever it is (texels and transfers look where they read).
+- **Alone.** The core takes 2 to 7% longer than the PSP over H with its vertices in RAM at 222/111 and 9 to 12% at
+  333/166 (32.3 bus clocks a triangle at both clocks, the PSP about 30 and 29), and 11 to 18% less with them in VRAM.
+  Everything run with the CPU idle comes out the same before and after #279 (within 1 µs).
+- **Activision Hits' lists' cases.** Within 5% on the second list as logged and its sprites at 2:1 (and on the one
+  wide sprite); short at 1:1 (−15%) and 4:1 (−45%); the picture swizzled in VRAM the same as not (the PSP +5%). The
+  third list's quads as logged +3.7% bilinear and +8.8% nearest: the core charges no filter (bilinear the same as
+  nearest in every case), so at 1:1 it's 13% short of bilinear and 18% over nearest; into 5650 15% cheaper than into
+  8888 (the PSP 18 to 19%).
+- **The game-style strips**: 53% short with the depth test into 8888, within 12% without either.
+- **The anchors** miss as part 106's "not yet" has them: time-perspective 3 +144 to +158%, time-mipmaps 1 −74 to −75%,
+  time-vram8 1 −44 to −47%, time-lights 38 −52 to −53%; time-anchors2 6, time-clut32 0 and time-widetri 0 within 9%.
+- **The Mac's run** of the core on this branch (`round10c/ours/`) came from "psp measure", whose machine keeps the GE
+  timing "Fast" (`KernelMachine`'s default; only measured6's and measured8's runs ask for the PSP's, `pspTiming()`):
+  its H takes 175 µs alone at 4,096 triangles and no pattern slows anything, so it isn't a run of the PSP's timing.
+  The merged tree's "psp measure" wrote the same five files bit for bit ("Fast" as before #279, on x86-64 as on the
+  Mac's arm64).
+
+### What round 10c says for the refits, and what it doesn't
+
+No timing changes here: these are for Super Monkey Ball's refit (its own pull request) and #269's agent.
+
+- **Super Monkey Ball** (#279's model leaves its frame at −20.6%, within its exception's limit of −21%):
+  - What the CPU slows in H is its vertices' reads from RAM. Its texels play no part (the texture cache, the filter,
+    the levels: untextured, it slows the same). With the vertices in VRAM it slows by 2% at most, its words still read
+    from RAM: that bounds the words only while VRAM reads pace the list, and no case here separates them while RAM
+    vertex reads do.
+  - H slows nearly as a list of vertices alone does (round 10's list D, culled triangles' vertices from RAM: ×1.39 to
+    1.44 beside streaming reads; H ×1.29 to 1.33). By #279's own form, the GE's time ×(1 + `Contention` × a kind's
+    share × u), H's ×1.31 beside streaming reads (u = 1, the vertices' `Contention` 0.34) means vertex reads for about
+    90% of its time, where the model has them at 32% of its clocks: on the PSP, reading H's vertices from RAM paces the
+    whole list, its PRIMs' and pixels' work underneath (derived; round 10 has H's time alone as its vertices' and
+    PRIMs').
+  - The refit has three things to fit from here: the share a vertex-paced list's vertex reads take of its time; the
+    curve against the CPU's traffic (half of streaming's turns gives ×1.24 to 1.29, the model ×1.10 to 1.11; the mix
+    over 256 KiB ×1.43 to 1.51, the model ×1.20 to 1.21); and vertices in VRAM, which the PSP reads 22 to 31% slower
+    and the CPU doesn't slow. How much of the frame's −20.6% that closes depends on how much of the frame is lists of
+    H's kind: the gate's to say, with the refit.
+- **Activision Hits' menu's second list** (A): the log doesn't describe what the game draws (derived). As logged the
+  list takes the PSP 4.52 ms, 30% over the game's own 3.48, and its sprites cost 1.39 ms alone (part 106's reading,
+  the sprites next to nothing, is out). The core is within 5% of the PSP on the logged list (4.72 ms) and its sprites
+  (1.36 ms), so the +48.5% is in what the game's list does that the log leaves out: its own words (a capture of them,
+  or the log again) settle that, not a rate. Of the rates the cases measure, shrinking sprites cost by the texels they
+  span (1.0 to 1.7 bus clocks a texel), where the core is 15% short at 1:1 and 45% at 4:1.
+- **Its third list** (B): the logged quads take the PSP 1.35 ms of the game's 5.40, and the core is 3.7% over on them:
+  if the game's quads are as logged, its +26.7% (1.45 ms) lies in the rest of the list. Bilinear costs on narrow rows
+  too, most at a texel a pixel: 0.77 bus clocks a pixel at 1:1 (36%), about 0.05 magnified (5% at the logged 1.875
+  times, 10% at 4 times), where the core charges none. The 16-bit target saves 18 to 19% of the quads' time on the PSP
+  and 15% in the core: into 5650 the core is 4 to 5 points further over the PSP than into 8888 (+3.7 against −0.8%
+  bilinear, +8.8 against +4.4% nearest), and the refit's 16-bit share of narrow rows read wide is at most that. So B
+  points at a bilinear term of its own, heavy at a texel a pixel and light magnified (round 10's copyright pass, about
+  a texel a pixel with bilinear 20% dearer, would fall under it too); the 16-bit share is small here either way.
+- **The game-style strips** (C): their 2.1 times the model's pixels is the depth test into an 8888 target; with either
+  one alone a strip takes a third of the time, and the core is within 12% then. Why the pair costs three times isn't
+  measured: round 10c neither moves the depth buffer nor separates its writes from its test.
+
+### Checks
+
+- The program builds without a warning (`-Wall`) with pspdev's v20261001 release for macOS on arm64 (psp-gcc 15.2.0);
+  a build from the committed source (`git archive 9bcaff348`) gives the committed `pspmeasure.elf` (`b38077b4…`) and the
+  owner's EBOOT (`243aa27d…`) byte for byte.
+- The owner's files: the RP6's sums and the local copies' agree; `ge-round10c` packs the five `.bin` with `xz -9e` (21
+  KB of records as 5.3 KB; xz 5.8.4, which packs round 10b's `time-contention3.bin` to its committed file byte for
+  byte), its `SHA256SUMS` the unpacked files' and the manifest's sums. Unpacked as `run-tests.sh` unpacks a round, each
+  file's sha256 is the device's. Committed with the owner's go-ahead of 2026-10-18 (19:21: "Yes, I dont mind the
+  measurements going on the repo"; `development-process.md` records it).
+- Master `d9bfbefb4` merged: one conflict, this document's end, where both sides added a part (part 113, then this
+  one, each as its side had it). `tests/psp/measure.cpp`, the tools README and the handoff merged by themselves;
+  master's `round10bFiles()` (#279's measured8 group) reaches round 10b by its line's name, one further down in round
+  10c's build.
+- On the merged tree (cachyOS x86-64, GCC 16.2.1), the measure groups with the sanitized test program
+  (`PSP_FFMPEG=0 PHOBOS_JOBS=2 PHOBOS_TESTS_ONLY=measure
+  PHOBOS_TESTS_REQUIRE=programs,ge-round3,ge-round6,ge-round8,ge-round9,ge-round10,ge-round10b tests/psp/run-tests.sh`):
+  13 groups, 0 failures, in 16 minutes ("fonts measured"; "psp measure" through round 10c; measured round 6's seven;
+  measured8's rounds 8, 9 and 10, and rounds 10 and 10b beside the CPU). The runner (`PSP_FFMPEG=0 PHOBOS_JOBS=2
+  tools/psp-runner/build.sh`) builds without a warning from the merged tree and from `eadbf8924`.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/round10c/`: `EBOOT.PBP` and its sha256, `build/` (the program as tested),
+`verify-9bcaff348/` (the rebuild from the commit), `measure-r10c.log` (the local test), `ours/` (the core's files from
+it, the GE timing "Fast"), `pr-body.md`, `r10c.py` (the decoder), `compare-r10c.py` (the PSP's files beside the core's)
+and its output `compare-r10c.txt`, `core-merged/` and `core-pre279/` (the core's runs above: the runner's files, its
+log and their decode); the specs in `round10/` (`SPECS-10c-1fd9133c.md`). `results-r10c/`: the owner's run as the
+coordinator pulled it (`ge/`, the device's and the local sums, `README.txt`, `decode-r10c.txt`). Nothing was run on the
+RP6.
+
+## Part 115: the CPU beside the GE refitted — Super Monkey Ball within 15% (−20.6% to −12.7%), its exception gone
+
+On branch `cursor/psp-smba-refit-cachy` (draft PR #291), from master `0f7c17d8a` (#289), with master `1257da75d`
+(#290) merged in, and master `d82f5db6f` (#292) merged in (`0e4fa0a80`). The goal set for it: Super Monkey Ball within
+15% of the owner's capture by its whole frame and its exception out of `gate.py`, Activision Hits' 3D menu within the
+owner's limit of +10%, no other judged frame past 15%, and the constants fitted to the PSP's measurements, never tuned
+on the gate. All four hold: Super Monkey Ball's frame goes from −20.6% to −12.7%, the menu's from +6.7% to +9.95%.
+Sources: the owner's rounds 10, 10b and 10c (parts 112 and 114) and probes of the gate's seven states. Clean room as
+part 113: our own code; no PPSSPP or JPCSP. Save states: layout 35, unchanged.
+
+### Why
+
+- **Super Monkey Ball's frame was −20.6% with #279** (part 113). The owner accepted it as an exception for now, wanting
+  it fixed ("I definitely would like to fix its behavior to fall in line with the other games weve focused on", 18 Oct,
+  22:00), and #279 merged with the exception limited at −21% (his decisions of 19 Oct, about 11:08;
+  `~/phobos-work/handoff/notes/owner-decisions.txt`).
+- **Round 10c** (part 114) showed where the rest lay: list H, the game's small trilinear strips, slows beside the CPU
+  only through its vertices' reads from RAM (untextured it slows the same; with its vertices in VRAM, by 2% at most),
+  and the PSP's CPU slows beside such lists too, which #279's model, timing the CPU's work as if alone, didn't count.
+- **The owner's limit for Activision Hits' 3D menu** is +10%: "As close as possible" (20 Oct, received by 00:53), read
+  as keeping the menu as close to the PSP as this refit allows.
+
+### The model (`Kernel::geContend()`, kernel/ge.cpp; `GE::Cost`, ge.hpp; ge/draw.cpp, list.cpp, thread.cpp)
+
+- **The hybrid form.** A busy window owes the GE a / (1 + a) + b of its time. a is the front end's part, #279's rule
+  for its two kinds of reads, the vertices and the list's words: the sum of `Contention[kind]` × the kind's share of
+  the list's clocks × u, so the front end's work takes 1 + a as long. b is the back end's part, the same sum over
+  texels and transfers, which cost it a fixed time for each line the CPU moves. u is the CPU's traffic with RAM as a
+  share of streaming's, as part 113 has it: the lines weighted (`WritebackLine` 0.45 a line written back,
+  `UncachedLine` 0.85 an uncached access) over the window's time, its cycles passed or the PSP's CPU's time T for it,
+  whichever is longer.
+- **The cap.** What a window owes is held at `Cap`, 0.75 of its time: a list at most 4 times as long (the PSP's longest
+  beside its CPU, 3.2 times). A window that reaches it is counted once for the runner's report (`geCapped`). The spin
+  skip (parts 91 and 105) refuses a skip where the cap binds at either end of the turns it would skip
+  (`spinRefused()`): only a skip with the cap binding at its start and not at its end could come out inexact, so
+  refusing at either end refuses more than it must, never less. The refusals and the instructions run in their place,
+  each refused skip's counted no further than its own turns, are the report's too: the runner's last line,
+  `ge contention: N windows capped; M spin skips refused, I instructions run in them, of R`.
+- **The reads counted by memory.** Each of the GE's reads of a kind is counted where it reads (`GE::ramRead()`: a read
+  from VRAM is other work): the front end's vertices with their PRIM's own start (`oweVertices()`), its list words by
+  the word rule, with a JUMP's, CALL's or RET's refetch; texels and transfers as before. The word rule counts a word
+  as RAM's by its own address, a segment of words in one memory at a time: the kernel's GE starts a segment where its
+  list enters a page of the other memory, the render GE (the GE on its thread, part 111) as it takes each word, so
+  both count the same words at every charge. The records handed to the GE thread carry what its render GE can't see
+  itself: a bounding box's vertices by memory, and at a run's end the RAM words the kernel's GE counted, which the
+  render GE's own count is checked against under `PHOBOS_GE_CHECK`.
+- **The CPU's stalls.** T, the time a PSP's CPU would take for the window (part 113: `InstructionCycles` 1.41 an
+  instruction, `FillCycles` 79 a line read in, `WritebackCycles` 9 a line written back, `UncachedCycles` 40 an uncached
+  access), now adds what each line stalls it more beside the busy GE: `StallFill`, `StallWriteback` and `StallUncached`
+  cycles of each kind (vertices, words, texels, transfers: 207, 213, 66 and 68; 227, 264, 64 and 82; 284, 295, 106
+  and 110), weighed by its share of the list's clocks.
+- **`GE::Cost`'s constants**: `Contention` 0.773, 0.720, 0.683 and 0.487 (vertices, words, texels, transfers; #279's
+  0.34, 0.27, 1.16 and 0.57), `WritebackLine` 0.45 and `UncachedLine` 0.85 (#279's 0 and 0.2), `Cap` 0.75, the stalls
+  above; the CPU's pace and `StreamLines` (1/164.4) as #279's.
+
+### The fit (`tools/psp-measure/contention12.py`)
+
+- **What it fits**: the hybrid and the rule (#279's form, every kind's reads as the front end's), each with the
+  stalls, to the PSP's rounds 10, 10b and 10c: 908 pairs (680, 144 and 84), never a game's frames. Each form at its
+  own line weights (`WritebackLine` 0 to 1 and `UncachedLine` 0 to 1.5 by 0.05: the hybrid 0.45 and 0.85, the rule
+  0.50 and 0.95); the stalls from the CPU's turns beside each list; the measuring loop's time checks a term of their
+  own.
+- **The choice** (the design's H1 to H5). H1: round 10c held out, the rule 6.79% and the hybrid 6.09% (round 10's
+  game-like rates 5.10% and 1.97%; list G 10.94% and 1.77%). H2: the hybrid's game-like misses 0.56 of the rule's (at
+  most 0.75), its worst list 30.8% against 81.3%. H3: both within measured8's bounds and the round 10c group's. H4: no
+  window at or past the cap among the PSP's pairs, the simulated rounds and the scenes' 2,147 windows. H5: the hybrid
+  holds; the rule puts the menu at +11.8% (its idle capture +11.4%), past the owner's +10%, so it isn't built, nor
+  kept as a fallback.
+- **The record**: the command and its output are in `~/phobos-work/scratch/psp-ge-profile/smba-refit/step1/`,
+  `REAL-RUNS.md` ("The final fit") and `fit-real2/c12-real-final.txt` (sha256
+  `0dab9bd2f3ac13aa9f31f884974b28c2bb44bdbe12d576ce473572cb0480309c`). Run again from this tree, the tool gives the
+  same output but for its header's hash of `ge.hpp`.
+- **The design**: `~/phobos-work/scratch/psp-ge-profile/smba-refit/DESIGN-smba-refit.md` (revision 3, sha256
+  `902c418679aaa8ce2d433e8fdf40bd1f6fd9532d52fbb4ffff05fe4ec683705e`), reviewed in three rounds
+  (`scratch/review-smba-design/`: NEEDS CHANGES, NEEDS CHANGES (light), then PASS in `REVIEW-r3.md`).
+
+### The inputs
+
+- **The probe**: a scratch build, never committed (`wt/smba-probe` at `126223a89`, three commits on master
+  `9f2d0633d`, their patches in `smba-refit/step1/`), implementing step 1's interface in `tools/psp-measure/README.md`
+  ("What step 1 gives"): each busy window's sums and each list's clocks by kind and memory, from which the tool
+  predicts each judged frame. Reviewed in `scratch/review-smba-probe/`: PASS for `89ab1ef7a`, `d9138aee5` and
+  `126223a89`, and for the real run (`REVIEW-real.md`).
+- **The gate's seven states** (`handoff/SCENES.md`; the run in `step1/REAL-RUNS.md`): Chains of Olympus draws 96% of
+  its vertices' clocks and 90% of its list words from VRAM; Killzone 99% of its vertices from VRAM and its words from
+  RAM; Ghost of Sparta 55% of its vertices from RAM and 95% of its words from VRAM; Super Monkey Ball, the 3D menu, the
+  copyright screen and Army of Two read everything from RAM. Killzone is judged on its 3D list: a fixed place in the
+  probe's order of lists can land on its small blit list (a list started before the state was saved has no start in
+  the probe's run), so the tool judges each scene's list with the most clocks (`a2b5af99a`).
+- **Step 2's inputs**, by their record files (sha256): `step2/COMMANDS.txt`
+  `7eb6818e84e01ef16bd807ef5a36e2f217a813cf4b75450fd34edb18f315a7ca`, `step2/r2/COMMANDS-r2.txt`
+  `03446dee449b0f804d4661c4e8e1e393760899be69c4e99c6cdd48bee51daeca`, `step2/r3/COMMANDS-r3.txt`
+  `2716e18f471909b3237da7609693657246ac6ee1a5dbcd64e8586b5630553791`, `step2/r4/COMMANDS-r4.txt`
+  `f75ae3b5e3d87420f1406094b64a617d909723be480d69f8bb55db1253c7a887`. The fit's round 10 terms file
+  (`refit/terms/terms10h-r10.txt`) came from round 10's own program, its first menu line, `--ge-threads 2`. The tools
+  README's recipe, with this branch's terms-patched runner and the committed program (round 10c's, its third line),
+  gives the same file but for the list addresses of its 12,737 Q lines, and the fit the same output but for the
+  inputs' names and hashes.
+
+### The gate
+
+The gate's profiles made as part 106's (900 frames from each state, the profile from frame 301; the copyright screen
+360 from frame 1), `gate.py` against the owner's captures; master's runner (`9f2d0633d`) beside this branch's, and the
+fit's prediction:
+
+| Scene | Capture | PSP | Master | Against the PSP | This branch | Against the PSP | The fit |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Chains of Olympus, difficulty menu | UCUS98653-5 | 27.60 ms | 27.67 ms | +0.277% | 27.36 ms | −0.873% | −1.1% |
+| Ghost of Sparta, main menu | UCUS98737-1 | 29.62 ms | 28.95 ms | −2.248% | 29.13 ms | −1.661% | −1.6% |
+| Super Monkey Ball Adventure, Story Mode | ULES00364-1 | 23.64 ms | 18.76 ms | −20.635% (excepted) | 20.64 ms | −12.686% | −12.6% |
+| Killzone, the courtyard | UCUS98646-1 | 26.03 ms | 23.46 ms | −9.869% | 22.95 ms | −11.825% | −11.8% |
+| Killzone, the courtyard | UCUS98646-r9-1 | 25.61 ms | 23.46 ms | −8.394% | 22.95 ms | −10.382% | −10.3% |
+| Activision Hits Remixed, 3D main menu | ULUS10186-menu | 30.30 ms | 32.32 ms | +6.682% | 33.31 ms | +9.952% | +9.2% (+9.6% at most) |
+| Activision Hits Remixed, 3D main menu, idle | ULUS10186-r9-1 | 30.39 ms | 32.32 ms | +6.352% | 33.31 ms | +9.612% | +8.8% (+9.3% at most) |
+| Activision Hits Remixed, copyright screen | ULUS10186-boot2 | 9.10 ms | 8.57 ms | −5.812% | 8.57 ms | −5.801% | −5.8% |
+
+Frames judged: 8, all within 15% (master's 7, Super Monkey Ball excepted); the median miss 9.8% (master's 6.5%), the
+most too slow the menu, +10%. Lists reported: 15, 11 within 15%. Super Monkey Ball's exception is out of `gate.py`
+(`EXCEPTED` is empty; its tests keep the mechanism with a made-up entry). With the GE on its thread the seven profiles
+are the same byte for byte, and `gate.txt` with them.
+
+- **The menu by list**: list 1 from 20.277 to 21.274 ms against the PSP's 21.201 (−4.358% to +0.344%); lists 2 and 3
+  as they were (+48.5% and +27.2%), and they carry the frame's excess.
+- **The menu against the fit**: +9.952% measured against +9.2% (+9.6% at most). The gap is list 1's push: the core's
+  list 1 takes 21.274 ms, the fit's 21.028 (0.8 of a point of the frame); lists 2 and 3 are the same in both. The
+  fit's one cut for the whole frame doesn't explain it: list 1's own cut, 0.884 on its sums and 0.905 window by
+  window, is below the frame's 0.934, so a cut for each list would lower the fit's push for list 1, not raise it.
+  What's left is an open hypothesis: the core charging each window the most it has owed so far (its push never falls
+  back), and this branch's longer windows; neither is measured (the code review's round two,
+  `~/phobos-work/scratch/review-smba-code/REVIEW-r2.md`).
+- **The control**: master's runner, built here, gave part 113's column again but for Ghost of Sparta by a microsecond
+  (28.954 against 28.96 ms): the same source built on the Mac and on this machine.
+
+### Exactness
+
+- **"Fast" gives master's results** (`--ge-timing fast` both sides, six of the gate's scenes, 300 frames): in Software
+  every frame's picture and VRAM, the RAM after them and the state at frame 300 byte for byte in all six; in Vulkan
+  fast in five. Killzone's per-frame Vulkan hashes vary from run to run with master's own runner too (4 of 8 repeats
+  differed from its first run; this branch's 6 of 9), its RAM and state the same in all 18 runs.
+- **The GE thread On = Off**: the gate's seven profiles byte for byte; and #277's proof sets (part 111), On with
+  `PHOBOS_GE_CHECK=1` against Off on this branch's runner: the gate's scenes (14 runs), section 9's sets (240:
+  end-only with states and shown frames, shown in Software, fuzzed three ways, Vulkan accurate and 2x, settled 100,
+  the stress mode at 1x, 2x and 4x) and part 109's slow three from their start (6). Of the 260, all the same but five
+  of Killzone's, each in a frame's picture or VRAM with its RAM and states the same, each traced:
+  - its first Vulkan fast run in the gate's set, the pipeline cache cold (11.8 ms making pipelines against 0.3 ms):
+    Off twice and On three times after it, the same byte for byte;
+  - settled 100 in Vulkan accurate, and the stress mode at 1x: Off and On run again twice each, all the same; the
+    stage's own runs were the odd ones;
+  - shown frames in Vulkan accurate: three Off runs, each different from the others (the host);
+  - fuzzed "ahead" in Vulkan fast: Off's pictures the same in three runs, On's different in each and once the same as
+    Off's. Master's runner (`0f7c17d8a`, the same patches) does it too: one run in three differs at frame 299's
+    picture and in the state saved at frame 300.
+- **Save states: layout 35 kept.** The list's clocks by kind now count a PRIM's own start and a JUMP's, CALL's or RET's
+  refetch, and a read from VRAM as other work: a layout-35 state of an earlier build loads, its running list's shares
+  a little off till the next list starts (`GE::pipeStart()` clears them). A new layout would change every state's
+  number, "Fast"'s too, for nothing a state holds. The gate's states, layouts 25, 31 and 32, load as before. The
+  runner's report carries no mark across a load: its counts run from power on, a window loaded isn't marked capped,
+  and a refused skip's turns are counted only up to the load.
+
+### The host cost and H6
+
+Part 113's eight polling games from boot (3600 frames, the library check's presses, Vulkan fast with late frames, the
+PSP's timing), master's runner against this branch's, both built the same way here: `tools/psp-runner/build.sh` with
+`android/measure.hpp` put in as `build-android.sh` puts it (the runners in `~/phobos-work/bin` print no measure lines),
+master's from `9f2d0633d` (its emulation is `0f7c17d8a`'s). A warm-up run each (the pipelines compile on the
+emulation thread), then two rounds taking turns; the emulation thread's user-mode instructions a frame (its perf
+counters), each runner within 0.005% of itself between rounds:
+
+| Game | Master | This branch | Change |
+| --- | --- | --- | --- |
+| Dante's Inferno | 147.99 M | 150.41 M | +1.63% |
+| Burnout Dominator | 137.68 M | 147.37 M | +7.03% |
+| Need for Speed: Shift | 124.23 M | 132.79 M | +6.89% |
+| Super Stardust Portable | 38.35 M | 38.43 M | +0.21% |
+| Midnight Club: L.A. Remix | 92.59 M | 93.17 M | +0.62% |
+| Burnout Legends | 210.23 M | 220.69 M | +4.97% |
+| Shepherd's Crossing | 98.73 M | 98.75 M | +0.02% |
+| Dragon Ball Z: Shin Budokai – Another Road | 64.16 M | 64.16 M | +0.006% |
+
+- **H6 holds**: no window capped and no skip refused in any run, so I and I / R are 0 in every game (the design's
+  bound: the refused skips' turns at most 0.5% of the instructions a frame).
+- **How the change splits isn't known**: it mixes the model's own work (the stalls in every `geContendDue()` and
+  `geContendBound()`, the word rule's test at each page change, the vertex and PRIM tests) with the games' extra
+  polling under this branch's longer GE times; master's runner has no counter line to tell them apart.
+- On the RP6: the coordinator's run, recorded in the pull request.
+
+### Tests
+
+- **ge time, the PSP's: the CPU beside the GE, the list's clocks by where they read**: a list's vertices, words and
+  refetches counted by memory, RAM and VRAM; a BEZIER from control points in RAM and one from VRAM, each one's own
+  start counted with its points (the surface's work making its vertices in neither); and a list in RAM that JUMPs into
+  VRAM and ends there, its refetch counted where the list goes on. Fails with the vertices counted as RAM's wherever
+  they are, with a BEZIER's own start from RAM counted as other work, and with a refetch counted by where its command
+  was (the independent review's mutations A and C, which the whole suite passed before).
+- **ge time, the PSP's, with the GE on its thread: the list's words by where they're read, as without it**: the word
+  rule on both GEs, bit for bit with the thread on and off, bounding boxes with their vertices in RAM and in VRAM among
+  the list; a broken word count on the render GE aborts at its check, and a VRAM vertex counted as RAM's fails two
+  checks.
+- **ge time, the PSP's: the CPU beside the GE, its stalls in its time**: the stalls in T; fails without them.
+- **ge time, the PSP's: the CPU beside the GE, the hybrid's two parts and its cap**: each part's push, and the cap;
+  fails without the cap.
+- **the GE's looks polled with the PSP's GE timing beside a window held at the cap: skips refused, then taken**
+  (spins.cpp): every step's state the same with the skip on as off, skips refused while the cap binds and taken
+  after, more than a thousand turns skipped; the instructions run in place of the refused skips (190 refusals, 6,840:
+  four turns of the poll each); and with the poll's go ended early by a thread woken or by an alarm's handler, the
+  last refused skip counted for its own turn alone (3,753, where counting to the next try gave 6,786). Fails with the
+  cap's test taken out of the skip, and with either count put back as it was.
+- **the GE's looks polled with the PSP's GE timing after a sleep: no skip across its busy window's kink** (#289's): its
+  list is now 40,000 one-pixel sprites with their corners in RAM and a 600 µs sleep. Under the hybrid #289's textured
+  list no longer reaches the refusal: texels cost a fixed time a line, so a texel-only list's push is at its most as
+  the poll begins. With the refusal's bound-kind operand dropped the test fails at its first step (pushed 34,726
+  against 36,650).
+- **measured round 10c: the CPU beside the GE, Super Monkey Ball's strips taken apart** (measured8): the core's run of
+  round 10c against the PSP's files, within its bounds; CI requires `ge-round10c` in the release job's two lanes.
+- `gate.py`'s tests: the exception's mechanism, with a made-up entry; Super Monkey Ball's frame has none.
+
+The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `step4/r4/r2l1/`, `step6/mut/`.
+
+### Tools
+
+- `tools/psp-measure/contention12.py` and its README: the fit, the choice, `--core` (a runner's run of the three
+  rounds against measured8's bounds) and `--counters` (the counter line), from the tool's reviewed head `a2b5af99a`
+  (`scratch/review-smba-step2/`, its last round PASS in `REVIEW-real-r2.md`) with the reviews' last wording points.
+- `tools/psp-measure/ge-terms.py` at the refit's places: two of its 21 moved (the vertices' terms beside
+  `oweVertices()`'s charge by memory, the words' term before `pipeStop()`). It applies to this tree and stops on a
+  broken copy, and round 10's terms file from its runner is the same as from master's script and runner.
+- `tools/psp-ge-profile/decoder/gate.py` without Super Monkey Ball's exception.
+
+### Checks
+
+- On the code's last commit (`b14ef87a0`; cachyOS, GCC 16.2.1): the release suite with the GE thread off 646 groups,
+  0 failures, and on 646, 0 (`SANITIZE=-Wno-error=array-bounds` for GCC 16's false warning in tests/psp/movies.cpp);
+  #289's step with the PSP's timing 110, 0; the measure groups sanitized, `ge-round10c` required, 14, 0, no sanitizer
+  report; the runner built without a warning. Master's #290 and #292, merged after it, change nothing they build: #290
+  nothing under ares/, tools/, tests/psp/ or psp-core.yml, #292 nothing but N64's ares/n64/ (two files),
+  tools/parallel-rdp/, its own workflow and docs/handoff.md, none of which they read.
+- On the tests' commit after the independent review (`f7d27d438`, the same machine and compiler): the release suite
+  with the GE thread off 646 groups, 0 failures, and on 646, 0; #289's step 110, 0; the measure groups sanitized,
+  `ge-round10c` required, 14, 0, no sanitizer report; "the list's clocks by where they read" sanitized, 1, 0. The
+  review's mutations, each applied to a copy of that tree, fail that group: A with `ramClocks[0]` short by
+  `Cost::Prim` (147.66 against 204.96 by hand), C with `ramClocks[1]` over by `Cost::Jump` (49.09 against 6.69) with
+  the GE thread off and with it on, where CI's GE thread step's 66 groups give that one failure (the group runs the GE
+  itself, off its thread, either way; `smba-refit/step6/`).
+- The code reviewed by reading (`~/phobos-work/scratch/review-smba-code/`): NEEDS CHANGES for `94efa7d33`
+  (`REVIEW.md`), its findings fixed; PASS for `ee0e44309` (`REVIEW-r2.md`), its one low finding (R2-L1, the count of
+  a refused skip's turns) fixed in `bb09cefc0`; PASS for `b14ef87a0` (`REVIEW-r3.md`, 20 Oct, 19:03).
+- The independent review, with its own runs (`~/phobos-work/scratch/review-291/REVIEW.md`): PASS for `b753b3b46`,
+  four low findings, all taken in: no test caught a BEZIER's own start counted in the wrong memory (L1) or a refetch
+  counted by where its command was (L2), which "the list's clocks by where they read" now does (Tests, above); the
+  pull request's status lines (L3); the Hypothesis on RAM texel reads missing from Left (L4). With its suggestions 2
+  to 5: this part's wording and the tools README's line on gate.py's tests.
+
+### Left
+
+- Activision Hits' lists 2 and 3, too slow by 48.5% and 27.2%: list 2 needs its own words (its log doesn't describe
+  what the game draws: part 114), list 3 a bilinear term. The menu's frame is the gate's nearest to its limit
+  (+9.95%, the limit +10%).
+- The polling skip's widening, the owner's order of 19 Oct: the games much slower with the PSP's timing.
+- Killzone's per-frame Vulkan variance, and its fuzz-ahead variance with the GE on its thread: both there before this
+  branch (master's runner shows them).
+- The design's open Hypothesis that every RAM texel read costs a fixed time a line: only cache fetches and transfers
+  were seen to behave so, and streamed narrow reads, in no measured list, are 56.5% of Super Monkey Ball's RAM texel
+  clocks and 16.0% of the menu's first list's. The fit gives both readings (`step1/fit-real2/c12-real-final.txt`,
+  lines 103-104): the menu +9.2% as it has them and +9.6% read the other way, Super Monkey Ball −12.6% and −11.9%.
+  The menu's frame is +9.952% against the owner's +10%, so part of its margin rests on it. A round-11 case would
+  settle it: narrow triangles streaming a RAM texture, beside the streaming pattern at four rates (the design, r3).
+- A probe of this head's own windows of the 3D menu (step 1's probe on the refit's code), a follow-up: it would settle
+  where the menu's 0.75-point gap to the fit comes from (the gate, above: an open hypothesis now), while the menu is
+  0.05 points from its limit.
+- A test of the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), a follow-up from the independent review's
+  second round (`~/phobos-work/scratch/review-291/REVIEW-r2.md`, its low finding): no test catches a slip there. Its
+  mutation D, which charges a refetch by the memory of the word the thread has just taken (`render.segmentRam`) rather
+  than by the mark's kind, passes CI's GE thread step (66 groups), the release suite with the thread On (646 groups) and
+  the gate (the seven profiles unchanged). Today's code is right by reading: `front()` (list.cpp:61-71) decides once,
+  for both GEs, whether a refetch reads RAM, and the thread charges the mark's kind the same way (thread.cpp:762-766). A
+  one-way JUMP in a threaded test (a list in RAM that jumps into VRAM and ends there) would catch it.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/smba-refit/`: `DESIGN-smba-refit.md`; `step1/` (the probe's patches and runs,
+`REAL-RUNS.md`, `fit-real2/`); `step2/` (the tool's rounds); `step3/` and `step4/` (the code's rounds: the gate's
+profiles in `gate-*/`, the suites in `final/` and `r4/`, the mutations' logs, "Fast" in `b7/`, On = Off in `r4/4d/`,
+the host cost in `r4/4g/`, the README's recipe in `r4/p6/`); `step5/` (this part's notes); `step6/` (the independent
+review's fixes: the two tests' mutations in `mut/`, the suites). The reviews:
+`scratch/review-smba-design/`, `review-smba-probe/`, `review-smba-step2/`, `review-smba-code/`, `review-291/` (the
+independent review, with its runs).

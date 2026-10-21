@@ -24,10 +24,11 @@ xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS
 `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another folder), and
 `tests/psp/measured6.cpp` compares the core's run of round 6 with them.
 
-Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8`, `PSP_GE_ROUND9` or `PSP_GE_ROUND10` set
-empty), the groups comparing with them say so as a skip of `ge-round3`, `ge-round6`, `ge-round8`, `ge-round9` or
-`ge-round10`; where
-`PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead.
+Without a round's files (`PSP_GE_RESULTS`, `PSP_GE_ROUND6`, `PSP_GE_ROUND8`, `PSP_GE_ROUND9`, `PSP_GE_ROUND10`,
+`PSP_GE_ROUND10b` or `PSP_GE_ROUND10c` set empty, or, without `run-tests.sh`, unset), every group comparing with them
+says so as a skip of `ge-round3`, `ge-round6`, `ge-round8`, `ge-round9`, `ge-round10`, `ge-round10b` or `ge-round10c`;
+where `PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead. Where one of rounds 6 to 10c's variables
+names a folder without a file a group compares with, that group fails, required or not: the PSP's file is missing.
 
 ## `ge-round8/`
 
@@ -68,8 +69,9 @@ the courtyard Friday's -1 is of) and `ULUS10186-r9-1` (Activision Hits' 3D menu 
 interrupts and times, the disc ID, title and thread names; no game code or data), packed with xz (`xz -9e`);
 `SHA256SUMS` holds the unpacked files' sums. `tools/psp-ge-profile/decoder/gate.py` sets them beside Phobos's profiles
 of the same scenes with the GE timing "PSP" (the owner's bar since 2026-10-18: each judged scene's whole frame within
-15% of the PSP's, none more than 15% too slow, each list reported; Super Monkey Ball's frame, too fast, his accepted
-exception for now, in `gate.py`'s `EXCEPTED` with his words; part 106 has the table and how the profiles are made).
+15% of the PSP's, none more than 15% too slow, each list reported; Super Monkey Ball's frame, too fast, was his
+accepted exception till the Super Monkey Ball refit put it within the bar; part 106 has the table and how the profiles
+are made).
 
 ## `ge-round10/`
 
@@ -79,14 +81,14 @@ files, the GE's timed lists laid out as `manifest10.txt` describes (round 8's re
 `time-contention2`'s runs two words longer, a thread's turns and their time): `time-anchors2`, `time-lights`,
 `time-clut32`, `time-widetri`, `time-perspective`, `time-mipmaps`, `time-vram8`, `time-contention` and
 `time-contention2`, at 222/111 and 333/166 MHz, `time-contention2` at 333/222/166; nothing stalled. He ran `d435eb2bd`'s
-`pspmeasure.elf` (its EBOOT `31364afe…`). The one in `tests/psp/programs` is round 10b's (`2578e331a`'s, `06c5de46…`),
-which draws round 10's lists the same way but for where its arrays sit: on 1 KiB boundaries, where `d435eb2bd`'s put the
-RAM textures and palette 64 bytes off a 128-byte boundary, which made swizzled RAM textures about 7% dearer (by
-time-placement the committed build's would come out 6 to 7% cheaper). Part 112 says so with what each test is for and
-what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 160 KB as 36 KB); `SHA256SUMS` holds the unpacked files'
-sums (and the manifest's). As round 9's, they're unpacked (`PSP_GE_ROUND10`), fitted (`ge-fit.py`, #269's part 106) and
-compared with the core's run (`tests/psp/measured8.cpp`: the committed program's, whose arrays' places don't move the
-core's times).
+`pspmeasure.elf` (its EBOOT `31364afe…`). The one in `tests/psp/programs` is round 10c's (`9bcaff348`'s, `b38077b4…`;
+round 10b's build before it), which draws round 10's lists the same way but for where its arrays sit: on 1 KiB
+boundaries (since round 10b's build), where `d435eb2bd`'s put the RAM textures and palette 64 bytes off a 128-byte
+boundary, which made swizzled RAM textures about 7% dearer (by time-placement the committed build's would come out 6 to
+7% cheaper). Part 112 says so with what each test is for and what the PSP showed. Each `.bin` is packed with xz
+(`xz -9e`, 160 KB as 36 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). As round 9's, they're
+unpacked (`PSP_GE_ROUND10`), fitted (`ge-fit.py`, #269's part 106) and compared with the core's run
+(`tests/psp/measured8.cpp`: the committed program's, whose arrays' places don't move the core's times).
 
 ## `ge-round10b/`
 
@@ -94,9 +96,22 @@ Round 10b, the same program's top-up (its menu's first line since, "Round 10b: t
 placement"), run on the same PSP on the night of 2026-10-18 (pulled at 20:23): 3 files, `time-contention3` and
 `time-placement` laid out as `manifest10b.txt` describes (round 10's records; `time-contention3`'s runs two words
 longer, as `time-contention`'s), at 222/111 and 333/166 MHz; nothing stalled. He ran `2578e331a`'s `pspmeasure.elf` (its
-EBOOT `6fa4ca80…`), the one in `tests/psp/programs`, its arrays on 1 KiB boundaries. Part 112 says what each test is for
-and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`, 19 KB as 4.5 KB); `SHA256SUMS` holds the unpacked
-files' sums (and the manifest's). No test reads them yet: they're for the GE timing's fit (#269).
+EBOOT `6fa4ca80…`), its arrays on 1 KiB boundaries (the one in `tests/psp/programs` is round 10c's, which draws round
+10b's lists the same way). Part 112 says what each test is for and what the PSP showed. Each `.bin` is packed with xz
+(`xz -9e`, 19 KB as 4.5 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). They're unpacked
+(`PSP_GE_ROUND10b`) and `tests/psp/measured8.cpp` compares the core's run of `time-contention3` with them (part 113).
+
+## `ge-round10c/`
+
+Round 10c, the same program's next round (its menu's first line since, "Round 10c: Monkey Ball's strips, Activision
+Hits' lists (30 KB)"), run on the same PSP on the evening of 2026-10-19 (pulled at 20:18): 6 files, `time-contention4`,
+`time-shrink`, `time-magnify`, `time-gamestrips` and `time-anchors3` laid out as `manifest10c.txt` describes (round 10's
+records; `time-contention4`'s runs two words longer, as `time-contention`'s), at 222/111 and 333/166 MHz; nothing
+stalled. He ran `9bcaff348`'s `pspmeasure.elf` (its EBOOT `243aa27d…`), the one in `tests/psp/programs`, its arrays on
+1 KiB boundaries. Part 114 says what each test is for and what the PSP showed. Each `.bin` is packed with xz (`xz -9e`,
+21 KB as 5.3 KB); `SHA256SUMS` holds the unpacked files' sums (and the manifest's). `tests/psp/run-tests.sh` unpacks
+them (`PSP_GE_ROUND10c`) and `tests/psp/measured8.cpp` compares the core's run of `time-contention4` with them (Super
+Monkey Ball's refit); the other four are for Activision Hits' menu's lists (part 114).
 
 ## `ge-reruns-round10/`
 
@@ -114,5 +129,5 @@ The VFPU's measurements (`tools/psp-measure`'s `vfpu.c`: rounds 1 to 3, about 67
 of functions like `vlog2` and `vsqrt`) are too big for the repository. The owner keeps them and copies them where
 they're needed; `docs/psp-vfpu-measurements.md` describes what they showed.
 
-Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11, rounds 8 and 9 and the captures on
-2026-10-18), as `docs/development-process.md` records.
+Kept here at the owner's request (round 3 on 2026-10-06, round 6 on 2026-10-11, rounds 8 to 10c, the re-runs and the
+captures on 2026-10-18), as `docs/development-process.md` records.

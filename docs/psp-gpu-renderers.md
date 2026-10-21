@@ -597,7 +597,8 @@ suboptimal), and `System::present` returns false otherwise (no window, as in the
 timed out), so that frame is read back and the host draws it. The shrunk copy is kept when its slot is next waited for,
 a frame or two later, so a screenshot taken just after a presented frame was the frame before's; since the PSP
 follow-ups of 2026-10-21 the host's screenshot has it kept at once (`settle()`: between frames, the host holding the
-core, the GPU's runs waited for and each one's copy kept), so it has the frame presented last.
+core, the GE thread drained first where it's on (merged from master on 2026-10-21), then the GPU's runs waited for and
+each one's copy kept), so it has the frame presented last.
 
 ## Shader blending (part 45)
 

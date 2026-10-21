@@ -14,6 +14,7 @@ namespace ares::PlayStationPortable {
 #include "recompiler-vfpu.cpp"
 #include "recompiler-memory.cpp"
 #include "serialization.cpp"
+#include "cache.cpp"
 
 //Clears every register and starts the program at entry (the game's entry point, as the loader finds it).
 auto Allegrex::power(u32 entry) -> void {
@@ -27,6 +28,7 @@ auto Allegrex::power(u32 entry) -> void {
   pipeline = {};
   ipu.pc = entry;
   ipu.pd = entry + 4;
+  dataCache.reset(), instructionCache.reset();
   recompiler.reset();
 }
 
@@ -69,9 +71,10 @@ auto Allegrex::executeSyscall(u32 address, u32 instruction) -> u32 {
 
 //Runs at least the given number of instructions, stopping early if the CPU halts, or once it reaches a runLimit a
 //syscall brought forward; returns how many ran. With the recompiler, whole blocks run at a time, so it may run a few
-//more than asked.
-auto Allegrex::run(u64 instructions) -> u64 {
-  instructionsRun = 0;
+//more than asked. (from: a run going on from where the last stopped, its count on from there: the GE thread's go,
+//Kernel::goThreaded())
+auto Allegrex::run(u64 instructions, u64 from) -> u64 {
+  instructionsRun = from;
   runLimit = instructions;
   while(instructionsRun < runLimit && !scc.halted) {
     if(recompiler.enabled) {

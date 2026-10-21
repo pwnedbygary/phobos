@@ -373,11 +373,14 @@ auto GE::texelClocks(const Look& look, u64 pixels, f64 texels, const TexelsRead&
 }
 
 //With the PSP's timing, a PRIM met: what the last left of its vertices' work (primitives culled or cut away) goes to
-//the front end, then the PRIM's own; its vertices' work (readVertices(), drawVertices()) is shared out among the
-//primitives it may draw, as they come (owePrimitive()).
+//the front end, then the PRIM's own, read where its vertices are (from RAM, or VRAM's other work, as theirs:
+//oweVertices()); its vertices' work (readVertices(), drawVertices()) is shared out among the primitives it may draw,
+//as they come (owePrimitive()).
 auto GE::pipePrimitive(u32 kind, u32 count) -> void {
   pipe.pending += pipe.vertices + Cost::Prim;
   pipe.vertices = 0;
+  if(readsRam(vertexAddress)) ramRead(0, Cost::Prim);
+  else otherWork(Cost::Prim);
   pipe.left = kind == Points ? count : kind == Lines || kind == Sprites ? count / 2 : kind == LineStrip
             ? (count ? count - 1 : 0) : kind == Triangles ? count / 3 : count > 2 ? count - 2 : 0;
 }
@@ -395,8 +398,12 @@ auto GE::pipeDrain() -> void {
 auto GE::pipeItem(f64 back, f64 entries) -> void {
   auto& q = pipe;
   constexpr u32 Room = Pipe::Room;
-  if(wordsRun) ramRead(1, f64(*wordsRun - q.words) * Cost::Command);
-  if(wordsRun) q.pending += f64(*wordsRun - q.words) * Cost::Command, q.words = *wordsRun;
+  if(wordsRun) {  //(the words read since the last item: from RAM, and from VRAM, ramWordsAt())
+    u64 ram = ramWordsAt(*wordsRun);
+    ramRead(1, f64(ram - q.ramWords) * Cost::Command);
+    otherWork(f64(*wordsRun - q.words - (ram - q.ramWords)) * Cost::Command);
+    q.pending += f64(*wordsRun - q.words) * Cost::Command, q.words = *wordsRun, q.ramWords = ram;
+  }
   f64 front = q.front + q.pending;
   q.pending = 0;
   while(q.count && (q.entries + entries > Cost::Queue || q.count == Room)) {
@@ -517,16 +524,25 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
     if(!format.colorFormat) vertex.color = ambient;
     if(format.through) vertex.u = keep15(vertex.u), vertex.v = keep15(vertex.v);
   }
+  u32 from = vertexAddress;
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
-  //(the GE's time: vertices in a row come in at a byte a VertexByte, VertexFloor at least, each one through an index
-  //far slower, the work
-  //shared out among the PRIM's primitives: Cost, Pipe)
-  if(pspTiming) {
-    f64 each = format.size == 3 ? Cost::Vertex3 : std::max(Cost::VertexFloor, format.size * Cost::VertexByte);
-    pipe.vertices += format.indexFormat ? count * Cost::IndexedVertex : count * each;
-    ramRead(0, format.indexFormat ? count * Cost::IndexedVertex : count * each);
-  }
+  oweVertices(count, format, from);
+}
+
+//(the GE's time: vertices in a row come in at a byte a VertexByte, VertexFloor at least, each one through an index far
+//slower, the work shared out among the PRIM's primitives: Cost, Pipe; read from RAM, or VRAM's other work, by where
+//they start, or through indices their base. Threaded, the control pass's, a bounding box's, go to the render GE's
+//pipeline after its word: thread.hpp)
+auto GE::oweVertices(u32 count, const VertexFormat& format, u32 from) -> void {
+  if(!pspTiming) return;
+  f64 each = format.size == 3 ? Cost::Vertex3 : std::max(Cost::VertexFloor, format.size * Cost::VertexByte);
+  f64 work = format.indexFormat ? count * Cost::IndexedVertex : count * each;
+  bool ram = readsRam(from);
+  if(thread) return thread->front(work, ram ? GeThread::VerticesRam : GeThread::VerticesVram);
+  pipe.vertices += work;
+  if(ram) ramRead(0, work);
+  else otherWork(work);
 }
 
 auto GE::primitive(u32 kind, u32 count) -> void {

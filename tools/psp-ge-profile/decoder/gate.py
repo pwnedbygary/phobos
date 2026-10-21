@@ -9,8 +9,9 @@ place's median GE time over the window of whole seconds, the PSP's against Phobo
 totals the same way (Killzone's scene list and full-screen list are its places 1 and 2). The owner's rule (2026-10-18,
 20:35): each judged scene is judged by its whole frame, which passes within 15% of the PSP's either way (none more than
 15% too slow: a model too slow makes a game run worse than a PSP); each list is reported, not judged. A frame the owner
-has accepted as an exception (EXCEPTED: his words, the date, and which way it may miss) is shown and doesn't fail the
-gate; any other judged frame outside the bar does. Killzone is judged at kz-gp's moment, the courtyard standing still
+has accepted as an exception (EXCEPTED: his words, the date, which way it may miss and how far) is shown and doesn't
+fail the gate within its limit; any other judged frame outside the bar does. Killzone is judged at kz-gp's moment, the
+courtyard standing still
 (Friday's -1 and Sunday's -1, the owner confirmed); captures of moments Phobos has no state of are shown, not judged.
 
 Phobos's profiles: tools/psp-runner's --ge-timing psp --ge-profile NAME.bin over 900 frames from each scene's state,
@@ -57,13 +58,11 @@ ROWS = [
     ("Army of Two, gameplay (another moment)", "ULUS10472-2", (0, 10), "a2-gp", (0, 10), False),
 ]
 #The owner's accepted exceptions: a judged scene's frame that may miss the bar one way without failing the gate, with
-#the reason, the date and his words. Any other miss of that frame (the other way) fails it.
-EXCEPTED = {
-    "ULES00364-1": ("too fast", "accepted by the owner on 2026-10-18 (21:57-22:02) as a known exception for now, the "
-                    "frame -29.6%: the CPU beside the GE, which the model holds at none till the CPU's RAM traffic is "
-                    "counted (part 106), the next pull request's (his words: \"fixing SMBA is the priority even though "
-                    "we are moving on past it\")"),
-}
+#the reason, the date and his words, and a limit past which it fails all the same, so it can't get worse unseen. Any
+#other miss of that frame (the other way) fails it.
+#(None now: Super Monkey Ball's, accepted on 2026-10-18 at -29.6% and limited at -21% by part 113, went once the
+#refit's hybrid form put its frame within the bar.)
+EXCEPTED = {}
 #Capture headers whose clocks aren't the scene's: read as the capture began, before the game set its own.
 CLOCKS_NOTE = {
     "ULUS10186-boot2": "the capture's header has 333/166, read before the game set its clocks; the copyright screen "
@@ -112,12 +111,15 @@ def verdict(miss):
 
 def judged_frame(capture, miss):
     """a judged frame's mark and whether it fails the gate: within the bar, or outside it the way the owner accepted
-    (EXCEPTED), it doesn't"""
+    (EXCEPTED) and no further than its limit, it doesn't"""
     mark = verdict(miss)
     if mark == "passes":
         return mark, False
     if capture in EXCEPTED and EXCEPTED[capture][0] == mark:
-        return "%s (the owner's accepted exception)" % mark, False
+        limit = EXCEPTED[capture][1]
+        if abs(miss) <= abs(limit):
+            return "%s (the owner's accepted exception)" % mark, False
+        return "%s (past the accepted exception's limit, %+.0f%%)" % (mark, 100 * limit), True
     return mark, True
 
 
@@ -164,7 +166,7 @@ def main(argv=None):
                     mark, fails = judged_frame(capture, miss)
                     failed |= fails
                     if capture in EXCEPTED and not fails and abs(miss) > BAR:
-                        excepted.append("%s (%s, %+.1f%%): %s" % (what, capture, 100 * miss, EXCEPTED[capture][1]))
+                        excepted.append("%s (%s, %+.1f%%): %s" % (what, capture, 100 * miss, EXCEPTED[capture][2]))
             print("| %s | %s | %s | %.2f ms%s | %s | %s | %s |" % (
                 what if n == 0 else "", capture if n == 0 else "", label, a, " (%s)" % pclock if n == 0 else "",
                 "-" if b is None else "%.2f ms%s" % (b, " (%s)" % oclock if n == 0 else ""),

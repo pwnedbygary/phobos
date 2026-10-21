@@ -16,6 +16,13 @@ scenes are captured here as Phobos measures from save states, so the two compare
   capture. It shows short notices on screen (that it's on, that a capture is coming, that it was saved or why not;
   only a small blinking square while it counts) and keeps a trace of every step in `PHOBOS/trace.txt`.
 - `decoder/geprof.py`: reads a capture and prints, per vblank and per second, what the GE and the CPU did.
+- `decoder/gate.py`: the GE timing's gate (docs/psp-core.md, part 106): Phobos's GE profiles beside the owner's
+  captures of the same scenes, each judged scene by its whole frame, within 15% of the PSP's either way.
+- `decoder/test_gate.py`: gate.py's verdict tested: a frame within 15% passes either way and one outside it fails.
+  No exception is accepted now, so every judged frame outside the bar fails the gate; the exception's mechanism is
+  tested on one the tests make up, which passes only the way it was accepted and no further than its limit.
+- `decoder/test_geprof.py`: geprof.py's tests, on synthetic captures written as the plugin writes them, and on the
+  plugin's own capture once `make hosttest` has written it.
 
 ## The owner's steps
 
@@ -428,6 +435,9 @@ fall), Killzone's FINISH from below its list's start (five records of a capture 
 inside its enqueue, a game drawing into one frame buffer, and interrupt handlers' calls with an error code for a
 thread; and, once `make hosttest` has written it, the capture the plugin's own record path makes.
 
+CI (`.github/workflows/psp-ge-profile.yml`) runs them, with `test_gate.py`'s for the GE timing's gate (`gate.py`), on
+every change to `decoder/`: all but the plugin's capture, as `make hosttest` needs pspdev, which its runners don't have.
+
 ## Building
 
 `make` in `plugin/`, with pspdev's toolchain on the PATH (`psp-config`), gives `phobosprof.prx`. On the
@@ -491,6 +501,8 @@ put over it. The decoder's tests then read the capture back.
 | `hello/hosttest.c` | The load test on the Mac. |
 | `decoder/geprof.py` | The decoder (and `write_capture`, for synthetic captures). |
 | `decoder/test_geprof.py` | Its tests. |
+| `decoder/gate.py` | The GE timing's gate (docs/psp-core.md, part 106): each judged scene within 15% of the owner's capture. |
+| `decoder/test_gate.py` | `gate.py`'s tests. |
 
 ## What's been checked, and what hasn't
 

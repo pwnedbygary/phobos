@@ -1,0 +1,56 @@
+name: PSP GE Profile Tests
+
+# The GE profile's decoder (tools/psp-ge-profile/decoder) tested on the host with Python's standard library alone:
+# geprof.py's tests on synthetic captures (test_geprof.py) and the GE timing gate's verdict (test_gate.py), both run
+# by unittest from their folder. Their paths are what the tests run or read: the decoder and this file (gate.py reads
+# the owner's captures, tests/psp/measurements/ge-captures, only when run as the gate, never in its tests). The
+# plugin's own capture (test_geprof.py's test_plugin_capture) is skipped here, and says so: make hosttest, which
+# writes it, needs pspdev (psp-config, for its build.mak, and the SDK's headers, which plugin.h includes even for the
+# host), and GitHub's runners have none. The runner is pinned to Ubuntu 24.04 (its Python 3.12), so a new image is a
+# change made on purpose. The tests' count and result go in the run's summary with the commit.
+
+on:
+  push:
+    branches: [ master ]
+    paths: [ 'tools/psp-ge-profile/decoder/**', '.github/workflows/psp-ge-profile.yml' ]
+  pull_request:
+    paths: [ 'tools/psp-ge-profile/decoder/**', '.github/workflows/psp-ge-profile.yml' ]
+  workflow_dispatch:
+
+concurrency:
+  # (a PR's newer push replaces its run; every other run is a group of its own: see psp-core.yml)
+  group: psp-ge-profile-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  decoder:
+    name: GE profile decoder tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: The image's Python
+        run: python3 --version
+
+      # (bash named, so a failing test fails the step through tee: pipefail; -v names each test and why one's skipped)
+      - name: Run the tests
+        shell: bash
+        working-directory: tools/psp-ge-profile/decoder
+        run: python3 -m unittest -v test_geprof test_gate 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python="$(python3 --version)"
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          ran=$(grep '^Ran ' "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          echo "- tools/psp-ge-profile/decoder on $python at $at: ${ran:-no output: they did not run}${ran:+, $last}" \
+            >> "$GITHUB_STEP_SUMMARY"

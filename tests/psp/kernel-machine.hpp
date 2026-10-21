@@ -16,6 +16,20 @@ namespace allegrex_test::psp {
 using ares::PlayStationPortable::Kernel;
 using ares::PlayStationPortable::GeProfile;
 
+//Whether the kernel's test machines start with the GE timed as the PSP's (PHOBOS_TESTS_GE_TIMING=PSP, run-tests.sh),
+//as the system's option "GE Timing" has it by default, rather than "Fast": every result but "Fast"'s own times must
+//come out the same either way. Tests that pin "Fast"'s times keep their machines on it while a FastTimed lives; those
+//that time the GE as the PSP's say so either way (pspTiming()).
+inline int fastTimedTests = 0;
+struct FastTimed {
+  FastTimed() { fastTimedTests++; }
+  ~FastTimed() { fastTimedTests--; }
+};
+inline auto testsPspTiming() -> bool {
+  const char* value = std::getenv("PHOBOS_TESTS_GE_TIMING");
+  return !fastTimedTests && value && std::string{value} == "PSP";
+}
+
 //A machine with the kernel: what the program writes and what the kernel notes are collected. Test programs call
 //system functions through stubs (jr ra; syscall code) at Stubs, one per function, as the loader would make them.
 struct KernelMachine {
@@ -32,6 +46,16 @@ struct KernelMachine {
     kernel.output = [this](const std::string& text) { output += text; };
     kernel.log = [this](const std::string& text) { notes.push_back(text); };
     kernel.power();
+    if(testsPspTiming()) pspTiming();
+  }
+
+  //The GE timed as the PSP's, as System::power() sets the option "GE Timing" "PSP": the kernel's timing, and the CPU's
+  //caches counted for the GE's time beside it (Allegrex::Cache); the GE on its thread or not as the machine has it
+  //(PHOBOS_TESTS_GE_THREAD: the same times either way). Before the program's code is compiled: blocks compiled before
+  //count nothing.
+  auto pspTiming() -> void {
+    kernel.gePspTiming = true;
+    system.dataCache.enabled = system.instructionCache.enabled = true;
   }
 
   auto stub(const char* name) -> u32 {

@@ -1,18 +1,22 @@
-//Rounds 8, 9 and 10 of tools/psp-measure against the owner's PSP (docs/psp-core.md, parts 107, 110, 112 and 106):
-//their GE timing files as this core writes them (measure.cpp's round8Files(), round9Files() and round10Files(): the
-//measuring program run in the core with the option "GE Timing" "PSP") beside the PSP's own
-//(tests/psp/measurements/ge-round8, ge-round9 and ge-round10, which run-tests.sh unpacks into PSP_GE_ROUND8, 9 and 10):
+//Rounds 8, 9, 10, 10b and 10c of tools/psp-measure against the owner's PSP (docs/psp-core.md, parts 107, 110, 112,
+//106, 113 and 114): their GE timing files as this core writes them (measure.cpp's round8Files() to round10cFiles():
+//the measuring program run in the core with the option "GE Timing" "PSP") beside the PSP's own
+//(tests/psp/measurements/ge-round8 to ge-round10c, which run-tests.sh unpacks into PSP_GE_ROUND8, 9, 10, 10b and 10c):
 //each timed list's middle finish time here and on the PSP.
 #include "kernel-machine.hpp"
 
 #include <cstdlib>
 #include <fstream>
+#include <map>
+#include <tuple>
 
 namespace allegrex_test::psp {
 
 auto round8Files() -> std::filesystem::path;
 auto round9Files() -> std::filesystem::path;
 auto round10Files() -> std::filesystem::path;
+auto round10bFiles() -> std::filesystem::path;
+auto round10cFiles() -> std::filesystem::path;
 
 namespace {
 
@@ -24,12 +28,14 @@ struct Round {
 const Round Round8{"PSP_GE_ROUND8", "ge-round8", round8Files};
 const Round Round9{"PSP_GE_ROUND9", "ge-round9", round9Files};
 const Round Round10{"PSP_GE_ROUND10", "ge-round10", round10Files};
+const Round Round10b{"PSP_GE_ROUND10b", "ge-round10b", round10bFiles};
+const Round Round10c{"PSP_GE_ROUND10c", "ge-round10c", round10cFiles};
 
 auto words(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
   std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   std::vector<u32> out(bytes.size() / 4);
-  std::memcpy(out.data(), bytes.data(), out.size() * 4);
+  if(!out.empty()) std::memcpy(out.data(), bytes.data(), out.size() * 4);  //(memcpy: no null, even for 0 bytes)
   return out;
 }
 
@@ -51,7 +57,7 @@ auto theirs(const Round& round, const char* name) -> std::vector<u32> {
 }
 
 //The core's, or nothing without the measuring program (or the PSP's file to compare it with); with both, the core's
-//run of the round wrote it.
+//run of the round wrote it. It says nothing of what the PSP's side lacks: theirs(), asked first, does.
 auto ours(const Round& round, const char* name) -> std::vector<u32> {
   const char* psp = std::getenv(round.variable);
   if(!psp || !*psp || !std::filesystem::exists(std::filesystem::path(psp) / (std::string(name) + ".bin"))) return {};
@@ -97,7 +103,7 @@ const Outside outside[] = {
 };
 //Round 10's lists beside a CPU thread (time-contention's 17 patterns alone, then ten lists, each alone and beside each
 //pattern; time-contention2's 4 and 5): the patterns alone have no list to match and the lists with a thread beside
-//them are contention10.py's (the term held at none: part 106); those with the CPU idle are fitted as any other.
+//them are measuredContention10()'s (the CPU beside the GE: part 113); those with the CPU idle are fitted as any other.
 struct Contended { const char* test; u32 first, row; };
 const Contended contended[] = {{"time-contention", 17, 18}, {"time-contention2", 4, 5}};
 
@@ -108,9 +114,9 @@ auto misses(const Round& round, std::initializer_list<const char*> tests, std::i
   -> std::vector<f64> {
   std::vector<f64> errors;
   for(auto name : tests) {
-    auto core = ours(round, name);
+    auto psp = theirs(round, name), core = ours(round, name);
     if(core.empty()) return {};
-    auto here = timed(core), there = timed(theirs(round, name));
+    auto here = timed(core), there = timed(psp);
     CHECK(here.size(), there.size());
     if(here.size() != there.size()) continue;
     bool lists = std::string(name) == "time-lists" || std::string(name) == "time-lists2";
@@ -219,11 +225,112 @@ auto measuredTime10() -> void {
   CHECK(*std::max_element(errors.begin(), errors.end()) < 0.65, true);
 }
 
+//Each list's time beside each of the CPU's patterns over its time alone, by its record's case, size and clock (a
+//contention file's records: the patterns alone first, then a row for each list, alone and beside each pattern).
+auto slowdowns(const std::vector<u32>& w, u32 first, u32 row) -> std::map<std::tuple<u32, u32, u32>, f64> {
+  std::map<std::tuple<u32, u32, u32>, f64> alone, out;
+  auto records = timed(w);
+  for(auto& r : records) if(r.test >= first && (r.test - first) % row == 0) alone[{r.test, r.size, r.bus}] = r.middle;
+  for(auto& r : records) {
+    if(r.test < first || (r.test - first) % row == 0 || !(r.middle > 0)) continue;
+    auto base = alone.find({r.test - (r.test - first) % row, r.size, r.bus});
+    if(base != alone.end() && base->second > 0) out[{r.test, r.size, r.bus}] = r.middle / base->second;
+  }
+  return out;
+}
+
+//Each list's slowdown beside each pattern here against the PSP's: its key and the core's over the PSP's, less 1.
+auto pairs(const std::vector<u32>& core, const std::vector<u32>& psp, u32 first, u32 row)
+  -> std::vector<std::pair<std::tuple<u32, u32, u32>, f64>> {
+  std::vector<std::pair<std::tuple<u32, u32, u32>, f64>> misses;
+  auto here = slowdowns(core, first, row);
+  for(auto& [key, slowdown] : slowdowns(psp, first, row)) {
+    if(auto found = here.find(key); found != here.end()) misses.push_back({key, found->second / slowdown - 1});
+  }
+  return misses;
+}
+
+//Rounds 10 and 10b's lists beside the CPU's patterns (part 113: the CPU's caches counted, the GE slowed by the lines
+//they move): each list's slowdown here against the PSP's. Round 10's 680 (ten lists beside 17 patterns, two sizes at
+//both clocks): half within 7%, nine in ten within 25%. Round 10b's 144: half within 1.5%; beside a CPU polling three
+//ways, writing before the list, or writing and settling, within 8% (the PSP's 0.96 to 1.09, here none); beside a
+//writer of 1 MiB once, the untextured list within 1% (none either side), the RAM-textured one within 10% (x2.12 here,
+//x2.02 and x2.12 there) and, twice as long, within 30% (x1.74; x2.00 and x2.13 there: the writer, slowed beside the GE
+//itself, still writes as the PSP's longer list goes on, which the model's CPU time doesn't count).
+auto measuredContention10() -> void {
+  auto psp = theirs(Round10, "time-contention"), core = ours(Round10, "time-contention");
+  if(!core.empty()) {
+    std::vector<f64> errors;
+    for(auto& pair : pairs(core, psp, 17, 18)) errors.push_back(std::abs(pair.second));
+    CHECK(errors.size(), 680u);
+    if(!errors.empty()) {
+      CHECK(median(errors) <= 0.07, true);
+      CHECK(within(errors, 0.25) >= 0.9, true);
+    }
+  }
+  psp = theirs(Round10b, "time-contention3"), core = ours(Round10b, "time-contention3");
+  if(core.empty()) return;
+  std::vector<f64> errors;
+  for(auto& [key, miss] : pairs(core, psp, 6, 7)) {
+    u32 test = std::get<0>(key), size = std::get<1>(key), list = (test - 6) / 7, pattern = (test - 6) % 7;
+    errors.push_back(std::abs(miss));
+    f64 bound = pattern <= 5 ? 0.08 : list == 1 ? 0.01 : list == 0 ? (size == 1 ? 0.10 : 0.30) : 1.0;
+    if(std::abs(miss) > bound) std::printf("  time-contention3 case %u size %u: %+.1f%%\n", test, size, miss * 100);
+    CHECK(std::abs(miss) <= bound, true);
+  }
+  CHECK(errors.size(), 144u);
+  if(!errors.empty()) CHECK(median(errors) <= 0.015, true);
+}
+
+//Round 10c's lists beside the CPU's patterns (part 114: round 10's list H, Super Monkey Ball's small strips, taken
+//apart: as round 10 drew it, nearest within the level chosen, bilinear and nearest without levels, untextured, and H
+//and H untextured with their vertices in VRAM; each beside streaming reads flat out and at a half and the game's mix
+//over 256 KiB, two sizes at both clocks): each list's slowdown here against the PSP's, 84 pairs (GE::Cost's hybrid,
+//fitted to rounds 10, 10b and 10c). The lists with their vertices in RAM: half within 7%, each within 20%; those with
+//them in VRAM, each within 7%. The lists alone are reported, not bounded: the PSP takes H 22 to 31% longer alone with
+//its vertices in VRAM, this core the same time either way.
+auto measuredContention10c() -> void {
+  auto psp = theirs(Round10c, "time-contention4"), core = ours(Round10c, "time-contention4");
+  if(core.empty()) return;
+  auto here = timed(core), there = timed(psp);
+  CHECK(here.size(), there.size());
+  for(u32 list = 0; list < 7 && here.size() == there.size(); list++) {
+    std::string line;
+    for(u32 n = 0; n < here.size(); n++) {
+      if(here[n].test != 3 + list * 4 || !(there[n].middle > 0)) continue;
+      char miss[16];
+      std::snprintf(miss, sizeof(miss), " %+.1f%%", (here[n].middle / there[n].middle - 1) * 100);
+      line += miss;
+    }
+    std::printf("  time-contention4 list %u alone, here over the PSP's:%s\n", list, line.c_str());
+  }
+  std::vector<f64> ram;
+  u32 count = 0;
+  for(auto& [key, miss] : pairs(core, psp, 3, 4)) {
+    u32 test = std::get<0>(key), size = std::get<1>(key), bus = std::get<2>(key);
+    bool vram = (test - 3) / 4 >= 5;
+    f64 bound = vram ? 0.07 : 0.20;
+    count++;
+    if(!vram) ram.push_back(std::abs(miss));
+    if(std::abs(miss) > bound) {
+      std::printf("  time-contention4 case %u size %u bus %u: %+.1f%%\n", test, size, bus, miss * 100);
+    }
+    CHECK(std::abs(miss) <= bound, true);
+  }
+  CHECK(count, 84u);
+  CHECK(ram.size(), 60u);
+  if(ram.empty()) return;
+  if(median(ram) > 0.07) std::printf("  time-contention4's RAM-vertex lists: half within %.1f%%\n", median(ram) * 100);
+  CHECK(median(ram) <= 0.07, true);
+}
+
 }
 
 auto measured8Tests() -> Tests {
   return {{"measured round 8 GE time", measuredTime8}, {"measured round 9 GE time", measuredTime9},
-          {"measured round 10 GE time", measuredTime10}};
+          {"measured round 10 GE time", measuredTime10},
+          {"measured rounds 10 and 10b: the CPU beside the GE", measuredContention10},
+          {"measured round 10c: the CPU beside the GE, Super Monkey Ball's strips taken apart", measuredContention10c}};
 }
 
 }

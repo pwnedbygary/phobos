@@ -33,11 +33,17 @@ namespace ares::PlayStationPortable {
   //the frames on the window now, so the host mustn't (nor lock the window, which would take it from the core); any
   //thread. shot(): the picture presented last, at the PSP's size (8888, red in the low byte), for screenshots; kept a
   //frame or two after it's presented from a target on the GPU, unless settle() keeps it at once, which waits for the
-  //GPU: only between frames, the host holding the core.
+  //GE thread (with "GE Thread" On) and the GPU: only between frames, the host holding the core.
   auto window(void* window) -> void;
   auto presenting() -> bool;
   auto settle() -> void;
   auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool;
+  //The GE on a thread of its own (option "GE Thread"), stuck: an unload found it still busy after two seconds (a
+  //driver call that never returned), and left it be with the machine under it. wedged(): whether one is; unwedge():
+  //waits up to milliseconds for it to come back, then finishes the unload (true: none left). Loads are refused while
+  //one is (load() is false): a front end with threads of its own stuck the same way asks for a restart.
+  auto wedged() -> bool;
+  auto unwedge(u32 milliseconds) -> bool;
 }
 
 #include <psp/cpu/allegrex.hpp>

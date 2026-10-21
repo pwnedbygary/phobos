@@ -16,7 +16,8 @@ auto GE::run(u64 budget) -> Stop {
 //they're drawn, or go on being drawn by the GE's workers while the CPU runs on. (With the GE on a thread of its own,
 //the loop hands its words over as it goes, thread.hpp: one made for each, so that the thread off costs it nothing.)
 auto GE::run(u64 budget, u64& ran) -> Stop {
-  wordsRun = &ran;  //(with the PSP's timing, its words' time: pipeItem())
+  wordsRun = &ran;  //(with the PSP's timing, its words' time: pipeItem(), its RAM words a segment at a time)
+  segmentsStart();
   return thread ? runList<true>(budget, ran) : runList<false>(budget, ran);
 }
 
@@ -38,7 +39,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
       ge.drawing.deferring = false;
       if constexpr(Threaded) {
         ge.running = false;
-        ge.thread->runEnd();
+        ge.thread->runEnd(*ge.wordsRun, ge.ramWordsAt(*ge.wordsRun));
         ge.handedState = ge.stateOf(), ge.handedStateValid = true;  //(the render GE takes every word the run ran)
       } else {
         ge.launch(true);
@@ -54,10 +55,27 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
   //Super Monkey Ball runs 600,000 commands a frame.)
   u32 undrawn = ~0u;
   const u8* words = nullptr;
+  //(the front end's own work for a command, with the PSP's timing: a JUMP's, CALL's or RET's, the list fetched afresh
+  //where it goes on, which reads RAM or is VRAM's other work; threaded, the render GE's pipeline takes it after the
+  //command's word, which went first, thread.hpp)
+  auto front = [&](f64 clocks) {
+    if(!pspTiming) return;
+    bool ram = readsRam(list.address);
+    if constexpr(Threaded) {
+      thread->front(clocks, ram ? GeThread::RefetchRam : GeThread::RefetchVram);
+    } else {
+      pipeFront(clocks);
+      if(ram) ramRead(1, clocks);
+      else otherWork(clocks);
+    }
+  };
   for(ran = 0; ran < budget;) {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
     u32 at = list.address;
     if(at >> 12 != undrawn) {  //(a list in VRAM, where what waits may draw: drawn first, then read without asking again)
+      //(with the PSP's timing, a segment of its words begun where it enters a page of the other memory, segment():
+      //every run's first word, a word after anything that draws and a word on a new page come here)
+      if(pspTiming) segment(readsRam(at), ran);
       if constexpr(Threaded) {  //(the render GE does the drawnFirst()s from the words' addresses; read as the GE thread
                                 //may still change it: thread.cpp)
         undrawn = thread->listWord(at) ? at >> 12 : ~0u;
@@ -93,9 +111,9 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
     case Spline:        patch(true, argument), undrawn = ~0u; break;
     case BoundingBox:   boxOutside = boundingBox(argument & 0xffff); break;
     case ConditionalJump:  //where JUMP would go, if the last BOUNDING_BOX was out of sight (pspsdk's sceGuEndObject)
-      if(boxOutside) list.address = relative(argument & ~3u), pipeFront(Cost::Jump);
+      if(boxOutside) list.address = relative(argument & ~3u), front(Cost::Jump);
       break;
-    case Jump:          list.address = relative(argument & ~3u), pipeFront(Cost::Jump); break;
+    case Jump:          list.address = relative(argument & ~3u), front(Cost::Jump); break;
     case Call:
       if(list.depth == 2) {
         note("a display list CALLed three deep, and the GE has room for two");
@@ -105,7 +123,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
       list.returnOffset[list.depth] = list.offset;
       list.depth++;
       list.address = relative(argument & ~3u);
-      pipeFront(Cost::Call);
+      front(Cost::Call);
       break;
     case Return:
       //With no CALL to return from, the GE goes on with the next command. Need for Speed: Most Wanted runs lists
@@ -114,7 +132,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
       list.depth--;
       list.address = list.returnAddress[list.depth];
       list.offset = list.returnOffset[list.depth];
-      pipeFront(Cost::Call);
+      front(Cost::Call);
       break;
     case Signal: signalWord = word; pending = Stop::Signaled; break;
     case Finish: finishWord = word; pending = Stop::Finished; break;

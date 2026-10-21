@@ -310,6 +310,22 @@ set(ARES_ALL_SOURCES
 
 set_property(SOURCE ${ARES_ALL_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
 
+# ares's own build compiles its code in the dialect that code relies on, -fwrapv -fno-strict-aliasing with GCC and Clang
+# alike (cmake/common/compiler_common.cmake and cmake/linux|macos|windows/compilerconfig.cmake, none of which this file
+# includes); their -fno-char8_t is left out, as it only retypes u8"" literals, which this code and its headers have none
+# of. ares reads vector lanes through cast pointers (the N64 RSP's r128::u16() and element()): without
+# -fno-strict-aliasing GCC compiled the RSP's VMOV and VMULQ, as its recompiler calls them, to read stale values. The
+# upstream systems' sources get it: every source under ares/ but ares/ares, which the PSP core shares, and ares/psp,
+# Phobos's own.
+set(ARES_DIALECT_SOURCES ${ARES_SOURCES} ${OTHER_SOURCES})
+list(FILTER ARES_DIALECT_SOURCES INCLUDE REGEX "^ares/")
+list(FILTER ARES_DIALECT_SOURCES EXCLUDE REGEX "^ares/(ares|psp)/")
+list(REMOVE_DUPLICATES ARES_DIALECT_SOURCES)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(ARES_DIALECT_OPTIONS -fwrapv -fno-strict-aliasing)
+endif()
+set_property(SOURCE ${ARES_DIALECT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
+
 # FFmpeg's LGPL decoders for the PSP's music and movies (docs/psp-core.md, parts 26 and 27): built from the official
 # release by thirdparty/ffmpeg/build.sh (once, then kept in its cache) and linked as the shared libraries libavcodec and
 # libavutil, which each package carries beside Phobos, as the LGPL asks. -DPHOBOS_FFMPEG=OFF builds without them: the
@@ -393,6 +409,11 @@ else()
   add_custom_command(TARGET phobos POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/Database $<TARGET_FILE_DIR:phobos>/Database
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/System $<TARGET_FILE_DIR:phobos>/System)
+  # tests/rsp-recompiler: the N64 RSP's recompiler against its interpreter, on phobos_core's own objects (the RSP as the
+  # program has it), its own source in ares's dialect too. Built on demand (desktop.yml's Linux job builds and runs it).
+  add_executable(rsp-recompiler EXCLUDE_FROM_ALL tests/rsp-recompiler/rsp-recompiler.cpp)
+  target_link_libraries(rsp-recompiler PRIVATE phobos_core Threads::Threads ${CMAKE_DL_LIBS})
+  set_property(SOURCE tests/rsp-recompiler/rsp-recompiler.cpp APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
   if(WIN32)
     # The icon is made from the PNG at configure time when Python is around; without it the
     # executable just has no icon.

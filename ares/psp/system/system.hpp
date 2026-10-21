@@ -87,18 +87,38 @@ struct System {
   auto speak() -> void;  //(the frame's sound to the speakers)
   auto load(Node::System& node, string name) -> bool;
   auto unload() -> void;
+  ~System();  //(the process ending with a GE thread unload() left stuck: not waited for)
   auto save() -> void;
   auto power(bool reset) -> void;
   auto serialize(bool synchronize) -> serializer;
   auto unserialize(serializer& s) -> bool;
+  u64 frames = 0;            //run so far (never reset: frame pictures are told apart by them)
+  bool exactFrame = false;   //the screen given this frame's own picture at its end, the GE thread waited for (a
+                             //front end's capture: the runner's PNGs); else the newest it has taken, a frame behind
 
 private:
   std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)
   std::vector<u8> steadyPages;  //the pages whose entries in it never change (Memory::buildSteady)
-  std::vector<u32> pixels;     //the frame the game shows
+  //A frame's picture, taken at its end: presented on the host's window by the GPU, or read back, width x height times
+  //at of the PSP's pixels (8888, red in the low byte); its frame's number. The screen's (shownPicture); with the GE
+  //on its thread, the newest that thread has taken (readyPicture, frameMutex's) and the one it's taking.
+  struct FramePicture {
+    u64 number = 0;
+    bool presented = false;
+    u32 width = 480, height = 272, at = 1;
+    std::vector<u32> pixels;
+  };
+  FramePicture shownPicture, readyPicture, threadPicture;
+  std::mutex frameMutex;
+  auto endFrame(const Kernel::Shown& showing, FramePicture& picture, GE& drawing,
+                const std::function<auto (std::vector<u32>&) -> void>& memoryPicture) -> void;
+  auto show(const FramePicture& picture) -> void;
+  auto onThread(const Kernel::Shown& showing) const -> bool;
+  auto frameEnded(const GeThread::Frame& frame) -> void;
+  auto pictureOnThread(const GeThread::Frame& frame, std::vector<u32>& pixels) -> void;
   std::vector<u32> latePixels; //the newest late frame the GPU has finished ("Late Frames"), its size and GE format
   u32 lateWidth = 0, lateHeight = 0, lateFormat = 3;
-  auto late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> bool;
+  auto late(u32 offset, u32 stride, u32 format, u32 width, u32 height, std::vector<u32>& pixels) -> bool;
   std::vector<s16> sound;      //the frame's sound, left and right samples side by side (Kernel::audioOutput())
   f64 soundOwed = 0;           //sound frames due to the speakers: 44100 a second, so 735.7 a frame
   std::atomic<u32> unmappedReports{0};  //accesses to nothing, reported (the first few only, from any thread)
@@ -118,9 +138,10 @@ private:
 
   bool gpuFailed = false;  //(the hardware renderer couldn't start: not tried again until the next game)
   //Presenting (window()): the host's window, as handed over (a reference held: windowMutex's), and the one the GPU
-  //was last given (the emulation thread's); whether the GPU presents the frames (the host's to read); the picture
-  //presented last, for shot() (shotMutex's: its pixels as they were in the target, and its GE format), and whether it
-  //came from a target, its shot the GPU's to keep (settle()).
+  //was last given (by the thread whose the GPU is: the emulation thread, or the GE thread at frames' ends); whether
+  //the GPU presents the frames (the host's to read); the picture presented last, for shot() (shotMutex's: its pixels
+  //as they were in the target, and its GE format), and whether it came from a target, its shot the GPU's to keep
+  //(settle()).
   std::mutex windowMutex;
   void* hostWindow = nullptr;
   void* gpuWindow = nullptr;
@@ -129,13 +150,22 @@ private:
   std::vector<u32> shotPixels;
   u32 shotWidth = 0, shotHeight = 0, shotFormat = 3;
   bool presentedFromTarget = false;
-  auto present() -> bool;
+  auto present(const Kernel::Shown& showing, GE& drawing, std::vector<u32>& pixels,
+               const std::function<auto (std::vector<u32>&) -> void>& memoryPicture) -> bool;
   auto handWindow() -> void;
   static auto hold(void* window, bool held) -> void;
   friend auto window(void* window) -> void;
   friend auto presenting() -> bool;
   friend auto settle() -> void;
   friend auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool;
+  //(unload()) A GE thread left stuck, kept till it has come back (unwedge()); the machine under it left as it was
+  std::unique_ptr<GeThread> stuckGE;
+  auto unwedge(u32 milliseconds) -> bool;
+  auto drainWithin() -> bool;  //(the GE thread done with everything handed to it, within two seconds)
+  auto unloadMachine() -> void;
+  auto unloadNodes() -> void;
+  friend auto wedged() -> bool;
+  friend auto unwedge(u32 milliseconds) -> bool;
   std::mutex noticeLock;
   std::string pendingNotice;  //(notice())
   auto startRenderer() -> void;

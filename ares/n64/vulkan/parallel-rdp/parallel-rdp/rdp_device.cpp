@@ -34,6 +34,7 @@
 
 #ifndef PARALLEL_RDP_SHADER_DIR
 #include "shaders/slangmosh.hpp"
+#include "shaders/rasterizer_patched.hpp"
 #endif
 
 // Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
@@ -227,12 +228,22 @@ void CommandProcessor::init_renderer()
 
 #ifndef PARALLEL_RDP_SHADER_DIR
 	Vulkan::ResourceLayout layout;
-	shader_bank.reset(new ShaderBank(device, layout, [&](const char *name, const char *define) -> int {
+	auto resolver = [&](const char *name, const char *define) -> int {
 		if (strncmp(name, "vi_", 3) == 0)
 			return vi.resolve_shader_define(name, define);
 		else
 			return renderer.resolve_shader_define(name, define);
-	}));
+	};
+	shader_bank.reset(new ShaderBank(device, layout, resolver));
+	// Qualcomm's proprietary compiler rejects the bank's SMALL_TYPES=0 rasterizer. The same module with the values
+	// shade_pixel stores computed by ordinary instructions (rasterizer_patched.hpp, from tools/parallel-rdp) takes
+	// its place before the renderer gets the bank, so no pipeline is made from the original.
+	if (resolver("rasterizer", "SMALL_TYPES") == 0)
+	{
+		layout.unserialize(reflection_bank + rasterizer_patched_layout_offset, rasterizer_patched_layout_size);
+		shader_bank->rasterizer = device.request_program(rasterizer_patched_spirv,
+		                                                 sizeof(rasterizer_patched_spirv), &layout);
+	}
 	renderer.set_shader_bank(shader_bank.get());
 	vi.set_shader_bank(shader_bank.get());
 #endif

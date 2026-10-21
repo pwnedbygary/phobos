@@ -59,8 +59,10 @@ struct Screen : Video {
   auto setInterlace(bool interlaceField) -> void;
   // [Phobos] Skip the per-pixel conversion for the frame being refreshed: the
   // frontend presents the picture from another source (N64 Vulkan scanout).
-  // Set from the refresh callback; platform->video() still receives the viewport.
-  auto setPassthrough(bool passthrough) -> void { _passthrough = passthrough; }
+  // Set from the refresh callback (the N64's) or before frame() (the PSP's, on
+  // the emulation thread, while the video thread may still be refreshing the
+  // frame before); platform->video() still receives the viewport.
+  auto setPassthrough(bool passthrough) -> void;
 
   auto attach(Node::Video::Sprite) -> void;
   auto detach(Node::Video::Sprite) -> void;

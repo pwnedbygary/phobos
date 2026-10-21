@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <bitset>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -9,6 +10,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#if defined(__APPLE__) || defined(__linux__)
+#include <pthread.h>
+#endif
 
 #include "ring.hpp"
 #include "model.hpp"
@@ -56,12 +60,20 @@ struct GeThread : Memory::Writer {
     Wrote,       //(checking) the emulation thread's write to VRAM: its first and last byte, and its place
     Store,       //the emulation thread's store the GE hears of (Memory::Writer): its address, size and place (cx), for
                  //writeElsewhere()'s checks (Memory::storeChecks())
+    Stores,      //its stores one after another, no other record between them: their place (cx), how many, then each
+                 //one's address, size and (checking) the VRAM bytes it wrote, a count and each first and last, for
+                 //their checks in turn
     Copy,        //its copy or fill: the same, for copyIn()'s (Memory::copyChecks())
     Transfer,    //TRANSFER_START's copy, the kernel GE's: the place of its rows' writes, for transfer()'s checks
                  //(GE::transferChecks())
-    RunStart,    //a kick: the render GE defers its primitives into batches
-    RunEnd,      //its end: what's batched drawn, a hardware renderer's work submitted (or finished, unguarded)
+    RunStart,    //a kick: the render GE defers its primitives into batches; with the PSP's timing, the GE's pipeline
+                 //moved on to the kick (Kernel::geResume()): whether it was, and by how many clocks
+    RunEnd,      //its end: what's batched drawn, a hardware renderer's work submitted (or finished, unguarded); the
+                 //run's words and, with the PSP's timing, those of them that read RAM (GE::ramWordsAt()), the front
+                 //end's last work (GE::pipeStop()); (checking) each count against the render GE's own
+    Owe,         //with the PSP's timing, a list starting: its own clocks, the pipeline begun afresh (Kernel::geOwe())
     State,       //the GE's state put back whole (sceGeRestoreContext's): commands, matrices and their indices (GE::State)
+    Frame,       //a frame's end (System::run()): what the screen shows then (Frame), its picture taken here (frameEnd)
   };
   struct Header { Kind kind; u32 size; u64 serial; };
   //A PRIM's or curved surface's copies: up to two ranges (its indices, its vertices), each its address and size, the
@@ -72,25 +84,77 @@ struct GeThread : Memory::Writer {
   GeThread(GE& control, GE& render);
   ~GeThread();
 
-  //(the emulation thread's) Records appended in the stream's order; words wait in a buffer until the next record or
-  //a drain. Each returns its place where it's asked for: the record's serial. nextPlace(): the next record's, the
-  //words before it handed over first (a PRIM's, which the model takes before its record goes).
-  auto word(u32 word, u32 address) -> void;
-  auto nextPlace() -> u64 { flushWords(); return serial + 1; }
-  auto primitive(u32 word, u32 wordAddress, u32 vertexAddress, u32 indexAddress, bool hardware, bool certain,
-                 const Copies& copies, const u8* bytes) -> u64;
+  //(the emulation thread's) Records appended in the stream's order; words and stores wait in buffers until the next
+  //record, a wait or a drain. Each returns its place where it's asked for: the record's serial. nextPlace(): the next
+  //record's, the words and stores before it handed over first (a PRIM's, which the model takes before its record goes).
+  //(a list word as run() read it, at its address, or ~0 for one from no list (the kernel's): runs of words one after
+  //another kept as a run. In the list's loop for every word: Super Monkey Ball's spent a fourteenth of the emulation
+  //thread there, called and growing vectors)
+  auto word(u32 word, u32 address) -> void {
+    if(wordCount == WordsMost) flushWords();
+    if(address == ~0u || address != nextWordAt) wordRuns[runCount++] = {address, 0};
+    wordRuns[runCount - 1].count++;
+    nextWordAt = address == ~0u ? ~0u : (address + 4) & 0x0fff'ffff;
+    words[wordCount++] = word;
+  }
+  //(with the PSP's timing, the control pass's own work for the GE's front end, which the render GE's pipeline takes
+  //once it has taken the words handed over before it, as many as wait: a JUMP taken, a CALL, a RET, after their
+  //words, GE::pipeFront(); vertices, a bounding box's, to be shared out among the next PRIM's primitives,
+  //GE::oweVertices(), where the box's check may have handed its word over in a record of its own, none waiting. Each
+  //of a kind, by the memory it reads, which the render GE counts as the synchronous GE does: GE::ramRead() of the
+  //words' kind or the vertices', or GE::otherWork(), VRAM's)
+  enum : u32 { RefetchRam = 0, RefetchVram = 1u << 30, VerticesRam = 2u << 30, VerticesVram = 3u << 30 };
+  static constexpr u32 MarkKind = 3u << 30;  //(a mark's word count's top two bits: its kind)
+  auto front(f64 clocks, u32 kind) -> void {
+    marks.push_back({wordCount | kind, clocks});
+  }
+  //(with the PSP's timing, the run about to start: the GE's pipeline moved on to it by clocks, Kernel::geResume())
+  auto resume(f64 clocks) -> void { shifting = true, shift = clocks; }
+  //(with the PSP's timing, a list starting: its own clocks, the pipeline begun afresh, Kernel::geOwe())
+  auto owe(f64 clocks) -> void;
+  auto nextPlace() -> u64 { flushStores(), flushWords(); return serial + 1; }
+  //A PRIM's or curved surface's record, made where it goes, with the words waiting before it in it: its place
+  //(primitivePlace(), given its copies' size), then the record begun (primitiveBegin(): where its copies' bytes go),
+  //and handed over (primitiveEnd()). Where each PRIM's bytes were copied once to be copied into its record, and its
+  //words went as a record of their own. One too big for the ring has its words go first as their own, and the
+  //emulation thread draws it, once the thread has drained (primitiveBegin() nullptr; primitiveEnd() given the bytes).
+  auto primitivePlace(u32 copied) -> u64;
+  auto primitiveBegin(u32 word, u32 wordAddress, u32 vertexAddress, u32 indexAddress, bool hardware,
+                      const Copies& copies) -> u8*;
+  auto primitiveEnd(bool certain, const u8* bytes) -> void;
   auto clut(u32 word, u32 wordAddress, u32 address, const u8* bytes, u32 size) -> void;
   auto drawnFirst(u32 address, u32 size) -> u64;
   auto read(u32 address, u32 size, bool loading) -> u64;
   auto write(u32 address, u32 size, Kind kind, u64 cx) -> u64;
   auto runStart() -> void;
-  auto runEnd() -> void;
+  auto runEnd(u64 words, u64 ramWords) -> void;  //(words: the run's, run()'s count; ramWords: those that read RAM)
   auto state(const GE& from) -> void;
   auto note(const std::string& text) -> void { notes.push_back(text); }  //(the render GE's, told as it drains)
+  //A frame's end: the frame buffer the screen shows then and how it's laid out, as the emulation thread has the
+  //display (Kernel::showing()), and the frame's number. The GE thread takes its picture as it comes to the record,
+  //everything handed over before it done (frameEnd: System's), so the picture is the frame's, as of its place, however
+  //far the emulation thread has run on; the emulation thread waits only where more than most frames handed over
+  //haven't ended.
+  struct Frame { u64 number; u32 frameBuffer, bufferWidth, pixelFormat, width, height; };
+  auto frame(const Frame& frame) -> void;
+  std::function<auto (const Frame& frame) -> void> frameEnd;
+  auto framesBehind() const -> u64 { return framesHanded - framesEnded.load(std::memory_order_acquire); }
+  auto waitFrames(u64 most) -> void;
+  //(the GE thread's, at a frame's record, its frame buffer wholly inside a copy of VRAM that keeps its bytes in order)
+  //The frame buffer's rows reached first as a picture's reads reach them with the GE on the emulation thread
+  //(pointer(): the drawing over them finished or drawn first), then use(vram) given VRAM as it was at the record (the
+  //emulation thread may have written it since: versions.hpp), the frame buffer's bytes at their offsets in it.
+  auto frameBytes(const Frame& frame, const std::function<auto (const u8* vram) -> void>& use) -> void;
   //What each run's primitives owe a PSP's GE (GE::owedPixels, owedPrimitives, which Kernel::geTime() folds), runs
   //numbered from 1 as they're handed over (runStart()): published by the GE thread as each ends, and the one under
-  //way's counts so far after each of its PRIMs, for the emulation thread's clock (kernel/ge.cpp).
-  struct Owed { u64 pixels = 0, primitives = 0; };
+  //way's counts so far after each of its PRIMs, for the emulation thread's clock (kernel/ge.cpp). With the PSP's timing,
+  //its pipeline's clocks too, from when its times count (Kernel::gePipeAt): as the run ends, all of its work's
+  //(GE::pipeTime()) and its front end's (Pipe::front), which the kernel takes as Kernel::geTime() does; so far, the two
+  //ends' (the larger, and the front end's), which only grow as primitives join the pipeline, so that the times they
+  //give are no later than the run's will be.
+  //(and, with the CPU's work beside the GE counted, GE::Cost::Contended, the list's clocks so far that read RAM by
+  //kind, and all of them, as the run ends: GE::ramClocks, allClocks, for Kernel::geContend())
+  struct Owed { u64 pixels = 0, primitives = 0; f64 time = 0, front = 0; f64 ramClocks[4] = {}, allClocks = 0; };
   //(the runs whose counts it keeps: the emulation thread folds the oldest before it hands over more than that many
   //not folded, Kernel::geTime(), and waits past that many not ended)
   static constexpr u32 RunsKept = 4096;
@@ -98,9 +162,18 @@ struct GeThread : Memory::Writer {
   auto owedOf(u64 run, bool wait, Owed& owed) -> bool;  //(once it has ended; with wait, waiting for that)
   auto owedSoFar(u64 run, Owed& owed) const -> bool;    //(while it's under way)
   //Every record so far taken and done by the render GE, which then waits for the next: until the emulation thread
-  //appends one, it may reach the render GE and its memory itself.
+  //appends one, it may reach the render GE and its memory itself. drain() waits as long as that takes; drainBy()
+  //gives up at the deadline, false where the thread hasn't done them all by then (it may be stuck in one: a driver call
+  //that never returns, System::unload()).
   auto drain() -> void;
+  auto drainBy(std::chrono::steady_clock::time_point deadline) -> bool;
   auto drained() const -> bool { return done.load(std::memory_order_acquire) == serial; }
+  //(a thread drainBy() gave up on) Told to take no record after the one it's in: left be, never waited for again,
+  //and joined once it has come back from that one (exited()), its object kept till then (it may still use it).
+  auto abandon() -> void;
+  auto exited() const -> bool { return left.load(std::memory_order_acquire); }
+  //(abandoned, and not come back as the process ends) Not to be joined: its object is to be left to it, not freed.
+  auto letGo() -> void { thread.detach(); }
 
   //(the emulation thread's) The value rule (model.hpp). model: what the PRIMs handed over may change; hardware:
   //whether the render GE draws with a hardware renderer (its begin() taking PRIMs), as far as the emulation thread
@@ -156,7 +229,9 @@ struct GeThread : Memory::Writer {
   //drawing threads may still draw or a texture a PRIM drawn by the software renderer may still read (a conflict), its
   //record goes first and the write waits for the render GE to pass it; else, where the render GE may still read or
   //write back the bytes at an earlier place (it hasn't passed every record), their old contents are kept first
-  //(versions: with the place of the write's record, 2 per record); after it, its record (where it hasn't gone).
+  //(versions: with the place of the write's record, 2 per record); after it, its record (where it hasn't gone): a
+  //store's joins the stores waiting, which go as one record (Stores) at the place of the next. Hot Wheels's CPU stored
+  //59,000 words a frame into VRAM, each a record of its own the GE thread woke for.
   auto before(u32 address, u32 size, Memory::Writer::Kind kind) -> void override;
   auto after(u32 address, u32 size, Memory::Writer::Kind kind) -> void override;
   auto conflicts(u32 address, u32 size) -> bool;
@@ -169,8 +244,25 @@ struct GeThread : Memory::Writer {
   u64 writePlace = 0;  //(the record of the write under way, where it went first)
   //(each page's newest PRIM handed over whose texture is in it, as Memory::watched numbers pages: a store there unwatches
   //it, as ever, but while the render GE hasn't passed that PRIM, which may still decode from it, it's watched again,
-  //so that later stores go on being heard of, their old bytes kept: protect())
+  //so that later stores go on being heard of, their old bytes kept: protect(). The latest texture's pages are kept
+  //apart, a range and its newest PRIM, put into each page's as another texture comes: Super Monkey Ball's PRIMs, one
+  //texture after another, each went through all its texture's pages)
+  //(the texture the last PRIM handed over read, as the words it's from have it: format, address, row width, size,
+  //mode; its bytes and their pages, worked out again only where those words have changed. The thread's, so that each
+  //machine's thread starts with none)
+  struct HandTexture {
+    u32 words[5] = {};
+    u32 low = 0, high = 0, first = 1, last = 0;
+    bool known = false, paged = false;
+  };
+  HandTexture handTexture;
   std::vector<u64> textureUntil = std::vector<u64>(512_MiB / Memory::PageSize, 0);
+  u32 textureFirst = 1, textureLast = 0;
+  u64 textureAt = 0;
+  auto textureRead(u32 first, u32 last, u64 at) -> void;
+  auto textureNewest(u32 page) const -> u64 {
+    return page >= textureFirst && page <= textureLast ? std::max(textureUntil[page], textureAt) : textureUntil[page];
+  }
   auto protect(u32 address, u32 size) -> void;
   std::vector<std::pair<u32, u32>> written;  //(checking: the VRAM bytes of the write under way, for its record)
 
@@ -180,21 +272,50 @@ struct GeThread : Memory::Writer {
   std::unique_ptr<GeVersions> versions;
 
 private:
-  static constexpr u32 WordsMost = 1024;
-  auto append(Kind kind, u32 size) -> u8*;
+  static constexpr u32 WordsMost = 1024, StoresMost = 16384;
+  auto append(Kind kind, u32 size) -> u8*;  //(the stores waiting handed over first)
   auto publish() -> void;  //(the record appended, handed over: ring.publish(), and the fuzzing's)
   auto flushWords() -> void;
+  auto flushStores() -> void;
+  auto addStore(u32 address, u32 size) -> void;
+  //(the words waiting, as a record holds them: their runs, the words, the marks; none where neither words nor marks
+  //wait)
+  auto wordsBytes() const -> u32;
+  auto putWords(u8* at) -> void;   //(and put there, none left waiting)
   auto take() -> void;  //the thread's loop
   auto replay(const Header& header, const u8* data) -> void;
+  auto replayWords(const u8* data, u64 serial) -> void;
   auto listWordDrawn(u32 address) -> void;  //(the render GE: run()'s drawnFirst() for a list word, replayed)
+  //(the PRIM record under way, between primitiveBegin() and primitiveEnd(): its data, or nullptr with what it says,
+  //for the emulation thread to draw it)
+  struct Building { u32 word, wordAddress, vertexAddress, indexAddress; bool hardware; Copies copies; };
+  u8* building = nullptr;
+  Building built{};
 
   RecordRing ring;
-  std::vector<u32> words;
-  std::vector<std::pair<u32, u32>> wordRuns;  //(the emulation thread's: each run's first address and count)
+  //(the emulation thread's: the words, and each run's first address and count; where the last run goes on, or ~0)
+  struct WordRun { u32 first, count; };
+  std::array<u32, WordsMost> words;
+  std::array<WordRun, WordsMost> wordRuns;
+  u32 wordCount = 0, runCount = 0, nextWordAt = ~0u;
+  //(and the control pass's front-end work among them: after how many of the words, and its clocks; the run about to
+  //start's shift, with the PSP's timing: front(), resume())
+  struct Mark { u32 word; f64 clocks; };
+  std::vector<Mark> marks;
+  bool shifting = false;
+  f64 shift = 0;
+  u64 runWords = 0;  //(the render GE's: the run's words so far, as run() counts them, for its pipeline: GE::wordsRun)
+  //(the emulation thread's: the stores waiting, as their record holds them after its count, and how many; the place
+  //the versions were last freed as of)
+  std::vector<u32> stores;
+  u32 storeCount = 0;
+  u64 freedAt = 0;
   u32 undrawn = ~0u;  //(the render GE's: run()'s page found with nothing drawn over it, as run() keeps it)
   std::vector<std::string> notes;
   u64 serial = 0;                     //(the emulation thread's) records appended
   alignas(64) std::atomic<u64> done{0};  //(the GE thread's) records taken and done
+  std::atomic<bool> abandoned{false}, left{false};  //(abandon(); the GE thread's loop ended)
+  auto afterDrain() -> void;  //(drain()'s and drainBy()'s once it has done them all)
   std::thread thread;
   //(runs: those handed over, the emulation thread's; ended, the GE thread's count of those done, each run's counts kept
   //at its number's place in owedRuns from then on; the run under way's counts so far, its number and a version that's
@@ -202,8 +323,11 @@ private:
   u64 runs = 0, takenRuns = 0;
   Owed owedRuns[RunsKept];
   alignas(64) std::atomic<u64> runsEnded{0};
+  u64 framesHanded = 0;                     //(the emulation thread's)
+  alignas(64) std::atomic<u64> framesEnded{0};  //(the GE thread's)
   alignas(64) std::atomic<u64> soFarVersion{0};
   std::atomic<u64> soFarRun{0}, soFarPixels{0}, soFarPrimitives{0};
+  std::atomic<f64> soFarTime{0}, soFarFront{0};
   auto publishSoFar() -> void;
   //(reports: the GE thread's, taken by the emulation thread; puts counts the put-backs, so that the 128 places are
   //taken only where one was made)
@@ -224,6 +348,18 @@ private:
     ~Blocked() { count.fetch_sub(1, std::memory_order_acq_rel); }
   };
   u32 dirtyPage = ~0u;  //(the emulation thread's: a list page found not all clean in this run, its words looked at)
+  //(and pages found all clean, with what would have to change for one not to be: its pages' newest rectangles, the
+  //model's other dirtyings; reports taken and the emulation thread's writes since only make it cleaner. The model may
+  //answer coarser later, rectangles painted into pieces or an older part's bytes given the whole's place, but the
+  //bytes are as clean as they were. Kept by page number, 64 of them: a list's calls jump from page to page)
+  struct CleanPage {
+    u32 page = ~0u;
+    u64 gpu = 0, software = 0, dirtyings = 0;
+    bool staleDepth = false, scaled = false;
+    auto operator==(const CleanPage&) const -> bool = default;
+  };
+  std::array<CleanPage, 64> cleanPages;
+  CleanPage cleanPiece;  //(the last 32-byte piece of a list word found clean on a page not all clean)
 };
 
 }

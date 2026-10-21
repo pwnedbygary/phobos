@@ -2,7 +2,8 @@
 #Builds the PSP as an ares system (ares/psp/psp.cpp, the whole core as Phobos builds it, with ares's node tree) and
 #runs system.cpp's checks on the host. tests/psp/run-tests.sh tests the parts underneath on their own.
 #usage: tests/psp/ares/run-tests.sh   (PSP_TEST_PROGRAMS: the test programs' folder, see system.cpp; PHOBOS_JOBS:
-#compiles at once; PHOBOS_TESTS_REQUIRE naming programs fails the run without them, where it would skip their checks)
+#compiles at once; PHOBOS_TESTS_REQUIRE naming programs fails the run without them, where it would skip their checks;
+#SANITIZE: sanitizers, below)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
@@ -40,7 +41,10 @@ if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
   INCLUDES+=(-isystem "$FFMPEG/include")
   LIBRARIES+=(-L"$FFMPEG/lib" -lavcodec -lavutil -Wl,-rpath,"$FFMPEG/lib")
 fi
-CXXFLAGS=(-std=c++20 -O1 -g "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}")
+#SANITIZE: sanitizers for the C++ objects and the program, as tests/psp/run-tests.sh takes them (none by default;
+#-fsanitize=thread for the GE thread's frames, tests/psp/ares/system.cpp's geThread checks)
+# shellcheck disable=SC2206
+CXXFLAGS=(-std=c++20 -O1 -g "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" ${SANITIZE:-})
 
 object "$CXX" "$ROOT/ares/psp/psp.cpp" "${CXXFLAGS[@]}" -w
 object "$CXX" "$ROOT/ares/ares/android_globals.cpp" "${CXXFLAGS[@]}" -w
@@ -57,7 +61,9 @@ object "$CC" "$ROOT/libco/libco.c" -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco"
 object "$CXX" "$HERE/system.cpp" "${CXXFLAGS[@]}" -Wall -Wextra -Werror
 objects_done
 
-objects_program psp-ares "${SYSROOT[@]}" "${LIBRARIES[@]}"
-$CXX "${SYSROOT[@]}" -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
+# shellcheck disable=SC2086
+objects_program psp-ares ${SANITIZE:-} "${SYSROOT[@]}" "${LIBRARIES[@]}"
+# shellcheck disable=SC2086
+$CXX ${SANITIZE:-} "${SYSROOT[@]}" -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
 mv -f "$REPLY.part-$$" "$REPLY"
 "$REPLY"

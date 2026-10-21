@@ -35,8 +35,8 @@ auto load(Node::System& node, string name) -> bool {
 //the player wait for its answer; without it (the default) they're answered at once, as they always were. "GE
 //Timing", "PSP" (the default, the owner's choice) for the GE to take the time the owner's PSP took over the same work
 //(docs/psp-core.md, part 106), or "Fast" for Sony's peak rates, which games' lists take a PSP 4 to 12 times longer
-//than (part 103); taken at the next power on (Kernel::geTime()). With "PSP" the GE stays on the emulation thread
-//whatever "GE Thread" says (threadGE()).
+//than (part 103); taken at the next power on (Kernel::geTime()). With "GE Thread" On, either way, the GE thread keeps
+//the GE's pipeline and the emulation thread its times (part 111, Kernel::GeRun).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -74,8 +74,11 @@ auto presenting() -> bool {
 
 //The picture presented last kept for shot() at once where it came from a target: the GPU's runs waited for, which
 //keeps each one's shot (a frame or two later otherwise). Between frames alone, the host holding the core: the frame's
-//drawing is done by then (GE::drawer()), and nothing else uses the GPU.
+//drawing is done by then (GE::drawer()), and once the GE thread has drained (it presents at frames' ends, a frame
+//behind at most) nothing else uses the GPU. A GE thread that doesn't drain within two seconds leaves the shot be.
 auto settle() -> void {
+  auto& thread = system.geThreading;
+  if(thread && !thread->drainBy(std::chrono::steady_clock::now() + std::chrono::seconds(2))) return;
   if(!system.gpu || !system.presents) return;
   std::lock_guard lock{system.shotMutex};
   if(!system.presentedFromTarget) return;
@@ -104,14 +107,20 @@ auto System::hold(void* window, bool held) -> void {
 }
 
 //The host's window, if it's changed, given to the GPU (its swapchain made on it as it's next shown on), the one before
-//let go of once the GPU has: on the emulation thread, the GPU's.
+//let go of once the GPU has: on the thread whose the GPU is (the emulation thread, or the GE thread at a frame's end),
+//the GPU called with the lock let go of, so that the host's thread handing a window over never waits for the GPU.
 auto System::handWindow() -> void {
-  std::lock_guard lock{windowMutex};
-  if(!gpu || hostWindow == gpuWindow) return;
-  gpu->window(hostWindow);
-  hold(hostWindow, true);
+  void* window;
+  {
+    std::lock_guard lock{windowMutex};
+    if(!gpu || hostWindow == gpuWindow) return;
+    window = hostWindow;
+    hold(window, true);
+  }
+  gpu->window(window);
   hold(gpuWindow, false);
-  gpuWindow = hostWindow;
+  std::lock_guard lock{windowMutex};
+  gpuWindow = window;
 }
 
 auto notice() -> string {
@@ -159,63 +168,124 @@ auto System::run() -> void {
   kernel.controller.rightX = controls.stick(controls.rightX);
   kernel.controller.rightY = controls.stick(controls.rightY);
   if(!kernel.exited) kernel.run(Kernel::VblankCycles);
-
-  //Where the GPU presents on the host's window itself, the frame is shown there (present()), and the screen only
-  //hands the host its turn (passthrough: nothing converted, nothing drawn). (With the GE on its thread, its renderer
-  //is the render GE's, once the thread has drawn everything handed to it: ge/thread.hpp.)
-  GE& drawing = ge.drawer();
+  frames++;
   if(++framesSinceKept >= 600) framesSinceKept = 0, keepPipelines();
-  bool presented = present();
-  presents = presented;
-  screen->setPassthrough(presented);
-  if(presented) return screen->frame(), speak();
 
-  //The screen's colors are the pixels' own (red in the low byte, then green and blue: the palette below). The
-  //frame comes straight from the hardware renderer's picture of it where the GPU drew it (GPU::picture(): VRAM's
-  //pages stay the GPU's), at the screen's size where the GPU draws larger, else from memory's VRAM, as the kernel
-  //has it, which finishes what the GPU drew there.
+  //The frame's picture. With the GE on its thread, that thread takes it as it comes to the frame's end, everything
+  //before it drawn, and the screen gets the newest it has taken: this frame's, or one a frame behind, the emulation
+  //thread waiting only where the thread is further behind (or for this frame's own: exactFrame, and where there's
+  //none yet to show). Else here, as the GE has it at this point (with the GE on its thread, where that thread can't
+  //take it, once it has drawn everything handed to it: ge/thread.hpp).
+  auto showing = kernel.showing();
+  if(geThreading && onThread(showing)) {
+    geThreading->frame({frames, showing.frameBuffer, showing.bufferWidth, showing.pixelFormat, showing.width,
+                        showing.height});
+    geThreading->waitFrames(exactFrame || !shownPicture.number ? 0 : 1);
+    std::lock_guard lock{frameMutex};
+    if(readyPicture.number > shownPicture.number) std::swap(readyPicture, shownPicture);
+  } else {
+    GE& drawing = ge.drawer();
+    endFrame(showing, shownPicture, drawing, [&](std::vector<u32>& pixels) { kernel.picture(pixels); });
+    shownPicture.number = frames;
+  }
+  show(shownPicture);
+  speak();
+}
+
+//A frame's end, as the GE drawing has it: on the thread whose the GPU is then (the emulation thread, or the GE
+//thread at the frame's record: frameEnded()). Where the GPU presents on the host's window itself, the frame is shown
+//there (present()); else its picture comes straight from the hardware renderer's picture of the frame buffer where
+//the GPU drew it (GPU::picture(): VRAM's pages stay the GPU's), at the screen's size where the GPU draws larger, else
+//from memory's VRAM (memoryPicture: the kernel's, which finishes what the GPU drew there).
+auto System::endFrame(const Kernel::Shown& showing, FramePicture& picture, GE& drawing,
+                      const std::function<auto (std::vector<u32>&) -> void>& memoryPicture) -> void {
+  picture.presented = present(showing, drawing, picture.pixels, memoryPicture);
+  presents = picture.presented;
+  if(picture.presented) return;
   bool drawn = false;
   u32 at = 1;  //(the picture's size, times the PSP's)
-  u32 frameBuffer = kernel.presentedFrameBuffer();  //(the one the frame after this blank shows)
-  if(drawing.renderer && gpu && frameBuffer) {
-    auto& display = kernel.display;
-    u32 physical = frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
-    u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
+  if(drawing.renderer && gpu && showing.frameBuffer) {
+    u32 physical = showing.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
     at = std::min(shown, gpu->resolution());
     if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMSize) {
+      u32 offset = physical - Memory::VRAMBase, format = showing.pixelFormat & 3;
       if(lateFrames && at == 1) {
-        drawn = late(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height);
+        drawn = late(offset, showing.bufferWidth, format, showing.width, showing.height, picture.pixels);
       } else {
-        drawn = gpu->picture(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width,
-                             height, pixels, at);
+        drawn = gpu->picture(offset, showing.bufferWidth, format, showing.width, showing.height, picture.pixels, at);
       }
     }
   }
-  if(!drawn) kernel.picture(pixels), at = 1;
-  //as picture() made it (480x272 times at: the PSP has no other size), in the screen's 480x272 times shown, each of
-  //its pixels repeated where it's smaller
-  u64 width = kernel.display.width ? kernel.display.width : 480;
-  u64 height = kernel.display.height ? kernel.display.height : 272;
-  auto output = screen->pixels().data();
-  u32 across = 480 * shown, down = 272 * shown;
-  width *= at, height *= at;
-  if(width * height == pixels.size()) {
-    for(u32 y : range(std::min<u64>(height * shown / at, down))) {
-      const u32* row = &pixels[y * at / shown * width];
-      u32* to = &output[y * across];
-      u32 columns = std::min<u64>(width * shown / at, across);
-      if(at == shown) for(u32 x : range(columns)) to[x] = row[x] & 0xff'ffff;
-      else for(u32 x : range(columns)) to[x] = row[x * at / shown] & 0xff'ffff;
+  if(!drawn) memoryPicture(picture.pixels), at = 1;
+  picture.width = showing.width, picture.height = showing.height, picture.at = at;
+}
+
+//A frame's picture on the screen. Presented on the host's window already, the screen only hands the host its turn
+//(passthrough: nothing converted, nothing drawn). Else the screen's colors are the pixels' own (red in the low byte,
+//then green and blue: the palette load() gives it): as picture made them (480x272 times at: the PSP has no other
+//size), in the screen's 480x272 times shown, each of its pixels repeated where it's smaller; written whole every
+//frame, as the screen clears what it hands back.
+auto System::show(const FramePicture& picture) -> void {
+  screen->setPassthrough(picture.presented);
+  if(!picture.presented) {
+    u64 width = u64(picture.width) * picture.at, height = u64(picture.height) * picture.at;
+    u32 at = picture.at, across = 480 * shown, down = 272 * shown;
+    auto output = screen->pixels().data();
+    if(width * height == picture.pixels.size()) {
+      for(u32 y : range(std::min<u64>(height * shown / at, down))) {
+        const u32* row = &picture.pixels[y * at / shown * width];
+        u32* to = &output[y * across];
+        u32 columns = std::min<u64>(width * shown / at, across);
+        if(at == shown) for(u32 x : range(columns)) to[x] = row[x] & 0xff'ffff;
+        else for(u32 x : range(columns)) to[x] = row[x * at / shown] & 0xff'ffff;
+      }
     }
   }
   screen->frame();
-  speak();
+}
+
+//Whether the GE thread takes the frame's picture: none to take, or memory's as of the frame's record through the
+//versions of VRAM (pictureOnThread()), so a frame buffer wholly inside a copy of VRAM that keeps its bytes in order
+//(the first or third). Elsewhere (main memory, whose stores the emulation thread keeps no versions of) the emulation
+//thread takes it, the thread drained.
+auto System::onThread(const Kernel::Shown& showing) const -> bool {
+  if(!showing.frameBuffer) return true;
+  u32 physical = showing.frameBuffer & 0x1fff'ffff;
+  if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize;
+  u32 offset = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  u64 bytes = (showing.pixelFormat & 3) == 3 ? 4 : 2;
+  u64 end = offset + (u64(showing.height - 1) * showing.bufferWidth + showing.width) * bytes;
+  return !(copy & 1) && end <= Memory::VRAMSize;
+}
+
+//(the GE thread's, at a frame's record) The frame's end there, as the render GE has it; its picture handed to the
+//emulation thread as the newest (run()).
+auto System::frameEnded(const GeThread::Frame& frame) -> void {
+  Kernel::Shown showing{frame.frameBuffer, frame.bufferWidth, frame.pixelFormat, frame.width, frame.height};
+  endFrame(showing, threadPicture, renderGE, [&](std::vector<u32>& pixels) { pictureOnThread(frame, pixels); });
+  threadPicture.number = frame.number;
+  std::lock_guard lock{frameMutex};
+  std::swap(threadPicture, readyPicture);
+}
+
+//(the GE thread's, at a frame's record) Memory's picture of the frame buffer as of the record (GeThread::frameBytes()).
+auto System::pictureOnThread(const GeThread::Frame& frame, std::vector<u32>& pixels) -> void {
+  Kernel::Shown showing{frame.frameBuffer, frame.bufferWidth, frame.pixelFormat, frame.width, frame.height};
+  auto none = [](u32, u32) -> u32 { return 0; };  //(rows wholly inside VRAM's copy: onThread())
+  if(!showing.frameBuffer) return Kernel::picture(showing, pixels, nullptr, none);
+  geThreading->frameBytes(frame, [&](const u8* vram) {
+    auto row = [&](u32 address, u32) -> const u8* {
+      return vram + ((address & 0x1fff'ffff) - Memory::VRAMBase) % Memory::VRAMSize;
+    };
+    Kernel::picture(showing, pixels, row, none);
+  });
 }
 
 //A late frame (option "Late Frames"): the GPU takes a shot of the frame shown (GPU::shoot()), nothing waited for, and
 //the newest it has finished taking is the picture, a frame or two late, as memory would keep it (picture()'s
 //colors). False till there's one of this size: the frame from memory then.
-auto System::late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> bool {
+auto System::late(u32 offset, u32 stride, u32 format, u32 width, u32 height, std::vector<u32>& pixels) -> bool {
   if(!gpu->shoot(offset, stride, format, width, height)) return false;
   u32 w, h, f;
   if(gpu->shot(latePixels, w, h, f)) lateWidth = w, lateHeight = h, lateFormat = f;
@@ -231,22 +301,21 @@ auto System::late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> 
 //the window), with nothing read back: the frame buffer straight from its target, or memory's picture where the GPU
 //doesn't hold it; kept for shot() too. False where the GPU doesn't present, has just given up, or couldn't put this
 //frame on the window (none, as in the background, or the acquiring timed out): the screen's then, read back.
-auto System::present() -> bool {
+auto System::present(const Kernel::Shown& showing, GE& drawing, std::vector<u32>& pixels,
+                     const std::function<auto (std::vector<u32>&) -> void>& memoryPicture) -> bool {
   handWindow();
   if(!gpu || !gpu->presents()) {
     if(gpu) gpu->letGo();  //(a GPU lost while it presented keeps the window no longer: the host draws on it)
     return false;
   }
-  auto& display = kernel.display;
-  u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
-  u32 frameBuffer = kernel.presentedFrameBuffer();
-  u32 physical = frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
+  u32 width = showing.width, height = showing.height;
+  u32 physical = showing.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
   bool fromTarget = false;
-  if(ge.drawer().renderer && frameBuffer && physical >= Memory::VRAMBase &&
+  if(drawing.renderer && showing.frameBuffer && physical >= Memory::VRAMBase &&
      physical - Memory::VRAMBase < Memory::VRAMSize) {
-    fromTarget = gpu->show(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height);
+    fromTarget = gpu->show(physical - Memory::VRAMBase, showing.bufferWidth, showing.pixelFormat & 3, width, height);
   }
-  if(!fromTarget) kernel.picture(pixels), gpu->show(pixels, width, height);
+  if(!fromTarget) memoryPicture(pixels), gpu->show(pixels, width, height);
   if(!gpu->presents() || !gpu->presented()) return false;
   //(the picture presented last: memory's, or the newest the GPU has finished presenting from a target)
   std::lock_guard lock{shotMutex};
@@ -272,6 +341,10 @@ auto System::speak() -> void {
 
 auto System::load(Node::System& root, string name) -> bool {
   if(node) unload();
+  if(!unwedge(0)) {  //(a GE thread left stuck still has the machine)
+    tell("The PSP's GE thread is stuck in the GPU's driver: restart the app to play again");
+    return false;
+  }
 
   node = std::make_shared<Core::System>("PlayStation Portable");
   node->setAttribute("configuration", name);
@@ -317,13 +390,73 @@ auto System::load(Node::System& root, string name) -> bool {
   return true;
 }
 
+//The game unloaded. With the GE on its thread, that thread does everything handed to it first, within two seconds (as
+//long as the app waits for the emulation thread to end its frame); past that it's stuck (a driver call that never
+//returns), and is left be with the machine under it, nothing of it freed or powered again: only the nodes the front
+//end sees go. It's joined as it comes back, and the rest of the unload done then (unwedge(): before the next load,
+//which is refused till then).
 auto System::unload() -> void {
   if(!node) return;
+  if(geThreading && !geThreading->drainBy(std::chrono::steady_clock::now() + std::chrono::seconds(2))) {
+    report(true, "the GE thread didn't finish its work in 2 s (stuck in the GPU's driver?): left be till it does");
+    geThreading->abandon();
+    stuckGE = std::move(geThreading);
+    presents = false;
+    disconnect();
+    return unloadNodes();
+  }
   threadGE(false);
+  unloadMachine();
+  unloadNodes();
+}
+
+//A GE thread left stuck by an unload, waited for up to milliseconds to come back from what it was in; then joined, its
+//links let go of as threadGE(false) lets them go, and the unload finished. True where none is left.
+auto System::unwedge(u32 milliseconds) -> bool {
+  if(!stuckGE) return true;
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+  while(!stuckGE->exited()) {
+    if(std::chrono::steady_clock::now() >= deadline) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  GeThread::unhook(memory);  //(memory's hooks call into the thread's object: off first, as threadGE() takes them)
+  stuckGE.reset();
+  renderGE.settleAll();
+  ge.render = nullptr, ge.thread = nullptr;
+  renderGE.log = nullptr;
+  renderGE.setRenderer(nullptr), renderGE.setThreads(1);
+  renderMemory.unwatchAll();
+  unloadMachine();
+  return true;
+}
+
+//The process ending (the global system destroyed) with the GE thread still stuck where unload() left it: joining it
+//would hang the exit, so it's let go of, its object left to it, should it come back as the process goes.
+System::~System() {
+  if(stuckGE && !stuckGE->exited()) stuckGE->letGo(), (void)stuckGE.release();
+}
+
+auto wedged() -> bool {
+  return (bool)system.stuckGE;
+}
+
+auto unwedge(u32 milliseconds) -> bool {
+  return system.unwedge(milliseconds);
+}
+
+//(for a state saved or loaded: the GE thread done first, within two seconds, else it's stuck, and the state isn't
+//saved or loaded, so that a save the app asks for from its menu fails rather than freezing it)
+auto System::drainWithin() -> bool {
+  if(!geThreading || geThreading->drainBy(std::chrono::steady_clock::now() + std::chrono::seconds(2))) return true;
+  report(true, "the GE thread didn't finish its work in 2 s (stuck in the GPU's driver?): no state saved or loaded");
+  return false;
+}
+
+//The machine goes, until the next game: the files the program left open (on the memory stick, still open on the
+//host), its threads, its 64 MiB of memory and the compiled code. power() makes them all again.
+auto System::unloadMachine() -> void {
   save();
   disconnect();
-  //The machine goes too, until the next game: the files the program left open (on the memory stick, still open on
-  //the host), its threads, its 64 MiB of memory and the compiled code. power() makes them all again.
   kernel.power();
   ge.setRenderer(nullptr);
   keepPipelines();
@@ -358,9 +491,13 @@ auto System::unload() -> void {
   decltype(cpu.recompiler.waiting)().swap(cpu.recompiler.waiting);
   decltype(cpu.recompiler.outOf)().swap(cpu.recompiler.outOf);
   cpu.recompiler.allocator.reset();
-  pixels = {};
+  shownPicture = readyPicture = threadPicture = {};
   latePixels = {}, lateWidth = lateHeight = 0;
   sound = {};
+}
+
+//The nodes the front end sees: the screen (its video thread stopped), the sound, the controls and the drive.
+auto System::unloadNodes() -> void {
   if(screen) {
     screen->quit();  //stops the screen's video thread
     node->remove(screen);
@@ -377,11 +514,10 @@ auto System::unload() -> void {
 //The GE on a thread of its own from now on, or not (option "GE Thread": ge/thread.hpp). On: the render GE takes the
 //kernel's GE's renderer, drawing threads and state, its memory sees memory's bytes, and VRAM's pages leave the CPU's
 //page table, so that every access to them goes through memory, whose drawer has the thread done first. Off: all of
-//that back, once the thread has drawn and put back everything handed to it. Never with the PSP's GE timing (option
-//"GE Timing" "PSP"): its pipeline takes each run's time as the run ends on the emulation thread (Kernel::geTime(),
-//geRun()'s SIGNAL), so the GE runs there, as with the thread off (docs/psp-core.md, part 106).
+//that back, once the thread has drawn and put back everything handed to it. The PSP's GE timing (option "GE Timing"
+//"PSP") goes along: the render GE keeps the list's pipeline while the thread runs, and the emulation thread the times
+//its runs take, from the clocks each gives back (docs/psp-core.md, part 111; Kernel::GeRun).
 auto System::threadGE(bool on) -> void {
-  if(kernel.gePspTiming) on = false;
   if(on == (bool)geThreading) return;
   auto vramPages = [&](bool out) {
     if(pageTable.empty()) return;
@@ -402,8 +538,15 @@ auto System::threadGE(bool on) -> void {
     renderGE.takeState(ge.stateOf());
     std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut)), renderGE.paletteChanged();
     renderGE.vertexAddress = ge.vertexAddress, renderGE.indexAddress = ge.indexAddress;
+    //(the GE's timing, the PSP's: the list's pipeline as its last run left it, the texels the GE's cache holds and
+    //the list's clocks by kind, the render GE's from here on, as the GE thread's records move them; the GE's clocks
+    //by kind a copy of them as the runs folded leave them, Kernel::geFold())
+    renderGE.pipe = ge.pipe, renderGE.texelCache = ge.texelCache, renderGE.pspTiming = ge.pspTiming;
+    for(u32 kind : range(4)) renderGE.ramClocks[kind] = ge.ramClocks[kind];
+    renderGE.allClocks = ge.allClocks;
     renderGE.setThreads(threads), renderGE.setRenderer(renderer);
     geThreading = std::make_unique<GeThread>(ge, renderGE);
+    geThreading->frameEnd = [this](const GeThread::Frame& frame) { frameEnded(frame); };
     renderGE.log = [this](const std::string& text) { geThreading->note(text); };
     ge.render = &renderGE, ge.thread = geThreading.get();
     geThreading->hook(memory, renderMemory);  //(as the tests' machines have it: ge/thread.cpp)
@@ -411,6 +554,9 @@ auto System::threadGE(bool on) -> void {
   } else {
     kernel.geFold(true);  //(the runs handed over counted: the kernel's clock needs the thread for them)
     geThreading->drain();
+    ge.pipe = renderGE.pipe, ge.texelCache = renderGE.texelCache;  //(the GE's timing back as the render GE left it)
+    for(u32 kind : range(4)) ge.ramClocks[kind] = renderGE.ramClocks[kind];
+    ge.allClocks = renderGE.allClocks;
     renderGE.settleAll();
     auto* renderer = renderGE.renderer;
     u32 threads = renderGE.drawing.threads;
@@ -496,6 +642,8 @@ auto System::power(bool reset) -> void {
   kernel.power();
   kernel.frontDialogs = dialogs;
   kernel.gePspTiming = gePspTiming;
+  cpu.dataCache.enabled = cpu.instructionCache.enabled = gePspTiming;  //(the CPU's traffic with RAM beside the GE:
+                                                                         //Allegrex::Cache)
   //The devices are the system's to give: the memory stick here, the disc in startProgram(); none left from the game
   //before.
   kernel.devices.clear();
@@ -637,15 +785,17 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
 //the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
-//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 34
-//since the PSP's GE timing keeps its state (part 106): the texels the GE's texture cache holds since a TEX_FLUSH,
-//when the GE's front end reaches a SIGNAL and whether one is due, and the list's pipeline (when its times count from,
+//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 35
+//since the PSP's GE timing keeps the CPU beside the GE (part 113): the lines the CPU's caches hold, the counts they made
+//that the GE's busy window hasn't seen yet, the window itself, the push it still owes and the list's clocks that read
+//RAM by kind; 34 since the PSP's GE timing keeps its state (part 106): the texels the GE's texture cache holds since a
+//TEX_FLUSH, when the GE's front end reaches a SIGNAL and whether one is due, and the list's pipeline (when its times count from,
 //when its front end and back end are done, its queue's items); 33 since the display keeps a frame buffer set for the next vertical blank,
 //shown from its start (part 108); 32
 //since an open memory stick file emptied as it was opened keeps the PSP's length of it and its host file's length,
 //the host file keeping the bytes past them until it's cut (part 95); 31 since the kernel keeps sceVaudio's hold on the
 //SRC channel, its buffers' format, effect and level control (part 82; 29 and 30 are skipped, other branches' layouts,
-//refused here: a branch with one of them landing after this renumbers its layout past 34 and updates
+//refused here: a branch with one of them landing after this renumbers its layout past 35 and updates
 //tests/psp/ares/system.cpp's list of refused versions); 28 since each module keeps the variables it imports, and the
 //address each holds now (part 88); 27 since a font holds the glyph it last read, and a
 //call may be reading one (part 87); 26 since the dialog keeps an aborted message's error and whether a list delete has
@@ -686,10 +836,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //list, 15 to 26 with no glyph held by a font nor being read into one, 15 to 27 with no module's imported variables
 //known (none linked, as those builds left them), 15 to 28 with sceVaudio holding nothing, 15 to 31 with no file
 //emptied as it was opened keeping its host file's bytes, 15 to 32 with no frame buffer waiting for a vertical blank,
-//and 15 to 33 with the GE's texture cache empty, no SIGNAL due and the PSP's GE timing's pipeline empty; 29 and
-//30 (other branches' layouts) and older layouts are refused.
+//15 to 33 with the GE's texture cache empty, no SIGNAL due and the PSP's GE timing's pipeline empty, and 15 to 34 with
+//the CPU's caches empty and the GE's busy window afresh; 29 and 30 (other branches' layouts) and older layouts are
+//refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 34;
+static constexpr u32 StateVersion = 35;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -699,14 +850,14 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28, 31 and
-//32 (the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent,
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28 and 31
+//to 34 (the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent,
 //sceJpeg not started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes
 //still to come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD
 //decryption set up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read
 //into one, no module's imported variables, sceVaudio holding nothing, no emptied file keeping its host file's bytes,
-//no texture in the GE's cache, as each layout lacks them): the owner's accuracy scenes were saved at 15 before part
-//42. Not 29 and 30, other branches' layouts.
+//no texture in the GE's cache, nothing in the CPU's caches, as each layout lacks them): the owner's accuracy scenes
+//were saved at 15 before part 42. Not 29 and 30, other branches' layouts.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;
@@ -726,7 +877,7 @@ auto System::header(serializer& s) -> bool {
 //A save state: none (an empty one, which front ends don't keep) once the program has ended, by leaving or by
 //crashing: there's nothing to carry on from, and a state of it would only bring back where it stopped.
 auto System::serialize(bool synchronize) -> serializer {
-  if(kernel.exited) return {};
+  if(kernel.exited || !drainWithin()) return {};
   return snapshot();
 }
 
@@ -769,7 +920,7 @@ auto System::restore(serializer& s, u32 length) -> bool {
 //half of each, closing them as powering on does.
 auto System::unserialize(serializer& s) -> bool {
   u32 length = s.capacity();  //a state to load holds exactly its bytes
-  if(!header(s)) return false;
+  if(!header(s) || !drainWithin()) return false;
   //snapshot() writes a current-layout header; keep the version just read so restore skips fields older layouts omit
   u32 layout = kernel.stateLayout;
   serializer before = snapshot();

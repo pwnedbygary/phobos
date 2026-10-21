@@ -104,6 +104,10 @@ object PhobosCore {
     external fun setPspRenderer(renderer: Int)
     /** The Vulkan renderer's internal resolution (the core's "Resolution", as a game starts): [PspResolution]. */
     external fun setPspResolution(scale: Int)
+    /** Whether the PSP's pictures are drawn alongside its own work (the core's "GE Thread", as a game starts): [PspGraphicsOverlap]. */
+    external fun setPspGraphicsOverlap(mode: Int)
+    /** With it on, on a phone whose cores aren't alike: its drawing thread on the fastest core, the game's on the next. */
+    external fun setPspThreadPlacement(enabled: Boolean)
     /** The GE timed as a real PSP's (the core's "GE Timing" "PSP", as a game starts), or by Sony's peak rates. */
     external fun setPspGeTiming(psp: Boolean)
     /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */

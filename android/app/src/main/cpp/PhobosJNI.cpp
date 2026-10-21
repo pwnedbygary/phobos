@@ -700,6 +700,16 @@ Java_com_phobos_emulator_PhobosCore_setPspResolution(JNIEnv* env, jobject, jint 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspGraphicsOverlap(JNIEnv* env, jobject, jint mode) {
+    ares::setPspGraphicsOverlap((s32)mode);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspThreadPlacement(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setPspThreadPlacement(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setPspGeTiming(JNIEnv* env, jobject, jboolean psp) {
     ares::setPspGeTiming(psp != JNI_FALSE);
 }

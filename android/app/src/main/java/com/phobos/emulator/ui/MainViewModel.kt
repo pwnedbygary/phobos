@@ -121,6 +121,7 @@ import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.PspDialogAnswer
 import com.phobos.emulator.util.PspDialogRequest
 import com.phobos.emulator.util.PspDrawingThreads
+import com.phobos.emulator.util.PspGraphicsOverlap
 import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspResolution
 import com.phobos.emulator.util.PspStartSettings
@@ -590,6 +591,16 @@ class MainViewModel(
     fun setPspResolution(scale: Int) = viewModelScope.launch {
         settingsStore.setPspResolution(scale)
         PhobosCore.setPspResolution(PspResolution.forCore(scale))
+    }
+    /** Whether a PSP game's pictures are drawn alongside its own work: [PspGraphicsOverlap], taken as a game starts. */
+    fun setPspGraphicsOverlap(mode: Int) = viewModelScope.launch {
+        settingsStore.setPspGraphicsOverlap(mode)
+        PhobosCore.setPspGraphicsOverlap(PspGraphicsOverlap.forCore(mode))
+    }
+    /** With it On, on a phone whose cores aren't alike, where its two threads run (each frame): off by default. */
+    fun setPspThreadPlacement(enabled: Boolean) = viewModelScope.launch {
+        settingsStore.setPspThreadPlacement(enabled)
+        PhobosCore.setPspThreadPlacement(enabled)
     }
     /** The GE timed as a real PSP's, or by Sony's peak rates: taken by the core as a game starts. */
     fun setPspGeTiming(psp: Boolean) = viewModelScope.launch {
@@ -2020,6 +2031,8 @@ class MainViewModel(
             PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(settings.value.pspDrawingThreads))
             PhobosCore.setPspRenderer(PspRenderer.forCore(settings.value.pspRenderer))
             PhobosCore.setPspResolution(PspResolution.forCore(settings.value.pspResolution))
+            PhobosCore.setPspGraphicsOverlap(PspGraphicsOverlap.forCore(settings.value.pspGraphicsOverlap))
+            PhobosCore.setPspThreadPlacement(settings.value.pspThreadPlacement)
             PhobosCore.setPspGeTiming(settings.value.pspGeTiming)
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
@@ -3094,8 +3107,9 @@ class MainViewModel(
             Log.i("Phobos", "Saves path resolved: $savesDir")
             // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
-            val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution, currentSettings.pspDrawingThreads,
-                currentSettings.pspGeTiming)
+            val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution,
+                currentSettings.pspDrawingThreads, currentSettings.pspGeTiming,
+                graphicsOverlap = currentSettings.pspGraphicsOverlap)
             _pspStartSettings.value = pspStart.takeIf { effectiveSystem == LaunchSystems.PSP }
             // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
             PhobosCore.setPspDrawingThreads(pspStart.drawingThreads)
@@ -3103,6 +3117,10 @@ class MainViewModel(
             PhobosCore.setPspRenderer(pspStart.renderer)
             // How many times over it draws each pixel (Vulkan's alone): Native, or 2x to 10x.
             PhobosCore.setPspResolution(pspStart.resolution)
+            // Whether its pictures are drawn alongside its own work, the core's "GE Thread" as the game starts.
+            PhobosCore.setPspGraphicsOverlap(pspStart.graphicsOverlap)
+            // And where that thread and the game's run, on a phone whose cores aren't alike (each frame).
+            PhobosCore.setPspThreadPlacement(currentSettings.pspThreadPlacement)
             // How long the GE takes over its work: as a real PSP's GE (the default), or by Sony's peak rates.
             PhobosCore.setPspGeTiming(pspStart.geTiming)
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or

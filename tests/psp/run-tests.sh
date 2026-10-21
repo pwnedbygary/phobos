@@ -7,7 +7,7 @@
 #PSP_AUTOTESTS: a pspautotests checkout, whose sample files atrac.cpp and mp3.cpp decode with FFmpeg; PHOBOS_JOBS:
 #compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here,
 #a group that needs it failing rather than skipping, as vulkan,programs,ge-round3,ge-round6,ge-round8,ge-round9,
-#ge-round10
+#ge-round10,ge-round10b,ge-round10c
 #(tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities); PHOBOS_TESTS_REPORT: a file for each
 #group's result, pass, FAIL or skip with why, a tab between)
 set -euo pipefail
@@ -18,10 +18,11 @@ export PSP_TEST_PROGRAMS=${PSP_TEST_PROGRAMS-$ROOT/tests/psp/programs}
 export PSP_GE_RESULTS=${PSP_GE_RESULTS-$ROOT/tests/psp/measurements/ge-round3}
 OUT=${TMPDIR:-/tmp}/phobos-psp-tests
 source "$ROOT/tests/objects.sh"
-#rounds 6, 8, 9 and 10 of the PSP's GE measurements (packed with xz, as tests/allegrex/measured's are), each unpacked
-#once into this checkout's folder, unless PSP_GE_ROUND6 (8, 9, 10) names another folder (empty: none); each file through
-#a temporary one, so one cut short isn't kept, and all of them again if they don't match SHA256SUMS (another commit's,
-#after a checkout, say)
+#rounds 6, 8, 9, 10, 10b and 10c of the PSP's GE measurements (packed with xz, as tests/allegrex/measured's are), each
+#unpacked once into this checkout's folder, unless PSP_GE_ROUND6 (8, 9, 10, 10b, 10c) names another folder (empty:
+#none);
+#each file through a temporary one, so one cut short isn't kept, and all of them again if they don't match SHA256SUMS
+#(another commit's, after a checkout, say)
 unpackRound() {  #round [all]
   local folder="$BUILD/ge-round$1" measured="$HERE/measurements/ge-round$1" packed unpacked kept
   for packed in "$measured"/*.xz; do
@@ -41,7 +42,7 @@ roundSums() {  #round
   if command -v sha256sum > /dev/null; then sum=(sha256sum); fi
   (cd "$BUILD/ge-round$1" && "${sum[@]}" -c "$HERE/measurements/ge-round$1/SHA256SUMS") > "$BUILD/ge-round$1.sums" 2>&1
 }
-for round in 6 8 9 10; do
+for round in 6 8 9 10 10b 10c; do
   variable=PSP_GE_ROUND$round
   [[ -n ${!variable+set} ]] && continue
   export "$variable=$BUILD/ge-round$round"
@@ -78,6 +79,13 @@ esac
 #The address sanitizer's check for stack use after return gives every call a fresh frame on its own heap, which the
 #interpreter's per-instruction and the GE's per-pixel functions make hundreds of times slower; its other checks stay.
 export ASAN_OPTIONS=${ASAN_OPTIONS-detect_stack_use_after_return=0}
+#LeakSanitizer looks at exit, after the Vulkan loader has closed the GPU's driver with the last instance: what the
+#driver keeps for good in its static variables (lavapipe's: the CPU's L3 cache masks on AMD's Zen, the heap of the x86
+#code it makes) is then held by nothing it can see, a leak from frames it can't name. With this the loader (1.3.260 and
+#later) keeps drivers and layers open to the end, so that stays held, and a leak of Phobos's own is still reported.
+if [[ $SANITIZE == *address* || $SANITIZE == *leak* ]]; then
+  export VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=${VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING-1}
+fi
 SYSROOT=()
 #zlib packs the disc tests' CSO images (disc-image.hpp)
 LIBRARIES=(-lpthread -ldl -lz)

@@ -271,6 +271,10 @@ data class EmulatorSettings(
     val pspRenderer: Int = 0,
     /** The Vulkan renderer's internal resolution (util/PspVideo.kt): 1, Native, to 10 times the PSP's. */
     val pspResolution: Int = 1,
+    /** Whether a PSP game's pictures are drawn alongside its own work (util/PspVideo.kt's PspGraphicsOverlap): 0 Off, 1 On. */
+    val pspGraphicsOverlap: Int = 0,
+    /** With it On, on a phone whose cores aren't alike: its drawing thread on the fastest core, the game's on the next. */
+    val pspThreadPlacement: Boolean = false,
     /** The GE takes the time a real PSP's took over the same work (the core's "GE Timing" "PSP", the default), not
      *  Sony's peak rates ("Fast"). */
     val pspGeTiming: Boolean = true,
@@ -407,6 +411,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val PSP_DRAWING_THREADS = intPreferencesKey("psp_drawing_threads")
         val PSP_RENDERER = intPreferencesKey("psp_renderer")
         val PSP_RESOLUTION = intPreferencesKey("psp_resolution")
+        val PSP_GRAPHICS_OVERLAP = intPreferencesKey("psp_graphics_overlap")
+        val PSP_THREAD_PLACEMENT = booleanPreferencesKey("psp_thread_placement")
         val PSP_GE_TIMING = booleanPreferencesKey("psp_ge_timing")
         val PSP_RIGHT_STICK = stringPreferencesKey("psp_right_stick")
         val ZX_TAPE_AUTO = booleanPreferencesKey("zx_tape_auto")
@@ -634,6 +640,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             pspDrawingThreads = safeGet(PSP_DRAWING_THREADS, 0),
             pspRenderer = safeGet(PSP_RENDERER, 0),
             pspResolution = safeGet(PSP_RESOLUTION, 1),
+            pspGraphicsOverlap = safeGet(PSP_GRAPHICS_OVERLAP, 0),
+            pspThreadPlacement = safeGet(PSP_THREAD_PLACEMENT, false),
             pspGeTiming = safeGet(PSP_GE_TIMING, true),
             pspRightStick = enumOrDefault(safeGetString(PSP_RIGHT_STICK, ""), PspRightStick.OFF),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
@@ -875,6 +883,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setPspDrawingThreads(threads: Int) = dataStore.edit { it[PSP_DRAWING_THREADS] = threads }
     suspend fun setPspRenderer(renderer: Int) = dataStore.edit { it[PSP_RENDERER] = renderer }
     suspend fun setPspResolution(scale: Int) = dataStore.edit { it[PSP_RESOLUTION] = scale }
+    suspend fun setPspGraphicsOverlap(mode: Int) = dataStore.edit { it[PSP_GRAPHICS_OVERLAP] = mode }
+    suspend fun setPspThreadPlacement(enabled: Boolean) = dataStore.edit { it[PSP_THREAD_PLACEMENT] = enabled }
     suspend fun setPspGeTiming(psp: Boolean) = dataStore.edit { it[PSP_GE_TIMING] = psp }
     suspend fun setPspRightStick(choice: PspRightStick) = dataStore.edit { it[PSP_RIGHT_STICK] = choice.name }
     suspend fun setZxTapeAuto(enabled: Boolean) = dataStore.edit { it[ZX_TAPE_AUTO] = enabled }

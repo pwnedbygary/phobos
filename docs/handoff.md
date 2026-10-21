@@ -35,6 +35,85 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Master merged into the hotkey branch: its 126 commits since the branch left it, the PSP's lost GPU and screenshot settle carried onto the GE thread's frames, both sides' new workflow steps kept — 2026-10-21
+
+Branch `improved-hotkeys`, on `d700fe234` (the entry below), with master `8d85eda9a` merged into it as a merge commit:
+the owner's choice before the draft pull request, which would otherwise conflict (GitHub runs no `pull_request` workflow
+while a pull request has a merge conflict, by its documentation). The branch left master at `08801ab60`; master's 126
+commits since then come in whole (the PSP's GE timing to part 115 and its GE thread's second part, N64's rasterizer for
+Qualcomm's stock driver and its RSP recompiler checked against the interpreter, CI), their 15 entries below the branch's
+own, from "Docs and CI: the wording points #290's, #291's and #292's reviews left" to "PSP GE: the CPU beside the GE",
+above the entries both share. Changed by the merge beyond what either side had: `ares/psp/system/system.cpp`,
+`ares/psp/system/system.hpp`, `ares/psp/psp.hpp` (a comment), `tests/psp/ares/system.cpp`,
+`.github/workflows/desktop.yml`, this entry, a sentence in the entry below, a sentence in `docs/psp-gpu-renderers.md`,
+and the hotkey row of `docs/implementation-plan.md`.
+- **The conflicts**, five; git merged every other file on its own:
+  - `docs/handoff.md`: both sides added entries at the top. The branch's 13 stay together above master's 15, each side's
+    in its own order and words (the file less the branch's entries is master's, byte for byte).
+  - `.github/workflows/desktop.yml`: both added a step after the Linux job's build. Master's N64 RSP recompiler check
+    comes first (it runs "on the objects just built"), then the branch's host test (`ctest`); the file differs from
+    master's by the branch's lines alone.
+  - `ares/psp/system/system.hpp`: master's `present()` takes the frame shown (`Kernel::Shown`), the GE that drew it and
+    the picture's pixels, and the comment above it says the GPU's thread may be the GE thread at frames' ends; the
+    branch's `presentedFromTarget` (the PSP follow-ups' entry) stays beside it, the comment saying both.
+  - `ares/psp/system/system.cpp`: master's `present()`, with the lost GPU's let-go (the lost GPU entry) at its start as
+    before.
+  - `tests/psp/ares/system.cpp`: both added tests after `presentedFrame()`; both kept.
+- **Carried onto the GE thread** (what git couldn't see): with "GE Thread" On (Android's "PSP Graphics Overlap"
+  setting), master has the GE thread take each frame's picture at the frame's end and present it there, a frame behind
+  the emulation thread at most (`System::run()`, `frameEnded()`).
+  - The lost GPU's let-go runs wherever `present()` runs, so on the GE thread then, after `handWindow()` on the same
+    thread, as both ran on the emulation thread before: the thread whose the GPU is does both. Its test now runs with
+    the GE on its thread too, each frame checked once the thread has drained.
+  - The screenshot's `settle()` (the PSP follow-ups' entry: between frames, the host holding the core, the picture
+    presented last kept at once) relied on nothing else using the GPU then; with the GE on its thread, that thread may
+    still be presenting the last frame. `settle()` now drains the GE thread first, within two seconds as a state saved
+    or loaded does (`drainWithin()`), leaving the shot as it is past that, then reads what it reads. A new test,
+    `settleWaitsForTheGeThread`: the GE thread slowed to present one frame (200 ms), `settle()` called as soon as the
+    frame is handed over comes back only once that frame is presented.
+- **Also**: the entry below's third Limit now says a PSP game under its Vulkan renderer is unchecked at exit too (its
+  second review's suggestion); and `docs/psp-gpu-renderers.md`'s sentence on the screenshot's `settle()` says the GE
+  thread is drained first where it's on (this change's first review's suggestion).
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`) pass, 415 checks, 0 failed. From copies outside the
+    repository: `settle()` without its drain fails `settleWaitsForTheGeThread`'s check alone; `present()` without the
+    let-go fails the lost GPU test's two checks in each GE mode (four). Built with ThreadSanitizer (the script's
+    `SANITIZE`, as it says for the GE thread's frames): 415 checks, 0 failed, no ThreadSanitizer report.
+  - The desktop builds (`build/linux-x64`, CMake reconfigured for the merged `CMakeLists.txt`) and ctest passes (209
+    checks, 0 failed). `desktop.yml`'s N64 step, its run block taken from the merged workflow and run as CI runs it,
+    passes: the 38 N64 sources each with `-fwrapv` and `-fno-strict-aliasing`, none undone, the PSP's one with neither;
+    the RSP recompiler, 34,816 cases, 0 differ.
+  - The virtual-display suite (on a copy whose stand-in window is `xterm`, not `xmessage`: Xvfb's core fonts have been
+    gone since a package upgrade): 145 of 145 pass on the merged build.
+  - Android: both flavours' JVM tests pass (455 each: the base's 379, the branch's 75, master's 1), the native library
+    rebuilt for the merged core and runner, and the legacy debug APK builds (32,647,711 bytes, SHA-256
+    `14382f15f79a40e8c617515313ddfa897115e4c428a7f7e951ce66dd979411ef`).
+  - The plan row's links each resolve to one heading, and the hotkey reference's tables still match the code (35 of 35).
+- **Limits**:
+  - The whole PSP suite (`tests/psp/run-tests.sh`: CI's, sanitized, up to an hour) wasn't run here, only its system
+    tests, plain and with ThreadSanitizer; the pull request's run is its check, as it is for master's other workflows
+    (the N64 rasterizer's, the PSP shaders', the GE profile's, RSP NEON's, the Neo Geo CD's) and for the desktop
+    workflow's Windows and macOS jobs.
+  - With "PSP Graphics Overlap" On (Android's: off by default, and not offered in the app's settings yet, so only a
+    stored value turns it on) and the picture drawn by the app (the software renderer, the default, or the Vulkan
+    renderer where it doesn't present on the window itself), a frame-advance step shows the picture the GE thread took
+    last, the frame before the step: master's GE thread gives the screen the newest picture it has taken, a frame behind
+    (`System::run()`; the app never sets `exactFrame`, the frame's own, which the tests and the headless runner
+    `tools/psp-runner` do), and while the game is paused nothing takes the step's own picture in. Where the Vulkan
+    renderer presents on the window, the GE thread presents each step's own frame there (`frameEnded()`, `present()`).
+    Derived from the code, not run. Neither side had this case before: where the app draws the picture, master's frame
+    advance drew nothing, and the branch had no GE thread.
+  - Nothing with the GE on its thread ran on the RP6: the drain and the let-go there rest on the host tests alone.
+- **Review**: the first review found two Minors in wording, both fixed: the frame-advance Limit above held only where
+  the app draws the picture (with the Vulkan renderer presenting, the GE thread presents each step's own frame), and it
+  said only the tests set `exactFrame` (the headless runner does too); and the commit message said every file only one
+  side changed is that side's, leaving out this change's own edit of the plan row. The full record is in the commit that
+  carries this entry.
+- **Next**: the RP6's test copy replaced with a build of the finished branch, and a draft pull request (the owner's
+  choices), whose run of the desktop workflow is the CI change's first; a frame-advance step showing its own frame with
+  "PSP Graphics Overlap" On where the app draws the picture (Limits); the Game Boy core's read of freed memory at exit,
+  if wanted; the hands-on checks (the RP6 pass, a pad, a window manager, Wayland, Steam, Windows and macOS).
+
 ## Desktop follow-ups: "Fullscreen and pause (toggle)" following fullscreen as ares 1810 asks, Screenshot with the pause menu open, no abort when the display goes away first, the host test in CI — 2026-10-21
 
 Branch `improved-hotkeys`, on `a8d36db7e` (the entry below). The last of the follow-ups the owner asked for on
@@ -133,7 +212,7 @@ of `docs/implementation-plan.md`. Checked on a virtual display; the workflow run
     `atexit` handlers those two registered as they loaded have run by then (derived from the code; AddressSanitizer, run
     with the Game Boy game, found nothing in the unload). The first review's display check with a Nintendo 64 game under
     Vulkan, on RADV and on lavapipe, ended as the Game Boy game's does (its save written, "System unloaded", exit status
-    1, no core dump); other drivers are unchecked.
+    1, no core dump); other drivers, and a PSP game under its Vulkan renderer, are unchecked.
   - The Windows and macOS jobs run a test so far run only on Linux, with their own compilers (MSYS2's GCC, without the
     sanitizers, as `CMakeLists.txt` has it on Windows, and Apple's clang for both of the Mac's architectures, with
     them): the pull request's run is its first check there.
@@ -1717,6 +1796,730 @@ machine (see Checks).
   system and its window behaviour, per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull
   request.
 
+## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
+
+Branch `cursor/docs-review-followups-cachy`, from master `c837d1868` (#291). `.github/workflows/desktop.yml`,
+docs/psp-core.md (part 115) and this file; no emulation code. Sources: the delta reviews,
+`~/phobos-work/scratch/review-290/REVIEW-r2.md`, `review-291/REVIEW-r2.md` and `review-292/REVIEW-r2.md`. Notes:
+`~/phobos-work/scratch/docs-followups/`.
+- **desktop.yml's N64 dialect check** (#290's I1): GCC's `-ftrapv` and `-fwrapv` override each other, so a later
+  `-ftrapv` undoes the dialect's `-fwrapv`; the "undone later" pattern and its error name it now. The step's run: block
+  as GitHub runs it, on copies of #290's stand-ins: 15 cases as expected, the 13 from before and two new, a later
+  `-ftrapv` failing the step ("1 of 38 N64 compile commands undo a flag") and an earlier one, which `-fwrapv` overrides,
+  passing; master's step passes the later one too. actionlint: master's two desktop.yml warnings only.
+  After this PR's review (its L1) the check also counts a later `-fstrict-overflow`, which GCC's manual says implies
+  `-fno-wrapv`: 18 cases as expected, a later one failing (a22cb99b6's step passes it), an earlier one and a later
+  `-fno-strict-overflow`, which implies `-fwrapv`, passing.
+- **#290's entry** (I2): the recompilers count cycles a little differently in some of a game's blocks of several
+  instructions, while the test's cases, one instruction under test each, count the same.
+- **#292's entry** (nits 1 and 2): the RP6's frames over 20 ms in one order, the control's then the PR's
+  (`~/phobos-work/scratch/n64-adreno/rp6/compare-292.txt`); the structure check names the store at fault, or for the
+  changed module its changed constant.
+- **#291's entry and part 115** (rulings (1) and (2)): master `d82f5db6f` (#292) merged in (`0e4fa0a80`) beside #290's
+  merge, and part 115's checks say what #292 changed; what the runner is built from is #291's PR body's list
+  (`ares/psp/`, `ares/ares/`, `tools/psp-runner/`, `tests/psp/ares/`, `nall/`, `libco/`, `thirdparty/`): the folders of
+  every source tools/psp-runner/build.sh compiles, and of every file its objects depend on (review-291's list for 25
+  objects, 1,004 files) but FFmpeg's built headers and the system's.
+- **After this PR's review** (its suggestion 2): #290's, #291's and #292's entries record their delta reviews' PASS,
+  #291's also how it merged with no macOS runner for its head; #291's Left and part 115's add the GE thread's own
+  refetch charge, which no test catches a slip in (#291's delta review's low finding).
+- **Checks**: `git diff --check` and `git show --check` clean; no added line over 120 columns; the diff is desktop.yml,
+  docs/handoff.md and docs/psp-core.md. CI's runs go in the pull request's body.
+- Independent review: PASS on `a22cb99b6`, read-only (`~/phobos-work/scratch/review-293/REVIEW.md`); one low finding.
+  Taken after it: L1 (a later `-fstrict-overflow`) and suggestion 2 in the next two commits, suggestion 3 in the body.
+
+## PSP GE timing: the CPU beside the GE refitted, Super Monkey Ball within 15% and its exception gone — 2026-10-20
+
+Branch `cursor/psp-smba-refit-cachy`, from master `0f7c17d8a` (#289), master `1257da75d` (#290) merged in
+(`a2c64338e`), master `d82f5db6f` (#292) merged in (`0e4fa0a80`). The core (`ares/psp/ge/`, `ares/psp/kernel/`), the
+runner's counter line, the PSP tests and CI's `ge-round10c`, `tools/psp-measure/` (contention12.py, its README,
+ge-terms.py), `tools/psp-ge-profile/` (gate.py, its tests and the README's line on them), docs/psp-core.md part 115 and
+this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (the design, then step 1's probe to step
+6's review fixes).
+- **What**: #279's CPU beside the GE (part 113) refitted to the PSP's rounds 10, 10b and 10c in a hybrid form: the
+  front end's vertex and list-word reads by #279's rule, texels and transfers a fixed time a line; a cap at 0.75 of a
+  window, the spin skip refusing a skip where it binds at either end (counted, as the runner's `ge contention:` line
+  reports); the GE's reads counted where they read (VRAM's as other work); and the CPU's own stalls beside the busy GE
+  in its time. Save-state layout 35 kept.
+- **Why**: Super Monkey Ball's frame was −20.6% with #279, the owner's accepted exception limited at −21%; round 10c
+  (part 114) put the rest in its strips' RAM vertex reads and the CPU slowed beside them. The owner's limit for
+  Activision Hits' 3D menu: +10%.
+- **The gate** (part 115's table; the PSP's timing): every judged frame within 15% (8 of 8, master's 7), Super Monkey
+  Ball −20.6% to −12.7% and its exception out of `gate.py`, the 3D menu +6.7% to +9.95% (its idle capture +6.4% to
+  +9.6%), the median miss 9.8% (master's 6.5%). With the GE on its thread the seven profiles are the same byte for byte.
+- **Checks** (cachyOS, GCC 16.2.1; logs in `smba-refit/step4/`): on `b14ef87a0`, the release suite with the GE thread
+  off 646 groups, 0 failures, on 646, 0, #289's step 110, 0, the measure groups sanitized with `ge-round10c` required
+  14, 0 (`r4/suite-*.log`, `r4/measure-sanitized.log`, each naming its tree); the gate (`gate-{off,on}-b14ef87a0/`);
+  "Fast" against master (`b7/`); #277's On = Off sets, 260 runs (`r4/4d/`); the host cost and H6 (`r4/4g/`); the
+  tools README's recipe (`r4/p6/`); the tests' mutations (`step3/mut*.log`, `step4/*-mutation-fail.log`,
+  `r4/r2l1/`). On `f7d27d438`, the independent review's two tests (logs in `smba-refit/step6/`): the release suite off
+  646, 0, on 646, 0, #289's step 110, 0, the measure groups sanitized 14, 0; the review's mutations A and C fail the
+  new tests, C with the GE thread off and on (`step6/mut/`). Part 115 has them all.
+- **The coordinator's library check** on `b14ef87a0`: "GATE: CLEAN" at 19:42, 266 games each in Software and Vulkan
+  fast, none newly failing, every exit line, none newly flat at frames 1,200 and 3,600, none more than 1.5x slower
+  (`~/phobos-work/scratch/libcheck/lib-refit.log`, sha256
+  `4ca24ff66f9983463d08c53c9a7aa9ea666225a586b218c4f2b32ff9315e76b8`). It stands for the head, which changes nothing
+  the runner is built from (`ares/psp/`, `ares/ares/`, `tools/psp-runner/`, `tests/psp/ares/`, `nall/`, `libco/`,
+  `thirdparty/`).
+- **The RP6 run**, the coordinator's, 20 Oct 20:03-20:16 (`~/phobos-work/scratch/runner-android/RP6-CHECK-291.txt`,
+  `logs/refit-rp6-table.txt`; the headless runner, Vulkan fast, the PSP's timing, two rounds taking turns), fps from
+  master to this branch: Super Monkey Ball 141.38 to 151.44 (+7.1%), Killzone 165.10 to 163.13 (−1.2%), Burnout
+  Dominator 112.11 to 102.50 (−8.6%), Need for Speed: Shift 123.95 to 113.62 (−8.3%), Burnout Legends 79.28 to 73.81
+  (−6.9%); every run of this branch's with 0 windows capped and 0 skips refused. The owner's OK (20 Oct ~22:01):
+  merge once the review passes; the polling skip's widening comes next.
+- **Reviews so far**: the design (three rounds, PASS), the probe (PASS), the fit tool (PASS for `a2b5af99a`), the code
+  by reading (PASS for `ee0e44309`, its one low finding fixed in `bb09cefc0`; round three PASS for `b14ef87a0`, 19:03,
+  `REVIEW-r3.md`), the independent review (below); part 115 names their files.
+- **Left** (part 115): Activision Hits' lists 2 and 3; the polling skip's widening; Killzone's per-frame Vulkan variance
+  and its fuzz-ahead variance with the GE on its thread, both there before this branch; a probe of this head's own
+  windows of the 3D menu.
+  - The design's open Hypothesis that every RAM texel read costs a fixed time a line (only cache fetches and transfers
+    were seen to behave so; streamed narrow reads are 56.5% of Super Monkey Ball's RAM texel clocks and 16.0% of the
+    menu's first list's): the fit's menu +9.2% as it has them and +9.6% read the other way, Super Monkey Ball −12.6%
+    and −11.9% (`step1/fit-real2/c12-real-final.txt`, lines 103-104), the menu's frame +9.952% against the owner's
+    +10%. A round-11 case would settle it: narrow triangles streaming a RAM texture beside the streaming pattern at
+    four rates (the design, r3).
+  - No test catches a slip in the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), the low finding of the
+    delta review (`~/phobos-work/scratch/review-291/REVIEW-r2.md`): its mutation D, which charges a refetch by the
+    memory of the word just taken rather than by the mark's kind, passes CI's GE thread step, the release suite with the
+    thread On and the gate. Today's code is right by reading; a one-way JUMP in a threaded test (a list in RAM that
+    jumps into VRAM and ends there) would catch it.
+- Independent review: PASS on `b753b3b46`, with runs (`~/phobos-work/scratch/review-291/REVIEW.md`); four low findings.
+  Taken after it: L1 and L2's tests (`f7d27d438`); L4 and section 6's suggestions 2 to 5 in the docs.
+  Round two passed the whole PR at `0e4fa0a80` (`REVIEW-r2.md`). With no macOS runner for that head in six attempts it
+  merged on the owner's OK on `b753b3b46`'s and `c9a2f7727`'s green macOS builds; the merge's own passed on attempt 2.
+
+## N64: the rasterizer Qualcomm's stock driver rejects, with its stored spec-constant values computed — 2026-10-20
+
+Branch `cursor/n64-qcom-rasterizer-cachy`, from master `1257da75d` (#290). `rdp_device.cpp`, the new generated
+`shaders/rasterizer_patched.hpp`, `tools/parallel-rdp/` (its script and CI check),
+`.github/workflows/n64-rasterizer.yml` and this file; `slangmosh.hpp` unchanged. Notes and logs:
+`~/phobos-work/scratch/n64-adreno/` (`FINDINGS.md`: the trace in sections 1-2, the RP6 probes E1 and E2 in sections 8
+and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS.txt` section 8).
+- **The fault**: on the RP6's stock driver (Adreno 740, driver 0676.53, compiler E031.41.03.47) N64 games run with
+  sound but a black picture under "GPU Driver Issue Detected". Every pipeline made from parallel-rdp's rasterizer
+  fails to compile (the driver's "Shader compilation failed", `VK_ERROR_UNKNOWN`): the generic one and each
+  specialization, 34 in Mario Tennis, 41-42 in Ocarina of Time. Every draw goes through the rasterizer, clears
+  included, so nothing reaches the frame buffer; each failure is one "Failed to create … blacklisted" line, which the
+  app counts for the dialog. The module is the bank's SMALL_TYPES=0 rasterizer: parallel-rdp turns 8/16-bit
+  arithmetic off on Qualcomm's proprietary driver (`rdp_renderer.cpp:204-208`).
+- **What it rejects** (a standalone probe making the app's pipelines from variants of the module, run on the RP6 by
+  the coordinator, E1 and E2): `shade_pixel`'s 24 stores of `OpSpecConstantOp` results (the static state flags, the
+  dither mode, the 16 combiner inputs, the texture formats and sizes, in its `RASTERIZER_SPEC_CONSTANT` blocks), even
+  where specialization leaves them dead. Those values computed by ordinary instructions (S2): it compiles in the
+  generic and fill pipelines (485.9 and 281.3 ms). Only the 4 spec-constant branches rewritten (S3), or each stored
+  value through `OpCopyObject` (S8): it fails. A plain spec constant stored (S7): it compiles. The combiner's 16 stores
+  are the only group that fails alone. The ubershader compiles there too (862.6 ms).
+- **The change**: `tools/parallel-rdp/patch_rasterizer.py` (Python 3, standard library) reads `slangmosh.hpp`,
+  refuses unless its SMALL_TYPES=0 rasterizer has the SHA-256 the patch was made for (`2787b409…`), rewrites those 24
+  stores and nothing else, and writes `rasterizer_patched.hpp` beside it (the module, `e3b620ef…`, and the offset and
+  size of the bank's resource layout record for it); `--check` re-derives the file and compares it byte for byte. The
+  module is byte for byte E2's S2, the one the RP6 compiled. `CommandProcessor::init_renderer` puts it in the bank's
+  place, with that layout, whenever the bank chose the SMALL_TYPES=0 rasterizer (`resolver("rasterizer",
+  "SMALL_TYPES") == 0`, the bank's own test), right after the bank is built and before the renderer and the VI get it.
+  Pipelines are made at first dispatch from `shader_bank->rasterizer` (`rdp_renderer.cpp:1779`, its only use) and the
+  N64's pipeline cache is a driver blob that replays nothing, so no pipeline is made from the original. No driver
+  check.
+- **Exact**: SPIR-V 1.6 rev. 8, 2.12: "The OpSpecConstantOp instruction is specialized by executing the operation and
+  replacing the instruction with the result." The rewrite executes the same operation as the ordinary instruction on
+  the same operands, each `OpSpecConstantOp` operand computed the same way, down to the specialization constants, so
+  every specialization stores the same bits.
+- **Which devices**: every device on which parallel-rdp chooses SMALL_TYPES=0, which is more than Qualcomm's: its
+  driver rules (`rdp_renderer.cpp:180-211`) turn small types off on AMD's proprietary and open-source drivers (RADV
+  too), NVIDIA's proprietary driver and Intel's Windows driver as well, and a device lacking `shaderInt8` or
+  `shaderInt16` takes SMALL_TYPES=0 too (`PARALLEL_RDP_SMALL_TYPES=1` sets the driver rules aside). So AMD and NVIDIA
+  desktops run the patched module by default; here RADV with no variable did, every frame the same as master's. The
+  render passes' GPU time per frame (parallel-rdp's timestamps, two alternated runs of each build): Mario Tennis 0.261
+  and 0.165 ms with master, 0.162 and 0.166 with this; Super Mario 64 0.149 and 0.149, 0.101 and 0.124: no slowdown
+  seen (a shared machine, the GPU's clocks not pinned; not a benchmark).
+- **The CI job** (`N64 Rasterizer`, its own workflow; paths: the parallel-rdp shaders folder, `tools/parallel-rdp`,
+  itself; SPIRV-Tools 2025.1 from ubuntu-24.04's apt, its version printed): `patch_rasterizer.py --check`, then
+  `check_rasterizer.py`, reading both modules from the headers on its own: `spirv-val` (Vulkan 1.1 and 1.3); the
+  structure, the proof for every specialization: the two modules side by side, each id paired, each of the 24 stores
+  of an `OpSpecConstantOp` result in `shade_pixel` preceded by instructions that mirror its tree node for node
+  (opcodes, result types, literals, the same `OpSpecConstant` and `OpConstant` leaves) and store its root, every
+  other instruction the same, none of those stores left. Then, as cross-checks, both modules specialized alike for
+  the app's generic (spec ids 0-2) and fill (0-7) pipelines, 4 random specializations (values from all 32 bits,
+  passed in hex and read back: spirv-opt leaves an `int` it can't read, a decimal above 2^31 - 1, at its default,
+  without an error) and one for which a single `-O` leaves an extra constant: the 24 stores store the same
+  constants, and `-O` followed by cleanup rounds until nothing changes gives the same program (the rounds:
+  `--unify-const --eliminate-dead-const --eliminate-dead-code-aggressive -O`). One store left as shipped, a
+  changed upstream module (one constant), a wrong rewrite (one `OpBitwiseAnd` made `OpBitwiseOr`), a missing `& 255`
+  and a wrong leaf (SpecId 6 for 5) each fail both commands, the structure check naming the store at fault, or for the
+  changed module its changed constant (instruction 1665, `OpConstant 254` against `255`).
+- **Checks** (cachyOS, GCC 16.2.1; an RX 9070 XT with RADV, Mesa 26.3.0-devel; lavapipe): the Linux desktop Release
+  build as desktop.yml's preset makes it (FFmpeg off, 2 jobs): exit 0, 510 steps, its only warning SDL3's;
+  `rdp_device.cpp` with `-Wall -Wextra`, master's and this: the same 15 warnings, none in the added lines. `--check`
+  passes; the header's module is byte for byte E2's S2 (`cmp`). The CI job's commands pass with SPIRV-Tools 2025.1
+  (Ubuntu 24.04's package, unpacked) and 2026.4; the five broken inputs fail both. Pictures, from master's and this
+  branch's desktop builds with the same scratch instrumentation (a picture every 60 emulated frames to frame 1800, no
+  input; a stderr line naming the bank's rasterizer by Granite's hash, checked after each run; ares's "Deterministic
+  Entropy", without which runs differ from one another: ares seeds the power-on state from the host, Mario Tennis's
+  intro takes one of two courses and Super Mario 64's eight runs all differ): Mario Tennis, Super Mario 64, Mario
+  Kart 64, Ocarina of Time and Mario Golf on RADV with PARALLEL_RDP_SMALL_TYPES=0, master against this twice and each
+  build against itself, the SMALL_TYPES=1 control the same way, no variable once, and on lavapipe once: the same
+  pixels in every frame compared (25 to 30 a run). `git diff --check`, `git show --check`, no changed line over 120
+  columns; actionlint: no findings.
+- **The RP6** (the coordinator's check, 21 Oct 08:20-08:29; `~/phobos-work/scratch/n64-adreno/rp6/RP6-CHECK-292.txt`
+  and `compare-292.txt`): the Retroid Pocket 6 on Qualcomm's stock driver (Adreno 740, 0676.53), the app from boot
+  with the N64 recompiler on, 55 s a game, its logcat and screenshots at 5 to 50 s. First the installed 215987, the
+  control (#290's own APK, master `1257da75d`'s tree), then this PR's own APK 215990 over it (CI run 39520621527's
+  Modern APK, built from GitHub's merge `c297f3766` of `3ed0a6731` into `1257da75d`). Mario Tennis, Ocarina of Time,
+  Paper Mario and F-Zero X, the control against this: 34, 41, 32 and 24 "blacklisted" lines against none, and 34,
+  42, 32 and 23 "Shader compilation failed" against none; from 10 s on, the control's pictures are the "GPU Driver
+  Issue Detected" dialog over black, this PR's the games (Mario Tennis's intro, Ocarina's Hyrule Field and title,
+  Paper Mario's logos and stage intro, F-Zero X's title and race demo), with no dialog. From the 10th second, 59.9
+  fps median in all eight runs; AvgFrameTime medians 8.83 and 8.56 ms, 7.24 and 7.53, 5.79 and 5.65, 8.04 and 8.39;
+  Phobos running at 55 s in all eight; the saves and states unchanged (md5). One observation: the frames over 20 ms, the
+  control's and then this PR's, were 27 and 57 in Mario Tennis's intro, 2 and 2 in Ocarina, 3 and 2 in Paper Mario and 7
+  and 3 in F-Zero X, the median rate still 59.9 fps; the likely cause of Mario Tennis's extra ones, untested, is the
+  patched pipelines compiling on first use (in E2, about 0.5 s for the generic pipeline and 0.28 s for a fill state)
+  where the control's failures took about 6 ms each. Not covered: an upscaled N64 setting; other Qualcomm drivers or
+  devices. The result stands for this head: `rdp_device.cpp` and `rasterizer_patched.hpp` are `3ed0a6731`'s byte for
+  byte.
+- **Left**: the patched module on AMD's and NVIDIA's proprietary drivers and Intel's Windows driver (not here);
+  whether Mario Tennis's extra slow frames on the RP6 are the patched pipelines' first compiles (untested).
+  Follow-ups: Granite's pipeline blacklist, a Phobos
+  addition, writes its function-static set under a read lock and doesn't log the `VkResult` (`command_buffer.cpp:1140`,
+  `1547`); the driver dialog's wording; offering the fix upstream (the owner's call); the review's suggestions 3 and
+  5, which change `rdp_device.cpp`: the hook's comment naming every SMALL_TYPES=0 device, not only Qualcomm's, and an
+  environment switch to skip the patch, to compare the two modules on a device without a rebuild.
+- Independent review: PASS on `3ed0a6731`, read-only (`~/phobos-work/scratch/review-292/REVIEW.md`); suggestions only.
+  Taken after it: Low 1 and Low 2 (per-store structure, random values from all 32 bits, cleanup rounds) and the nit.
+  Round two passed the whole PR at `c9a2f7727` (`REVIEW-r2.md`); its two wording nits went into #293.
+
+## N64: ares's dialect for the upstream systems' code, and the RSP's recompiler against its interpreter — 2026-10-20
+
+Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLists.txt`, `tests/rsp-recompiler/`,
+`.github/workflows/desktop.yml` and this file; no core code changes. Notes and logs:
+`~/phobos-work/scratch/n64-mario-tennis/` (`FINDINGS.md`, rounds two to four in `round2/` to `round4/`).
+- **The fault** (FINDINGS.md): with the recompiler on, Mario Tennis's 3D intro, Super Mario 64, Mario Kart 64, Ocarina
+  of Time and Mario Golf rendered corrupt on x86-64. The RSP's recompiler calls the out-of-line `RSP::VMOV<e>` and
+  `RSP::VMULQ<e>`, which read vector lanes through a pointer cast from the `r128` union (`u16()`, `element()`); GCC
+  compiled VMOV's read before the store it reads (stale stack bytes in every recompiled VMOV's lane) and VMULQ's from
+  a register never loaded. The interpreter inlines its own copies, compiled right. ares's own build compiles its code
+  with `-fwrapv -fno-strict-aliasing`, with GCC and Clang alike (cmake/common/compiler_common.cmake and the
+  per-platform cmake/*/compilerconfig.cmake), which this CMakeLists.txt never included. Every GCC run, 11.4 (CI's Linux
+  job's), 12.4, 13.3, 14.4, 15.2 and trunk, gets FINDINGS.md's standalone copy 128 of 128 wrong at -O3 (Compiler
+  Explorer), and none with the two flags; Clang none.
+- **The change**: every source under ares/ but ares/ares (shared with the PSP core) and ares/psp gets `-fwrapv
+  -fno-strict-aliasing` with GCC, Clang and AppleClang: upstream's dialect flags, not its warnings. Its `-fno-char8_t`
+  is left out: it only retypes `u8""` literals, and the 90 units the dialect applies to and the 2,028 files of ares/,
+  nall/ and thirdparty/ they read have none. compile_commands.json of the Linux desktop build (GCC) before and after:
+  89 of 462 units changed, each by those two flags only (the 18 upstream systems, PCE's vdp-performance, the N64's
+  vulkan.cpp and 36 parallel-rdp units, 33 components), the test's added, none removed; none of the 24 units the PSP
+  core links from (ares/psp, ares/ares's node and android_globals, nall, libco, sljit, libchdr) changed. With Clang 23
+  (configured, not built) the same units carry both flags and the PSP's neither. In the linked Release binary all 16
+  `RSP::VMOV<e>` store the shuffled vector before they read the lane; the desktop build has no LTO. The PSP core's
+  code in the Linux desktop link (GNU ld) comes from those 24 objects, none changed, and every inline-function copy
+  psp.cpp.o's lost went to the desktop's own objects, none to a changed unit (the review's check 4). Not traced: the
+  Android link (lld, ThinLTO) and the macOS link, where the linker may keep a changed unit's copy of an inline function
+  the PSP shares (nall, ares-core, std): the same source compiled without the two assumptions the flags remove, so the
+  PSP's results could differ only where that code has undefined behaviour. The coordinator's RP6 check runs a PSP
+  scene on the PR's APK beside master's nightly.
+- **The test**: `tests/rsp-recompiler` (target `rsp-recompiler`, on phobos_core's own objects, its source in ares's
+  dialect too): VMOV for every e and de with Vd and Vt apart and the same, every COP2 function, MFC2/CFC2/MTC2/CTC2,
+  LBV-LTV and SBV-STV with the base known to the recompiler and not; 34,816 cases from seeded random states,
+  recompiled against interpreted, the VU registers, ACCH/ACCM/ACCL, VCOH/VCOL/VCCH/VCCL/VCE, DIVIN/DIVOUT/DIVDP, the
+  GPRs and DMEM compared, not the PC, the branch state, the status or the cycle counts (a scratch copy comparing
+  `pipeline.clocksTotal` too: equal in all 34,816 cases), the stack filled with a pattern first; a group with
+  differences ends with a line for each differing instruction (its mnemonic, or an invalid COP2 function's number) and
+  its count. Linked with master's N64 object (GCC 16.2.1): 4,608 differ, the VMOV group's 4,096 of 4,096 (each lane
+  `a5a5`, the pattern) and the COP2 functions group's 512: VMOV's 256 of 256 and VMULQ's 256 of 256, no other
+  instruction; with the change: 0, in 0.35 s. desktop.yml's Linux job builds and runs it after the build, first
+  checking `ninja -t commands`, each condition failing the step on its own with an error and up to 10 of the sources
+  at fault: N64 commands found, each with `-fwrapv` and with `-fno-strict-aliasing` (counted apart), neither undone by
+  a later `-fno-wrapv` or `-fstrict-aliasing`; PSP commands found, none with either flag. Here 38 N64 commands with
+  both and the PSP's 1 with neither; on master's commands the step fails ("38 of 38 N64 compile commands lack
+  -fwrapv"). 34dfeb7fa's check, one `&&` list under `bash -e`, could fail the step only on its last (the PSP's) test.
+- **Checks** (cachyOS, GCC 16.2.1; the Linux desktop build as desktop.yml's preset makes it, Ninja Release, but FFmpeg
+  off: its script builds with every CPU, against this machine's two-job rule). On a scratch copy with the change, the
+  recompiler on against the interpreter at the same frames (a picture every 60 to frame 1800): Super Mario 64 2.3,
+  Mario Kart 64 2.0, Ocarina of Time 0.2, Mario Golf 2.0, none above 20; Mario Tennis 7.2, 2 of 29 above 20 (frames
+  1140 and 1200): the logo board a few pixels apart as the camera pans, both pictures right (the RSP's recompiler alone
+  gives the same two; the recompilers count cycles a little differently in some of a game's blocks of several
+  instructions (the checker below: about 3% of Mario Tennis's), while the test's cases, one instruction under test each,
+  count the same). FINDINGS.md's differential checker on that
+  copy: 0 differences in 40,000,000 Mario Tennis blocks and 56,000,000 Super Mario 64 blocks. Speed, the recompiler
+  on: 59.9 FPS in every run; with the same work on both sides (round one's recompiler-only fix against this) the
+  emulation per frame is 4.16 and 4.09 ms (Mario Tennis), 3.74 and 3.71 ms (Super Mario 64), within the runs' spread.
+  actionlint: master's two desktop.yml warnings only. The dialect check's run: block as GitHub runs it (`bash
+  --noprofile --norc -eo pipefail`, on the review's stand-ins for the build): exit 0 on this branch's commands and
+  with the two flags the other way round; exit 1 on master's, with no N64 or no PSP command, with one N64 command
+  lacking either flag or undoing one later, with a PSP command carrying either, and with a failing test. `git diff
+  --check`.
+- **Left**: the upstream code the PSP core and the runner share, still without the dialect (ares/ares, nall, libco,
+  mia); the teardown crash (FINDINGS.md); an RP6 run (the coordinator's): with the NDK's Clang the N64's units now get
+  `-fwrapv -fno-strict-aliasing` too, and the Android link wasn't traced for the PSP (above).
+- Independent review (fresh session): NEEDS CHANGES for 34dfeb7fa; desktop.yml's N64 dialect check can't fail its step.
+  Fixed after it: L1 in 35b6489f5; M1 (each condition fails the step) and L2 and L3 in the commit after it.
+  Round two passed the whole PR at `43917e2ac` (`REVIEW-r2.md`); its two informational points went into #293.
+
+## Tests and CI: the kernel's tests with the PSP's GE timing, and the skip's contention refusal tested — 2026-10-20
+
+Branch `cursor/ci-psp-timing-cachy`, from master `dcf2f1b2c` (#287). Tests and CI only (`tests/psp/kernel-machine.hpp`,
+`ge.cpp`, `modules.cpp`, `spins.cpp`, `.github/workflows/psp-core.yml`); the core doesn't change, so docs/psp-core.md
+has no part for it. A follow-up from #269's review (`~/phobos-work/scratch/review-269/REVIEW-r3.md`, lines 123-128).
+Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
+- **The switch**: `PHOBOS_TESTS_GE_TIMING=PSP` (`testsPspTiming()`, tests/psp/kernel-machine.hpp) makes every kernel
+  test machine that doesn't choose its GE timing start with the PSP's, the option "GE Timing"'s default since #269;
+  unset, nothing changes. Machines made while a `FastTimed` lives stay on "Fast" (as an `Unthreaded` keeps the GE off
+  its thread under `PHOBOS_TESTS_GE_THREAD`); tests that call `pspTiming()` keep it.
+- **Twelve groups pin "Fast"'s numbers** and now say so with a `FastTimed`. With the switch on and no choice they failed
+  73 checks, each a time or an order only "Fast" gives: ge time (`geDone` 0x2993 for 0x600: Sony's peaks), ge time's
+  interrupt (its 294-295 µs), ge FINISH after a quiet function ("Fast"'s 12288 cycles inside the spin), ge profile (9
+  records for 8: "Fast"'s one ModelWork record, 1536 cycles), ge time, the PSP's: the CPU's caches (its "Fast" machine
+  counted 0x402 lines for none), ge callbacks, ge pause, ge suspending signals' callbacks and ge break (the list still
+  drawing where each expects it done by the program's next call), ge endless list (a million commands at once, a
+  SIGNAL taken as met), a spin skipped directly (`anchor()` sets the detector up as "Fast" runs it) and programs
+  unloading themselves (the interpreter's state against the recompiler's: with the PSP's timing the CPU's caches,
+  which a state holds, move in compiled code alone). None showed a fault in the PSP's timing.
+- **CI**: the release job's step "Run the kernel's GE tests with the PSP's GE timing", after the GE thread's, on the
+  same objects, with its own summary line: `PHOBOS_TESTS_ONLY` the spin groups and the GE's looks polled, every "ge "
+  group (the GE thread's among them), the sample programs and the curves, 105 groups with the new test;
+  `PHOBOS_TESTS_REQUIRE=vulkan, programs`. Left out for time: the six measured groups and three of the GPU's, which
+  have a machine the switch moves too (a selection with them took 175 s here, against the step's 24). 26 s here; CI
+  took 35 s on `a0dd68a27`, where the GE thread's step took 186 s (181 s on master's last run, PSP Core run 39439646839
+  on `dcf2f1b2c`; 104 s here).
+- **What the step catches** (gcov on a coverage build: `covbranch.txt`): it takes 18 branches the release lane (its
+  suite and the GE thread's step) never takes. No mutation tried is caught by the step alone. (1) The spin skip's
+  SIGNAL check dropped (ares/psp/kernel/spins.cpp:192): the step reaches it three times, in "the GE's looks polled
+  behind a list, past a SIGNAL, with interrupts held off" (its SIGNAL case), each time the SIGNAL's time (8864) past
+  the skip's end (7864 + 976): the CPU's go ends at that time (threads.cpp:296-297) and a skip stops SpinMargin turns
+  short of the go's end (spins.cpp:179-181), so the check never refuses and the same skips are made without it. (4) A
+  due SIGNAL taken with interrupts held off (ge.cpp:466): the step reaches that once, in "ge calls and threads"
+  (tests/psp/ge.cpp:789-846), its SIGNAL reached (7143) by the end of sceGeListEnQueue (7880) while main holds
+  interrupts off; taken there, its callback is a call into the program, which doesn't start while they're held off
+  (interrupts.cpp:24-25), so the order the group checks comes out the same. (3) (1) with threads.cpp:297 dropped as
+  well: caught by both, the step 6 failures, the release lane 71. (2) The skip's contention refusal dropped
+  (spins.cpp:211): passed every lane (below).
+- **The new test** for (2), "the GE's looks polled with the PSP's GE timing after a sleep: no skip across its busy
+  window's kink" (spins.cpp, explicit `pspTiming()`, the recompiler): gcov of today's lanes found the refusal never
+  made, its right-hand operand (`geContendBound(geWindow) != geContendBound(end)`) evaluated 40046 times and true none
+  (566 and none in the step). Three lists of 16 RAM-textured sprites, each queued, then 256 fresh lines read, the
+  shortest sleep (230 µs) and a poll (sceGeListSync) whose turns move no lines: the sleep leaves the GE's busy window's
+  time the cycles passed, and the poll's turns make it the CPU's about 4440 turns in, the push the window owes peaking
+  there (the first list's 15776 cycles: 14764 as the poll begins, 9340 had the turns to the step's end been one
+  stretch). After every step the clock, `geDoneAt`, the window and the rest of the state are the same with the skip as
+  without it; 1.46 million turns skipped, 3340 skips refused at :211 (a scratch probe's count). With (2) it fails at
+  step 1: the GE done at 4515134 against 4516146, pushed 14764 against 15776. It passes with the GE on its thread (the
+  GE thread's step selects it). A first version reading 16 lines failed (2) by 9 cycles; 256 make it about 1000.
+- **The SIGNAL check with the GE on its thread** (reading only, no test): it can't change what a skip does. With runs
+  pending `due()` (spins.cpp:187-192) compares `geReachBound()`, a lower bound (ge.cpp:396-404), and folds only where
+  that lies within the skip; a SIGNAL still to come bounds the go (threads.cpp:298-302), which the skip makes exact
+  before taking its room (spins.cpp:173-177; `geExactLimit()`, ge.cpp:447), so the skip ends before the SIGNAL's exact
+  time. Only a SIGNAL already reached and not taken (interrupts held off) makes `due()` refuse, and then the turns
+  skipped would change nothing: it can't be taken till they're back on.
+- **Checks** (here: cachyOS, GCC 16.2.1; release builds with `SANITIZE=-Wno-error=array-bounds` for its false warning at
+  tests/psp/movies.cpp:52, which CI's GCC 13 doesn't give): the release suite with the switch off 640 groups, 0
+  failures (master's 639 names and results, and the new one), on 640, 0; the GE thread's step 60, 0 (105 s); the new
+  step's selection 105, 0 (26 s); the new test sanitized 1, 0, no sanitizer report; actionlint (master's two
+  desktop.yml warnings only); `git diff --check`. All at niceness 5 through `pinned.sh`, two compiles at once.
+- **Not run** here: the rest of the sanitized suite, tests/allegrex, tests/psp/ares (CI's).
+- Independent review: PASS on `a0dd68a27`, read-only (`~/phobos-work/scratch/review-289/REVIEW.md`), no file changes.
+  Taken after it: section 6's suggestions 2, 5 and 6 (`a23c3e8e9`); round two passed it (`REVIEW-r2.md`).
+
+## PSP measure: ge-terms.py applies to master again, its five places where #277 left them — tools only — 2026-10-20
+
+Branch `cursor/ge-terms-master-cachy`, from master `16156ab9a` (#286), master `dcf2f1b2c` (#287) merged in
+(`bc4e4521d`). `tools/psp-measure/ge-terms.py`, its README's recipe and this file; the core doesn't change.
+- **Why**: since #277 (part 111) master's script stopped at its tenth edit on master ("0 places for '    pipe.vertices
+  += format.indexFormat ? …'"): five of its 21 places had moved.
+- **What**: the five follow the code, adding what they added: the vertices' terms beside `ramRead(0, work)` in
+  `GE::oweVertices()`, JUMP's and CALL/RET's at `runList()`'s `front()`, the words' term and the R line in `geTime()`'s
+  branch for the synchronous GE, the S line in `geOwe()`'s. Its patched copy is byte for byte what the Super Monkey
+  Ball refit's step 1 copy of the script (made for `9f2d0633d`) gives. The docstring says the places are master's for
+  the GE thread Off: with it On, `geTime()` and `geOwe()` take the thread's branches, so the file has no R or S lines
+  (and, by reading, both threads add to the counts unguarded).
+- **Checks** (cachyOS x86-64, GCC 16.2.1, Python 3.14.7; `~/phobos-work/scratch/ge-terms/COMMANDS.txt`): it applies
+  to a `git archive` of `16156ab9a` and fails closed on a missing anchor; the patched runner builds with `build.sh`
+  (which compiles `psp.cpp` with `-w`; under `-Wall -Wextra` the script's added lines add no warning); Super Monkey
+  Ball and Chains of Olympus from boot, 2,400 frames, the PSP's timing: master's runner and the patched one without
+  and with PHOBOS_GE_TERMS give the same PNGs, state, WAV, output and report (but for the runner's source and the
+  host's timings), and the terms files are step 1's byte for byte; the README's recipe ran (its folder made first, as
+  `tar -x -C` needs; round 10c's built `EBOOT.PBP` for `make`: no pspdev here), and `ge-fit.py` gives `GE::Cost` back
+  to its figures (61 terms of 61).
+- Independent review: PASS on `c1673609b`, read-only (`~/phobos-work/scratch/review-288/REVIEW.md`); docs findings only.
+  Taken after it: L1, L2 and L3, and section 6's suggestion 1.
+
+## CI: the sanitized PSP suite keeps the Vulkan driver loaded, so LeakSanitizer sees what lavapipe holds — 2026-10-20
+
+Branch `cursor/ci-lsan-mesa-cachy`, from master `b398e86f7` (#285), master `16156ab9a` (#286) merged in (`74b58eef2`).
+Tests and CI only (`tests/psp/run-tests.sh`); the core doesn't change, so docs/psp-core.md has no part for it. Notes
+and logs: `~/phobos-work/scratch/ci-lsan/`.
+- **Why**: on GitHub's ubuntu-24.04 image 20261018.339.1 the sanitized "PSP system tests" job failed at exit, after
+  every group passed, on a LeakSanitizer report from frames in an unloaded module: 240 bytes in 3 allocations (a 128
+  and two 56s), or the two 56s alone. 5 of 5 that finished there without the fix (`b26e0cebe`, #279's `69ea2650d`,
+  master's `9f2d0633d`, #286's `0954b8800`, and master's `16156ab9a` since; a sixth, `9bcaff348`'s, was cancelled
+  mid-suite); none in the 156 that finished on 20261004.327.1 and 20261012.334.1 since 15 Oct (#279's re-run among
+  them), nor in #286's re-run there. The only difference in the images' software lists that the job could use is the
+  kernel (6.17.0-1022-azure to 7.0.0-1017-azure); GCC (the FFmpeg build's name, which has the compiler's identity in
+  it, is the same), Clang, glibc 2.39-0ubuntu8.9, Mesa 25.2.8-0ubuntu0.24.04.4 and the loader 1.3.275 are the same.
+- **The blocks are lavapipe's own**, CI's frames named with Ubuntu's debug file for that build (frames #1 and #2 land
+  exactly on the calls of `realloc` in `get_cpu_topology` and of it in its caller, which fixes the base). The 128
+  bytes: Mesa's L3 cache masks (src/util/u_cpu_detect.c:566), made once through `call_once` from
+  `llvmpipe_create_screen` in `vkEnumeratePhysicalDevices`, on Zen CPUs only (family 0x17 and up), kept in its
+  static `util_cpu_caps`. The two 56s: `u_mmInit`'s two blocks, each linked to the other (u_mm.c:77 and 81), the
+  heap of the x86 code `translate_sse` makes (`rtasm_exec_malloc`, its static `exec_heap`), made when it first makes
+  some (in CI, at a draw in lavapipe's queue thread). Mesa frees neither; only lavapipe's static variables hold
+  them, and those go when the loader closes lavapipe at `vkDestroyInstance`, before the check at exit. Why the
+  images before never reported them is not known (the 128 bytes need a Zen runner, the 56s don't); lavapipe has no
+  NODELETE flag of its own and no thread-exit destructors, but glibc can still keep it loaded. A lead, a hypothesis
+  untested on CI: Ubuntu's lavapipe, asahi and nouveau drivers define the same five `STB_GNU_UNIQUE` symbols, glibc
+  keeps whichever of them loads first (NODELETE), and loader 1.3.275 opens `icd.d` in directory order, which a new
+  image can change (review-287, section 3).
+- **Reproduced here** (cachyOS, kernel 7.2.9, Ryzen 7 7800X3D, Mesa 26.3-devel's lavapipe, loader 1.4.363, GCC
+  16.2.1): the sanitized GPU groups (`PHOBOS_TESTS_ONLY=gpu`, lavapipe alone through `VK_ICD_FILENAMES`) leak the
+  same 240 bytes in 3 allocations. A 40-line C program (the loader opened, an instance, its GPUs enumerated, the
+  instance destroyed, the loader closed) leaks the 128 bytes: still with the loader kept open or Mesa's device-select
+  layer off, not with lavapipe kept open, and again with that and `use_globals=0` (a global holds them).
+- **What**: `run-tests.sh` sets `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` (the caller's value kept; only `1`
+  turns it on, so a caller's `0` or empty value turns the fix off) when the address or leak sanitizer is on: the
+  loader (1.3.260 and later) then keeps drivers and layers open, so their static variables are still LeakSanitizer's
+  roots at exit. The release lane doesn't change. No suppressions file: frames in an unloaded module have no name for
+  a pattern to match, the queue thread's pair has no frame of Phobos's, and a pattern on `VulkanBackend::create`
+  would hide that function's own leaks too.
+- **What it can hide**: only what a Vulkan driver or layer still holds from its static variables at exit, which isn't
+  a leak by LeakSanitizer's measure; the libraries the kept drivers load stay too (lavapipe's LLVM, for one), so
+  their static variables are roots as well. A block of Phobos's is hidden only if a driver kept a pointer to it there
+  (Phobos gives Vulkan no allocator or user data). A Vulkan object Phobos fails to destroy is reported as before (the
+  driver's frames named now), unless the driver itself keeps it in a static variable. The sanitized lane no longer
+  exercises unloading a driver; the release lane still does.
+- **Checks** (here; logs in `~/phobos-work/scratch/ci-lsan/logs`): the GPU groups before, 240 bytes leaked, exit 1;
+  after, "78 groups, 0 failures, 1 skipped" (CI's skip), no report, exit 0. A scratch copy's deliberate leaks (never
+  committed: `new char[1234]` in `VulkanBackend::create`, `new char[4321]` in "memory windows"), with the fix: both
+  reported (11 of the 1234 at vulkan.cpp:2237, the 4321 at memory.cpp:8), nothing of lavapipe's; the same build with
+  `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=0` from the caller: lavapipe's 240 bytes back beside them. `bash -n`
+  and `git diff --check` clean; shellcheck's two warnings are master's.
+- **CI on 20261018.339.1**: with the fix, `74b58eef2`'s sanitized job 118629925990 passed there, "639 groups, 0
+  failures, 1 skipped", no LeakSanitizer line; master `16156ab9a` without it failed there (job 118623513419, 240
+  bytes in 3 allocations).
+- **Not run** here: the rest of the sanitized suite, the release lane, tests/allegrex, tests/psp/ares (CI's).
+- Independent review: PASS on `9b18548cc`, read-only (`~/phobos-work/scratch/review-287/REVIEW.md`), wording nits only.
+  Taken after it: L1, L2 and section 6's points on the switch's values, kept drivers' libraries and unloading.
+
+## CI: every workflow's checkout step off Node 20 — 2026-10-20
+
+Branch `cursor/ci-checkout-node24-cachy`, from master `b398e86f7` (#285). CI only, a follow-up from #283's review
+(`~/phobos-work/scratch/review-283/REVIEW.md`, its question 3).
+- **What and why**: the 17 `actions/checkout@v4` steps in `.github/workflows/` use `actions/checkout@v7` now, pinned
+  by major tag as before (android.yml 2, desktop.yml 3, ngcd.yml 1, psp-core.yml 8, psp-ge-profile.yml 1,
+  psp-shaders.yml 1, rsp-neon.yml 1); nothing else in the workflows changed. v4's action.yml declares `node20`, which
+  GitHub is retiring, so every run carried its deprecation warning. Seven other actions the workflows use still
+  declare `node20`; they are left as they are, and the pull request lists them as a possible follow-up.
+- **Why v7** (v7.0.1, the newest major): its action.yml declares `node24` and is otherwise v4's byte for byte, so the
+  options the repo passes (`submodules: recursive`, `fetch-depth: 0`, `filter: blob:none`) mean what they did. The
+  majors' breaking changes miss this repo: v5 needs runner 2.327.1 or later (every job is on GitHub's hosted
+  runners); v6 keeps the token in a file under `$RUNNER_TEMP` that `.git/config` includes, not in `.git/config`
+  itself: git on the runner still gets it, and only a Docker container action would need runner 2.329.0 for it (none
+  here; the repository and its one submodule are public); v7 refuses fork pull requests' code under
+  `pull_request_target` and `workflow_run` (neither is used, and v4.4.0, what v4 is now, refuses it too). The one
+  change the repo will see is on a tag push (the review below, section 4.3): v7 keeps the pushed annotated tag
+  annotated, where v4 fetched it by commit and made it lightweight (so build.txt's `git describe` gave
+  `v2.3.0-208-ga8d5640f` on v2.4.0's push, not `v2.4.0`), and checkout now fails if the tag moved or was deleted
+  after its push, where v4 built the pushed commit. The pull request's body has the evidence.
+- **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 on the seven workflows: only the two warnings master has
+  (desktop.yml:189 SC2046, desktop.yml:249 SC2034); `git diff --check` and `git show --check` clean; the diff is the
+  seven workflows and this file; no `actions/checkout@v4` left in `.github`. CI's runs go in the pull request's body.
+- Independent review: PASS on `0954b8800`, read-only (`~/phobos-work/scratch/review-286/REVIEW.md`); no file changes.
+  Its suggestion S1, the tag-push clause in "Why v7", was added after it.
+
+## PSP GE: #277's entry after its review and library check; the GE profile's decoder files — docs only — 2026-10-20
+
+Branch `cursor/docs-277-followups-cachy`, from master `9f2d0633d` (#277, merged at `331eed9a9`). Docs only.
+- **#277's entry, below**: its last bullet still named the fix round's review and the coordinator's library check as
+  next. It gives their results now (the review: PASS on `fee55ee6d`, and on `331eed9a9` with master's #284 merged in;
+  the library check of `fee55ee6d`: 266 games, Off the same as master and On the same as Off), CI's on `331eed9a9`
+  and the merge, and keeps the rest of next.
+- **tools/psp-ge-profile/README.md**: its list at the top of what's in the folder had only `plugin/` and
+  `decoder/geprof.py`; it names `decoder/gate.py` (the GE timing's gate), `decoder/test_gate.py` and
+  `decoder/test_geprof.py` now, as #283's review suggested (`~/phobos-work/scratch/review-283/REVIEW.md`, its
+  suggestion 3), and the "Files" table near its end gains `decoder/gate.py` and `decoder/test_gate.py` too.
+- Independent review: PASS on `140e156a2`, read-only (`~/phobos-work/scratch/review-285/REVIEW.md`), no changes asked.
+  Its wording suggestion (S1, the README bullet's credit to #283's review) is taken after it.
+
+## PSP GE thread, its second part: the frame shown from the GE thread, the emulation thread's work for it cut, its two threads placed, and the PSP's GE timing with it, exact — 2026-10-19
+
+Branch `cursor/psp-ge-thread2-2b67` (GE round 4, part B, second PR; draft PR #277), from master `d428d91f9` (#276) with
+`08801ab60` (#269, the PSP's GE timing the default, and #278 with it) merged in, then master `ba1a19896` (#279, part
+113, the CPU's caches and the CPU beside the GE, merged as `f5cf0c6b5`; #282); docs/psp-core.md, part 111, has the
+evidence. Clean room: our code, uOFW for the GE driver's behaviour; no PPSSPP or JPCSP. Save states: layout 35, as #279
+left it (with the thread On, the GE's timing state is the render GE's, drained first: the same file on or off).
+- **What**: with "GE Thread" On the frame is shown from the GE thread, which takes each frame's picture at the frame's
+  record, at most two frames in flight (the screen a frame behind: about 17 ms more between a press and its picture at
+  60 frames a second); the window is handed over through it; saving and loading wait for it at most 2 s, and an unload
+  with it stuck leaves it be (design steps 3a, 3c, 3d). The app's "PSP Graphics Overlap" (Off, On; Restart to Apply)
+  is built and not offered till On beats Off on the RP6.
+- **The emulation thread's work for the thread, cut**: VRAM vertices copied whole, a PRIM's texture worked out once,
+  a target's run of PRIMs one model rectangle, a PRIM's record taking the words before it and its copies made in
+  place, the CPU's stores into VRAM as one record (Hot Wheels: 59,000 a frame), the value rule's page checks kept
+  clean. Its instructions a frame with the thread On ("Fast"): Chains of Olympus 92M to 50M, Ghost of Sparta 222M to
+  118M, Super Monkey Ball 303M to 238M, Army of Two 44M to 36M, Killzone 149M to 74M, Hot Wheels 258M to 206M.
+- **The two threads placed** (the app's "PSP thread placement", off by default and not offered; the runner's
+  `--ge-place`): the GE thread on the fastest core the app may use, the emulation thread on the next, by the kernel's
+  capacities among the cpuset's cores, asked for again every frame: 7 and 3 on the RP6, as fast as the best placement
+  pinned by hand (with "Fast": Killzone 1.02x, Army of Two 0.96x, Ghost of Sparta 0.92x, Chains of Olympus 0.87x,
+  Disaster Report 3 0.83x, Super Monkey Ball 0.76x; unplaced 0.60x to 0.89x).
+- **The PSP's GE timing with the thread** (#269 refused it): the GE thread keeps the GE's pipeline in its clocks (a
+  list's start, each run's shift, its words as `run()` counts them, the control pass's own work as marks after their
+  words, its primitives, transfers, palettes and copied vertices) and hands back each run's two times; the emulation
+  thread keeps the times in cycles and folds each run's as the synchronous GE ends it. Where a time decides something
+  (a FINISH, a SIGNAL, the go's limits, `sceGeSaveContext`, a spin's skip), the last run's bound answers first (its
+  pipeline's two ends so far, or half its words' work), and the emulation thread waits for the GE thread only where it
+  doesn't. #279's CPU-beside-the-GE term is carried exactly: each stretch kept with its instructions, the caches'
+  counts as it ended, whether a SIGNAL was due and the CPU's clock (since the port's review), no more than 65,536 of
+  them waiting, and taken as the fold reaches it, a run's start folding first while stretches wait (the term's push
+  moves the pipeline's start), a cut go counted as one, spin skips as long as the synchronous go's (deciding from the
+  busy window, folded first).
+- **Speed with the PSP's timing and #279** (the M1, Vulkan fast, 600 frames, five rounds, medians, `a335937a9`): On/Off
+  Ghost of Sparta 1.25x, Chains of Olympus 0.98x, Super Monkey Ball 1.16x, Army of Two 1.23x, Killzone 1.00x, Disaster
+  Report 3 1.40x, Hot Wheels 1.21x; before #279 1.15x, 0.99x, 1.08x, 1.10x, 1.01x, 1.38x, 1.09x (0.78x with "Fast": with
+  the PSP's timing the emulation thread reaches a FINISH's time after the GE thread has counted its runs). The runs'
+  starts that fold first while stretches wait: Super Monkey Ball 0.9 a frame, Army of Two 0.5, the others none. The RP6
+  with the PSP's timing, before #279, placed (the GE thread on core 7, the emulation thread on 3): Ghost of Sparta
+  0.95x, Chains of Olympus 0.87x, Super Monkey Ball 0.91x, Army of Two 1.03x, Killzone 0.86x, Disaster Report 3 0.99x,
+  Hot Wheels 0.82x (unplaced 0.28x to 0.94x): where the GE thread's time a frame is about the emulation thread's whole
+  time Off there's little to overlap, and the emulation thread on the A715 saves little.
+- **Off costs nothing**: the emulation thread's instructions a frame with the thread Off against master `ba1a19896`
+  (#279 in), the PSP's timing: -0.45% to +0.21%, the settled hashes the same (the gate's scenes, both renderers, 12 of
+  12); before #279, against master `08801ab60`: -0.04% to -0.15%, and -0.15% to -0.26% with "Fast".
+- **Exact on #279** (`a335937a9`, master with #279 in, and before it `0ab56c774` and `bee76daa1`; its term live in every
+  run; the thread On with the checks against Off, the PSP's timing): the gate's scenes (14 of 14), section 9's sets (240
+  of 240), "Fast" (3 of 3), the slow three from their start (6 of 6); the suite Off, 633 groups, and the thread On lane,
+  53 (#279's tests, measured rounds 10 and 10b and spin test threaded), 0 failures; the ares lane, 391 checks. A test of
+  the CPU's stretches beside a list given in parts, On == Off, failing with each of six parts of the port taken out.
+- **Exact, the thread On with the checks against Off, with the PSP's timing** (the gate's scenes, section 9's sets, the
+  contention term, "Fast" and the slow three run again after the review's fix, `df88b37ee`: all the same): the gate's
+  scenes in Vulkan fast and Software (14 of 14); part 109's section 9 sets (240 of 240: the 26 scenes' end hashes with
+  states and shown frames, shown frames in Software, fuzzing three ways, Vulkan accurate and 2x, the 78 settled hashes,
+  the stress mode at 1x, 2x and 4x); the contention term carried, with a scratch build that turns round 10's slopes on
+  (12 of 12); "Fast" unchanged (C's runner gives the merge's hashes, Off and On); part 109's slow three from their
+  start, the clock fixed, every frame and then RAM and the state, either timing (6 of 6); the suite Off and On, 625
+  groups, 0 failures, the measure rounds now threaded with the PSP's timing; the ares lane, 391 checks; CI green.
+  ThreadSanitizer, nothing suppressed, the GPU on MoltenVK: the threaded groups (103, the measured rounds and the GPU's
+  among them) no report; the ares lane and a sanitized runner (five scenes, the thread On, the PSP's timing) none from
+  C's code, two from elsewhere, fixed (below), then clean.
+- **Slow three** (part 109's: each from its start, Software, 3,600 frames, Off and On): BlazBlue 2 s and 7 s, SSX on
+  Tour 4 and 11, Aces of War 5 to 6 and 25 to 26, with either timing (part 109: 4 and 20, 8 and 43, 10 and 41).
+- **Found by the independent review** (CHANGES, item 1): C lost the control pass's front-end work after a word-buffer
+  flush. A bounding box whose vertices lie on a VRAM page with drawing pending hands its check to the GE thread as a
+  record of its own, which takes the words waiting, so the box's vertices' work was marked after word -1 and never
+  replayed, with every mark after it in that record (and a PRIM right after the box carried none): the GE thread's
+  front end ended early, a SIGNAL's time earlier than with the thread off. Marks now count the words before them
+  (none: before the next word), go in a record even with no words, and the checks abort on one not taken
+  (`716171da0`; its test fails on `4ee2e5acf`, a SIGNAL's time up to 274 cycles early, and passes after). The nits
+  (`df88b37ee`): `unwedge()` unhooks first; quitting with the GE thread
+  stuck lets it go, no hang; the placement checks its kept thread ID each frame; CI has a thread-On lane.
+- **Found and fixed on the way**: `listWord()`'s piece cache kept a 32-byte piece clean after checking one word; with
+  the checks on the thread's model kept every passed put point (MX vs ATV crawled); under the contention term the first
+  threaded runs differed (limits taking in later stretches, a cut go never ending its stretch, spin skips sized by a
+  bound's shorter limit); the On lane's state layout checks set the kernel's GE's texel cache, not the render GE's.
+  ThreadSanitizer: the screen's passthrough flag (`Screen::setPassthrough()`) set on the emulation thread without the
+  lock its own thread reads it under (master's runner has it too; it takes the lock now), and the ares lane's save
+  states check hashing VRAM while the drawing threads could still draw (it settles them first). The runner's sparse
+  PNGs (the library check's) with the thread On showed the frame the screen showed a frame late: the frame before a
+  PNG's gets its own picture now, so On's PNGs are Off's (the slow three, 24 of 24), and Off's are as they were.
+- **On part 113** (#279 merged in at `8a0a04b7f`, its review's fixes at `0ab56c774`, master with it at `a335937a9`):
+  #279's code as it is with the thread Off. With it On, a stretch the CPU ends while runs are pending keeps its
+  instructions, the caches' four counts, whether a SIGNAL was due and the CPU's clock (`Kernel::GeStretch`), each run
+  the counts as it ended (`GeRun::caches`); the list's clocks by kind come with each run (`GeThread::Owed`) into the
+  kernel's GE's own, which draws nothing meanwhile, and a state saves the render GE's; `goThreaded()` counts a cut go's
+  instructions across its parts (`Allegrex::run(limit, from)`) and ends its stretch once. #279's test machine
+  `pspTiming()` keeps the GE thread as the machine has it, and the CI thread On lane runs the CPU beside the GE's
+  groups. No layout of its own: 35.
+- **The port's review** (NEEDS CHANGES on `b56fa5010`, four findings) **and its fixes** (`99e067692`, `5a29bcc1d`,
+  `216a89cf9`, `d62faaaa0`): a stretch waiting on the GE thread's runs carries the CPU's clock it ended at (a clock set
+  while stretches waited gave the thread On another time than Off: 6876 against 6958 µs in the review's program); no
+  more than 65,536 stretches wait (past that the oldest are folded with their run, as runs are past 4,096: a stalled
+  list beside a program making calls grew them without end); and four port items have a test each that fails without
+  it (the threaded spin skip's fold, a stretch's SIGNAL flag, a state's clocks by kind, the exact limit's entries for
+  stretches, that one white-box: a limit short of its time only ends a go early). Part 111 lists what a stretch's
+  fold reads and the checks; ThreadSanitizer, per the review, found nothing in Phobos's code (its only reports came
+  from inside the GPU drivers' own threads, RADV's and lavapipe's).
+- **The fix round's review** (PASS on `fee55ee6d`, no findings; `~/phobos-work/scratch/review-277/REVIEW-port-r2.md`):
+  the reviewer's clock probe gives 6,958 µs Off and On; taking out any of the four items, or the fix round's two (the
+  clock a stretch carries, the cap's fold), fails a test; the cap holds and can't hang; the docs match. It re-ran six
+  games from boot, On against Off and Off against master (6 of 6 each; "Fast" 3 of 3), Resistance's spin skip,
+  threaded states, the release suite (639 groups), the thread On lane (59) and ThreadSanitizer (29 groups, no report).
+  The look at the merge with master's #284 (`REVIEW-port-r3.md`): PASS on `331eed9a9`, the whole PR, no findings.
+- **The library check** (the coordinator's, of `fee55ee6d` on the owner's Linux desktop;
+  `~/phobos-work/scratch/libcheck/lib277.log`): 266 games from their start with the library's presses, 3,600 frames,
+  pictures at 60, 300, 1,200 and 3,600, the PSP's GE timing, the clock fixed (`--start-time 1700000000`), Software and
+  Vulkan fast on RADV. With the thread Off no game differs from master `d9bfbefb4` in either renderer, and with it On
+  none differs from Off; none newly failing, every run's exit line there. (Master's emulation code was `d9bfbefb4`'s
+  until #277; `331eed9a9` adds only #284's docs and tests to `fee55ee6d`.) The same check on `b56fa5010` was clean
+  too. CI on `331eed9a9`: 14 checks passed, the 3 publish jobs skipped. Merged 2026-10-20 as `9f2d0633d`.
+- **Next**: Auto with its handover both ways (design step 4), a stacked PR; the app's option once On beats Off on the
+  RP6; Hot Wheels' remaining store cost; the busy window kept on the GE thread, so that a run's start needn't wait.
+
+## PSP tests: the measured rounds' groups report a missing round, and a missing file no longer ends a sanitized run — 2026-10-20
+
+Branch `cursor/psp-measured-skips-cachy`, from master `b48c0c68b` (#280's merge), master `f8f301347` (#283) merged
+in: #280's review suggestion S4. Tests and their README only; the core doesn't change, so docs/psp-core.md has no
+part for it.
+- **Why**: #280's independent review (claim (b)) found that neither measured8's four groups (rounds 8, 9, 10 and 10b)
+  nor "measured round 6 GE time" could report its skip. Each asked `ours()` for the core's file first and returned
+  when it came back empty, which it does without a word when the round's variable is unset or empty or the PSP's file
+  is missing; only `theirs()` reports. With the five rounds' variables empty and all five required, the review's run
+  gave "11 groups, 6 failures": measured6's other six groups failed and these five passed. CI's exposure was small
+  (`run-tests.sh` always unpacks the rounds and checks their sums).
+- **Found on the way**: a missing PSP file ended a sanitized run before any group could say so. The tests' readers
+  (`words()` in measured6.cpp and measured8.cpp, curves.cpp's round 3 `load`) gave `memcpy` an empty vector's null
+  pointer for 0 bytes, which UBSan takes as undefined; with `-fno-sanitize-recover=all` the program stopped there
+  ("measured round 6 lighting", measured6.cpp:24; "curves round 3", curves.cpp:373), never reaching the failure and
+  the skip their code means for a missing file.
+- **What**: the five ask `theirs()` first (measured8's `misses()` and `measuredContention10()`, measured6's
+  `measuredTime()`), as five of measured6's other six groups do; the sixth, the driver statuses, asks `ours()` first
+  but `theirs()` before it can return. `ours()`'s comment says why. The three readers copy only when there's
+  something to copy. With the files there, every group reads and checks the same.
+  `tests/psp/measurements/README.md` names `PSP_GE_ROUND10b` and `ge-round10b`, says what a missing round and a
+  missing file do now, and that round 10c's files have neither a variable nor a requirement (no test reads them).
+- **The other readers**, checked and left: measured6's other six groups (`theirs()` first; the driver statuses ask
+  both); "curves round 3" (a skip without `PSP_GE_RESULTS` or one of its five files, now that its reader doesn't end
+  the run); "psp measure" (a skip without `PSP_GE_RESULTS` or its `manifest3.txt`, a failure where required; a
+  picture missing from a round 3 folder is listed, as differences are; its reader has no `memcpy`).
+- **Test** (cachyOS x86-64, GCC 16.2.1, `PHOBOS_JOBS=2`; logs in `~/phobos-work/scratch/measured-skips/logs`): the CI
+  measure groups (`PSP_FFMPEG=0 PHOBOS_TESTS_ONLY=measure PHOBOS_TESTS_REQUIRE=programs,ge-round3,…,ge-round10b
+  tests/psp/run-tests.sh`), sanitized: 13 groups, 0 failures before and after, the output the same line for line;
+  release (`SANITIZE=-Wno-error=array-bounds`, for GCC 16's false warning at movies.cpp:52, not fixed here): 13
+  groups, 0 failures. Every check counted in a scratch copy whose `check()` counts (release): each group's count the
+  same before and after (round 6's GE time 1126; rounds 8, 9 and 10's 1243, 938 and 1834; rounds 10 and 10b's 151;
+  "curves round 3" 10; the other eight groups too). The rounds' variables unset or empty: before, these five passed
+  (all five rounds required: "11 groups, 6 failures", the review's output byte for byte; round 8, 9, 10 or 10b
+  required alone: no failure); after, all 11 groups skip, and fail where required (all five: 12 failures, rounds 10
+  and 10b's group once for each round; each round alone fails only its own groups: 7, 1, 1, 2 and 1). The variables
+  naming an empty folder: before, the sanitized run stopped in measured6's first group, and these five, run alone,
+  passed; after, sanitized and release, every group fails on the PSP's missing file (13 failures). "curves round 3"
+  with an empty folder: before, stopped; after, a skip, and 5 failures where required.
+- **Not run**: the rest of the PSP suite, tests/allegrex, tests/psp/ares, the runner and the app builds (CI's).
+- Independent review: PASS on `e17c27607`, read-only (`~/phobos-work/scratch/review-284/REVIEW.md`), no changes asked.
+  Its two wording nits are fixed after it (N1: measured6's `ours()` comment and the "What" bullet; N2: the PR body).
+
+## CI: the GE profile decoder's tests on every change to them — 2026-10-19
+
+Branch `cursor/psp-ge-decoder-ci-cachy`, from master `d9bfbefb4` (#281). CI only, a non-blocking follow-up from
+#269's review; the decoder and its tests untouched.
+- **The job** (a new workflow, PSP GE Profile Tests, `.github/workflows/psp-ge-profile.yml`): `python3 -m unittest -v
+  test_geprof test_gate` in `tools/psp-ge-profile/decoder` with Ubuntu 24.04's own Python, on pushes to master and
+  pull requests that change the decoder or the workflow (gate.py reads the owner's captures only as the gate, never in
+  its tests). Not a job in psp-core.yml: its path filters would then run every PSP suite for a decoder change.
+- **The plugin's capture stays skipped** (`test_plugin_capture`): `make hosttest` needs pspdev, which the runners
+  don't have (`psp-config` for `build.mak`, and the SDK's headers, which `plugin.h` includes even with `-DHOST`).
+- **Checks**, here (Python 3.14.7): the job's command ran 30 tests, OK (skipped=1); with one assertion broken on
+  purpose (not committed), FAILED (failures=1, skipped=1), exit 1; actionlint 1.7.12 with shellcheck 0.11.0, clean.
+  CI's run is in the pull request's body. Review: PASS on `483d5b1cf`, independent and read-only, with wording
+  items in the PR body only.
+
+## PSP measure, round 10c: Super Monkey Ball's small strips beside the CPU taken apart, Activision Hits' menu's second and third lists — 2026-10-19
+
+Branch `cursor/psp-measure-round10c-2b67` (PR #280, draft), from master `08801ab60` (#269 and #278 merged), master
+`d9bfbefb4` merged in (#279, #282, #281); docs/psp-core.md, part 114.
+- **Why**: #279's model of the CPU's traffic (part 113) leaves Super Monkey Ball's rest on the GE's side: round 10's
+  list H (the game's small trilinear CLUT4 strips) comes out about 16% short beside the CPU, the model having it read
+  RAM for 37% of its clocks. #269's refit leaves Activision Hits' menu's second list +48.5% (60 sprites shrinking a
+  VRAM picture, charged 1.64 ms where the PSP leaves them 0.25) and its third +26.7% (triangles magnifying a RAM
+  texture into 5650); 1fd9133c specified both (`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-10c-1fd9133c.md`).
+- **What**: a new first menu line, round 10c (about 30 KB, `manifest10c.txt`): `time-contention4` (31: H as round 10
+  drew it, nearest within the level, bilinear and nearest without levels, untextured, its vertices in VRAM, untextured
+  with them there; each alone and beside streaming reads flat out and at a half and the game's mix over 256 KiB; each
+  pattern alone), `time-shrink` (9: the second list as logged, its sprites alone, nearest, 1:1, 4:1, the picture
+  swizzled in VRAM and from RAM, one sprite 240 wide), `time-magnify` (14: the third list as logged, 1:1 and 4 times,
+  into 8888, unblended, the texture 512x256, CLUT8; bilinear and nearest each), `time-gamestrips` (6: round 10's
+  game-style strips unlit, then nearest, no alpha test, no depth test, into 5650, untextured) and `time-anchors3` (7 of
+  round 10's cases). About half a minute on the PSP. Synthetic: nothing of a game's lists, textures or vertices.
+- **Safety**: round 10's and 10b's: new names only; the clocks put back after each test; every GE wait 5 s with the
+  reset path; the contention thread's own deadline, its lines written back and invalidated after each run; the arrays
+  on 1 KiB boundaries; H's VRAM vertices in VRAM's last 256 KiB, past the depth buffer.
+- **Test**: "psp measure" runs round 10c after round 10b and checks every record; measured8 runs rounds 8, 9, 10 and
+  10b from the new build; `tests/psp/programs/pspmeasure.elf` rebuilt (`b38077b4…`); the owner's EBOOT `243aa27d…`
+  (`git archive 9bcaff348`, byte for byte).
+- **The owner's run** (2026-10-19 evening; `tests/psp/measurements/ge-round10c`, packed with xz, under his go-ahead of
+  2026-10-18): every run finished, nothing stalled; round 10's anchors repeat within 0.2% where nothing moved, 2 to 8%
+  cheaper where round 10's build had its arrays 64 bytes past 1 KiB boundaries.
+- **What it showed** (part 114): the CPU slows H through its vertices' reads from RAM, ×1.29 to 1.33 beside streaming
+  reads, ×1.24 to 1.29 at a half, ×1.43 to 1.51 beside the mix, the same untextured or with any filter; with the
+  vertices in VRAM (read 22 to 31% slower alone), ×0.99 to 1.02. The core with #279's model gives every variant ×1.15
+  to 1.16, 1.10 to 1.11 and 1.20 to 1.21: 10 to 20% short with the vertices in RAM, and 9 to 21% over the PSP with
+  them in VRAM, which the PSP doesn't slow; before #279, ×1.00. Activision Hits' second list as logged takes the PSP
+  4.52 ms (the game's own 3.48): the log doesn't describe it, and the core is within 5% of the logged list. Its third
+  list's logged quads take 1.35 ms of the game's 5.40 (the core 3.7% over); bilinear costs 36% at a texel a pixel and
+  5 to 10% magnified, which the core doesn't charge. Round 10's game-style strips take three times as long with the
+  depth test into 8888 as with either alone (the core 53% short with the pair, within 12% without).
+- **Next**: Super Monkey Ball's refit (its own pull request): H's vertex reads as most of its time beside the CPU, the
+  curve against the CPU's traffic, VRAM vertices at their own rate and out of the contention. For #269's agent: the
+  second list's own words, a bilinear term heavy at a texel a pixel, the depth test into 8888.
+
+## PSP GE: part 113 and the handoff after #279's second review — wording only — 2026-10-19
+
+Branch `cursor/psp-279-nits-2b67`, from master `f5cf0c6b5` (#279, merged at `9f4e7607a`). Docs only.
+- **The second review** (18de2dd5, `0c4baeb4f..9f4e7607a`: approve with nits): the spin skip exact for every case the
+  code allows (two equal turns settle both caches' tags and dirty bits; one syscall a turn keeps what the window owes
+  falling then rising at most; the window's time changes kind at most once); skip on and off the same in Resistance
+  (160.5 million turns skipped) and Burnout Dominator (none skipped: 1,239 refusals for unsteady turns, 86 for lines);
+  the gate and the measured rounds reproduced; "Fast" still master's.
+- **Its wording nits, put right here**: part 113's round 10 in the core, 94.0% of the pairs within 25% (not 93%); its
+  sentence on what's refused with lines in play now says what the code does; the #279 entry below: only turns of more
+  than one syscall that move lines are refused, not every turn of more than one syscall.
+- **Its other nits, for the spin skip's widening** (its own pull request, after #277's): tests that fail when each of
+  the four refusals is taken out (the GE done part way, turns of more than one syscall moving lines, the window's time
+  changing kind, unsteady turns; today's test fails only without the skipped turns' lines); a skip shortened to end
+  before `geDoneAt` instead of refused whole; `spin.wait` grown after unsteady refusals; the steady rule's theoretical
+  hole (a loop settling in the last turn run, its counts equal but its lines others).
+
+## PSP GE: the CPU beside the GE — the CPU's caches counted with the PSP's GE timing, the GE slowed by the lines they move while it draws (Super Monkey Ball −29.6% to −20.6%) — 2026-10-19
+
+Branch `cursor/psp-cpu-traffic-2b67`, from master `08801ab60` (#269, part 106); draft PR #279. docs/psp-core.md, part
+113, has the evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: layout 35 (2,168 bytes more, at one
+place; older layouts load with the caches empty).
+- **The caches** (`Allegrex::Cache`): the PSP's CPU's data and instruction caches as tags (16 KiB each, 64-byte lines,
+  two ways, least recently used out), looked up by compiled code alone in blocks compiled for a system started with the
+  PSP's timing ("Fast" compiles none of it: its code master's): a load's or store's line in its set's most recent way
+  inline (seven instructions), an instruction's line as a block starts and at each line's first word (three on ARM64), a
+  block going on to itself skipping its own first line's look. Counted: RAM's lines read in, dirty ones written back,
+  uncached accesses, instruction lines.
+- **The term** (`Kernel::geContend()`, `GE::Cost`): over the GE's busy window, the lines moved as a share of a thread
+  streaming RAM flat out, over the longer of the time passed and the PSP's CPU's time for the window's instructions and
+  stalls, times round 10's slopes by the GE's kind of read (refitted with the model's own counts:
+  `tools/psp-measure/contention11.py`, vertices 0.34, words 0.27, texels 1.16, transfers 0.57, write-backs 0, an
+  uncached access 0.2 of a line); the window owes passed x slow / (1 + slow), each line costing the GE its share once.
+  The CPU's work before a list and polling cost it nothing. A first version charged a burst again in every later cycle
+  of the window (Super Monkey Ball looked like −14.5%); the writer test caught it.
+- **Against the PSP** (`contention11.py --core`, the core's own rounds 10 and 10b; `measured8`'s new group in CI): round
+  10's 680 list-pattern pairs within 5.7% at the median (15.5% with the term held at none); round 10b's 144 within 1.0%
+  (polling and work before x1.00, a writer beside list A x1.91 against 2.02, beside the untextured list x1.00).
+- **The gate** (part 113's table, per frame and per list): Chains of Olympus −5.0% to +0.3%, Ghost of Sparta −7.1% to
+  −2.2%, Killzone −12.3% and −10.9% to −9.9% and −8.4%, Super Monkey Ball −29.6% to −20.6% (its exception kept, now with
+  a limit, −21%), Activision Hits' copyright screen −5.8% as it was, its menu +2.2% and +1.9% to +6.7% and +6.4% (its
+  first list −10.6% to −4.4%; the second and third, +48.5% and +27%, as they were). Lists 10 of 15 within 15%.
+- **The owner's decisions** (2026-10-19, 11:08): Activision Hits' menu frame at +6.7% accepted; the host cost accepted;
+  merge after the review and checks; round 10c (draft PR #280, e15d2cff's) times list H's kind (Super Monkey Ball's
+  small trilinear CLUT4 strips, predicted about 16% short beside the CPU's patterns) taken apart, its refit to follow.
+- **The review** (18de2dd5 at `0c4baeb4f`: approve with should-fixes): "Fast" exact and free, the caches deterministic,
+  states mid-list carried on, fits and gate reproduced. Fixed: the spin skip counts each skipped turn's lines as the
+  turn before moved, and skips no turns the GE would finish part way through (test: the GE polled with a turn reading an
+  uncached word, or missing three lines; skip on and off the same); the window's sums are whole counts and its push
+  whole cycles, so a skip's one stretch adds up as its turns would (the floats' last bits differed), and with lines in
+  play no turns are skipped where the push could rise and fall within them (a turn of more than one syscall that moves
+  lines, or the window's time changing kind); a push moves `geReachAt` only with a SIGNAL due (as master did; `geTime()`
+  works it out otherwise). Documented: the interpreter isn't counted, so under the PSP's timing `--interpreter` gives
+  the GE other times than the recompiler (part 113, the runner's help). The cheap win (the data look's add) doesn't
+  apply: `Allegrex` starts with its vtable pointer.
+- **#277 lands after this** (b331a6e1 ports its threaded GE onto it): each stretch must keep its instructions and the
+  caches' four count deltas as it ends; the pushes must agree with the folds; states save the drawing GE's clocks by
+  kind; the measured rounds keep `KernelMachine::pspTiming()` (part 113, "Not yet").
+- **Host cost** (the emulation thread's instructions a frame on the Mac, the PSP's timing both sides; part 113's
+  tables): the counting alone (master's emulation exactly) +5.8% (Super Monkey Ball) to +16.7% (Activision Hits'
+  copyright screen) on the gate's scenes; on the library check's polling games from boot +0.8% (Dragon Ball Z) to +39.5%
+  (Dante's Inferno, its loading streaming through memory). As players get it (the GE slowed too, so games wait and poll
+  differently): −4.2% to +16.8% on the scenes, −12.6% (Midnight Club) to +41.6% (Dante's Inferno) on the games. Cut: a
+  block going on to itself skipping its line's look (−4 to −6 points on the spinning scenes), ARM64's short instruction
+  compare, the kernel's sums skipped while the GE is idle; measured and left, skipping VRAM's and the scratchpad's
+  looks (0 to 2.2% of them). The RP6 run (master against the branch, the scenes and Dante's Inferno, Burnout Dominator
+  and Need for Speed: Shift) is the coordinator's: `smba-rp6.sh` in the runner-android scratch folder.
+- **Not yet**: the kernel's cache calls and the `cache` instruction; the CPU's traffic with VRAM; the CPU slowed beside
+  the GE; the interpreter counted alike; spins without syscalls pay a data look a turn (the spin skip's widening, its
+  own pull request).
+
 ## PSP GE: the GE's time as the owner's PSP took it — its two ends and their queue fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in), the gate against the captures by the whole frame, a SIGNAL's interrupt at its time — 2026-10-18
 
 Branch `cursor/psp-ge-time-2b67`, from #266's branch (part 103, merged as `a014706e9`) on master `a8d5640f5`, masters
@@ -1739,7 +2542,7 @@ pipeline: 28 and 16 a queued item; "Fast" 46 in all).
 - **The fit** (`tools/psp-measure/ge-terms.py`, `ge-fit.py`): rounds 6, 8, 9 and 10, 3,373 timed lists, 5.0% at the
   median (70% within 10%, 90% within 25%), its own fixed point after three passes; 253 lists that moved more than 5%
   between the owner's two sessions held out (`--again`: placement, round 10's time-anchors2); the cases the model's
-  texels can't follow (perspective, turned, mipmaps) shown as checks; `measured8` tests rounds 8 and 9 in the core.
+  texels can't follow (perspective, turned, mipmaps) shown as checks; `measured8` tests rounds 8, 9 and 10 in the core.
 - **The default**: "PSP" wherever one is chosen (the core's option, any value but "Fast"; the kernel's flag; the app's
   setting and its native default; the runner's `--ge-timing`); the desktop builds take the core's. The app's text: the
   GE draws at the speed measured on a real PSP, so games pace close to a PSP's; "Fast" draws faster than a PSP. The

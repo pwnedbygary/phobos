@@ -80,6 +80,7 @@ fun EmulationSettingsScreen(
                     PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
                     PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
                     PspGeTimingItem(settings.pspGeTiming) { viewModel.setPspGeTiming(it) }
+                    // (PspGraphicsOverlapItem not offered till On is faster than Off on the RP6)
                     PspRightStickItem(settings.pspRightStick) { viewModel.setPspRightStick(it) }
                 }
             }

@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # (g++ 13 or later, which the script needs on Linux, is Ubuntu 24.04's; bash named, for pipefail through tee)
       - name: Run the tests
