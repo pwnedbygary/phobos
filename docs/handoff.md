@@ -35,6 +35,136 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## The PSP's Vulkan renderer letting go of the window when the GPU stops answering, so that the software renderer's frames show where the screen froze — 2026-10-21
+
+Branch `improved-hotkeys`, on `eed1043d3` (the entry below). The owner, during the entry below's device check
+(verbatim): "Go ahead and use it. I did notice that when the game was running its "Accessing Memory Stick Duo" it gave
+the notification about Vulkan renderer dropping, and now it seems stuck. please look into that." Changed:
+`ares/psp/ge/gpu/gpu.hpp` (`GPU::letGo`), `ares/psp/system/system.cpp` (`System::present`),
+`android/app/src/main/cpp/PhobosHostAndroid.cpp` (`lockFrame`, `setWindow`), `android/app/src/main/cpp/PhobosHost.hpp`
+(a comment), `tests/psp/ares/system.cpp` (a new test), `docs/psp-gpu-renderers.md`, the entry below (its Next, and two
+wordings of its first Limit that its last review left for this change) and the hotkey row of
+`docs/implementation-plan.md`. Checked on the host and on the RP6 (Checks).
+- **What the owner saw**: in a build of `eb67f4ea7` with the PSP's Vulkan renderer (on Android, by choice), Crash Tag
+  Team Racing saving, the GPU stopped answering; the core said so ("The Vulkan renderer stopped: the GPU stopped
+  answering; the software renderer draws from now on") and the software renderer took over, the emulation going on at 60
+  FPS, but the screen stayed on the save's "Accessing Memory Stick Duo" (the entry below, Checks: Also seen).
+- **Why the screen froze**: two things, the second found by this entry's checks on the RP6.
+  - The Vulkan renderer presents on the host's window itself, its surface connected to the window (the swapchain made
+    on it). A GPU that stops answering turns presenting off (`presents()`), and the host then draws each frame on the
+    window itself, locking it for the CPU (`lockFrame`); but while the window stayed the same, only a surface that
+    couldn't be made (`giveUp()`) or one lost was dropped, so the window stayed connected to Vulkan and every lock was
+    refused (the device's log: "connect: already connected (cur=1 req=2)", 60 a second).
+  - With the surface dropped, the host's frames still didn't show: the window dropped every one (Android's log:
+    "rejecting buffer"). The host asks the window for its frames' size, format and scaling (to the window's size) when
+    their size changes, and remembers having asked. A lock while Vulkan still had the window (at the loss, in the frame
+    the GPU failed in) asked and was refused; then the surface's letting go put the window's format and scaling back to
+    their defaults, the scaling to "freeze", which drops a buffer that isn't the window's size, and the host,
+    remembering, never asked again. (Android 13's own code, `ANativeWindow_setBuffersGeometry`, `Surface::disconnect`
+    and `BLASTBufferQueue::rejectBuffer`, does each of these; in its Vulkan loader the surface connects to the window
+    and disconnects from it, and destroying the swapchain doesn't disconnect, though making one disconnects and
+    connects again.)
+- **The fix**: at the next frame after the GPU stops answering, `System::present()` (on the emulation thread, where the
+  window is handed to the GPU and frames are presented) has the GPU let go of the window (`GPU::letGo()`: the backend
+  given no window, as when the host's window goes), and Vulkan's backend drops its surface, with its swapchain, which
+  disconnects it from the window. The host draws on ares's screen thread, which nothing orders with the emulation
+  thread, so that disconnect can come between the host's request for its frames' size, format and scaling and its lock,
+  undoing the request (the first review's finding, seen on the RP6 below). So `lockFrame` now asks again at the next
+  lock after the first that succeeds once the window is set or has refused a lock (by then the window is the CPU's,
+  connected at that lock, and no other producer can connect to it), a refused lock having it forget what it asked for;
+  and a buffer in neither of the two formats it writes, `RGBA_8888` and `RGBX_8888` (the window's default format after a
+  disconnect, 16-bit `RGB_565` on the RP6), is posted undrawn, as one too small for the frame already was, where 32-bit
+  rows would have been written into it, past its end. From then the host's frames show. The same covers a surface Vulkan
+  gives up (`giveUp()`) after a refused lock, which left the host's request undone in the same way (derived, the first
+  review's; not run). A loss found by a wait that timed out (five seconds: a run that never ended) still leaves the
+  surface and its swapchain as they are, the GPU perhaps still using them, so the screen still freezes there (Limits).
+  The RP6's, by its log, was the other kind, a call that failed (derived: the emulation thread's longest frame was 810
+  ms, never five seconds, and Adreno's driver logged its fault on that thread).
+- **Why the GPU stopped**: not known. Seen once, not in two more runs of the same steps; Adreno's driver wrote no
+  snapshot of it (its path not set).
+- **The entries below**: the entry below's Next says this is done, and its first Limit takes the two wordings its third
+  review left: `Generic.kl` maps the RP6's hat and none of its D-pad buttons (it does map a keyboard's arrows to the
+  D-pad's keys), and the D-pad keys Android makes up go to a dialog as D-pad keys do, which in the PSP keyboard is to
+  its text field (and in a save list left and right do nothing), so Back + a direction does there what the direction
+  alone does.
+- **Checks**:
+  - The PSP core's host tests, `TMPDIR=… bash tests/psp/ares/run-tests.sh` (GCC 16.2.1): 371 checks, 0 failed. The new
+    test, `lostGpuLetsGoOfTheWindow`, has a pretend GPU (no Vulkan needed) present on a window, give presenting up
+    without being lost, present again and then stop answering: the window the GPU's while it presents and while it has
+    given up, let go of at the next frame after the loss and not taken back, and the frames presented (`presenting()`)
+    until the loss and while it hasn't given up. Run from a copy of the tree with `gpu.hpp` and `system.cpp` as the
+    entry below has them, it fails its two checks of the window after the loss (371 checks, 2 failed); with
+    `GPU::letGo()` letting go of the window whether the GPU is lost or not, it fails its check of the window kept while
+    presenting is given up (371 checks, 1 failed).
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja), the PSP core compiled again; ctest 1/1, its 209 host
+    checks. The PSP core compiled with `-Wall -Wextra` by the desktop build's own command, and `PhobosHostAndroid.cpp`
+    by the Android build's (the NDK's clang, arm64), into a scratch folder: no warning on a line this change made (793
+    elsewhere in the core, none in the other).
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0's wrapper):
+    BUILD SUCCESSFUL, 454 tests in each flavour, 0 failures, 54 result files each; the APK 32,596,851 bytes, SHA-256
+    `fecfc5bca1c47095e111736ff0088f7c043d48aef1f3d6e7f2a596bc48eb9620`, its native library built with the change.
+  - On the RP6 (Android 13), with the owner's copy of Crash Tag Team Racing and the PSP's Vulkan renderer: six debug
+    builds under application IDs of their own, installed one after the other beside the owner's apps and removed
+    afterwards (the uninstalls' output kept, the owner's two apps unchanged), the game copied into each one's own folder
+    and gone with it. Each had the GPU's loss injected at its 900th wait for a run: that wait made to fail as
+    `VK_ERROR_DEVICE_LOST` makes it, by a change to `vulkan.cpp` for these builds alone, kept outside the repository and
+    taken out after each build. The loss came about 16 s into the game, in its intro (Radical's logo); the screen was
+    captured 3 s and 5 s after it, then Start pressed and the screen captured 4 s later, and the captures compared where
+    no on-screen control covers the game's picture (510,000 pixels).
+    - A build of `eed1043d3` (`com.phobos.emulator.f4base`, APK SHA-256
+      `d4fb583c149514b338b51978e34c6cc00b4811a7418da4a7a6936903c5182ba6`): every lock refused from the loss on, 60 a
+      second (689 in the run's last 12 s); the picture the same in all three captures, Radical's logo (no pixel
+      differing).
+    - A build with this change's core part alone, without `lockFrame`'s (`com.phobos.emulator.f4`, APK SHA-256
+      `1ac140bdde780d162d27d62f4fcffa1439659c3782fd2e2f4cb07f025e88f00a`): one lock refused, at the loss, then none; but
+      the window dropped every frame (749 times "rejecting buffer", the window 1712x970 and the frames 1920x1088, read
+      from the device's log after the run), and the picture was the same in all three captures (no pixel differing).
+    - A build of the tree the first review saw (`com.phobos.emulator.f4`, APK SHA-256
+      `5f23b32fac9cfea4b45c03aee3d24fe9c7cde4278946f4035277d92283ba71c1`): one lock refused, at the loss, and no frame
+      dropped; the picture went on, the logo giving way to black, and after Start the game's "Loading.." screen at the
+      window's size (about 28,000 and then 49,000 pixels differing).
+    - After that review, three more (`com.phobos.emulator.f4` each, the log kept with Android's crash lines too), two of
+      them with the first lock tried on the window made to wait 100 ms after asking for its frames' size, format and
+      scaling (by a change to `PhobosHostAndroid.cpp` for those builds alone, kept outside the repository and taken out
+      after each build), so that the GPU's letting go of the window came between the request and the lock:
+      - The tree the first review saw, with the wait (APK SHA-256
+        `16711548581e8779a2d197f0cfaa880b8e29ce7188feeecd3ba502551ae882b5`): no lock refused; the lock after the wait
+        had a 1920x1088 buffer in format 4, 16-bit (`RGB_565`), the request undone; the window dropped every frame from
+        then (680 times "rejecting buffer"), and the picture was the same in all three captures, though each frame's
+        32-bit rows were written into those buffers, past their end (no crash seen).
+      - This change, with the wait (APK SHA-256 `277feb30c7adf512f997d886d17ce3c4659f2ae86983b0bdb14396f22ac5e607`):
+        that lock's buffer, 16-bit again, posted undrawn (the one frame the window dropped), and the next lock, asking
+        again, had a 32-bit one (format 1), as did the three after it (the ones logged); the picture went on (about
+        27,000 and then 49,000 pixels differing).
+      - This change, without the wait (APK SHA-256 `cd1c0579be9b6bed866062a32be2ca71ccc07babfcb7a991c330c8707fbe9351`):
+        one lock refused, at the loss, no frame dropped, and the picture went on (about 27,000 and then 49,000).
+  - Not run: a loss that wasn't injected (Limits); the let-go landing between the host's request and its lock at its
+    own timing, a few microseconds wide (the wait forced it); the desktop's Vulkan renderer, which never presents.
+- **Limits**:
+  - A loss found by a wait that timed out still freezes the screen (above). So would a loss after which the wait for
+    the GPU's runs as the surface is dropped times out: `vulkan.cpp`'s `dropSwapchain()`, unchanged, checks for a
+    timed-out wait before making its own, so the swapchain is destroyed then and the surface kept, the window still
+    Vulkan's, the emulation thread having waited at least five seconds (that wait, then `vkDeviceWaitIdle`, which has no
+    limit; the first review's; unlikely, as Vulkan has a wait end after a loss).
+  - On the RP6 the loss was injected, the GPU in fact still answering, so the surface was dropped from a working device;
+    after a real loss Vulkan allows the same, but a real one wasn't seen with this change.
+  - `lockFrame`'s part has no host test (it's Android's window code): the RP6's builds are its check, the let-go landing
+    between the host's request and its lock forced there by a wait.
+  - After such a loss the window stays the CPU's, so a PSP game loaded again on it (a Reload) can't make its Vulkan
+    surface: it gives presenting up and reads its frames back until the window is made again (derived, the first
+    review's; not run).
+  - As before this change, making a swapchain (as presenting starts, or again after the window changes size)
+    disconnects the window and connects it again, and a host lock landing between the two would take the window:
+    Vulkan's swapchain then sets its own size on it, and the host's later frames, of another size, could be dropped
+    (derived from Android's source, the second review's; not seen, and not on the lost path, where no swapchain is
+    made).
+  - Why the GPU stopped in Crash Tag Team Racing is unknown (above).
+- **Review**: the independent review's record is in the commit that carries this entry.
+- **Next**: the desktop's follow-ups (1810's toggle, the Screenshot hotkey with the menu open, Phobos's abort when its
+  display goes away first, the test target in CI); then the RP6's test copy replaced with a build of the finished branch
+  and a draft pull request (the owner's choices); and the hands-on checks.
+
 ## PSP system dialogs running the hotkeys, the keys they take no longer the dialog's, and a PSP screenshot with the Vulkan renderer presenting having the picture on screen — 2026-10-21
 
 Branch `improved-hotkeys`, on `eb67f4ea7` (the entry below). Three more of the follow-ups the owner asked for on
@@ -156,11 +286,12 @@ below (The entries below) and the hotkey row of `docs/implementation-plan.md`. C
     trigger reported only as an axis, or a stick direction, can't complete there, nor one with a direction of a D-pad
     that's a hat. Android makes D-pad keys of an unhandled hat, and of the left stick, in that window (its synthetic
     joystick events), but marks them as fallbacks (`FLAG_FALLBACK`), which the dialog keeps from the hotkeys as the
-    window does: they move the dialog's choice and run nothing. The RP6's built-in controls give their D-pad as a hat
-    (Android reads them by `Generic.kl`, which maps a hat and no D-pad key), so there Back + a direction, Next or
-    Previous Slot by default, moves a dialog's choice instead. Letting those keys reach the hotkeys would let the left
-    stick's in too, though over the game the stick is no D-pad to them. Derived from Android's input handling, the code
-    and the RP6's layout, not seen; the second review found this limit still saying the hotkeys saw those keys.
+    window does: they go to the dialog as D-pad keys do (in the PSP keyboard, to its text field) and run nothing. The
+    RP6's built-in controls give their D-pad as a hat (Android reads them by `Generic.kl`, which maps their hat and none
+    of their D-pad buttons), so there Back + a direction, Next or Previous Slot by default, does in a dialog what the
+    direction alone does. Letting those keys reach the hotkeys would let the left stick's in too, though over the game
+    the stick is no D-pad to them. Derived from Android's input handling, the code and the RP6's layout, not seen; the
+    second review found this limit still saying the hotkeys saw those keys.
   - Guide or PS, where it starts no hotkey, still goes Home from a dialog; R3 and L3 alone still confirm in a message or
     a save dialog (their fallback); and the soft keyboard over the PSP keyboard still has Back first (the entry led by
     Back, Limits).
@@ -172,9 +303,9 @@ below (The entries below) and the hotkey row of `docs/implementation-plan.md`. C
 - **Review**: the independent review's record is in the commit that carries this entry.
 - **Next**: the desktop's follow-ups (1810's toggle, the Screenshot hotkey with the menu open, Phobos's abort when its
   display goes away first, the test target in CI); the PSP's Vulkan renderer letting go of the window when the GPU stops
-  answering, so that the software renderer's frames show (Checks, Also seen), which the owner asked to have looked into;
-  then the RP6's test copy replaced with a build of the finished branch and a draft pull request (the owner's choices);
-  and the hands-on checks.
+  answering, so that the software renderer's frames show (Checks, Also seen), which the owner asked to have looked into
+  (done in the entry above); then the RP6's test copy replaced with a build of the finished branch and a draft pull
+  request (the owner's choices); and the hands-on checks.
 
 ## Android follow-ups: the Back warning ended by a Back from any device connected, a button any level gives the game asked about, the settings test's keys written out, taps beside longer bindings tested — 2026-10-21
 

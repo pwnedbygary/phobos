@@ -233,7 +233,10 @@ auto System::late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> 
 //frame on the window (none, as in the background, or the acquiring timed out): the screen's then, read back.
 auto System::present() -> bool {
   handWindow();
-  if(!gpu || !gpu->presents()) return false;
+  if(!gpu || !gpu->presents()) {
+    if(gpu) gpu->letGo();  //(a GPU lost while it presented keeps the window no longer: the host draws on it)
+    return false;
+  }
   auto& display = kernel.display;
   u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
   u32 frameBuffer = kernel.presentedFrameBuffer();

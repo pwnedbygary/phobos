@@ -932,6 +932,59 @@ auto presentedFrame() -> void {
   root->unload();
 }
 
+//A GPU that stops answering while it presents on the host's window (Android's Vulkan renderer) lets go of the window
+//at the next frame, its backend given no window (which drops its surface, with its swapchain, from it), so that the
+//host can draw the software renderer's frames on it; one that presents keeps the window, and so does one that has
+//given presenting up without being lost (Vulkan's lets go of its surface itself then). A pretend GPU (no Vulkan
+//needed) holds the window it was given last, as Vulkan's does.
+auto lostGpuLetsGoOfTheWindow() -> void {
+  std::printf("a GPU lost while it presents: the host's window let go of\n");
+  using ares::PlayStationPortable::GPU;
+  struct Pretend : GPU::Backend {
+    void* shown = nullptr;
+    bool gaveUp = false;
+    auto name() const -> std::string override { return "pretend"; }
+    auto makeTarget(u32, u32) -> u32 override { return 1; }
+    auto dropTarget(u32) -> void override {}
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return 1; }
+    auto dropTexture(u32) -> void override {}
+    auto submit(const GPU::Recorded&) -> bool override { return presented = true; }
+    auto finish(const GPU::Recorded&) -> bool override { return presented = true; }
+    auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
+    auto presents() const -> bool override { return !gaveUp; }
+    auto window(void* window) -> void override { shown = window; }
+  };
+  host.game.reset();
+  Node::System root;
+  if(!CHECK(start(root), "the PSP starts")) return;
+  auto backend = std::make_unique<Pretend>();
+  auto& pretend = *backend;
+  psp.gpu = std::make_unique<GPU>(std::move(backend));
+  psp.ge.setRenderer(psp.gpu.get());
+  psp.kernel.exited = true;  //(nothing runs: each frame is its picture alone)
+  int surface = 0;  //(the host's window, as the host hands it over)
+  PlayStationPortable::window(&surface);
+  root->run(), root->run();
+  CHECK(pretend.shown == &surface, "presenting: the host's window the GPU's");
+  CHECK(PlayStationPortable::presenting(), "and the frames presented on it");
+  pretend.gaveUp = true;
+  root->run();
+  CHECK(!PlayStationPortable::presenting(), "given up, not lost: no frame presented");
+  CHECK(pretend.shown == &surface, "but the window kept");
+  pretend.gaveUp = false;
+  root->run();
+  CHECK(PlayStationPortable::presenting(), "presenting again");
+  pretend.lost = true;
+  root->run();
+  CHECK(pretend.shown == nullptr, "lost: the window let go of at the next frame");
+  CHECK(!PlayStationPortable::presenting(), "and no frame presented");
+  root->run();
+  CHECK(pretend.shown == nullptr, "and not taken back");
+  PlayStationPortable::window(nullptr);
+  root->run();
+  root->unload();
+}
+
 //Where the host gives no memory that code may run from, the recompiler turns itself off, and the interpreter runs
 //the program instead. (Asking for no code memory at all stands for that: the host refuses the mapping.)
 auto noCodeMemory(const fs::path& programs) -> void {
@@ -1049,6 +1102,7 @@ auto main() -> int {
   drawingThreads();
   geThreadAndPspTiming();
   presentedFrame();
+  lostGpuLetsGoOfTheWindow();
   bool programsRun = false;
   if(auto programs = std::getenv("PSP_TEST_PROGRAMS"); programs && fs::exists(fs::path{programs} / "hello.elf")) {
     programsRun = true;

@@ -19,7 +19,7 @@ struct Frame {
 enum class LockResult {
   NoSurface,
   Locked,
-  // The surface would not take the requested size; the next lockFrame() asks again.
+  // The surface would not take the requested size or format; the next lockFrame() asks again.
   Rejected,
 };
 

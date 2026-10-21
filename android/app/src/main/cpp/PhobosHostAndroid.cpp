@@ -23,6 +23,11 @@ static ANativeWindow* window = nullptr;
 // Geometry last requested from the window; 0 x 0 forces the next lockFrame() to set it again.
 static std::uint32_t geometryWidth = 0;
 static std::uint32_t geometryHeight = 0;
+// Whether a lock has succeeded since the window was set or last refused one. Until then another producer (the PSP's
+// Vulkan renderer) may hold the window, and its disconnect resets the window's format and scaling (to freeze, where a
+// buffer not the window's size is dropped), undoing a geometry request made before it. Once locked, the window is the
+// CPU's: no other producer can connect to it.
+static bool held = false;
 static bool locked = false;
 
 static AAudioStream* audioStream = nullptr;
@@ -33,6 +38,7 @@ auto setWindow(ANativeWindow* next) -> void {
   window = next;
   geometryWidth = 0;
   geometryHeight = 0;
+  held = false;
 }
 
 auto surfaceReady() -> bool { return window != nullptr; }
@@ -45,9 +51,24 @@ auto lockFrame(std::uint32_t width, std::uint32_t height, Frame& frame) -> LockR
     geometryHeight = height;
   }
   ANativeWindow_Buffer buffer;
-  if (ANativeWindow_lock(window, &buffer, nullptr) != 0) return LockResult::NoSurface;
-  if ((std::uint32_t)buffer.width < width || (std::uint32_t)buffer.height < height) {
-    // The geometry request did not take effect; writing would overrun the buffer.
+  if (ANativeWindow_lock(window, &buffer, nullptr) != 0) {
+    // Refused while another producer holds the window: the geometry is set again once it lets go.
+    geometryWidth = 0;
+    geometryHeight = 0;
+    held = false;
+    return LockResult::NoSurface;
+  }
+  if (!held) {
+    // A disconnect between the geometry request and this lock may have undone the request: it's made again at the
+    // next lock, which nothing can come between.
+    held = true;
+    geometryWidth = 0;
+    geometryHeight = 0;
+  }
+  if ((buffer.format != WINDOW_FORMAT_RGBA_8888 && buffer.format != WINDOW_FORMAT_RGBX_8888)
+      || (std::uint32_t)buffer.width < width || (std::uint32_t)buffer.height < height) {
+    // The geometry request did not take effect (a buffer smaller than asked for, or not 32-bit: the window's default
+    // format, after a disconnect); writing would overrun the buffer.
     ANativeWindow_unlockAndPost(window);
     geometryWidth = 0;
     geometryHeight = 0;
