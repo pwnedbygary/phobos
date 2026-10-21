@@ -38,29 +38,63 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
 
 Branch `cursor/license-notices-cachy`, from master `8d85eda9a` (#293). LICENSE and this file; no code or packaging
-change. Notes, listings and checksums: `~/phobos-work/scratch/license-notices/` (the brief:
-`~/phobos-work/scratch/prompts/license-notices.txt`).
-- **What**: LICENSE gains SDL 3.2.30's notice (the zlib license, from its LICENSE.txt at `release-3.2.30`) and
-  MoltenVK 1.4.2's (its copyright line, as its sources give it at `v1.4.2`, and the Apache License 2.0 already in
-  LICENSE, whose "Used by" line names it), both after MinGW-w64's block; and its "Android and Kotlin libraries" notice
-  names the rest of the Maven libraries the APKs carry.
+change. Notes, listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
+`~/phobos-work/scratch/prompts/license-notices.txt` and `license-notices-r2.txt`).
+- **What**: LICENSE gains the notices of the third-party code inside what the builds ship: SDL 3.2.30 and the code it
+  bundles; MoltenVK 1.4.2 and the libraries in its dylib; the AppImage's runtime and the libraries linked into it; and
+  its "Android and Kotlin libraries" notice names the rest of the Maven libraries the APKs carry. 17 blocks, 38
+  notices to 55; the Apache text's "Used by" line names MoltenVK, SPIRV-Cross and SPIRV-Tools.
 - **Why**: the owner's choice (21 Oct, ~18:27): "LICENSE: a small PR adding the notices for whatever the builds
   actually include." Building the website, its author had found LICENSE naming none of SDL 3, MoltenVK, VMA, jansson or
-  GLFW.
+  GLFW. Round one left the code inside SDL, MoltenVK's dylib and the AppImage's runtime for the coordinator, who put it
+  in this PR (round two), as it ships.
 - **How it was established**: from the build files (CMakeLists.txt, the packaging scripts, desktop.yml, android.yml,
   build.gradle.kts) and from the artifacts: v2.4.0's AppImage, Windows zip, macOS zip and APKs and nightly-216017's
   APKs, downloaded with gh (each file's sha256 GitHub's), read as archives (the AppImage's squashfs from its offset,
   944,632, with 7z), their binaries by strings and symbols. Nothing was run.
-- **Added**: SDL 3.2.30, linked statically into all three desktop programs (FetchContent, `SDL3::SDL3-static`): each
-  carries `SDL-3.2.30-release-3.2.30`. MoltenVK 1.4.2: `Contents/Frameworks/libMoltenVK.dylib` in the macOS app, whose
-  `Resources/LICENSE-MoltenVK` is MoltenVK's LICENSE at `v1.4.2` byte for byte (the Apache text). SDL's block is its
-  file word for word, without the spaces three of its lines end with (git diff --check rejects them).
+- **Added in round one**: SDL 3.2.30, linked statically into all three desktop programs (FetchContent,
+  `SDL3::SDL3-static`): each carries `SDL-3.2.30-release-3.2.30`. MoltenVK 1.4.2:
+  `Contents/Frameworks/libMoltenVK.dylib` in the macOS app, whose `Resources/LICENSE-MoltenVK` is MoltenVK's LICENSE at
+  `v1.4.2` byte for byte (the Apache text). SDL's block is its file word for word, without the spaces three of its
+  lines end with (git diff --check rejects them). Both after MinGW-w64's block.
+- **Round two, MoltenVK's dylib**: byte for byte the one in MoltenVK v1.4.2's release (`MoltenVK-macos.tar`, its sha256
+  GitHub's), so its libraries are the revisions its `ExternalRevisions` pin. Its symbols: SPIRV-Cross `6c09849f` (its
+  parser and GLSL, MSL and reflection compilers), SPIRV-Tools `0d6fd73c`'s core library only (no optimizer, validator,
+  reducer, linker, linter or differ), cereal `a56bad8b`'s binary archives (none of its JSON or XML code). SPIRV-Cross
+  and SPIRV-Tools (LICENSE files the Apache text, no NOTICE files): the copyright lines of the files their symbols come
+  from, and a pointer to the Apache text; cereal: its BSD-3-Clause LICENSE. Beyond the brief's list, SPIRV-Headers
+  `29981f65`: SPIRV-Tools' tables are generated from its grammar files (their names, the core grammar's to Arm's TOSA
+  set's, are in the dylib's strings) and SPIRV-Cross compiles its spirv.hpp's inline functions; its block carries its
+  LICENSE's notice, the grammars' own statements (Khronos's, Arm's) and the MIT text they name.
+- **Round two, SDL's bundled code**, by symbols (the Linux and macOS programs keep theirs) and by strings or bytes (the
+  stripped Phobos.exe), each block word for word from SDL's tree at `release-3.2.30`, its first line naming the
+  platforms. In all three: HIDAPI (the BSD-style choice, LICENSE-bsd.txt; hidraw, Windows and macOS backends), yuv2rgb
+  (its YUV2RGB table, computed from its source, in all three), stb_image 2.30's JPEG decoder (its JPEG messages in all
+  three), SDL_rotate from SDL_gfx (on Windows by the software renderer, whose one string is there and which calls it),
+  Valve's controller table and Max Maisel's Steam Deck driver (and Igalia's X11 settings, Linux), under SDL's zlib
+  license with their own copyright lines. On Linux only: the X11 EDID parser, the XSETTINGS client, imKStoUCS,
+  xdg-user-dirs' lookup functions and the 22 Wayland protocol files, each one's every interface in the program (21
+  share one permission notice, given once after their copyright lines). Left out: SDL's libm, OpenVR and the libusb
+  backend (in no binary: no symbols or strings, and three fdlibm tables in none), Valve's two Steam headers and the
+  Khronos, Mesa and Microsoft headers (declarations and constants only), and public-domain code (dlmalloc, the CRCs,
+  murmur3, PDCLib's strtok_r, the VGA font).
+- **Round two, the AppImage's runtime** (its first 944,632 bytes): type2-runtime commit `8f39b89` by its version
+  string, built on Alpine 3.21 (its `.comment`), linked (its Makefile at that commit) with musl 1.2.5, libfuse 3.15.0
+  (patched by type2-runtime), squashfuse 0.5.2, zstd 1.5.6, zlib 1.3.2 (their version strings) and mimalloc 2.1.7, which
+  the runtime's own LICENSE omits. One block after MinGW-w64's: each part's license and source; libfuse's LGPL2.txt,
+  zstd 1.5.6's LICENSE and zlib 1.3.2's terms are word for word texts LICENSE has (FFmpeg's LGPL 2.1, Zstandard's,
+  zlib's), so pointed to; the rest word for word, musl's COPYRIGHT indented (two of its lines are 70-dash rules).
+- **The runtime isn't pinned**: scripts/package-linux-appimage.sh fetches appimagetool's continuous build, which
+  downloads type2-runtime's continuous runtime unless given `--runtime-file` (src/appimagetool_fetch_runtime.cpp);
+  that runtime is now built from a later commit (`fedfad51a`, 19 Oct). Pinning, a fetched runtime checked by sha256 and
+  passed with `--runtime-file`, is a few lines, but type2-runtime's one fixed release, `20251108`, predates `8f39b89`'s
+  change that creates extraction directories with mode 0700; for the coordinator to queue, or not, as its own PR.
 - **In the repository, in no build**: VMA (nothing includes `vk_mem_alloc.h`), jansson (`thirdparty/jansson` holds only
   `jansson_config.h`, an include path nothing uses), librashader (two headers nothing includes; no library in any
   package), GLFW (`thirdparty/GLFW` is a five-function stub Phobos wrote, no GLFW code, and no binary keeps it); none
   of their strings in any binary. Also unbuilt though LICENSE has their notices: the OpenGL and EGL registry headers
   (no compiled source includes them) and zlib (Android links the system's `libz.so`; of what ships, only the
-  AppImage's runtime has zlib, below).
+  AppImage's runtime has zlib, above).
 - **Shipping, with notices already**: in every build, sljit, libchdr with LZMA, miniz and Zstandard, xxHash (inline),
   volk, paraLLEl-RDP, Vulkan-Headers, TZXFile (`ZXTape!` in every binary), ymfm, qon with `qoi2.h`, MAME's portions,
   puff, FFmpeg, the firmware, C-BIOS and the ZX Spectrum ROMs; sse2neon in the APKs and the Mac's arm64 half; MinGW-w64
@@ -74,15 +108,14 @@ change. Notes, listings and checksums: `~/phobos-work/scratch/license-notices/` 
   JSpecify's annotations, each with its holder from its sources. All Apache-2.0.
 - **The Windows zip** carries `LICENSE.txt` and `COPYING.txt` (scripts/package-windows.sh:48-49; v2.4.0's has both),
   so no packaging change.
-- **Left for the coordinator**: code inside what ships that LICENSE doesn't name: SPIRV-Cross, SPIRV-Tools and cereal
-  in libMoltenVK.dylib (its symbols); SDL's own bundled code in the Linux program (hidapi, yuv2rgb, X11's EDID parser,
-  Wayland's protocol tables); the AppImage's runtime (type2-runtime with musl, libfuse, squashfuse, zstd and zlib,
-  whose `--appimage-help` names their licenses); the NDK's libc++, static in the APKs' libraries (Apache 2.0 with the
-  LLVM exception, which asks for no notice).
-- **Checks**: LicensesScreen's split re-implemented (python3 -B): 38 notices before, 40 after (41 in the APK with
-  COPYING's), the new "SDL 3.2.30 (...)" and "MoltenVK 1.4.2 (...)"; master's assembly equals nightly-216017's
-  `assets/licenses/LICENSE.txt` byte for byte; LicenseNoticesTest holds by reading (and its assertions mirrored in
-  Python); `git diff --check` and `git show --check` clean. CI runs the unit tests; its runs go in the PR's body.
+- **atomicfu and libc++**: atomicfu stays named in the Android libraries notice, and the NDK's libc++, static in the
+  APKs' native libraries, gets no notice, as its license (Apache 2.0 with the LLVM exception) asks for none.
+- **Checks**: LicensesScreen's split re-implemented (python3 -B): 38 notices on master, 40 after round one, 55 after
+  round two (56 in the APK with COPYING's); each round-two block's words against its sources, whitespace normalised (91
+  checks, all holding); master's assembly equals nightly-216017's `assets/licenses/LICENSE.txt` byte for byte;
+  LicenseNoticesTest holds by reading (it pins no count, but the first two titles, unique titles and 16 names each
+  starting one; its assertions mirrored in Python hold); `git diff --check` and `git show --check` clean. CI runs the
+  unit tests; its runs go in the PR's body.
 - Independent review: not yet.
 
 ## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
