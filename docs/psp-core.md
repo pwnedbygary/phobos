@@ -19767,12 +19767,12 @@ RP6.
 ## Part 115: the CPU beside the GE refitted — Super Monkey Ball within 15% (−20.6% to −12.7%), its exception gone
 
 On branch `cursor/psp-smba-refit-cachy` (draft PR #291), from master `0f7c17d8a` (#289), with master `1257da75d`
-(#290) merged in. The goal set for it: Super Monkey Ball within 15% of the owner's capture by its whole frame and its
-exception out of `gate.py`, Activision Hits' 3D menu within the owner's limit of +10%, no other judged frame past 15%,
-and the constants fitted to the PSP's measurements, never tuned on the gate. All four hold: Super Monkey Ball's frame
-goes from −20.6% to −12.7%, the menu's from +6.7% to +9.95%. Sources: the owner's rounds 10, 10b and 10c (parts 112
-and 114) and probes of the gate's seven states. Clean room as part 113: our own code; no PPSSPP or JPCSP. Save states:
-layout 35, unchanged.
+(#290) merged in, and master `d82f5db6f` (#292) merged in (`0e4fa0a80`). The goal set for it: Super Monkey Ball within
+15% of the owner's capture by its whole frame and its exception out of `gate.py`, Activision Hits' 3D menu within the
+owner's limit of +10%, no other judged frame past 15%, and the constants fitted to the PSP's measurements, never tuned
+on the gate. All four hold: Super Monkey Ball's frame goes from −20.6% to −12.7%, the menu's from +6.7% to +9.95%.
+Sources: the owner's rounds 10, 10b and 10c (parts 112 and 114) and probes of the gate's seven states. Clean room as
+part 113: our own code; no PPSSPP or JPCSP. Save states: layout 35, unchanged.
 
 ### Why
 
@@ -19997,8 +19997,9 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
 - On the code's last commit (`b14ef87a0`; cachyOS, GCC 16.2.1): the release suite with the GE thread off 646 groups,
   0 failures, and on 646, 0 (`SANITIZE=-Wno-error=array-bounds` for GCC 16's false warning in tests/psp/movies.cpp);
   #289's step with the PSP's timing 110, 0; the measure groups sanitized, `ge-round10c` required, 14, 0, no sanitizer
-  report; the runner built without a warning. Master's #290, merged after it, changes nothing they build: nothing
-  under ares/, tools/, tests/psp/ or psp-core.yml.
+  report; the runner built without a warning. Master's #290 and #292, merged after it, change nothing they build: #290
+  nothing under ares/, tools/, tests/psp/ or psp-core.yml, #292 nothing but N64's ares/n64/ (two files),
+  tools/parallel-rdp/, its own workflow and docs/handoff.md, none of which they read.
 - On the tests' commit after the independent review (`f7d27d438`, the same machine and compiler): the release suite
   with the GE thread off 646 groups, 0 failures, and on 646, 0; #289's step 110, 0; the measure groups sanitized,
   `ge-round10c` required, 14, 0, no sanitizer report; "the list's clocks by where they read" sanitized, 1, 0. The
@@ -20032,6 +20033,13 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
 - A probe of this head's own windows of the 3D menu (step 1's probe on the refit's code), a follow-up: it would settle
   where the menu's 0.75-point gap to the fit comes from (the gate, above: an open hypothesis now), while the menu is
   0.05 points from its limit.
+- A test of the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), a follow-up from the independent review's
+  second round (`~/phobos-work/scratch/review-291/REVIEW-r2.md`, its low finding): no test catches a slip there. Its
+  mutation D, which charges a refetch by the memory of the word the thread has just taken (`render.segmentRam`) rather
+  than by the mark's kind, passes CI's GE thread step (66 groups), the release suite with the thread On (646 groups) and
+  the gate (the seven profiles unchanged). Today's code is right by reading: `front()` (list.cpp:61-71) decides once,
+  for both GEs, whether a refetch reads RAM, and the thread charges the mark's kind the same way (thread.cpp:762-766). A
+  one-way JUMP in a threaded test (a list in RAM that jumps into VRAM and ends there) would catch it.
 
 ### Scratch
 

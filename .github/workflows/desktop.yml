@@ -77,8 +77,9 @@ jobs:
           grep -E -e ' -c [^ ]*/ares/psp/' "$RUNNER_TEMP/commands.txt" > "$RUNNER_TEMP/psp.txt" || true
           has_wrapv=' -fwrapv( |$)'
           has_aliasing=' -fno-strict-aliasing( |$)'
-          # a later -fno-wrapv or -fstrict-aliasing on the command line undoes the flag
-          undoes=' -fwrapv( .*)? -fno-wrapv( |$)| -fno-strict-aliasing( .*)? -fstrict-aliasing( |$)'
+          # a later -fno-wrapv, -ftrapv, -fstrict-overflow or -fstrict-aliasing on the command line undoes the flag
+          undoes=' -fwrapv( .*)? -f(no-wrapv|trapv|strict-overflow)( |$)'
+          undoes+='| -fno-strict-aliasing( .*)? -fstrict-aliasing( |$)'
           count() { grep -c -E "$@" || true; }
           sources() { grep -m 10 -E "$@" | sed -E 's/.* -c /  /'; }
           n64=$(wc -l < "$RUNNER_TEMP/n64.txt")
@@ -101,7 +102,8 @@ jobs:
             sources -v -e "$has_aliasing" "$RUNNER_TEMP/n64.txt"; exit 1
           fi
           if [ "$undone" -ne 0 ]; then
-            echo "::error::$undone of $n64 N64 compile commands undo a flag (a later -fno-wrapv or -fstrict-aliasing)"
+            echo "::error::$undone of $n64 N64 compile commands undo a flag" \
+              "(a later -fno-wrapv, -ftrapv, -fstrict-overflow or -fstrict-aliasing)"
             sources -e "$undoes" "$RUNNER_TEMP/n64.txt"; exit 1
           fi
           if [ "$psp" -eq 0 ]; then
