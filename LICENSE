@@ -3133,8 +3133,17 @@ https://github.com/libusb/hidapi
 
 SDL's joystick code compiles in its copy of HIDAPI: the hidraw backend on
 Linux (linux/hid.c), the Windows one (windows/hid.c) and the macOS one
-(mac/hid.c). HIDAPI can be used under one of three licenses; Phobos uses
-it under the BSD-style one, SDL's src/hidapi/LICENSE-bsd.txt:
+(mac/hid.c). Those three files carry:
+
+Alan Ott
+Signal 11 Software
+
+libusb/hidapi Team
+
+Copyright 2022, All Rights Reserved.
+
+HIDAPI can be used under one of three licenses; Phobos uses it under the
+BSD-style one, SDL's src/hidapi/LICENSE-bsd.txt:
 
 Copyright (c) 2010, Alan Ott, Signal 11 Software
 All rights reserved.
