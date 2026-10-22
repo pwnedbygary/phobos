@@ -84,7 +84,7 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
   PipeWire camera driver. On Linux only: the X11 EDID parser, the XSETTINGS client, imKStoUCS, xdg-user-dirs' lookup
   functions, the 22 Wayland protocol files, each one's every interface in the program (21 share one permission notice,
   given once after their copyright lines), and from round three PipeWire's SPA header code (Ubuntu 22.04's
-  0.3.48-1ubuntu3.2: 39 SPA and 29 pipewire headers reached, five copyright lines, one MIT text; four spa_pod_*
+  0.3.48-1ubuntu3.2: 39 SPA and 30 pipewire headers reached, five copyright lines, one MIT text; four spa_pod_*
   functions kept out of line). Left out: SDL's libm, OpenVR and the libusb backend (in no binary: no symbols or
   strings, and three fdlibm tables in none), Valve's two Steam headers and the Khronos, Mesa and Microsoft headers
   (declarations and constants only), SDL's test library (not built: no SDLTest_ symbols) and public-domain code
@@ -93,8 +93,8 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
   when the AppImage is made, naming its own commit: `8f39b89` in v2.4.0's, `fedfad51a` in this PR's CI AppImage
   (`type2-runtime/commit/fedfad5`; the review's M1, for which round three rewords the notice). Built on Alpine 3.21 (its
   `.comment`), linked (type2-runtime's Makefile) with musl, libfuse 3.15.0 (patched by type2-runtime), squashfuse 0.5.2,
-  zstd, zlib and mimalloc, which the runtime's own LICENSE omits; in 2.4.0's, musl 1.2.5, zstd 1.5.6 and zlib 1.3.2
-  (their version strings) and mimalloc 2.1.7 (inferred). One block after MinGW-w64's: each part's license and its
+  zstd, zlib and mimalloc, which the runtime's own LICENSE omits; in 2.4.0's, zstd 1.5.6 and zlib 1.3.2 (their
+  version strings), musl 1.2.5 and mimalloc 2.1.7 (inferred). One block after MinGW-w64's: each part's license and its
   project's source; libfuse's LGPL2.txt, zstd's LICENSE and zlib's terms are word for word texts LICENSE has (FFmpeg's
   LGPL 2.1, Zstandard's, zlib's), so pointed to; the rest word for word, musl's COPYRIGHT indented (two of its lines
   are 70-dash rules). No Alpine package revisions: a runtime doesn't record them.
@@ -127,9 +127,14 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
 - **The Windows zip** carries `LICENSE.txt` and `COPYING.txt` (scripts/package-windows.sh:48-49; v2.4.0's has both),
   so no packaging change.
 - **atomicfu and libc++**: atomicfu stays named in the Android libraries notice. libc++ is linked statically into
-  three of the APKs' native libraries; its license is Apache 2.0 with the LLVM Exceptions, which ask for no notice in
-  object code, but code not relicensed keeps LLVM's legacy license, and whether any is in the APKs isn't known, so it
-  has a short notice (round three: the review's L3).
+  three of the APKs' native libraries, with LLVM's other runtime libraries: libc++abi and libunwind in
+  libphobos_android.so and libhook_impl.so (their own messages), and compiler-rt's builtins in those, in
+  libdatastore_shared_counter.so and FFmpeg's libavcodec.so and libavutil.so (its Android atomics check, `ro.arch` and
+  `exynos9810` with a `getauxval` import) and, from Apple's toolchain, in the macOS app's Phobos and libMoltenVK.dylib
+  (`___isOSVersionAtLeast`, both architectures). Their license is Apache 2.0 with the LLVM Exceptions, which ask for no
+  notice in object code, but code not relicensed keeps LLVM's legacy license, and whether any is in the builds isn't
+  known, so they have a short notice (round three: the review's L3, for libc++; the follow-up: R2-L1, for the others,
+  whose LICENSE.TXT files are libc++'s but for their names and compiler-rt's MIT copyright line).
 - **Checks**: LicensesScreen's split re-implemented (python3 -B): 38 notices on master, 40 after round one, 55 after
   round two, 57 after round three (58 in the APK with COPYING's), titles unique, no notice line exactly 70 dashes; each
   round-two block's words against its sources, whitespace normalised (91 checks, at round two's head), and at round
@@ -140,6 +145,8 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
   --check` clean. CI runs the unit tests; its runs go in the PR's body.
 - Independent review: NEEDS CHANGES for `94d7802d1` (runtime notice names `8f39b89`; its own AppImage has `fedfad51a`).
   Fixed after it: M1, L1 to L4 and the HIDAPI and test suggestions in `24ca53ef6` to `a568e627a`; N1 in the PR body.
+- Follow-up, from master `062dd53e2`: R2-L1 and R2-N1 to R2-N3 from the review's second round; libc++ in the Apache
+  text's "Used by" line; LicenseNoticesTest requires "SDL 3.2.30 (", which only SDL's own notice starts.
 
 ## Tests: the spin skip's untested refusals and the GE thread's refetch charge — 2026-10-21
 
