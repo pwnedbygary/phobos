@@ -3329,6 +3329,50 @@ static auto geTimePspWordsThreaded() -> void {
   CHECK(fast.allClocks, 0.0);
 }
 
+//With the PSP's GE timing, on both GEs: a list in RAM JUMPs into VRAM and ends there, queued through the kernel and
+//waited for (sceGeDrawSync(0)). With the GE on its thread the render GE takes the JUMP's refetch as a mark of where the
+//list goes on (GeThread's marks: RefetchVram), after the JUMP's word, which it read from RAM, and charges it as the
+//mark says. After the fold, the list's clocks by kind as worked out by hand: its words each by where it was read,
+//Cost::Command from RAM in ramClocks[1] and from VRAM in allClocks alone, and the refetch, Cost::Jump, in allClocks
+//alone; nothing else (the list draws nothing). The render GE's own clocks the same.
+static auto geTimePspOneWayThreaded() -> void {
+  using Cost = GE::Cost;
+  constexpr u32 Code = 0x0880'4000, VramEnd = VRAM + 0x10'4000;
+  auto near = [](f64 x, f64 y) { return std::abs(x - y) <= 1e-9 * std::max(1.0, std::abs(y)); };
+  for(bool threaded : {false, true}) {
+    KernelMachine m;
+    m.pspTiming();
+    m.system.threadGE(threaded);
+    auto& memory = m.system.memory;
+    ListWriter going{memory, ListA};
+    going.put(GE::Nop), going.to(GE::Jump, VramEnd);
+    ListWriter ending{memory, VramEnd};
+    ending.put(GE::Nop), ending.put(GE::Finish), ending.put(GE::End);
+    u32 fromRam = (going.address - ListA) / 4, fromVram = (ending.address - VramEnd) / 4;
+    Assembler a{m, Code};
+    a.li(a0, ListA), a.li(a1, 0), a.li(a2, 0xffff'ffff), a.li(a3, 0);
+    a.call("sceGeListEnQueue");
+    a.li(a0, 0), a.call("sceGeDrawSync");
+    a.call("sceKernelExitGame");
+    m.runProgram(Code, true, Kernel::CPUFrequency / 10);
+    CHECK(m.kernel.exited, true);
+    m.kernel.geFold(true);
+    f64 ram[4] = {0, fromRam * Cost::Command, 0, 0};
+    f64 all = (fromRam + fromVram) * Cost::Command + Cost::Jump;
+    for(GE* ge : {&m.system.ge, &m.system.timedGE()}) {
+      const char* which = !threaded ? "the GE" : ge == &m.system.ge ? "the GE, folded" : "the render GE";
+      for(u32 kind : range(4)) {
+        if(!near(ge->ramClocks[kind], ram[kind])) {
+          std::printf("  %s: ramClocks[%u] %.6f, by hand %.6f\n", which, kind, ge->ramClocks[kind], ram[kind]);
+        }
+        CHECK(near(ge->ramClocks[kind], ram[kind]), true);
+      }
+      if(!near(ge->allClocks, all)) std::printf("  %s: allClocks %.6f, by hand %.6f\n", which, ge->allClocks, all);
+      CHECK(near(ge->allClocks, all), true);
+    }
+  }
+}
+
 //With the PSP's GE timing, a state saved while the CPU writes beside a list (its caches holding lines, the GE's busy
 //window part way, a push owed) carries on in another machine exactly as in the one it came from: a frame later, every
 //byte of the two machines' states alike.
@@ -6214,6 +6258,8 @@ auto geTests() -> Tests {
     {"ge time, the PSP's: the CPU beside the GE, the list's clocks by where they read", geTimePspClassified},
     {"ge time, the PSP's, with the GE on its thread: the list's words by where they're read, as without it",
      geTimePspWordsThreaded},
+    {"ge time, the PSP's, with the GE on its thread: a list going one way into VRAM, its refetch where the list "
+     "goes on", geTimePspOneWayThreaded},
     {"ge time, the PSP's: a state saved with the CPU beside the GE", geTimePspBesideState},
     {"ge time, the PSP's: a state keeps the list's clocks by kind, loaded with the GE on its thread or not",
      geTimePspStateClocks},
