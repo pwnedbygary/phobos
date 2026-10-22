@@ -28,7 +28,7 @@ class LicenseNoticesTest {
         val expected = listOf(
             "MAME (portions)", "paraLLEl-RDP", "volk", "sse2neon", "miniz", "Zstandard", "libadrenotools",
             "Vulkan-Headers", "font-rs", "puff", "Systematic console icons", "ZX Spectrum", "Android and Kotlin libraries", "C-BIOS",
-            "FFmpeg", "MinGW-w64 runtime",
+            "FFmpeg", "MinGW-w64 runtime", "SDL 3.2.30", "MoltenVK", "AppImage runtime",
         )
         for (name in expected) assertTrue("no notice for $name", titles.any { it.startsWith(name) })
     }
