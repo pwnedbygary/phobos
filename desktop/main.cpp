@@ -842,7 +842,7 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   auto completed = hotkeyTracker.completions(hotkeys);
   auto tapped = hotkeyTracker.taps(hotkeys);
   // A pad going away lets go of its buttons, which taps nothing.
-  if (event.type == SDL_EVENT_GAMEPAD_REMOVED || !tapHere) tapped.clear();
+  if (padGoingAway(event) || !tapHere) tapped.clear();
   if (!focused) completed.clear();
   if (screen == Screen::Hotkeys || quitAsked) return;
   // Quit runs first, and once it has asked, the question has the keys: nothing else the event brought runs (an action

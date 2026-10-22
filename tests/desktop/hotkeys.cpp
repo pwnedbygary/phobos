@@ -1,14 +1,15 @@
 // The desktop's hotkey rules (desktop/Hotkeys.cpp), the Android app's (input/Hotkeys.kt) on SDL's keys, buttons, axes
 // and mouse buttons: settings.ini's format, a combo's exact keys with its first key pressed first and held back from
 // the game, tap bindings, the tokens that count only where bound, pads holding a token together and the keyboards
-// theirs as one (desktop/Input.cpp), the axes' hysteresis, conflicts and their question, the defaults, the keys a
-// computer's keyboard keeps, a binding's changes to store, and the levels: each one's key in settings.ini
-// (desktop/Settings.cpp reading it back), a game's bindings over its console's over all consoles', and what a level
-// keeps.
+// theirs as one (desktop/Input.cpp), what SDL lets go of as a pad goes away (on SDL's virtual gamepad), the axes'
+// hysteresis, conflicts and their question, the defaults, the keys a computer's keyboard keeps, a binding's changes to
+// store, and the levels: each one's key in settings.ini (desktop/Settings.cpp reading it back), a game's bindings over
+// its console's over all consoles', and what a level keeps.
 #include <desktop/Hotkeys.hpp>
 #include <desktop/Input.hpp>
 #include <desktop/Settings.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -262,6 +263,121 @@ auto aKeyHeldAsTheWindowLosesFocusIsLetGoOfWhicheverKeyboardPressedIt() -> void 
   }
 }
 
+// SDL lets go of a pad's buttons and axes as it goes away, each in an event of its own before
+// SDL_EVENT_GAMEPAD_REMOVED, the pad already disconnected (SDL_PrivateJoystickRemoved, in SDL 3.2.30's SDL_joystick.c):
+// Guide held as the pad goes is let go of alone, which would tap Pause. A Guide let go of within 250 ms of its press
+// SDL holds back until then (SDL_MINIMUM_GUIDE_BUTTON_DELAY_MS, SDL_gamepad.c), and as the pad goes never sends: the
+// removal lets go of it (Input). On SDL's virtual gamepad, attached as SDL's own tests attach one.
+auto whatSDLLetsGoOfAsAPadGoesAwayIsThePadGoingAway() -> void {
+  SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+  bool started = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  CHECK(started);
+  if (!started) return;
+  // Each pad event as the app takes it (main.cpp: the hotkeys, then Input): whether it's the pad going away, and the
+  // taps its changes complete.
+  struct Seen {
+    Uint32 type;
+    bool goingAway;
+    Names taps;
+  };
+  Input input;
+  HotkeyTracker tracker;
+  auto hotkeys = shownHotkeys({});
+  // The virtual pad's events alone: a pad of the machine's, or another program's virtual one, may press as this runs.
+  SDL_JoystickID ours = 0;
+  auto drain = [&] {
+    std::vector<Seen> seen;
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+      SDL_JoystickID pad = 0;
+      switch (event.type) {
+      case SDL_EVENT_GAMEPAD_AXIS_MOTION: pad = event.gaxis.which; break;
+      case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+      case SDL_EVENT_GAMEPAD_BUTTON_UP: pad = event.gbutton.which; break;
+      case SDL_EVENT_GAMEPAD_REMOVED: pad = event.gdevice.which; break;
+      default: break;
+      }
+      if (pad && pad != ours) continue;
+      for (auto [token, down] : input.hotkeyChanges(event)) {
+        if (down) tracker.press(hotkeys, token);
+        else tracker.release(token);
+      }
+      tracker.completions(hotkeys);
+      auto taps = tracker.taps(hotkeys);
+      if (pad) seen.push_back({event.type, padGoingAway(event), taps});
+      input.handle(event);
+    }
+    return seen;
+  };
+  auto attach = [&] {
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    ours = SDL_AttachVirtualJoystick(&desc);
+    drain();
+    return ours;
+  };
+  auto wentAway = [](const std::vector<Seen>& seen) {
+    return !seen.empty() && seen.back().type == SDL_EVENT_GAMEPAD_REMOVED &&
+           std::all_of(seen.begin(), seen.end(), [](const Seen& each) { return each.goingAway; });
+  };
+  constexpr Uint32 guideHeld = 300;
+  auto id = attach();
+  auto* pad = SDL_GetJoystickFromID(id);
+  CHECK(pad != nullptr);
+  if (pad) {
+    // Guide let go of while the pad stays taps Pause, and isn't the pad going away.
+    SDL_SetJoystickVirtualButton(pad, buttonGuide, true);
+    drain();
+    SDL_Delay(guideHeld);
+    SDL_SetJoystickVirtualButton(pad, buttonGuide, false);
+    auto seen = drain();
+    CHECK(seen.size() == 1 && seen[0].type == SDL_EVENT_GAMEPAD_BUTTON_UP && !seen[0].goingAway &&
+          seen[0].taps == Names{Hotkey::pause});
+    SDL_SetJoystickVirtualButton(pad, buttonGuide, true);
+    drain();
+    SDL_Delay(guideHeld);
+    SDL_DetachVirtualJoystick(id);
+    seen = drain();
+    CHECK(wentAway(seen));
+    CHECK(std::count_if(seen.begin(), seen.end(), [](const Seen& each) {
+            return each.type == SDL_EVENT_GAMEPAD_BUTTON_UP && each.taps == Names{Hotkey::pause};
+          }) == 1);
+  }
+  // Guide pressed and the pad gone at once, inside SDL's 250 ms (a stall that long between the two would fail this):
+  // the removal alone lets go of it.
+  id = attach();
+  pad = SDL_GetJoystickFromID(id);
+  CHECK(pad != nullptr);
+  if (pad) {
+    SDL_SetJoystickVirtualButton(pad, buttonGuide, true);
+    drain();
+    SDL_DetachVirtualJoystick(id);
+    auto seen = drain();
+    CHECK(seen.size() == 1 && wentAway(seen) && seen[0].taps == Names{Hotkey::pause});
+  }
+  // A trigger held as the pad goes, once SDL has its rest (the first value it gets), is let go of in an axis event.
+  id = attach();
+  pad = SDL_GetJoystickFromID(id);
+  CHECK(pad != nullptr);
+  if (pad) {
+    SDL_SetJoystickVirtualAxis(pad, axisRightTrigger, SDL_JOYSTICK_AXIS_MIN);
+    drain();
+    SDL_SetJoystickVirtualAxis(pad, axisRightTrigger, SDL_JOYSTICK_AXIS_MAX);
+    auto seen = drain();
+    CHECK(seen.size() == 1 && seen[0].type == SDL_EVENT_GAMEPAD_AXIS_MOTION && !seen[0].goingAway);
+    SDL_DetachVirtualJoystick(id);
+    seen = drain();
+    CHECK(wentAway(seen));
+    CHECK(std::count_if(seen.begin(), seen.end(),
+                        [](const Seen& each) { return each.type == SDL_EVENT_GAMEPAD_AXIS_MOTION; }) == 1);
+  }
+  input.close();
+  SDL_Quit();
+}
+
 auto anAxisPressesPastHalfAndLetsGoBelowFortyPercent() -> void {
   auto held = latchAxis({}, 0.45f);
   CHECK(!held.positive && !held.negative);
@@ -487,6 +603,7 @@ int main() {
   aHoldsOwnLongerBindingLeavesItsKeyNoTapButAnotherActionsMakesItOne();
   padsHoldingATokenTogetherLetItGoWhenTheLastDoes();
   aKeyHeldAsTheWindowLosesFocusIsLetGoOfWhicheverKeyboardPressedIt();
+  whatSDLLetsGoOfAsAPadGoesAwayIsThePadGoingAway();
   anAxisPressesPastHalfAndLetsGoBelowFortyPercent();
   conflictsNameTheCollidingBindingsAndLeaveTheActionsOwnOut();
   theQuestionNamesTheExactConflictFirstThenTheOverlaps();

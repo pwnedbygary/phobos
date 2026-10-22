@@ -35,6 +35,76 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## A pad unplugged with Guide held no longer taps Pause on the desktop: the releases SDL sends as it removes a pad count as the pad going away — 2026-10-22
+
+Branch `improved-hotkeys`, on `1c47f1a1d` (the entry below). Automated tests of the draft pull request's AppImage
+(#294's Linux build from CI, installed with Gear Lever on the owner's CachyOS machine, as the owner asked on 2026-10-22)
+found one fault, fixed here at the owner's choice: unplugging a pad while Guide is held opened the pause menu, where the
+desktop hotkeys' entry ("Desktop hotkeys: combos of keys, ...") says a pad going away lets go of its buttons, which taps
+nothing. Changed: `desktop/Input.cpp`, `desktop/Input.hpp`, a line of `desktop/main.cpp`, `tests/desktop/hotkeys.cpp`,
+this entry, that sentence of the desktop hotkeys' entry, and the hotkey row of `docs/implementation-plan.md`.
+- **The tests that found it**, on the AppImage (`Phobos-2.4.0-321-gff33f5a4-x86_64.AppImage`, built from GitHub's test
+  merge of `1c47f1a1d` into master `8d85eda9a`, whose tree is `1c47f1a1d`'s), each on a display of its own, not the
+  owner's: the virtual-display suite, 145 of 145; the toggle check, 9 of 9; the display check (exit status 1, the game
+  unloaded, no core dump); a new pad suite on a virtual X display, 36 of 36, through a uinput pad laid out as a wired
+  Xbox 360 pad (the defaults, Select+Start, exact matching, the Quit question, frame advance, a combo of a button, a
+  stick direction and a trigger captured on the Hotkeys page, the overwrite question, the pad unplugged and plugged in
+  again, the focus pause), its unplug with Guide held opening the menu; and a new Wayland suite on a private KWin (its
+  virtual backend, its own D-Bus session and folders), 19 of 19, where SDL puts Phobos's window on Wayland when both an
+  X display and a Wayland one are offered, and the compositor going away ends Phobos cleanly (exit status 0, the game
+  unloaded, no core dump). The two new suites aren't in the repository.
+- **Why**: SDL lets go of a removed pad's buttons and axes before it reports the pad gone, each in an event of its own:
+  `SDL_PrivateJoystickRemoved` (SDL 3.2.30's `SDL_joystick.c`) re-centres the pad, marks it detached, then sends
+  `SDL_EVENT_GAMEPAD_REMOVED`. Guide's release so came alone, in an `SDL_EVENT_GAMEPAD_BUTTON_UP`: a tap of Pause's
+  Guide binding. `hotkeyEvent()` dropped the taps only for `SDL_EVENT_GAMEPAD_REMOVED`, whose own releases
+  (`HotkeyHolders::remove`) were none by then. SDL's event log (`SDL_EVENT_LOGGING=1`) on the AppImage: the release, the
+  removal 12 µs later, then "Emulation paused"; with RB held, or nothing, no menu.
+- **The fix**: `padGoingAway()` (`desktop/Input.cpp`) is true for the removal, and for a pad's button release or axis
+  motion once SDL has the pad disconnected (`SDL_GamepadConnected`), as it has for every event the re-centring sends by
+  the time the app reads it. `hotkeyEvent()` drops the taps for all of those. The releases still let go of their keys,
+  so Fast forward (hold) and Slow motion (hold) end as they did.
+- **SDL's 250 ms**: SDL holds back a Guide release that comes within 250 ms of its press until that time is up
+  (`SDL_MINIMUM_GUIDE_BUTTON_DELAY_MS`, `SDL_gamepad.c`); a pad gone before then never sends it, and the removal lets go
+  of Guide, as before. The test covers both ways.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja):
+  - The desktop builds, and ctest passes: 220 checks, 0 failed (209 before). The new test,
+    `whatSDLLetsGoOfAsAPadGoesAwayIsThePadGoingAway`, runs on SDL's virtual gamepad, attached as SDL's own joystick
+    tests attach one, and takes that pad's events alone: Guide let go of while the pad stays taps Pause and isn't the
+    pad going away; Guide held 300 ms as the pad goes comes back in a button release that is the pad going away and
+    would tap Pause; Guide pressed and the pad gone at once comes back in the removal alone; a trigger held as the pad
+    goes comes back in an axis event that is the pad going away. With the old condition (the removal alone) in
+    `padGoingAway()`, two checks fail: Guide held, and the trigger; each of the first review's five other mutants fails
+    one or two. With a uinput pad pressing A every 20 ms as it runs, the test passes 3 runs of 3, where the first
+    review's version, which took every pad's events, failed 2 or 3 checks in each.
+  - On a virtual X display, the uinput pad unplugged with Guide held, SDL's event log on: the AppImage opens the menu
+    and this build doesn't; with RB held, or nothing, neither opens it. On this build the pad suite, its unplug now
+    checked to open no menu (Guide held, and Guide pressed and unplugged at once), passes 38 of 38, and the
+    virtual-display suite 145 of 145.
+  - `desktop/main.cpp` compiled with `-Wall -Wextra` (the program builds with `-w`) warns nowhere in it; `Input.cpp`,
+    `Input.hpp` and the test build under the host test's `-Wall -Wextra -Werror`, AddressSanitizer and
+    UndefinedBehaviorSanitizer, with no report.
+  - The plan row's links each resolve to one heading, and the hotkey reference's tables still match the code.
+- **Limits**:
+  - No real pad was unplugged. Every desktop backend of SDL 3.2.30 (Linux's, HIDAPI's, Windows', macOS's, the virtual
+    one) reports a pad gone through `SDL_PrivateJoystickRemoved`, so SDL lets go of a USB pad unplugged, or a Bluetooth
+    pad dropping, as it let go of the uinput pad. Derived from SDL's code, not run on hardware.
+  - `padGoingAway()` tells only the releases SDL sends once it has the pad disconnected: a release that reaches Phobos
+    while SDL still has the pad connected still taps, as before this fix. Two ways that could come, neither seen in the
+    tests: Linux lets go of a pad's held keys itself as the pad unregisters (`input_disconnect_device()`), microseconds
+    before the pad's device node stops giving events, and SDL reading them in that moment, then finding the pad gone
+    only on a later pass, would hand Phobos Guide's release with the pad still connected; and a pad may report Guide's
+    release itself as it is switched off with Guide held, as wireless Xbox and PlayStation pads are switched off
+    (whether any does is unknown). Hypothesis, unchecked.
+  - The test holds SDL to the order of 3.2.30 it relies on: a later SDL changing it fails the test. Its case of the pad
+    gone at once needs the removal inside SDL's 250 ms of Guide's press, so a stall that long on the machine running it
+    would fail it.
+  - Android: a controller going away there may bring key releases marked cancelled (`KeyEvent.FLAG_CANCELED`), which the
+    app doesn't look for, so a Mode held as a controller disconnects may tap Pause there too. Hypothesis, unchecked.
+- **Next**: master merged again (#294 conflicts with it in this file alone since #296 and #295 were merged), then the
+  pull request's CI, its macOS job included; a real pad unplugged with Guide held, and a wireless one switched off with
+  Guide held (Limits); Android's cancelled releases checked (Limits); and the entry below's Next, less what's done: the
+  RP6's test copy replaced with a build of `1c47f1a1d` and the draft pull request opened, both on 2026-10-21.
+
 ## Master merged into the hotkey branch: its 126 commits since the branch left it, the PSP's lost GPU and screenshot settle carried onto the GE thread's frames, both sides' new workflow steps kept — 2026-10-21
 
 Branch `improved-hotkeys`, on `d700fe234` (the entry below), with master `8d85eda9a` merged into it as a merge commit:
@@ -1403,8 +1473,10 @@ keyboard and the mouse on a virtual display; **not** with a pad, Steam, Windows 
   action, any of which runs it; the same conflict rules and question. A stick direction or a mouse button counts only
   where a binding uses one, so a stick held for the game or a click on the window doesn't keep a combo from matching; a
   trigger counts as the button it is to the game. `HotkeyHolders` counts the devices holding each token: a button held
-  on two pads goes up when both have let go, and a pad going away lets go of its buttons, which taps nothing. An axis
-  presses past half and lets go below 40%, as the game's buttons do.
+  on two pads goes up when both have let go, and a pad going away lets go of its buttons, which taps nothing for the
+  releases SDL sends as it removes the pad (until 2026-10-22's fix, Guide held as the pad went tapped Pause: SDL lets go
+  of a pad's buttons before it reports the pad gone). An axis presses past half and lets go below 40%, as the game's
+  buttons do.
 - **Storage** (`settings.ini`; `Settings::has` and `erase` are new): `hotkey.<action>` holds an action's bindings, each
   token as `k<scancode>`, `b<button>`, `a<axis>+` or `a<axis>-`, or `m<button>`, a combo's joined by `,` and the
   bindings by `;`, an empty slot kept (`b5,b10;;k62`: Guide + RB, then F5 in the third slot). A stored action replaces

@@ -76,6 +76,9 @@ auto isKeyboardComputer(const std::string& system) -> bool;
 // Whether [token] plays the controller: a key of the keyboard's controller, a pad's button (but Guide, which no game
 // gets), trigger or stick.
 auto isGameButton(HotkeyToken token) -> bool;
+// Whether [event] is a pad going away: SDL_EVENT_GAMEPAD_REMOVED, or a button or axis SDL lets go of just before it, in
+// an event of its own, the pad already disconnected (SDL_PrivateJoystickRemoved, in SDL 3.2.30's SDL_joystick.c).
+auto padGoingAway(const SDL_Event& event) -> bool;
 // A token's name as the Hotkeys page shows it ("F5", "Guide", "RT", "LS Up", "Mouse 4"), and a combo's ("Guide+RB").
 auto hotkeyTokenLabel(HotkeyToken token) -> std::string;
 auto hotkeyComboLabel(const HotkeyCombo& combo) -> std::string;

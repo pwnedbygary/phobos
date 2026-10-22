@@ -182,6 +182,18 @@ auto Input::hotkeyChanges(const SDL_Event& event) -> std::vector<HotkeyChange> {
   return changes;
 }
 
+auto padGoingAway(const SDL_Event& event) -> bool {
+  SDL_JoystickID pad;
+  switch (event.type) {
+  case SDL_EVENT_GAMEPAD_REMOVED: return true;
+  case SDL_EVENT_GAMEPAD_BUTTON_UP: pad = event.gbutton.which; break;
+  case SDL_EVENT_GAMEPAD_AXIS_MOTION: pad = event.gaxis.which; break;
+  default: return false;
+  }
+  auto* gamepad = SDL_GetGamepadFromID(pad);
+  return !gamepad || !SDL_GamepadConnected(gamepad);
+}
+
 auto isKeyboardComputer(const std::string& system) -> bool {
   return system == "ZX Spectrum" || system == "ZX Spectrum 128" || system == "MSX" || system == "MSX2";
 }
