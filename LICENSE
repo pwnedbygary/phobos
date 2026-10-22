@@ -2717,20 +2717,22 @@ DEALINGS IN THE SOFTWARE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-AppImage runtime (the start of the Linux AppImage: type2-runtime, with musl, libfuse, squashfuse, zstd, zlib and mimalloc linked in)
+AppImage runtime (type2-runtime, the start of the Linux AppImage, with the libraries linked into it)
 https://github.com/AppImage/type2-runtime
 
 The Linux AppImage begins with the AppImage runtime, the program that
-mounts or extracts the image after it: the first 944,632 bytes of Phobos
-2.4.0's. It reports itself as type2-runtime commit 8f39b89
-(8f39b89e2ac31e1640b3d3f7e9a5108e6ce805fa), built on Alpine Linux 3.21,
-and is statically linked with the libraries below. Its parts, their
-licenses and where their source is:
+mounts or extracts the image after it: type2-runtime's continuous build,
+which appimagetool downloads when the AppImage is made. The runtime names
+its own commit (run the AppImage with --appimage-version); Phobos 2.4.0's
+is 8f39b89. It is built on Alpine Linux 3.21 and statically linked with
+musl, libfuse 3.15.0 (patched by type2-runtime), squashfuse 0.5.2, zstd,
+zlib and mimalloc (in Phobos 2.4.0: musl 1.2.5, zstd 1.5.6, zlib 1.3.2 and
+mimalloc 2.1.7). Its parts, their licenses and where their source is:
 
 - type2-runtime: its LICENSE, below.
-  https://github.com/AppImage/type2-runtime/tree/8f39b89e2ac31e1640b3d3f7e9a5108e6ce805fa
-- musl libc 1.2.5 (Alpine 3.21's musl 1.2.5-r12): its COPYRIGHT, below.
-  https://musl.libc.org/releases/musl-1.2.5.tar.gz, with Alpine's patches:
+  https://github.com/AppImage/type2-runtime
+- musl libc: its COPYRIGHT, below (musl 1.2.5's).
+  https://musl.libc.org, with Alpine 3.21's patches:
   https://git.alpinelinux.org/aports/tree/main/musl?h=3.21-stable
 - libfuse 3.15.0: Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>,
   under the GNU Lesser General Public License, version 2.1, whose text
@@ -2739,15 +2741,15 @@ licenses and where their source is:
   with type2-runtime's patches/libfuse/mount.c.diff applied.
 - squashfuse 0.5.2: its LICENSE, below.
   https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz
-- zstd 1.5.6 (Alpine 3.21's zstd-static 1.5.6-r2): under the BSD license
-  whose text, with its copyright line, appears in Zstandard's notice above.
-  https://github.com/facebook/zstd/releases/tag/v1.5.6
-- zlib 1.3.2 (Alpine 3.21's zlib-static 1.3.2-r1): Copyright (C) 1995-2026
-  Jean-loup Gailly and Mark Adler, under the license whose text appears in
-  zlib's notice above.
-  https://github.com/madler/zlib/releases/tag/v1.3.2
-- mimalloc 2.1.7 (Alpine 3.21's mimalloc2-dev 2.1.7-r0): its LICENSE, below.
-  https://github.com/microsoft/mimalloc/releases/tag/v2.1.7
+- zstd: under the BSD license whose text, with its copyright line, appears
+  in Zstandard's notice above (zstd 1.5.6's text).
+  https://github.com/facebook/zstd
+- zlib: under the license whose text appears in zlib's notice above; zlib
+  1.3.2's copyright line is Copyright (C) 1995-2026 Jean-loup Gailly and
+  Mark Adler.
+  https://github.com/madler/zlib
+- mimalloc: its LICENSE, below (mimalloc 2.1.7's).
+  https://github.com/microsoft/mimalloc
 
 type2-runtime's LICENSE:
 
