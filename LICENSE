@@ -3224,17 +3224,29 @@ Andreas Schiffler -- aschiffler at ferzkopp dot net
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-SDL 3.2.30's files by other authors (Valve's and Max Maisel's: Linux, Windows and macOS; Igalia's: Linux)
+SDL 3.2.30's files by other authors (the first four in Linux, Windows and macOS; the other four in Linux)
 
-These carry their own copyright lines, each followed by the license text
-of SDL's notice above, the zlib license, word for word:
+These carry their own copyright lines under the license text of SDL's
+notice above, the zlib license, word for word:
 - src/joystick/controller_type.c, controller_type.h and controller_list.h,
   the table of game controllers SDL recognises:
   Copyright (C) Valve Corporation
 - src/joystick/hidapi/SDL_hidapi_steamdeck.c, the Steam Deck's driver:
   Copyright (C) 2023 Max Maisel <max.maisel@posteo.de>
+- src/stdlib/SDL_qsort.c, the sort SDL always uses:
+  Copyright (c) 1998-2021 Gareth McCaughan
+- src/video/SDL_surface.c's SDL_ReadSurfacePixel:
+  This function Copyright 2023 Collabora Ltd., contributed to SDL under the
+  ZLib license
 - src/video/x11/SDL_x11settings.c and SDL_x11settings.h, its X11 settings:
   Copyright 2024 Igalia S.L.
+- src/core/linux/SDL_evdev_capabilities.c and SDL_evdev_capabilities.h,
+  how it classes input devices:
+  Copyright (C) 2020 Collabora Ltd.
+- src/video/x11/SDL_x11opengl.c, its OpenGL code for X11:
+  Copyright (C) 2021 NVIDIA Corporation
+- src/camera/pipewire/SDL_camera_pipewire.c, its PipeWire camera driver:
+  Copyright (C) 2024 Wim Taymans <wtaymans@redhat.com>
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
