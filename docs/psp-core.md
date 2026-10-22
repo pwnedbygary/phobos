@@ -20040,6 +20040,9 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
   the gate (the seven profiles unchanged). Today's code is right by reading: `front()` (list.cpp:61-71) decides once,
   for both GEs, whether a refetch reads RAM, and the thread charges the mark's kind the same way (thread.cpp:762-766). A
   one-way JUMP in a threaded test (a list in RAM that jumps into VRAM and ends there) would catch it.
+  Done since: tests/psp/ge.cpp's `geTimePspOneWayThreaded` (the handoff's entry "Tests: the spin skip's untested
+  refusals and the GE thread's refetch charge", 2026-10-21), which mutation D fails in the release suite, CI's
+  PSP-timing step and its GE-thread step.
 
 ### Scratch
 

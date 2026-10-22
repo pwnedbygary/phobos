@@ -35,6 +35,62 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Master merged into the hotkey branch again: its 22 commits since the first merge, #295's PSP spin tests and #296's license notices — 2026-10-22
+
+Branch `improved-hotkeys`, on `8d2f75a10` (the entry below), with master `062dd53e2` merged into it as a merge commit:
+the owner's choice on 2026-10-22 ("Fix the unplug tap, then merge master again: two reviewed changes, after which CI
+reruns, macOS included"), the draft pull request (#294) having conflicted with master since #296 and #295 were merged,
+and GitHub running no `pull_request` workflow while a pull request has a merge conflict. Master's 22 commits since
+`8d85eda9a`, which the first merge (two entries below) brought in, come in whole: #295, tests of the PSP's spin skip and
+of the GE thread's refetch charge (`tests/psp/spins.cpp`, `tests/psp/ge.cpp`, `docs/psp-core.md`; no emulation code),
+and #296, the notices of the third-party code the builds ship that `LICENSE` lacked (`LICENSE`, and three more names
+`LicenseNoticesTest.kt` requires), their two entries below the branch's. Changed by the merge beyond what either side
+had: this file (this entry, and a sentence in the entry below) and the hotkey row of `docs/implementation-plan.md`.
+- **The conflict**, one; git merged every other file on its own: `docs/handoff.md`, where both sides added entries at
+  the top. The branch's 15 stay together above master's 2, each side's in its own order and words, as the first merge
+  kept them (the file less the branch's entries is master's, byte for byte). Of the files only one side changed, each is
+  that side's, byte for byte, but `docs/implementation-plan.md`, whose hotkey row this change edits.
+- **Where the two meet**: master changed nothing the desktop program compiles or the hotkeys use, though its `LICENSE`
+  goes into every package the builds make (the AppImage, the Windows and macOS packages, and the APK's licenses, which
+  the APK built here carries). Its new PSP tests are built into one test program with the PSP GPU code the branch
+  changed (`ares/psp/ge/gpu/gpu.cpp`), so the whole PSP suite, which the first merge left to CI, ran here as CI runs it.
+  Android's `LicenseNoticesTest`, which master changed, runs with the Android JVM tests.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The whole PSP suite (`tests/psp/run-tests.sh`), every requirement CI names required, master's new groups among those
+    run each time:
+    - On Mesa's CPU Vulkan driver (lavapipe) alone, as on CI's runners, which have no GPU: the Vulkan loader limited to
+      it (`VK_DRIVER_FILES`), since the renderer takes the first Vulkan device and `PSP_GPU_ON_CPU` only lets it take a
+      CPU one. As CI's "PSP system tests, built as the app is" job runs it, 649 groups pass and 1 is skipped, as on CI
+      ("gpu without rasterization order, barriers only where reading primitives overlap", which needs a GPU reading out
+      of order: lavapipe reads in order, and CI doesn't require it); then 70 pass with the GE on its thread and 114 with
+      the PSP's GE timing. As CI's "PSP system tests" job runs it, built for debugging with AddressSanitizer and
+      UndefinedBehaviorSanitizer: 649 pass and the same 1 is skipped, with no sanitizer report and no warning.
+    - On this machine's GPU (an AMD Radeon RX 9070 XT, through RADV), which the renderer takes when the loader offers
+      it: the same four runs pass every group (650, 70, 114, and 650 built for debugging), with no sanitizer report.
+    - GCC 16.2.1 here (CI's is GCC 13) stops the release build at a false out-of-bounds warning in
+      `std::vector::resize`, inlined into `tests/psp/movies.cpp`'s `movie()` (`-Warray-bounds`, which `-Werror` makes an
+      error). Master alone, built the same way, stops there too, the file being the same on both sides; so each release
+      build here had that warning shown but not an error (`CXX="c++ -Wno-error=array-bounds"`: it showed twice, both
+      there, and no other warning did). The builds for debugging, at `-O1`, don't meet it, and used the plain compiler.
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`): 415 checks, 0 failed.
+  - The desktop: nothing recompiled, and the program and the host test are the entry below's, byte for byte, so its
+    checks stand for this tree (the virtual-display suite's 145, the pad suite's 38); ctest passes again, 220 checks, 0
+    failed.
+  - Android: both flavours' JVM tests pass (455 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,660,863 bytes, SHA-256 `fa1cde4729d667453fbf29e2135fb0af56dfcbaa7888167475d05fd784bf8985`).
+  - The plan row's links each resolve to one heading, and the hotkey reference's tables still match the code (35 of 35).
+- **Also**: the entry below's "the first review's version" reads "the version the first review saw" (its second review's
+  suggestion: the words could read as a version the reviewer wrote).
+- **Limits**: nothing ran on a device, on Windows or on macOS; the pull request's CI builds the desktop program for all
+  three, and runs master's other workflows.
+- **Review**: the first review found that the PSP suite had run on this machine's GPU, not on lavapipe as this entry
+  first said (the renderer takes the first Vulkan device it finds); the suite ran again on lavapipe alone, as above. It
+  also found the commit message's review lines lacking a diff hash. The full record is in the commit that carries this
+  entry.
+- **Next**: the pull request's CI on the merge, its macOS job included; `tests/psp/movies.cpp`'s false warning under GCC
+  16 settled in the code, as GCC 13's four were (master's as much as this branch's: CI's runners may meet it when their
+  GCC moves on); and the entry below's Next, less the merge.
+
 ## A pad unplugged with Guide held no longer taps Pause on the desktop: the releases SDL sends as it removes a pad count as the pad going away — 2026-10-22
 
 Branch `improved-hotkeys`, on `1c47f1a1d` (the entry below). Automated tests of the draft pull request's AppImage
@@ -74,8 +130,8 @@ this entry, that sentence of the desktop hotkeys' entry, and the hotkey row of `
     would tap Pause; Guide pressed and the pad gone at once comes back in the removal alone; a trigger held as the pad
     goes comes back in an axis event that is the pad going away. With the old condition (the removal alone) in
     `padGoingAway()`, two checks fail: Guide held, and the trigger; each of the first review's five other mutants fails
-    one or two. With a uinput pad pressing A every 20 ms as it runs, the test passes 3 runs of 3, where the first
-    review's version, which took every pad's events, failed 2 or 3 checks in each.
+    one or two. With a uinput pad pressing A every 20 ms as it runs, the test passes 3 runs of 3, where the version the
+    first review saw, which took every pad's events, failed 2 or 3 checks in each.
   - On a virtual X display, the uinput pad unplugged with Guide held, SDL's event log on: the AppImage opens the menu
     and this build doesn't; with RB held, or nothing, neither opens it. On this build the pad suite, its unplug now
     checked to open no menu (Guide held, and Guide pressed and unplugged at once), passes 38 of 38, and the
@@ -1868,6 +1924,170 @@ machine (see Checks).
   system and its window behaviour, per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull
   request.
 
+## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
+
+Branch `cursor/license-notices-cachy`, from master `8d85eda9a` (#293), with master `8c2b1ddee` (#295) merged in.
+LICENSE, this file and LicenseNoticesTest.kt (three more required names); no other code, no packaging change. Notes,
+listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
+`~/phobos-work/scratch/prompts/license-notices.txt`, `license-notices-r2.txt` and `license-notices-r3.txt`).
+- **What**: LICENSE gains the notices of the third-party code inside what the builds ship: SDL 3.2.30 and the code it
+  bundles, with PipeWire's SPA header code; MoltenVK 1.4.2 and the libraries in its dylib; the AppImage's runtime and
+  the libraries linked into it; the NDK's libc++ in the APKs; and its "Android and Kotlin libraries" notice names the
+  rest of the Maven libraries the APKs carry. 19 blocks, 38 notices to 57; the Apache text's "Used by" line names
+  MoltenVK, SPIRV-Cross and SPIRV-Tools.
+- **Why**: the owner's choice (21 Oct, ~18:27): "LICENSE: a small PR adding the notices for whatever the builds
+  actually include." Building the website, its author had found LICENSE naming none of SDL 3, MoltenVK, VMA, jansson or
+  GLFW. Round one left the code inside SDL, MoltenVK's dylib and the AppImage's runtime for the coordinator, who put it
+  in this PR (round two), as it ships; round three made the independent review's fixes.
+- **How it was established**: from the build files (CMakeLists.txt, the packaging scripts, desktop.yml, android.yml,
+  build.gradle.kts) and from the artifacts: v2.4.0's AppImage, Windows zip, macOS zip and APKs and nightly-216017's
+  APKs, downloaded with gh (each file's sha256 GitHub's), read as archives (the AppImage's squashfs from its offset,
+  944,632, with 7z), their binaries by strings and symbols; in round three also this PR's CI AppImage, macOS zip and
+  APKs (runs 39693815936 and 39693816063). Nothing was run.
+- **Added in round one**: SDL 3.2.30, linked statically into all three desktop programs (FetchContent,
+  `SDL3::SDL3-static`): each carries `SDL-3.2.30-release-3.2.30`. MoltenVK 1.4.2:
+  `Contents/Frameworks/libMoltenVK.dylib` in the macOS app, whose `Resources/LICENSE-MoltenVK` is MoltenVK's LICENSE at
+  `v1.4.2` byte for byte (the Apache text). SDL's block is its file word for word, without the spaces three of its
+  lines end with (git diff --check rejects them). Both after MinGW-w64's block.
+- **Round two, MoltenVK's dylib**: byte for byte the one in MoltenVK v1.4.2's release (`MoltenVK-macos.tar`, its sha256
+  GitHub's), so its libraries are the revisions its `ExternalRevisions` pin. Its symbols: SPIRV-Cross `6c09849f` (its
+  parser and GLSL, MSL and reflection compilers), SPIRV-Tools `0d6fd73c`'s core library only (no optimizer, validator,
+  reducer, linker, linter or differ), cereal `a56bad8b`'s binary archives (none of its JSON or XML code). SPIRV-Cross
+  and SPIRV-Tools (LICENSE files the Apache text, no NOTICE files): the copyright lines of the files their symbols come
+  from, and a pointer to the Apache text; cereal: its BSD-3-Clause LICENSE. Beyond the brief's list, SPIRV-Headers
+  `29981f65`: SPIRV-Tools' tables are generated from its grammar files (their names, the core grammar's to Arm's TOSA
+  set's, are in the dylib's strings) and SPIRV-Cross compiles its spirv.hpp's inline functions; its block carries its
+  LICENSE's notice, each shipped grammar's own statement (Khronos's; Arm's for TOSA, the motion engine, graph debug
+  info and, from round three, experimental ML operations, `Arm.ExperimentalMLOperations.` being in the dylib) and the
+  MIT text they name.
+- **Round two, SDL's bundled code**, by symbols (the Linux and macOS programs keep theirs) and by strings or bytes (the
+  stripped Phobos.exe), each block word for word from SDL's tree at `release-3.2.30`, its first line naming the
+  platforms. In all three: HIDAPI (the BSD-style choice, LICENSE-bsd.txt, and from round three the lines its three
+  backends carry, "libusb/hidapi Team ... Copyright 2022"; hidraw, Windows and macOS backends), yuv2rgb (its YUV2RGB
+  table, computed from its source, in all three), stb_image 2.30's JPEG decoder (its JPEG messages in all three),
+  SDL_rotate from SDL_gfx (on Windows by the software renderer, whose one string is there and which calls it). Under
+  SDL's zlib license with their own copyright lines, in all three: Valve's controller table, Max Maisel's Steam Deck
+  driver and, from round three, Gareth McCaughan's qsort and Collabora's SDL_ReadSurfacePixel (both inferred on
+  Windows: no LTO or section garbage collection in the desktop build, so SDL's objects go in whole); on Linux: Igalia's
+  X11 settings and, from round three, Collabora's evdev capabilities, NVIDIA's X11 OpenGL code and Wim Taymans's
+  PipeWire camera driver. On Linux only: the X11 EDID parser, the XSETTINGS client, imKStoUCS, xdg-user-dirs' lookup
+  functions, the 22 Wayland protocol files, each one's every interface in the program (21 share one permission notice,
+  given once after their copyright lines), and from round three PipeWire's SPA header code (Ubuntu 22.04's
+  0.3.48-1ubuntu3.2: 39 SPA and 29 pipewire headers reached, five copyright lines, one MIT text; four spa_pod_*
+  functions kept out of line). Left out: SDL's libm, OpenVR and the libusb backend (in no binary: no symbols or
+  strings, and three fdlibm tables in none), Valve's two Steam headers and the Khronos, Mesa and Microsoft headers
+  (declarations and constants only), SDL's test library (not built: no SDLTest_ symbols) and public-domain code
+  (dlmalloc, the CRCs, murmur3, PDCLib's strtok_r, the VGA font).
+- **The AppImage's runtime** (its first 944,632 bytes): type2-runtime's continuous build, which appimagetool downloads
+  when the AppImage is made, naming its own commit: `8f39b89` in v2.4.0's, `fedfad51a` in this PR's CI AppImage
+  (`type2-runtime/commit/fedfad5`; the review's M1, for which round three rewords the notice). Built on Alpine 3.21 (its
+  `.comment`), linked (type2-runtime's Makefile) with musl, libfuse 3.15.0 (patched by type2-runtime), squashfuse 0.5.2,
+  zstd, zlib and mimalloc, which the runtime's own LICENSE omits; in 2.4.0's, musl 1.2.5, zstd 1.5.6 and zlib 1.3.2
+  (their version strings) and mimalloc 2.1.7 (inferred). One block after MinGW-w64's: each part's license and its
+  project's source; libfuse's LGPL2.txt, zstd's LICENSE and zlib's terms are word for word texts LICENSE has (FFmpeg's
+  LGPL 2.1, Zstandard's, zlib's), so pointed to; the rest word for word, musl's COPYRIGHT indented (two of its lines
+  are 70-dash rules). No Alpine package revisions: a runtime doesn't record them.
+- **The runtime isn't pinned**: scripts/package-linux-appimage.sh fetches appimagetool's continuous build, which
+  downloads type2-runtime's continuous runtime unless given `--runtime-file` (src/appimagetool_fetch_runtime.cpp), and
+  the notice is worded for that. type2-runtime's one fixed release, `20251108`, predates `8f39b89`'s change that creates
+  extraction directories with mode 0700. Left for the owner or later PRs: the pin (a hosted copy checked by sha256,
+  passed with `--runtime-file`, and a CI step comparing the runtime's commit string with the notice), libfuse's source
+  beside each build (LGPL 2.1 §6), and appimagetool and linuxdeploy pinned.
+- **What the AppImage bundles**: this PR's CI AppImage (run 39693815936, read as an archive) holds two shared
+  libraries, usr/lib/libavcodec.so.63 and libavutil.so.61, FFmpeg's, under its notice; besides them, the runtime,
+  usr/bin/phobos, AppRun, the desktop files and icons, the data folders and LICENSE and COPYING.
+- **In the repository, in no build**: VMA (nothing includes `vk_mem_alloc.h`), jansson (`thirdparty/jansson` holds only
+  `jansson_config.h`, an include path nothing uses), librashader (two headers nothing includes; no library in any
+  package), GLFW (`thirdparty/GLFW` is a five-function stub Phobos wrote, no GLFW code, and no binary keeps it); none
+  of their strings in any binary. Also unbuilt though LICENSE has their notices: the OpenGL and EGL registry headers
+  (no compiled source includes them) and zlib (Android links the system's `libz.so`; of what ships, only the
+  AppImage's runtime has zlib, above).
+- **Shipping, with notices already**: in every build, sljit, libchdr with LZMA, miniz and Zstandard, xxHash (inline),
+  volk, paraLLEl-RDP, Vulkan-Headers, TZXFile (`ZXTape!` in every binary), ymfm, qon with `qoi2.h`, MAME's portions,
+  puff, FFmpeg, the firmware, C-BIOS and the ZX Spectrum ROMs; sse2neon in the APKs and the Mac's arm64 half; MinGW-w64
+  and winpthreads in Phobos.exe; libadrenotools, the ten fonts (equal by sha256 to `res/font`'s), the console icons
+  and font-rs's translation in the APKs.
+- **Android's libraries**: build.gradle.kts's 16 implementation lines, and in every APK 80 META-INF version files and
+  the classes the dex files define. The notice named the direct AndroidX and Compose libraries (not
+  ui-tooling-preview), Material, Kotlin's, Coil, OkHttp, Okio, AndroidSVG, Protocol Buffers and the Public Suffix List;
+  now also the AndroidX libraries those use (by group), Compose's others, Accompanist's Drawable Painter, Kotlin's
+  Parcelize and Android Extensions runtimes, JetBrains' annotations, Guava's ListenableFuture, Error Prone's and
+  JSpecify's annotations, each with its holder from its sources. All Apache-2.0.
+- **The Windows zip** carries `LICENSE.txt` and `COPYING.txt` (scripts/package-windows.sh:48-49; v2.4.0's has both),
+  so no packaging change.
+- **atomicfu and libc++**: atomicfu stays named in the Android libraries notice. libc++ is linked statically into
+  three of the APKs' native libraries; its license is Apache 2.0 with the LLVM Exceptions, which ask for no notice in
+  object code, but code not relicensed keeps LLVM's legacy license, and whether any is in the APKs isn't known, so it
+  has a short notice (round three: the review's L3).
+- **Checks**: LicensesScreen's split re-implemented (python3 -B): 38 notices on master, 40 after round one, 55 after
+  round two, 57 after round three (58 in the APK with COPYING's), titles unique, no notice line exactly 70 dashes; each
+  round-two block's words against its sources, whitespace normalised (91 checks, at round two's head), and at round
+  three's its new and changed lines (33) and the review's own 119 (its verbatim.py), all holding; master's assembly
+  equals nightly-216017's `assets/licenses/LICENSE.txt` byte for byte, and round two's head's APKs carry its LICENSE so
+  assembled; LicenseNoticesTest holds by reading (it pins no count, but the first two titles, unique titles and, from
+  round three, 19 names each starting one; its assertions mirrored in Python hold); `git diff --check` and `git show
+  --check` clean. CI runs the unit tests; its runs go in the PR's body.
+- Independent review: NEEDS CHANGES for `94d7802d1` (runtime notice names `8f39b89`; its own AppImage has `fedfad51a`).
+  Fixed after it: M1, L1 to L4 and the HIDAPI and test suggestions in `24ca53ef6` to `a568e627a`; N1 in the PR body.
+
+## Tests: the spin skip's untested refusals and the GE thread's refetch charge — 2026-10-21
+
+Branch `cursor/psp-spin-tests-cachy`, from master `c837d1868` (#291), master `8d85eda9a` (#293) merged in
+(`706fc295f`). tests/psp/spins.cpp, tests/psp/ge.cpp, docs/psp-core.md (part 115's Left) and this file; no emulation
+code. The polling skip's widening, phase 2's first step: F1's tests (the design,
+`~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r2.md`), recalibrated for the hybrid. Notes,
+scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
+- **What**: four tests, each passing as written and failing with what it checks taken out, which master's tests all
+  pass without:
+  - "…its list stalled: no skip past the GE's end" (`spinsGePartway`): spinSkip()'s refusal of a skip the GE would be
+    done part way through. geWait()'s list stalled as the GE draws, its mover now every 4000 microseconds (geWait()'s
+    new `every`; 2000 as before for the others), so steps end with the GE waiting at the stall. Master's threaded
+    group of that list passes without the refusal: its mover sets the GE going again within a step, and the GE's time
+    then starts afresh from the clock (geResume()).
+  - "…two calls a turn moving lines: no skip of a push that zig-zags" (`spinsGeTwoCalls`): the refusal of several
+    calls a turn with lines moved (#289's review, suggestion 4). F1's poll, its lines before its first call, would end
+    a skip where the push peaks, which is exact; here the anchor's call ends the turn's instructions-only stretch,
+    where the push dips, past the busy window's kink with the push rising. The turns after such a skip make up what it
+    fell short by before a step ends, so the test also makes a skip at once, as spinsDirect does: without the refusal
+    it pushes the GE back 38,806 cycles where the turns run push it 38,827.
+  - "…its turns settling: no skip till the last two turns move alike" (`spinsGeSettling`): the refusal when the last
+    two turns moved different lines; k = min(k + 1, 5) and movz pick a line not read before on the fifth turn only.
+  - "ge time, the PSP's, with the GE on its thread: a list going one way into VRAM, its refetch where the list goes
+    on" (`geTimePspOneWayThreaded`): the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:762-766`; #291's delta
+    review's low finding): a list in RAM JUMPing into VRAM and ending there, run without the thread and with it, its
+    ramClocks[1] 3 × Cost::Command (6.69) and allClocks 6 × Cost::Command + Cost::Jump (55.78) worked out by hand, on
+    both GEs. The review's mutation D (`~/phobos-work/scratch/review-291/r2/mut/mutD-thread-refetch-by-word.diff`)
+    makes the render GE's ramClocks[1] 49.09.
+- **Reaching them** (`tests/inst.sh`: a copy counting spinSkip()'s refusals by arm, never committed;
+  `tests/logs/inst-*.log`): the stalled list 74,345 refusals part way and 213 skips (5,883,259 turns); two calls a turn
+  1,727 refusals of several calls, the at-once try among them, and 3 skips on the interpreter (5,842 turns); the
+  settling turns 3 refusals unsteady (one a list, on the recompiler) and 36 skips (811,836 turns); the one-way list 1
+  refetch marked as VRAM's.
+- **Mutations** (`tests/mut/`: each diff as made on this tree and each run's log; r2/mut's three made again, D the
+  review's), each run through the release suite with the GE thread off, CI's PSP-timing step and its GE-thread step,
+  groups / failed checks. With master's tests every run passes: 646/0, 110/0 and 66/0 for each. With these, each
+  fails at its own test only, in all three:
+  - partway: 650/2, 114/2, 70/2 (the stalled list's states differ after step 1, with both kinds of traffic);
+  - multicall: 650/1, 114/1, 70/1 (the skip at once: the GE done at 1,520,857 against 1,520,878 with the turns run);
+  - steady: 650/1, 114/1, 70/1 (the settling turns' states differ after step 1, on the recompiler);
+  - D: 650/2, 114/2, 70/2 (ramClocks[1] 49.09 against 6.69 by hand, on the GE folded and on the render GE).
+- **Checks** on `c837d1868` with the two test files as committed in `60810b8ad` (each log in `tests/logs/` starts with
+  the tree, its status lines and the files' hashes): the release suite with the GE thread off 650 groups, 0 failures,
+  on 650, 0; CI's PSP-timing step 114, 0; its GE-thread step 70, 0; the four groups sanitized (ASan and UBSan), the
+  thread off 4, 0 and on 4, 0. `git diff --check` and `git show --check` clean; no added line over 120 columns; the
+  diff from master `8d85eda9a` is the two test files, docs/handoff.md and docs/psp-core.md.
+- **Departures from F1's constructions** (the review's L1 and its suggestion 3):
+  - The settling group reads its new line on the fifth turn, not on the fourth as F1's construction does (phase 1's
+    DESIGN-spin-widening.md:206-212). spinTurn() counts turns from the spin's third call, so the first try compares
+    the fourth and fifth turns; with F1's construction the fifth turn moves nothing, so a skip would be exact without
+    the steady refusal (the review ran F1's construction with the refusal taken out, and it passed). F4's hole test
+    (DESIGN-spin-widening.md:214-217) needs the same shift: Y on the fourth turn, X on the fifth.
+  - The part-way group's poll differs from F1's: F1 polled sceKernelGetThreadId() with one uncached read; the group
+    polls sceGeDrawSync(1) through geWait(), with uncached and missing-line traffic. The change is harmless: the
+    refusal is reached 74,345 times and its mutation is caught.
+- Independent review: PASS on `45eb68d3c`, with runs (`~/phobos-work/scratch/review-295/REVIEW.md`); one low finding.
+  Taken after it: L1 and suggestions 3 and 4 in the next commit; 1 and 2 left for the widening's rework of spinSkip().
+
 ## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
 
 Branch `cursor/docs-review-followups-cachy`, from master `c837d1868` (#291). `.github/workflows/desktop.yml`,
@@ -1956,6 +2176,9 @@ this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (t
     memory of the word just taken rather than by the mark's kind, passes CI's GE thread step, the release suite with the
     thread On and the gate. Today's code is right by reading; a one-way JUMP in a threaded test (a list in RAM that
     jumps into VRAM and ends there) would catch it.
+    Done since: the spin tests' entry (above), whose group "ge time, the PSP's, with the GE on its thread: a list going
+    one way into VRAM, its refetch where the list goes on" fails with mutation D in the release suite, CI's PSP-timing
+    step and its GE-thread step.
 - Independent review: PASS on `b753b3b46`, with runs (`~/phobos-work/scratch/review-291/REVIEW.md`); four low findings.
   Taken after it: L1 and L2's tests (`f7d27d438`); L4 and section 6's suggestions 2 to 5 in the docs.
   Round two passed the whole PR at `0e4fa0a80` (`REVIEW-r2.md`). With no macOS runner for that head in six attempts it
