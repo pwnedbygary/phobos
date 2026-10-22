@@ -825,23 +825,51 @@ auto Kernel::sceKernelSignalSema() -> void {
 }
 
 //What sceKernelSignalSema refuses with, changing nothing (0: it signals): no such semaphore, or a count of 0 or less,
-//or one taking it past its most.
-auto Kernel::signalRefused(u32 uid, s32 count) const -> u32 {
+//or one taking it past its most. held: what a spin's turn has added to its count so far, or taken (spins.cpp).
+auto Kernel::signalRefused(u32 uid, s32 count, s64 held) const -> u32 {
   auto found = semaphores.find(uid);
   if(found == semaphores.end()) return ErrorUnknownSemaphore;
   //(in 64 bits: a semaphore may hold any count, so the sum can pass what 32 hold)
-  if(count <= 0 || s64(found->second.count) + count > found->second.maximum) return ErrorSemaphoreOverflow;
+  if(count <= 0 || s64(found->second.count) + held + count > found->second.maximum) return ErrorSemaphoreOverflow;
   return 0;
 }
 
-//(semaphore, count, timeout)
+//What a semaphore's wait refuses with before anything else, changing nothing (0: it goes on, with semaphore found):
+//mayWait()'s refusals, with the CPU's interrupts as given (its own, or a spin's turn's), no such semaphore, or a count
+//it could never take.
+auto Kernel::semaphoreWaitRefused(u32 uid, s32 count, bool interrupts, Semaphore*& semaphore) -> u32 {
+  if(u32 refused = mayWaitRefused(interrupts)) return refused;
+  auto found = semaphores.find(uid);
+  if(found == semaphores.end()) return ErrorUnknownSemaphore;
+  if(count <= 0 || count > found->second.maximum) return ErrorIllegalCount;
+  semaphore = &found->second;
+  return 0;
+}
+
+//Whether reschedule() would hand the CPU from the running thread to another now, with the CPU's interrupts as given
+//(its own, or a spin's turn's): switching allowed and a ready thread better than it (a lower priority number; one
+//suspended isn't chosen). While interrupting the choice waits for the handler's end, and with no thread running there
+//is none to keep: taken as one that may.
+auto Kernel::wouldPreempt(bool interrupts) const -> bool {
+  if(interrupting || !current || current->status != Status::Running) return true;
+  if(dispatchSuspended || !interrupts) return false;
+  for(auto& [uid, thread] : threads) {
+    if(thread.get() == current || thread->status != Status::Ready || thread->suspended) continue;
+    if(thread->priority < current->priority) return true;
+  }
+  return false;
+}
+
+//(semaphore, count, timeout) Refused, only its result changes: calm, but for ILLEGAL_CONTEXT, which comes only while
+//interrupting, where no spin is skipped.
 auto Kernel::waitSemaphore(bool callbacks) -> void {
-  if(!mayWait()) return;
-  auto found = semaphores.find(arg(0));
-  if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
-  auto& semaphore = found->second;
+  Semaphore* found = nullptr;
+  if(u32 refused = semaphoreWaitRefused(arg(0), s32(arg(1)), interruptsEnabled, found)) {
+    calm = refused != ErrorIllegalContext;
+    return result(refused);
+  }
+  auto& semaphore = *found;
   s32 count = s32(arg(1));
-  if(count <= 0 || count > semaphore.maximum) return result(ErrorIllegalCount);
   result(0);
   //With callbacks notified, no timeout and no other thread in line, a CB wait whose count is there waits all the
   //same: its callbacks run first, at once and in its wait, and it takes the count once they're done if it's still
@@ -857,8 +885,10 @@ auto Kernel::waitSemaphore(bool callbacks) -> void {
     callbacksFirst = !inLine(thread->wait, thread->waitID)
                   && !(thread->inCallback && inLine(thread->waitBeforeCallback.wait, thread->waitBeforeCallback.id));
   }
+  //(taken at once, waking no thread and handing the CPU to none: calm, unless its callbacks run)
   if(semaphore.count >= count && !callbacksFirst) {
     semaphore.count -= count;
+    calm = !(callbacks && callbacksDue());
     return callbacksOnReturn(callbacks);
   }
   current->waitCount = count;

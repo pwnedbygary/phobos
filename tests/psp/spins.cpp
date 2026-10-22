@@ -5,12 +5,16 @@
 //88 bytes), the intro movies' wait (also through the ring's library, one naming no ring, and with interrupts held off)
 //and the GE asked after as it draws (also with its list stalled, behind another, past a SIGNAL, with interrupts held
 //off, with a GE profile recording, and with the PSP's GE timing, each turn moving lines of the CPU's caches, or begun
-//after a sleep and not skipped across the kink in its busy window's push), skipped;
+//after a sleep and not skipped across the kink in its busy window's push; also beside a semaphore signalled and taken
+//back with waits that succeed at once, as the EA games' loops do, with a CB wait, with waits and a signal refused, and
+//with a signal that hands the CPU to no thread ready), skipped;
 //loops that aren't one turn over and over (a count stored, a register counting, an FPU register adding up, the thread's
-//run time read, the clock polled, a semaphore that counts, another priority's line rotated, a store into its own
-//compiled code), not skipped. And skips made directly, against the same turns run: every register and byte, the clock,
-//the ready order's count and the run time the last turn wrote (to the cycle); the turns' boundaries, none outside a go
-//or with a thread of the caller's priority ready, and the pages a turn may store to.
+//run time read, the clock polled, a semaphore that counts, a turn taking one more of a semaphore than it gives, another
+//priority's line rotated, a store into its own compiled code), or whose turn would hand the CPU to a better thread, or
+//signals a semaphore a thread waits on, or waits, not skipped. And skips made directly, against the same turns run:
+//every register and byte, the clock, the ready order's count and the run time the last turn wrote (to the cycle); the
+//turns' boundaries, none outside a go or with a thread of the caller's priority ready, nor past a CB wait's callback
+//notified as a turn begins; and the pages a turn may store to.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -396,9 +400,9 @@ auto machine(const std::function<void(KernelMachine&)>& program, bool recompile,
 
 //The program run in steps (up to steps of them, or its end) with the skip on and off, on one engine: true if after
 //every step the two machines' states are the same, and in the end the CPU's caches' counts. skipped: the turns
-//skipped with it on.
+//skipped with it on; checks, if given: the tries each of the PSP's GE timing's checks refused with it on.
 auto bothWays(const std::function<void(KernelMachine&)>& program, bool recompile, u32 steps, u64& skipped,
-              bool psp = false) -> bool {
+              bool psp = false, Kernel::SpinChecks* checks = nullptr) -> bool {
   auto on = machine(program, recompile, true, psp), off = machine(program, recompile, false, psp);
   bool same = true;
   for(u32 step = 0; step < steps && !(on->kernel.exited && off->kernel.exited); step++) {
@@ -412,6 +416,7 @@ auto bothWays(const std::function<void(KernelMachine&)>& program, bool recompile
   CHECK(off->kernel.spun, 0);
   for(auto& note : on->notes) std::printf("  note: %s\n", note.c_str());
   skipped = on->kernel.spun;
+  if(checks) *checks = on->kernel.spinChecks;
   u64 counts[2][4];
   on->kernel.spinCounts(counts[0]), off->kernel.spinCounts(counts[1]);
   return same && std::equal(counts[0], counts[0] + 4, counts[1]);
@@ -667,6 +672,7 @@ static auto spinsGeKink() -> void {
   CHECK(off->kernel.spun, 0);
   if(on->kernel.spun <= 1000) std::printf("  skipped %llu turns\n", (unsigned long long)on->kernel.spun);
   CHECK(on->kernel.spun > 1000, true);
+  CHECK(on->kernel.spinChecks.kind > 0, true);  //(the skip across the kink refused by its check, the window's kind)
 }
 
 //The GE asked after as a poll may go besides (gePoll()), skipped (thousands of turns) and every step's state the same
@@ -1003,10 +1009,15 @@ static auto spinsGePartway() -> void {
   for(bool recompile : {false, true}) {
     for(auto traffic : {Traffic::Uncached, Traffic::Missing}) {
       u64 skipped = 0;
+      Kernel::SpinChecks checks;
       CHECK(bothWays([traffic](KernelMachine& m) { geWait(m, Look::Drawing, traffic, 4000); }, recompile, 48, skipped,
-                     true), true);
-      if(skipped <= 1000) std::printf("  traffic %u skipped %llu turns\n", u32(traffic), (unsigned long long)skipped);
+                     true, &checks), true);
+      if(skipped <= 1000 || !checks.partway) {
+        std::printf("  traffic %u skipped %llu turns, %llu tries refused part way\n", u32(traffic),
+                    (unsigned long long)skipped, (unsigned long long)checks.partway);
+      }
       CHECK(skipped > 1000, true);
+      CHECK(checks.partway > 0, true);  //(its refusal reached)
     }
   }
 }
@@ -1041,14 +1052,18 @@ auto geTwoCalls(KernelMachine& m, u32 count) -> void {
 //than the cycles passed), rising from turn to turn. Run one by one the turns push the GE back to the most it owes,
 //after the last first stretch; one stretch for the turns a skip would take, to what it owes at their end, after a
 //second stretch: less (the skip below: 38806 cycles pushed against 38827). Such a skip is refused (spinSkip(): several
-//calls a turn with lines moved). Every step's state the same with the skip on as off, and in the end the caches'
-//counts; on both engines (the interpreter's accesses aren't counted: its window owes nothing, and its turns are
-//skipped).
+//calls a turn with lines moved), counted (Kernel::spinChecks). Every step's state the same with the skip on as off, and
+//in the end the caches' counts; on both engines (the interpreter's accesses aren't counted: its window owes nothing,
+//and its turns are skipped).
 static auto spinsGeTwoCalls() -> void {
   for(bool recompile : {false, true}) {
     u64 skipped = 0;
-    CHECK(bothWays([](KernelMachine& m) { geTwoCalls(m, 40000); }, recompile, 32, skipped, true), true);
-    if(recompile) continue;
+    Kernel::SpinChecks checks;
+    CHECK(bothWays([](KernelMachine& m) { geTwoCalls(m, 40000); }, recompile, 32, skipped, true, &checks), true);
+    if(recompile) {
+      CHECK(checks.calls > 0, true);  //(its refusal reached)
+      continue;
+    }
     if(skipped <= 1000) std::printf("  skipped %llu turns\n", (unsigned long long)skipped);
     CHECK(skipped > 1000, true);
   }
@@ -1056,16 +1071,23 @@ static auto spinsGeTwoCalls() -> void {
   //step's end: so at once too, as spinsDirect makes a skip. Two machines run with the skip off to the list's call just
   //past the kink, the skip then on in one of them for the next five calls (the detector's turns, steady, the last
   //moving a line with two calls); its next call made in a go of its own with room for 20 turns and the margin, against
-  //the other's running the turns that call skipped: the same at once.
+  //the other's running the turns that call skipped: the same at once. That try is refused by its check alone: what
+  //the others need holds there, so that the check can't pass because another refusal stopped it.
   Unthreaded unthreaded;  //(a go made by hand: the synchronous GE's, no bound of the GE thread's in it)
+  //(each step a go of one instruction, at most Steps of them: a timing change keeping the window short of its kink till
+  //the list ends, after which the program ends and a step does nothing, fails here instead of hanging)
+  constexpr u64 Steps = 200'000;
   auto positioned = [](bool spins) {
     auto m = machine([](KernelMachine& m) { geTwoCalls(m, 40000); }, true, false, true);
     u32 stub = m->stub("sceGeListSync");
-    auto toStub = [&] { do m->kernel.run(1); while(m->system.ipu.pc != stub); };
+    u64 steps = 0;
+    auto toStub = [&] { do m->kernel.run(1); while(m->system.ipu.pc != stub && ++steps < Steps); };
     m->kernel.run(200'000);
-    do toStub(); while(!m->kernel.geContendBound(m->kernel.geWindow));
+    do toStub(); while(!m->kernel.geContendBound(m->kernel.geWindow) && steps < Steps);
     m->kernel.spins = spins;
-    for(u32 visit = 0; visit <= Kernel::SpinTurns; visit++) toStub();
+    for(u32 visit = 0; visit <= Kernel::SpinTurns && steps < Steps; visit++) toStub();
+    if(steps >= Steps) std::printf("  not at the list's call past the kink in %llu steps\n", (unsigned long long)steps);
+    CHECK(steps < Steps, true);
     return m;
   };
   auto go = [](KernelMachine& m, u64 room) {  //(the stub's jr, then its syscall in a go: spinsDirect's anchor())
@@ -1082,9 +1104,23 @@ static auto spinsGeTwoCalls() -> void {
   auto x = positioned(true), y = positioned(false);
   CHECK(saveState(*x) == saveState(*y), true);
   u64 room = (20 + Kernel::SpinMargin) * x->kernel.spin.period + 2;  //(as spinsDirect's, and the jr counted)
+  auto& k = x->kernel;
+  auto before = k.spinChecks;
   go(*x, room);
-  auto& spin = x->kernel.spin;
+  auto& spin = k.spin;
   CHECK(spin.turns == 0 && spin.steady && spin.calls == 2 && spin.moved[2] == 1, true);  //(the try made)
+  //and refused by its own check alone: what the others need holds (the GE busy past the 20 turns, and the window's
+  //time the same kind at both ends, the turns' cycles and lines added as spinSkip() adds them), and only that check's
+  //count went up
+  u64 skips = 20 * spin.period;
+  auto end = k.geWindow;
+  end.passed += skips, end.instructions += skips;
+  end.fills += 20 * (spin.moved[0] + spin.moved[3]), end.writebacks += 20 * spin.moved[1];
+  end.uncached += 20 * spin.moved[2];
+  CHECK(k.geDoneAt > k.cycles + skips, true);
+  CHECK(k.geContendBound(k.geWindow) == k.geContendBound(end), true);
+  CHECK(k.spinChecks.calls == before.calls + 1 && k.spinChecks.partway == before.partway &&
+        k.spinChecks.unsteady == before.unsteady && k.spinChecks.kind == before.kind, true);
   u64 turns = x->kernel.spun;
   go(*y, room);
   if(turns) y->kernel.run(turns * x->kernel.spin.period);
@@ -1138,9 +1174,369 @@ auto settling(KernelMachine& m) -> void {
 static auto spinsGeSettling() -> void {
   for(bool recompile : {false, true}) {
     u64 skipped = 0;
-    CHECK(bothWays(settling, recompile, 32, skipped, true), true);
+    Kernel::SpinChecks checks;
+    CHECK(bothWays(settling, recompile, 32, skipped, true, &checks), true);
     if(skipped <= 1000) std::printf("  skipped %llu turns\n", (unsigned long long)skipped);
     CHECK(skipped > 1000, true);
+    if(recompile) CHECK(checks.unsteady > 0, true);  //(its refusal reached; the interpreter's turns are all alike)
+  }
+}
+
+constexpr u32 Answers = R + 0x400, Mark = R + 0x480, CallbackRuns = R + 0x490, Buffer = 0x0893'0000;
+
+//Where a poll's anchor is, for a skip made directly: sceGeDrawSync's syscall, and where main goes on.
+struct Anchor { u32 site = 0, back = 0; };
+
+//What a poll's turn does with a semaphore besides asking the GE how it's doing (semaphorePoll()), storing each call's
+//result:
+//  Free        Need for Speed: Shift's: one at 0 (its most 1) signalled and taken back with a wait, twice
+//  OneMore     one with a large count signalled once and taken twice: one more taken than given, each turn
+//  WaitCB      one at 1 taken with sceKernelWaitSemaCB (the thread has a callback, not notified) and given back
+//  CanNotWait  one at 1 waited on with interrupts held off round the wait (mtic): CAN_NOT_WAIT
+//  Unknown     a deleted one's ID waited on: UNKNOWN_SEMAPHORE
+//  NoCount     one at 1 waited on for 0: ILLEGAL_COUNT
+//  PastMost    one at 1, its most, waited on for 2: ILLEGAL_COUNT
+//  Held        one at 0 (its most 1) signalled (to 1), signalled again (refused past its most, the turn's own signal
+//              counted) and taken back
+//  Waiter      one another thread waits on for 2, signalled and taken back for 1 (that thread never wakes)
+//  WouldWait   one at 0 that another thread signals every 500 microseconds, waited on: the wait waits
+enum class Sema : u32 { Free, OneMore, WaitCB, CanNotWait, Unknown, NoCount, PastMost, Held, Waiter, WouldWait };
+
+//The thread's callback (at 0x0880'4800): one more run counted at CallbackRuns, the clock it ran at after that count.
+auto threadCallback(KernelMachine& m) -> void {
+  Assembler callback{m, 0x0880'4800};
+  callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+  callback.call("sceKernelGetSystemTimeLow");
+  callback.li(t0, CallbackRuns); callback.put(lw(t1, 0, t0)); callback.put(addiu(t1, t1, 1));
+  callback.put(sw(t1, 0, t0)); callback.put(sw(v0, 4, t0));
+  callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+  callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);  //(0: kept)
+}
+
+//main starts an asynchronous read of DATA.BIN on the memory stick (stick: its host folder, mounted as ms0), with the
+//callback in s7 as the file's: done between goes, 100 microseconds and its bytes at the stick's rate after it's made,
+//which notifies the callback.
+auto readAsync(KernelMachine& m, Assembler& main, const std::string& stick) -> void {
+  m.kernel.mount("ms0", stick);
+  main.li(a0, m.string("ms0:/DATA.BIN")); main.li(a1, 1); main.li(a2, 0); main.call("sceIoOpen");
+  main.put(addu(s2, v0, zero));
+  main.put(addu(a0, s2, zero)); main.put(addu(a1, s7, zero)); main.li(a2, 0x55); main.call("sceIoSetAsyncCallback");
+  main.put(addu(a0, s2, zero)); main.li(a1, Buffer); main.li(a2, 4000); main.call("sceIoReadAsync");
+}
+
+//A poll of the GE that also uses a semaphore each turn (what), as the EA games' loops do (geWait() leaves that out):
+//main makes the semaphore (and starts the thread that waits on it or signals it), then queues a list of 16 sprites
+//(geSprites()) and, till the GE says it's done, asks sceGeDrawSync(1), the turn's first call and so its anchor, and
+//makes the turn's semaphore calls, storing each result at Answers on; three lists, the clock noted after each. With
+//stick (WaitCB), main first starts an asynchronous read whose callback is the thread's (readAsync()): the poll's next
+//CB wait once it's done runs the callback.
+auto semaphorePoll(KernelMachine& m, Sema what, const std::string& stick = {}) -> Anchor {
+  threadCallback(m);
+  Assembler main{m, 0x0880'1000};
+  u32 count = what == Sema::OneMore ? 0x4000'0000 : what == Sema::Free || what == Sema::Held ||
+              what == Sema::Waiter || what == Sema::WouldWait ? 0 : 1;
+  u32 most = what == Sema::OneMore || what == Sema::Waiter ? 0x7fff'ffff : 1;
+  main.li(a0, m.string("sema")); main.li(a1, 0); main.li(a2, count); main.li(a3, most); main.li(t0, 0);
+  main.call("sceKernelCreateSema");
+  main.put(addu(s6, v0, zero));
+  main.li(t0, Spare); main.put(sw(s6, 0, t0));  //(for the other thread)
+  if(what == Sema::Unknown) main.put(addu(a0, s6, zero)), main.call("sceKernelDeleteSema");
+  if(what == Sema::Waiter || what == Sema::WouldWait) {  //(better than main: it runs at once, to its wait or delay)
+    Assembler other{m, 0x0880'3000};
+    u32 again = other.here();
+    if(what == Sema::WouldWait) other.li(a0, 500), other.call("sceKernelDelayThread");
+    other.li(t0, Spare); other.put(lw(a0, 0, t0));
+    if(what == Sema::Waiter) other.li(a1, 2), other.li(a2, 0), other.call("sceKernelWaitSema");
+    else other.li(a1, 1), other.call("sceKernelSignalSema");
+    other.put(beq(zero, zero, branchTo(other, again))); other.put(nop);
+    startThread(main, m, "other", 0x0880'3000);
+  }
+  if(what == Sema::WaitCB) {
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'4800); main.li(a2, 0); main.call("sceKernelCreateCallback");
+    main.put(addu(s7, v0, zero));
+    if(!stick.empty()) readAsync(m, main, stick);
+  }
+  geSprites(m, GeList, GeVertices);
+  main.li(s4, 0);
+  u32 round = main.here();
+  main.put(addiu(s4, s4, 1));
+  main.li(a0, GeList); main.li(a1, 0); main.li(a2, 0xffff'ffff); main.li(a3, 0);
+  main.call("sceGeListEnQueue");
+  u32 poll = main.here();
+  main.li(a0, 1); main.call("sceGeDrawSync");
+  Anchor anchor{m.stub("sceGeDrawSync") + 4, main.here()};
+  main.put(addu(s5, v0, zero));
+  u32 answer = Answers;
+  auto store = [&] { main.li(t0, answer); main.put(sw(v0, 0, t0)); answer += 4; };
+  auto signal = [&] { main.put(addu(a0, s6, zero)); main.li(a1, 1); main.call("sceKernelSignalSema"); store(); };
+  auto wait = [&](u32 count, const char* name = "sceKernelWaitSema") {
+    main.put(addu(a0, s6, zero)); main.li(a1, count); main.li(a2, 0); main.call(name); store();
+  };
+  switch(what) {
+  case Sema::Free: signal(); wait(1); signal(); wait(1); break;
+  case Sema::OneMore: signal(); wait(1); wait(1); break;
+  case Sema::WaitCB: wait(1, "sceKernelWaitSemaCB"); signal(); break;
+  case Sema::CanNotWait: main.put(mtic(zero)); wait(1); main.li(t1, 1); main.put(mtic(t1)); break;
+  case Sema::Unknown: case Sema::WouldWait: wait(1); break;
+  case Sema::NoCount: wait(0); break;
+  case Sema::PastMost: wait(2); break;
+  case Sema::Held: signal(); signal(); wait(1); break;
+  case Sema::Waiter: signal(); wait(1); break;
+  }
+  main.put(bne(s5, zero, branchTo(main, poll))); main.put(nop);
+  main.call("sceKernelGetSystemTimeLow");
+  main.put(sll(t1, s4, 2)); main.li(t2, Seen); main.put(addu(t2, t2, t1)); main.put(sw(v0, 0, t2));
+  main.put(sltiu(t3, s4, Rounds));
+  main.put(bne(t3, zero, branchTo(main, round))); main.put(nop);
+  main.call("sceKernelExitGame");
+  return anchor;
+}
+
+//Who else is ready as a poll's turn signals a semaphore with interrupts on (switching()): a thread better than main
+//(0x10), its delay ended while main held interrupts off; one of main's own priority, ready all along; or a better one
+//suspended in its delay (sceKernelSuspendThread), ready once it ends but passed over.
+enum class Other : u32 { Better, Equal, Suspended };
+
+//A poll (sceGeDrawSync(1), its turn's first call and so its anchor) that also takes a binary semaphore at 1 and gives
+//it back, its signal made with interrupts held off (mtic) for its first five turns and on from then (a count stored
+//each turn, without a branch), while another thread is ready (other); it ends once that thread has run (its mark) or
+//two vertical blanks have passed. With interrupts on, the signal hands the CPU to a better thread there
+//(reschedule()), to none of main's priority nor to a suspended one. With anchorOff, interrupts are held off instead
+//from the turn's start to its wait, so that the anchor's call is made with them off and the signal with them on: the
+//CPU's flag at the anchor isn't the turn's at the signal. (The programs of the design's review, finding 3.1 and its
+//round two, the GE asked after.)
+auto switching(KernelMachine& m, Other other, bool anchorOff = false) -> void {
+  Assembler thread{m, 0x0880'3000};
+  thread.li(a0, 100); thread.call("sceKernelDelayThread");
+  thread.call("sceKernelGetSystemTimeLow");
+  thread.put(ori(v0, v0, 1)); thread.li(t0, Mark); thread.put(sw(v0, 0, t0));
+  u32 again = thread.here();
+  thread.li(a0, 1'000'000); thread.call("sceKernelDelayThread");
+  thread.put(beq(zero, zero, branchTo(thread, again))); thread.put(nop);
+  Assembler main{m, 0x0880'1000};
+  main.li(a0, m.string("binary")); main.li(a1, 0); main.li(a2, 1); main.li(a3, 1); main.li(t0, 0);
+  main.call("sceKernelCreateSema");
+  main.put(addu(s0, v0, zero));
+  main.call("sceDisplayGetVcount");
+  main.put(addu(s4, v0, zero));
+  main.li(a0, m.string("other")); main.li(a1, 0x0880'3000); main.li(a2, other == Other::Equal ? 0x20 : 0x10);
+  main.li(a3, 0x1000); main.li(t0, 0); main.li(t1, 0);
+  main.call("sceKernelCreateThread");
+  main.put(addu(s3, v0, zero));
+  main.put(addu(a0, s3, zero)); main.li(a1, 0); main.li(a2, 0);
+  main.call("sceKernelStartThread");  //(a better one runs at once, to its delay; one of main's priority is ready)
+  if(other == Other::Suspended) main.put(addu(a0, s3, zero)), main.call("sceKernelSuspendThread");
+  main.put(mtic(zero));  //(held off past the better one's delay: it's ready, and main keeps the CPU)
+  main.li(t0, 200'000);
+  u32 busy = main.here();
+  main.put(addiu(t0, t0, -1)); main.put(bne(t0, zero, branchTo(main, busy))); main.put(nop);
+  main.li(t9, 1);
+  if(!anchorOff) main.put(mtic(t9));
+  main.li(s1, Count); main.li(s2, Mark);
+  u32 loop = main.here();
+  if(anchorOff) main.put(mtic(zero));
+  main.li(a0, 1); main.call("sceGeDrawSync");
+  main.call("sceDisplayGetVcount");
+  main.put(subu(t6, v0, s4));
+  if(anchorOff) main.put(mtic(t9));
+  main.put(addu(a0, s0, zero)); main.li(a1, 1); main.li(a2, 0); main.call("sceKernelWaitSema");
+  main.put(lw(t0, 0, s1));
+  main.put(sltiu(t1, t0, 5)); main.put(xori(t2, t1, 1)); main.put(mtic(t2));  //(on from the sixth turn)
+  main.put(addu(a0, s0, zero)); main.li(a1, 1); main.call("sceKernelSignalSema");
+  if(!anchorOff) main.put(mtic(t9));
+  main.put(addu(t3, t0, t1)); main.put(sw(t3, 0, s1));
+  main.put(lw(t5, 0, s2));
+  main.put(sltiu(t7, t6, 2)); main.put(xori(t7, t7, 1));
+  main.put(sltu(t8, zero, t5)); main.put(or_(t8, t8, t7));
+  main.put(addu(t0, zero, zero)); main.put(addu(t1, zero, zero)); main.put(addu(t2, zero, zero));
+  main.put(addu(t3, zero, zero));
+  main.put(beq(t8, zero, branchTo(main, loop))); main.put(nop);
+  main.put(mtic(t9));
+  main.call("sceKernelExitGame");
+}
+
+//The anchor's syscall made in a go of its own, as a go would make it (spinsDirect's anchor()): main about to make it,
+//the detector a turn short of a proof with the turn's period, and room for turns turns and the margin. The turns
+//skipped.
+auto anchorGo(KernelMachine& m, const Anchor& anchor, u64 period, u64 turns) -> u64 {
+  auto& k = m.kernel;
+  k.spins = true;
+  k.spin = {anchor.site, anchor.back, k.cycles - period, period, Kernel::SpinTurns - 1, 0};
+  k.counted = 0;
+  k.going = true;
+  m.system.instructionsRun = 0;
+  m.system.runLimit = (turns + Kernel::SpinMargin) * period + 1;
+  m.system.instruction();
+  k.going = false;
+  u64 ran = m.system.instructionsRun + 1;  //(and the syscall)
+  k.cycles += ran - k.counted, k.counted = ran;
+  return k.spun;
+}
+
+//Machines for skips made directly on a poll's program (one returning its anchor): each run with the skip off till main
+//is about to make the anchor's syscall at the second turn of its poll (the GE drawing the first list; the registers
+//and the stored results as each turn leaves them); and the turn's period, stepped round once on one of them. Each step
+//is a go of one instruction, at most Steps of them: a change keeping main from the anchor fails here instead of
+//hanging.
+struct AtAnchor {
+  static constexpr u64 Steps = 1'000'000;
+  std::function<Anchor(KernelMachine&)> program;
+  Anchor anchor;
+  auto at(KernelMachine& m) const -> bool { return m.system.ipu.pc == anchor.site && m.system.ipu.pd == anchor.back; }
+  auto make() -> std::unique_ptr<KernelMachine> {
+    auto m = machine([this](KernelMachine& m) { anchor = program(m); }, false, false);
+    u64 steps = 0;
+    while(!at(*m) && ++steps < Steps) m->kernel.run(1);
+    do m->kernel.run(1); while(!at(*m) && ++steps < Steps);
+    CHECK(at(*m), true);
+    return m;
+  }
+  auto period(KernelMachine& m) const -> u64 {
+    u64 period = 0;
+    do m.kernel.run(1), period++; while(!at(m) && period < Kernel::SpinLongest);
+    return period;
+  }
+};
+
+//A callback notified as a poll's turn begins (as a file's request done between goes notifies it): skipped directly
+//(atAnchor's machines, "Fast"'s timing and the synchronous GE, as spinsDirect makes them, with room for 500 turns),
+//with none due the turns are skipped and the state is the same as with them run; with the thread's callback notified
+//first the proof stops where the turn would run it (a CB wait, or a callback check), the detector waits longer, none is
+//skipped, and the turn runs it. That the GE is busy past the turns (no FINISH falls due in them) is checked first.
+auto notifiedDirectly(AtAnchor& atAnchor) -> void {
+  constexpr u64 Turns = 500;
+  auto a = atAnchor.make(), b = atAnchor.make(), c = atAnchor.make();
+  u64 period = atAnchor.period(*c);
+  if(period < 10 || period > 100) std::printf("  a turn of %llu instructions\n", (unsigned long long)period);
+  CHECK(period >= 10 && period <= 100, true);
+  CHECK(a->kernel.geDoneAt > a->kernel.cycles + (Turns + Kernel::SpinMargin + 1) * period, true);
+  CHECK(anchorGo(*a, atAnchor.anchor, period, Turns), Turns);
+  b->kernel.run(Turns * period + 1);
+  CHECK(saveState(*a) == saveState(*b), true);
+  auto d = atAnchor.make();
+  auto& k = d->kernel;
+  CHECK(k.callbacks.size(), 1u);
+  CHECK(k.notifyCallback(k.callbacks.begin()->first, 1), true);
+  CHECK(anchorGo(*d, atAnchor.anchor, period, Turns), 0);
+  CHECK(k.spin.wait > 0, true);  //(the proof failed)
+  CHECK(d->system.memory.read(4, CallbackRuns), 0u);
+  k.run(period * 4);
+  CHECK(d->system.memory.read(4, CallbackRuns), 1u);
+}
+
+//The EA games' loops (Need for Speed: Shift's, Burnout Dominator's and Legends'): the GE asked after, a semaphore
+//signalled and taken back with a wait each turn, twice, the waits succeeding at once (semaphorePoll()'s Free): calm,
+//worked out on the shadow, and the turns skipped (thousands) as run. A turn taking one more than it gives (OneMore)
+//changes the semaphore: its proof fails at the counts' closing check, and it isn't skipped. Every step's state the same
+//either way, on both engines.
+static auto spinsSemaphore() -> void {
+  for(bool recompile : {false, true}) {
+    u64 skipped = 0;
+    CHECK(bothWays([](KernelMachine& m) { semaphorePoll(m, Sema::Free); }, recompile, 32, skipped), true);
+    if(skipped <= 1000) std::printf("  Free skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+    CHECK(bothWays([](KernelMachine& m) { semaphorePoll(m, Sema::OneMore); }, recompile, 32, skipped), true);
+    if(skipped) std::printf("  OneMore skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped, 0);
+  }
+}
+
+//A CB wait taking its semaphore at once, the thread's callback made but none notified (semaphorePoll()'s WaitCB), and
+//the semaphore given back: calm, and the turns skipped as run. With an asynchronous read whose callback is the
+//thread's, done between goes, the poll's next CB wait runs the callback, as with every turn run. And directly
+//(notifiedDirectly()): a try with the callback notified isn't skipped, the proof stopping at the CB wait. Every step's
+//state the same either way, on both engines.
+static auto spinsSemaphoreCB() -> void {
+  HostFolder stick;
+  stick.put("DATA.BIN", std::string(4000, 'd'));
+  auto read = [&](KernelMachine& m) { semaphorePoll(m, Sema::WaitCB, stick.path.string()); };
+  for(bool recompile : {false, true}) {
+    u64 skipped = 0;
+    CHECK(bothWays([](KernelMachine& m) { semaphorePoll(m, Sema::WaitCB); }, recompile, 32, skipped), true);
+    if(skipped <= 1000) std::printf("  WaitCB skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+    CHECK(bothWays(read, recompile, 32, skipped), true);
+    if(skipped <= 1000) std::printf("  WaitCB with a read skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+    auto m = machine(read, recompile, true);
+    m->kernel.run(Step * 32);
+    CHECK(m->kernel.exited, true);
+    CHECK(m->system.memory.read(4, CallbackRuns), 1u);
+  }
+  FastTimed fastTimed;
+  Unthreaded unthreaded;
+  AtAnchor atAnchor{[](KernelMachine& m) { return semaphorePoll(m, Sema::WaitCB); }, {}};
+  notifiedDirectly(atAnchor);
+}
+
+//A semaphore's wait refused, its result stored each turn (semaphorePoll()): with interrupts held off round it
+//(CAN_NOT_WAIT; the turn's first call, its anchor, made with them on, outside that), on a deleted semaphore
+//(UNKNOWN_SEMAPHORE), for 0, and for more than its most (ILLEGAL_COUNT); and a signal refused past the semaphore's most
+//only in the turn's view, after the turn's own signal (Held). Each refused call calm (but for ILLEGAL_CONTEXT, which
+//comes only while interrupting, where nothing is skipped), worked out on the shadow as the kernel answers it, and the
+//turns skipped as run. Every step's state the same either way, and each result the PSP's; on both engines.
+static auto spinsSemaphoreRefused() -> void {
+  struct Case { Sema what; std::vector<u32> answers; };
+  std::vector<Case> cases{{Sema::CanNotWait, {Kernel::ErrorCanNotWait}},
+                          {Sema::Unknown, {Kernel::ErrorUnknownSemaphore}},
+                          {Sema::NoCount, {Kernel::ErrorIllegalCount}}, {Sema::PastMost, {Kernel::ErrorIllegalCount}},
+                          {Sema::Held, {0, Kernel::ErrorSemaphoreOverflow, 0}}};
+  for(bool recompile : {false, true}) {
+    for(auto& item : cases) {
+      Sema what = item.what;
+      auto& answers = item.answers;
+      u64 skipped = 0;
+      auto program = [what](KernelMachine& m) { semaphorePoll(m, what); };
+      CHECK(bothWays(program, recompile, 32, skipped), true);
+      if(skipped <= 1000) std::printf("  case %u skipped %llu turns\n", u32(what), (unsigned long long)skipped);
+      CHECK(skipped > 1000, true);
+      auto m = machine(program, recompile, true);
+      m->kernel.run(Step * 32);
+      CHECK(m->kernel.exited, true);
+      for(u32 n = 0; n < answers.size(); n++) CHECK(m->system.memory.read(4, Answers + n * 4), answers[n]);
+    }
+  }
+}
+
+//A semaphore's signal with interrupts on and another thread ready (switching()): where it would hand the CPU over (a
+//better thread), no turn is skipped, the interrupts the turn's at the signal, not the CPU's at the anchor (anchorOff),
+//and the better thread runs there as with every turn run; with one of main's priority ready, or a better one suspended,
+//it hands over nothing, and the turns are skipped (thousands; a decline wider than reschedule()'s switch would lose
+//them). Every step's state the same either way, on both engines.
+static auto spinsSemaphoreSwitch() -> void {
+  struct Case { Other other; bool anchorOff; };
+  for(bool recompile : {false, true}) {
+    for(auto item : {Case{Other::Better, false}, Case{Other::Better, true}, Case{Other::Equal, false},
+                     Case{Other::Suspended, false}}) {
+      Other other = item.other;
+      bool anchorOff = item.anchorOff;
+      u64 skipped = 0;
+      auto program = [other, anchorOff](KernelMachine& m) { switching(m, other, anchorOff); };
+      CHECK(bothWays(program, recompile, 48, skipped), true);
+      bool better = other == Other::Better;
+      if(better ? skipped != 0 : skipped <= 1000) {
+        std::printf("  other %u, anchor off %u: skipped %llu turns\n", u32(other), anchorOff,
+                    (unsigned long long)skipped);
+      }
+      CHECK(better ? skipped == 0 : skipped > 1000, true);
+      auto m = machine(program, recompile, true);
+      m->kernel.run(Step * 48);
+      CHECK(m->kernel.exited, true);
+      CHECK(m->system.memory.read(4, Mark) != 0, better);  //(the better thread ran; the others never do)
+    }
+  }
+}
+
+//A signal a thread waits on (Waiter: not worked out, the signal might wake it), and a wait that waits (WouldWait: not
+//calm), each a poll's turn: not skipped, every step's state the same either way, on both engines.
+static auto spinsSemaphoreWaits() -> void {
+  for(bool recompile : {false, true}) {
+    for(auto what : {Sema::Waiter, Sema::WouldWait}) {
+      u64 skipped = 0;
+      CHECK(bothWays([what](KernelMachine& m) { semaphorePoll(m, what); }, recompile, 32, skipped), true);
+      if(skipped) std::printf("  case %u skipped %llu turns\n", u32(what), (unsigned long long)skipped);
+      CHECK(skipped, 0);
+    }
   }
 }
 
@@ -1164,6 +1560,15 @@ auto spinTests() -> Tests {
      spinsGeTwoCalls},
     {"the GE's looks polled with the PSP's GE timing, its turns settling: no skip till the last two turns move alike",
      spinsGeSettling},
+    {"the GE's looks polled beside a semaphore signalled and taken back each turn: skipped as run, but not one taking "
+     "more than it gives", spinsSemaphore},
+    {"the GE's looks polled beside a CB wait taking a semaphore at once: skipped as run, not with its callback "
+     "notified", spinsSemaphoreCB},
+    {"the GE's looks polled beside a semaphore's waits and a signal refused: skipped as run", spinsSemaphoreRefused},
+    {"the GE's looks polled beside a semaphore's signal with another thread ready: not skipped where it hands the CPU "
+     "over", spinsSemaphoreSwitch},
+    {"the GE's looks polled beside a semaphore another thread waits on, or a wait that waits: not skipped",
+     spinsSemaphoreWaits},
   };
 }
 
