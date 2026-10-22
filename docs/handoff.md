@@ -58,8 +58,9 @@ both entries kept).
   back with a wait that succeeds at once, twice a turn, and Midnight Club: L.A. Remix's checks its callbacks with none
   due: neither call was calm, so the detector started afresh every turn and the loops were never skipped (part 105's
   Left, closed). The design's prototype took those games' host instructions under the PSP's timing down 50-79% (the
-  EA three) and 24% (Midnight Club), every state master's (r3's `compare-runs.txt`); this code's own runs, the
-  second round's: 79%, 71% and 50%, and 24%, every state master's (below).
+  EA three) and 24% (Midnight Club), every state master's (its runs kept outside the repository); this code's own
+  runs, the second round's: 79%, 71% and 50%, and 24%, every state master's. Both are the host instructions of the
+  headless runner's -O1 build on one x86-64 desktop, not the app's build (The games, below).
 - **Tests** (tests/psp/spins.cpp; each new group named "the GE's looks polled beside …", so that CI's GE-thread step
   runs it with the thread on too; part 116 gives each case's turns): Shift's turn skipped as run (88,629 turns) and
   one taking more than it gives not; a CB wait skipped (151,563), an asynchronous read's callback run once at the next
@@ -72,7 +73,7 @@ both entries kept).
   and a try made directly with it notified refused. #295's groups and #289's kink group check their own refusals
   through `Kernel::spinChecks`; the two-calls group's skip at once also checks what the other refusals need, and its
   `positioned()` loops are bounded (#295's review, suggestions 1 and 2).
-- **Mutations** (`code/mut/`: each diff and each run's log), each through the release suite with the GE thread off,
+- **Mutations** (the diffs and logs kept outside the repository), each through the release suite, the GE thread off,
   CI's PSP-timing step and its GE-thread step, failed checks. With these tests all 18 fail in all three (656, 120
   and 76 groups), the same number in each but `closing`'s: `closing` 8, 8, 4; `waitcalm` 12; `cbcalm` 4; `cbdue` 2;
   the refusals' `calm` 2, 2, 4 and their codes 2, 2, 4; `held` 12; `preempt` 8; `preempt-cpuflag` 4;
@@ -80,34 +81,37 @@ both entries kept).
   every one passes (650/0, 114/0, 70/0) but `closing`, 650/4, 114/4, 70/0, through "spins refused"'s semaphore that
   counts. `cbdue` and `pending` fail only in the try made directly. `cbdue`'s first runs didn't build (its parameter
   left unused); they were run again with `(void)callbacks;`.
-- **#295's groups' counts, taken again** in a scratch copy after the rework (`code/logs/inst-final.log`): line for
-  line what #295 counted on `45eb68d3c` (74,345 refused part way and 213 skips; 1,727 refused with several calls and
-  3 skips; 3 refused unsteady and 36 skips; 1 refetch marked as VRAM's).
-- **Checks** on `a7552b776`, the worktree clean (each log in `code/logs/` starts with the tree and its status lines):
-  the release suite with the GE thread off 656 groups, 0 failures, on 656, 0; CI's PSP-timing step 120, 0; its
-  GE-thread step 76, 0; the six new groups and #295's four sanitized (ASan and UBSan), the thread off 10, 0 and on 10,
-  0, no sanitizer report; W1's commit alone (`c793ab17d`) through the release suite, the thread off, 655, 0.
-  `git diff --check` and `git show --check` clean on each commit; no added line over 120 columns.
-- **Departures from the prototype** (r3's `proto-r3.diff`; the two set against each other in
-  `code/proto-vs-final.diff`, every decision the same): split into W1 and W2; `semaphoreWaitRefused()` hands back the
-  semaphore it found (the design review's suggestion 1), no longer `const`; `spinSkip()`'s counters for tests
-  (#295's review, suggestion 1); the comments the prototype left stale, and its "(W1)" and "(W2)" labels.
+- **#295's groups' counts, taken again** in a scratch copy after the rework (its log kept outside the repository):
+  line for line what #295 counted on `45eb68d3c` (74,345 refused part way and 213 skips; 1,727 refused with several
+  calls and 3 skips; 3 refused unsteady and 36 skips; 1 refetch marked as VRAM's).
+- **Checks** on `a7552b776`, the worktree clean (each log, kept outside the repository, starts with the tree and its
+  status lines): the release suite with the GE thread off 656 groups, 0 failures, on 656, 0; CI's PSP-timing step
+  120, 0; its GE-thread step 76, 0; the six new groups and #295's four sanitized (ASan and UBSan), the thread off 10,
+  0 and on 10, 0, no sanitizer report; W1's commit alone (`c793ab17d`) through the release suite, the thread off,
+  655, 0. `git diff --check` and `git show --check` clean on each commit; no added line over 120 columns.
+- **Departures from the prototype** (the design's third round's; the two set against each other in a diff kept outside
+  the repository, every decision the same): split into W1 and W2; `semaphoreWaitRefused()` hands back the semaphore
+  it found (the design review's suggestion 1), no longer `const`; `spinSkip()`'s counters for tests (#295's review,
+  suggestion 1); the comments the prototype left stale, and its "(W1)" and "(W2)" labels.
 - **The games** (the second round; part 116's "The games"): master `062dd53e2` against `760ee14a7`, each runner with
   the same scratch patch (each frame's XXH3-128 of `root->serialize(true)`'s bytes, `kernel.spun` in the summary, the
   saved state's frame named). Exactness from boot, 2,400 frames, the Software renderer: Burnout Dominator, Need for
   Speed: Shift, Burnout Legends, Midnight Club: L.A. Remix and Resistance: Retribution, both GE timings, the GE thread
   off and on, every frame's state master's in all 20 configurations (48,000 frames), and the state saved at the top of
   frame 2,400 (after 2,399 frames) too. Master skips none of the four games' loops; the branch skips 3.5 to 41.6
-  million turns in each, and as many of Resistance's as master. Host cost, `polls.sh`'s eight games (3,600 frames,
-  Vulkan fast with late frames, the GE thread off, two rounds taking turns; the emulation thread's host instructions a
-  frame): under the PSP's timing Dominator 147.56 to 30.55 M (−79.3%), Shift 133.06 to 38.26 (−71.2%), Legends
-  220.96 to 110.82 (−49.8%), Midnight Club 93.46 to 71.49 (−23.5%); under "Fast" −26.0%, −32.4%, −5.6% and −16.1%;
-  the other four games within 0.01%; every state at frame 3,600 master's.
+  million turns in each, and as many of Resistance's as master. Host cost, eight polling games (3,600 frames, Vulkan
+  fast with late frames, the GE thread off, two rounds taking turns), in the emulation thread's user-mode host
+  instructions a frame, from the headless runner as tools/psp-runner/build.sh builds it (-O1, `BUILD_DEBUG`, GCC 16)
+  on one x86-64 desktop; the Android app builds at -O3 with LTO and wasn't measured, nor were the RP6 and the Mac:
+  under the PSP's timing Dominator 147.56 to 30.55 M (−79.3%), Shift 133.06 to 38.26 (−71.2%), Legends 220.96 to
+  110.82 (−49.8%), Midnight Club 93.46 to 71.49 (−23.5%); under "Fast" −26.0%, −32.4%, −5.6% and −16.1%; the other
+  four games within 0.01%; every state at frame 3,600 master's.
 - Independent review: PASS on `2ddcb6237`, independent and read-only (round one: no high or medium finding; one low,
   the PR description's CI image version, corrected there; two informational, the conflict with #296's entry, resolved
-  in the merge, and W1's message's "the PSP's" for the kernel's results). The merge, the second round's docs and the
-  removal of local paths from this entry and part 116 go to a delta review; its verdict is in the message of the
-  commit that merges this branch into master.
+  in the merge, and W1's message's "the PSP's" for the kernel's results). The delta round on the merge, `869dd95af`
+  and `b1bb7b449` found two wording matters (NEEDS CHANGES): files kept outside the repository still named by path,
+  and the host costs' build and host unsaid. The docs commit that adds this line fixes them; the delta round's verdict
+  on it goes in the message of the commit merging this branch into master.
 
 ## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
 

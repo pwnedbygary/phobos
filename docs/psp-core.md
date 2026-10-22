@@ -20130,7 +20130,7 @@ and the turn's interrupts; for a counting signal, whether `reschedule()` would h
 of quiet and calm calls none of these changes but by the turn's own calls:
 - **every writer of a thread's status, priority or suspension, and of `dispatchSuspended`, is a function that is
   neither quiet nor calm, or runs between goes**, the rotation aside. The design review's round two followed all 62 of
-  `ready()`'s call sites and every other such write (`REVIEW-r2.md`, its finding 3.3): a wait's wakeup, a delete,
+  `ready()`'s call sites and every other such write (its finding 3.3): a wait's wakeup, a delete,
   cancel, unlock or send, an event flag's set, a pool's or a TLS block's free, the UMD's change, callbacks returning, a
   module thread's end, a timeout, the sound, the controller, a file's request or the GE (between goes, or at a call
   taking the GE's FINISH or SIGNAL), `wakeForCallbacks()` (events.cpp:223-227, from `notifyCallback()` and `block()`),
@@ -20158,7 +20158,8 @@ tests/psp/spins.cpp. Each new group is named "the GE's looks polled beside …",
 with the GE on its thread as well; each poll asks `sceGeDrawSync(1)` first in its turn (its anchor), as the EA games'
 do, over three lists. On both engines, with the skip on and off, every step's state the same either way
 (`bothWays()`). The turns skipped are each case's on each engine (the two the same, or one turn apart), counted in a
-scratch copy that prints them (`code/logs/inst-new.log`; never committed); the groups check thousands, or none.
+scratch copy that prints them (never committed; its log kept outside the repository); the groups check thousands, or
+none.
 - "…a semaphore signalled and taken back each turn: skipped as run, but not one taking more than it gives"
   (`spinsSemaphore`, W1): Shift's turn (a semaphore at 0, its most 1, signalled and taken back twice), 88,629 turns
   skipped. A turn taking one more than it gives (one signal and two waits on a large count): none, its proof failing
@@ -20200,15 +20201,15 @@ scratch copy that prints them (`code/logs/inst-new.log`; never committed); the g
   one-instruction steps with a CHECK, so that a timing change fails rather than hangs (its suggestion 2), as
   `AtAnchor`'s do after 1,000,000.
 
-#295's four groups' refusals, counted again in the copy after this rework (`code/logs/inst-final.log`), are line for
-line what #295 counted on `45eb68d3c`: the stalled list 74,345 tries refused part way and 213 skips (5,883,259 turns);
-two calls a turn 1,727 refused with several calls, the at-once try among them, and 3 skips on the interpreter (5,842
-turns); the settling turns 3 refused unsteady and 36 skips (811,836 turns); the one-way list 1 refetch marked as
-VRAM's. The rework changed no decision in them.
+#295's four groups' refusals, counted again in the copy after this rework (its log kept outside the repository), are
+line for line what #295 counted on `45eb68d3c`: the stalled list 74,345 tries refused part way and 213 skips
+(5,883,259 turns); two calls a turn 1,727 refused with several calls, the at-once try among them, and 3 skips on the
+interpreter (5,842 turns); the settling turns 3 refused unsteady and 36 skips (811,836 turns); the one-way list 1
+refetch marked as VRAM's. The rework changed no decision in them.
 
 ### Mutations
 
-Each one change to `a7552b776`'s code, kept with its logs in `code/mut/` (`NAME.diff`, `NAME-SIDE-RUN.log`), run
+Each one change to `a7552b776`'s code, kept with its logs outside the repository (a diff, and a log for each run), run
 through the release suite (the GE thread off), CI's PSP-timing step and its GE-thread step, with these tests and with
 master's (`8c2b1ddee`'s tests/psp/spins.cpp); groups / failed checks. With these tests every one fails in all three,
 656, 120 and 76 groups; with master's every one passes, 650/0, 114/0 and 70/0, but the closing check's:
@@ -20245,12 +20246,11 @@ master's (`8c2b1ddee`'s tests/psp/spins.cpp); groups / failed checks. With these
   turns, its proof passing (the runs with the timer and the read pass, as for `cbdue`).
 
 `cbdue`'s first runs didn't build: with the check deleted, `callbacks` went unused and `-Werror=unused-parameter`
-stopped the build. They were run again with `(void)callbacks;` in its place; the failed logs are
-`code/mut/buildfail-cbdue-*`.
+stopped the build. They were run again with `(void)callbacks;` in its place; the failed logs are kept with the others.
 
 ### Checks
 
-On `a7552b776`, the worktree clean; each log in `code/logs/` starts with the tree and its status lines:
+On `a7552b776`, the worktree clean; each log (kept outside the repository) starts with the tree and its status lines:
 - the release suite with the GE thread off: 656 groups, 0 failures; with it on: 656, 0;
 - CI's PSP-timing step: 120, 0; its GE-thread step: 76, 0;
 - the six new groups and #295's four, sanitized (the debug build, ASan and UBSan): the thread off 10, 0; on 10, 0; no
@@ -20266,18 +20266,19 @@ committed): the runner's measurements, as part 115 has them; an option that writ
 (XXH3, 128 bits) of `root->serialize(true)`'s bytes, the state a save state takes once the GE thread has drained and
 the drawing has finished (the design review's finding 3.2); and two summary lines, `Kernel::spun` (the turns skipped,
 read before unloading clears it) and the frame the state was saved at (`--save-state-at F` saves at the top of frame
-F, before it runs). The script is the one the design specifies (`DESIGN-spin-widening-r3.md:278-313`), pairing
-master with the branch in place of the skip off with the skip on: that pairing tests the calm calls and the wider skip
-together against master, which `bothWays()`, running both sides with W1's calm, can't. Each run waited for the
-machine's load to allow it, and ran at niceness 5.
+F, before it runs). The script is the one the design's third round specifies, pairing master with the branch in place
+of the skip off with the skip on: that pairing tests the calm calls and the wider skip together against master, which
+`bothWays()`, running both sides with W1's calm, can't. Each run waited for the machine's load to allow it, and ran
+at niceness 5.
 
 **Exactness.** The design's five games (Burnout Dominator, Need for Speed: Shift, Burnout Legends, Midnight Club:
 L.A. Remix and Resistance: Retribution), 2,400 frames each (Start at 120, Cross at 1,800, the clock at 1700000000),
 the Software renderer with two drawing threads, under the PSP's GE timing and "Fast", with the GE thread off and on:
 20 configurations, each run by both runners. In all 20 every frame's hash is master's (48,000 frames), and so is the
 state saved at the top of frame 2,400 (after 2,399 frames), whose own hash is each run's hash of frame 2,399. Every
-other line of the runners' reports is master's, the turns skipped aside. Master skips none of the four games' loops;
-the branch skips them, and as many turns of Resistance's, whose loop master already skips:
+other line of the runners' reports is master's, the turns skipped and the host's own timing lines (frames a second,
+the captures' time) aside. Master skips none of the four games' loops; the branch skips them, and as many turns of
+Resistance's, whose loop master already skips:
 
 | Game | Turns skipped, the PSP's timing: master; the branch | "Fast": master; the branch |
 | --- | --- | --- |
@@ -20289,12 +20290,15 @@ the branch skips them, and as many turns of Resistance's, whose loop master alre
 
 With the GE thread on, the turns skipped and every frame's hash are those with it off, on both runners.
 
-**Host cost.** `polls.sh`'s eight games from boot, 3,600 frames (the same presses and clock), Vulkan (fast) with late
+**Host cost.** The eight games below from boot, 3,600 frames (the same presses and clock), Vulkan (fast) with late
 frames, the GE thread off, under both timings: each runner twice, taking turns (master first in the first round, the
-branch in the second), one run at a time. The figure is the emulation thread's user-mode host instructions a frame,
-from the CPU's counters, not frames a second; each side's two rounds agree within 0.01%. Each game's four states at
-the top of frame 3,600 are one, and the design's master runs' (on `c837d1868`, whose emulation is master's); every
-other report line is the same on both sides, the turns skipped aside.
+branch in the second), one run at a time. The figure is the emulation thread's user-mode host instructions a frame
+(from the CPU's counters, not frames a second) in the headless runner as tools/psp-runner/build.sh builds it (-O1,
+`BUILD_DEBUG`, GCC 16), on one x86-64 desktop. The Android app builds at -O3 with LTO, and neither it, the RP6 nor the
+Mac was measured. Each side's two rounds agree within 0.01%. Each game's four states at the top of frame 3,600 are
+one, and the design's master runs' (on `c837d1868`, whose emulation is master's); every other report line is the same
+on both sides, the turns skipped and the host's own lines (frames a second, the measurements, the GPU renderer's)
+aside.
 
 | Game | The PSP's timing: master; the branch (M a frame) | "Fast": master; the branch |
 | --- | --- | --- |
@@ -20318,9 +20322,11 @@ Round one, independent and read-only, on `2ddcb6237`: PASS, with no high or medi
 pull request's description rather than the tree (its CI section gave the Hosted Compute Agent's version as the
 sanitized job's runner image), corrected there; two informational: the conflict with master's docs/handoff.md (#296),
 resolved in the merge `760ee14a7` keeping both entries, and W1's message calling the refused waits' results the PSP's,
-where its test shows they're the kernel's. The merge, the second round's docs and the removal of local paths from
-this part and its handoff entry go to a delta review; its verdict is in the message of the commit that merges this
-branch into master.
+where its test shows they're the kernel's. The delta round on the merge, the second round's docs (`869dd95af`) and the
+removal of local paths (`b1bb7b449`) found two wording matters (NEEDS CHANGES): files kept outside the repository still
+named by path, and the host costs' build and host unsaid. The docs commit that adds this sentence fixes both, with its
+informational point on the host's own report lines; the delta round's verdict on that commit goes in the message of
+the commit merging this branch into master.
 
 ### Left
 
