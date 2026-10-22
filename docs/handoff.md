@@ -43,7 +43,8 @@ tests/psp/spins.cpp, docs/psp-core.md (part 116; part 105's Left) and this file 
 entry). The design: `~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r3.md`, passed by its
 review's round two (`~/phobos-work/scratch/review-spinwide/REVIEW-r2.md`). Notes, scripts and logs:
 `~/phobos-work/scratch/psp-ge-profile/spinwide/code/`. No game was run: the games' exactness and host cost are the
-next round's.
+next round's (the second round ran them: below). Master `062dd53e2` (#296) merged in as `760ee14a7` (only this file
+conflicted; both entries kept).
 - **What**: W1, a semaphore's wait taking its count at once (unless its callbacks run) and its refusals (but
   ILLEGAL_CONTEXT) made calm, and a spin's turn working out its waits and counting signals on the shadow
   (`spinWaitSemaphore()`, `spinSignalSema()`), through decisions the kernel and the shadow share (`mayWaitRefused()`,
@@ -58,7 +59,8 @@ next round's.
   back with a wait that succeeds at once, twice a turn, and Midnight Club: L.A. Remix's checks its callbacks with none
   due: neither call was calm, so the detector started afresh every turn and the loops were never skipped (part 105's
   Left, closed). The design's prototype took those games' host instructions under the PSP's timing down 50-79% (the
-  EA three) and 24% (Midnight Club), every state master's (r3's `compare-runs.txt`); this code's own runs come next.
+  EA three) and 24% (Midnight Club), every state master's (r3's `compare-runs.txt`); this code's own runs, the
+  second round's: 79%, 71% and 50%, and 24%, every state master's (below).
 - **Tests** (tests/psp/spins.cpp; each new group named "the GE's looks polled beside …", so that CI's GE-thread step
   runs it with the thread on too; part 116 gives each case's turns): Shift's turn skipped as run (88,629 turns) and
   one taking more than it gives not; a CB wait skipped (151,563), an asynchronous read's callback run once at the next
@@ -91,7 +93,21 @@ next round's.
   `code/proto-vs-final.diff`, every decision the same): split into W1 and W2; `semaphoreWaitRefused()` hands back the
   semaphore it found (the design review's suggestion 1), no longer `const`; `spinSkip()`'s counters for tests
   (#295's review, suggestion 1); the comments the prototype left stale, and its "(W1)" and "(W2)" labels.
-- Independent review: not yet.
+- **The games** (the second round; part 116's "The games"): master `062dd53e2` against `760ee14a7`, each runner with
+  the same scratch patch (each frame's XXH3-128 of `root->serialize(true)`'s bytes, `kernel.spun` in the summary, the
+  saved state's frame named). Exactness from boot, 2,400 frames, the Software renderer: Burnout Dominator, Need for
+  Speed: Shift, Burnout Legends, Midnight Club: L.A. Remix and Resistance: Retribution, both GE timings, the GE thread
+  off and on, every frame's state master's in all 20 configurations (48,000 frames), and the state saved at the top of
+  frame 2,400 (after 2,399 frames) too. Master skips none of the four games' loops; the branch skips 3.5 to 41.6
+  million turns in each, and as many of Resistance's as master. Host cost, `polls.sh`'s eight games (3,600 frames,
+  Vulkan fast with late frames, the GE thread off, two rounds taking turns; the emulation thread's host instructions a
+  frame): under the PSP's timing Dominator 147.56 to 30.55 M (−79.3%), Shift 133.06 to 38.26 (−71.2%), Legends
+  220.96 to 110.82 (−49.8%), Midnight Club 93.46 to 71.49 (−23.5%); under "Fast" −26.0%, −32.4%, −5.6% and −16.1%;
+  the other four games within 0.01%; every state at frame 3,600 master's.
+- Independent review: PASS on `2ddcb6237`, independent and read-only (round one: no high or medium finding; one low,
+  the PR description's CI image version, corrected there; two informational, the conflict with #296's entry, resolved
+  in the merge, and W1's message's "the PSP's" for the kernel's results). The merge and the second round's docs: not
+  yet.
 
 ## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
 

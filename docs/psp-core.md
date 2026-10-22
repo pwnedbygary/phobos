@@ -20066,8 +20066,8 @@ as the design's third round has it
 and Legends) signal a semaphore and take it back with a wait that succeeds at once, twice a turn, and Midnight Club:
 L.A. Remix's poll checks its callbacks with none due. Neither call was calm, so part 91's detector started afresh
 every turn and part 105's skip never reached those loops. Clean room: Phobos's own code and uOFW; nothing of PPSSPP or
-JPCSP. Save states are unchanged: nothing new is kept. No game was run for this part; the games' exactness and host
-cost come in a round of their own.
+JPCSP. Save states are unchanged: nothing new is kept. The games' exactness and host cost came in a second round, on
+the branch with master `062dd53e2` (#296) merged in (The games, below).
 
 ### What changed
 
@@ -20259,11 +20259,71 @@ On `a7552b776`, the worktree clean; each log in `code/logs/` starts with the tre
 - W1's commit alone (`c793ab17d`) through the release suite, the thread off: 655, 0;
 - `git diff --check` and `git show --check` clean on each commit; no added line over 120 columns.
 
+### The games
+
+The second round ran them from boot: master `062dd53e2` against the branch at `760ee14a7` (master merged in; its PSP
+code is `2ddcb6237`'s). Each runner is built by tools/psp-runner/build.sh with the same scratch patch (never
+committed): the runner's measurements, as part 115 has them; an option that writes, after each frame's run, the hash
+(XXH3, 128 bits) of `root->serialize(true)`'s bytes, the state a save state takes once the GE thread has drained and
+the drawing has finished (the design review's finding 3.2); and two summary lines, `Kernel::spun` (the turns skipped,
+read before unloading clears it) and the frame the state was saved at (`--save-state-at F` saves at the top of frame
+F, before it runs). The script is the one the design specifies (`DESIGN-spin-widening-r3.md:278-313`), pairing
+master with the branch in place of the skip off with the skip on: that pairing tests the calm calls and the wider skip
+together against master, which `bothWays()`, running both sides with W1's calm, can't. Each run waited for the
+machine's load to allow it, and ran at niceness 5.
+
+**Exactness.** The design's five games (Burnout Dominator, Need for Speed: Shift, Burnout Legends, Midnight Club:
+L.A. Remix and Resistance: Retribution), 2,400 frames each (Start at 120, Cross at 1,800, the clock at 1700000000),
+the Software renderer with two drawing threads, under the PSP's GE timing and "Fast", with the GE thread off and on:
+20 configurations, each run by both runners. In all 20 every frame's hash is master's (48,000 frames), and so is the
+state saved at the top of frame 2,400 (after 2,399 frames), whose own hash is each run's hash of frame 2,399. Every
+other line of the runners' reports is master's, the turns skipped aside. Master skips none of the four games' loops;
+the branch skips them, and as many turns of Resistance's, whose loop master already skips:
+
+| Game | Turns skipped, the PSP's timing: master; the branch | "Fast": master; the branch |
+| --- | --- | --- |
+| Burnout Dominator | 0; 41,649,834 | 0; 4,795,843 |
+| Need for Speed: Shift | 0; 35,115,239 | 0; 9,970,254 |
+| Burnout Legends | 0; 40,611,173 | 0; 3,464,005 |
+| Midnight Club: L.A. Remix | 0; 28,547,559 | 0; 28,647,050 |
+| Resistance: Retribution | 161,622,878; the same | 43,444,531; the same |
+
+With the GE thread on, the turns skipped and every frame's hash are those with it off, on both runners.
+
+**Host cost.** `polls.sh`'s eight games from boot, 3,600 frames (the same presses and clock), Vulkan (fast) with late
+frames, the GE thread off, under both timings: each runner twice, taking turns (master first in the first round, the
+branch in the second), one run at a time. The figure is the emulation thread's user-mode host instructions a frame,
+from the CPU's counters, not frames a second; each side's two rounds agree within 0.01%. Each game's four states at
+the top of frame 3,600 are one, and the design's master runs' (on `c837d1868`, whose emulation is master's); every
+other report line is the same on both sides, the turns skipped aside.
+
+| Game | The PSP's timing: master; the branch (M a frame) | "Fast": master; the branch |
+| --- | --- | --- |
+| Burnout Dominator | 147.56; 30.55 (−79.3%) | 38.46; 28.44 (−26.0%) |
+| Need for Speed: Shift | 133.06; 38.26 (−71.2%) | 54.50; 36.83 (−32.4%) |
+| Burnout Legends | 220.96; 110.82 (−49.8%) | 116.90; 110.32 (−5.6%) |
+| Midnight Club: L.A. Remix | 93.46; 71.49 (−23.5%) | 106.23; 89.14 (−16.1%) |
+| Dante's Inferno | 150.67; 150.68 (+0.009%) | 122.01; 122.01 (+0.002%) |
+| Shepherd's Crossing | 98.95; 98.95 (−0.005%) | 97.10; 97.09 (−0.005%) |
+| Dragon Ball Z: Shin Budokai – Another Road | 64.35; 64.35 (0.000%) | 64.14; 64.14 (0.000%) |
+| Super Stardust Portable | 38.64; 38.64 (−0.001%) | 34.49; 34.49 (0.000%) |
+
+The other four games skip no turn on either side. Master's figures are the design's master runs' within 0.01%. The EA
+three cost a little under the design's prototype (one run each: 30.60, 38.32 and 110.89 M under the PSP's timing),
+which looked a wait's semaphore up twice (this code, once: the design review's suggestion 1); where the difference
+goes wasn't measured. Midnight Club, which makes no semaphore wait, costs what the prototype did (71.49 and 89.14).
+
+### Review
+
+Round one, independent and read-only, on `2ddcb6237`: PASS, with no high or medium finding. One low finding, in the
+pull request's description rather than the tree (its CI section gave the Hosted Compute Agent's version as the
+sanitized job's runner image), corrected there; two informational: the conflict with master's docs/handoff.md (#296),
+resolved in the merge `760ee14a7` keeping both entries, and W1's message calling the refused waits' results the PSP's,
+where its test shows they're the kernel's. The merge and the second round's docs aren't reviewed yet.
+
 ### Left
 
-- The games: the exactness script the design specifies (`DESIGN-spin-widening-r3.md:278-313`, with its review's
-  finding 3.2: each frame's hashes over `root->serialize(true)`'s bytes, `kernel.spun` in the summary, the final
-  state's frame named) and its runs, and the host cost (`polls.sh`'s eight games, host instructions): their own round.
+- The library check and the RP6 (the coordinator's).
 - F3, after this; F2 and F4 later (F4's hole test reads Y on the fourth turn and X on the fifth, as #295's handoff
   records); Dante's Inferno's loop, a design of its own.
 - The calm probe's count of W2's context path (the design review's round one, its suggestion 6): not done.
