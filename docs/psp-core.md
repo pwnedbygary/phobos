@@ -16927,6 +16927,8 @@ library's presses):
 
 - Shift's loop: a wait that succeeds at once and its signal in the same turn, a net change of zero with no thread
   waiting, made a spin's turn. Its own pull request, after this one.
+  Done since: part 116 (W1), whose group "the GE's looks polled beside a semaphore signalled and taken back each turn"
+  skips Shift's turn as run.
 
 ### Scratch
 
@@ -20053,3 +20055,222 @@ the host cost in `r4/4g/`, the README's recipe in `r4/p6/`); `step5/` (this part
 review's fixes: the two tests' mutations in `mut/`, the suites). The reviews:
 `scratch/review-smba-design/`, `review-smba-probe/`, `review-smba-step2/`, `review-smba-code/`, `review-291/` (the
 independent review, with its runs).
+
+## Part 116: the polling skip widened — a semaphore taken at once and a callback check with none due, made calm
+
+On branch `cursor/psp-spin-widening-cachy`, from master `8c2b1ddee` (#295), in three commits: W1 (`c793ab17d`), W2
+(`a7552b776`) and these docs. The task, the owner's order of 19 Oct (the games much slower with the PSP's GE timing),
+as the design's third round has it
+(`~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r3.md`, which its review's second round passed:
+`~/phobos-work/scratch/review-spinwide/REVIEW-r2.md`): the EA games' polls (Need for Speed: Shift, Burnout Dominator
+and Legends) signal a semaphore and take it back with a wait that succeeds at once, twice a turn, and Midnight Club:
+L.A. Remix's poll checks its callbacks with none due. Neither call was calm, so part 91's detector started afresh
+every turn and part 105's skip never reached those loops. Clean room: Phobos's own code and uOFW; nothing of PPSSPP or
+JPCSP. Save states are unchanged: nothing new is kept. No game was run for this part; the games' exactness and host
+cost come in a round of their own.
+
+### What changed
+
+- **W1, in the kernel** (threads.cpp, interrupts.cpp): `waitSemaphore()` sets `calm` where it takes the count at once,
+  unless its callbacks run (a CB wait with one due), and on its refusals: CAN_NOT_WAIT, an unknown semaphore, an
+  illegal count. ILLEGAL_CONTEXT stays not calm: it comes only while interrupting, where no spin is skipped.
+- **Decisions shared by the kernel and the shadow**, each given the interrupts it decides with (the CPU's own,
+  `interruptsEnabled`, or the turn's, `shadow.scc.interrupts`, never the CPU's on the shadow): `mayWaitRefused()`
+  (`mayWait()`'s refusal), `semaphoreWaitRefused()` (a wait's refusal before anything else, handing back the semaphore
+  it found, so that the kernel's wait looks it up once), `signalRefused()` with `held` (what the turn has added to that
+  semaphore so far; 0 for the kernel) and `wouldPreempt()`: whether `reschedule()` would hand the CPU from the running
+  thread to another now (dispatching allowed, the interrupts on, a ready, unsuspended thread with a lower priority
+  number than the caller's; threads.cpp:163-186 switches only to a strictly better one).
+- **W1, on the shadow** (spins.cpp): `SpinShadow` keeps the turn's net change to each semaphore, and `spinProve()`
+  passes only with every one back at zero. `sceKernelWaitSema` and `sceKernelWaitSemaCB` are worked out
+  (`spinWaitSemaphore()`): their refusals but ILLEGAL_CONTEXT through `semaphoreWaitRefused()` with the turn's
+  interrupts; a count there in the turn's view taken, a CB wait's only with no callback due; a wait that would wait, or
+  run callbacks, isn't. `sceKernelSignalSema` (`spinSignalSema()`) has its refusals worked out against the turn's view
+  (`signalRefused()` with `held`), and its counting case only with no thread waiting on that semaphore and
+  `wouldPreempt()` false with the turn's interrupts.
+- **W2** (events.cpp, spins.cpp): `sceKernelCheckCallback()` is calm on its nothing-due path alone; its ILLEGAL_CONTEXT
+  path (from a handler or a callback) stays not calm. `spinCheckCallback()` works out the nothing-due path (0) and
+  declines the ILLEGAL_CONTEXT path and a check with one due, which runs it.
+- **The skip itself is unchanged.** `spinTurn()` and `spinSkip()` take no new refusal. `spinSkip()` counts the tries
+  each of the PSP's GE timing's checks refuses (`Kernel::spinChecks`: the last two turns unlike, the GE done part way
+  through the turns, several calls a turn with lines moved, the busy window's time not the same kind at both ends), so
+  that each test can tell which refusal stopped a try; they decide nothing, power-on clears them, and no state keeps
+  them.
+- **Comments**: spins.cpp's header no longer says Shift's loop is "never one that can be skipped", and names the four
+  loops; `spinSkip()`'s "a spin's turn makes no waits" now reads "never waits" (a wait in a turn takes its count at
+  once).
+
+### Why it's exact
+
+**Where the go ends.** A calm call needs no `runUntilNextEvent()`: the go's limit it was given must be no lower than
+one worked out at the call. Since #291 the inputs of `untilNextEvent()` (threads.cpp:287) move inside a go, so it must
+be shown input by input that a limit worked out at a calm call would be no lower:
+- the vertical blank, the sound, files' requests, timers and alarms and the controller's sampling change only between
+  goes (`events()`) or in a call that is neither quiet nor calm;
+- the waits' timeouts (`wakeAt`) are set and cleared only by a wait that waits and by wakeups, none quiet or calm (a
+  wait taking its count at once, or refused, sets none);
+- the GE's times move inside a go, but only later: at every system call's stretch `syscall()` calls `geContend()`, and
+  `geContendNow()` pushes `gePipeAt`, `geDoneAt` and `geReachAt` by what the busy window's running most (`w.pushed`)
+  gained, never back (kernel/ge.cpp:228-232);
+- the clock keeps pace with the instructions: `syscall()` adds each stretch's instructions to `cycles`, and runs ahead
+  only through `geDriven()` (kernel/ge.cpp:306), whose callers are `sceGeListEnQueue` and `sceGeListEnQueueHead`,
+  through `geEnqueue()` (kernel/ge.cpp:732-798), and `sceGeListUpdateStallAddr` (kernel/ge.cpp:814-831). None of them
+  is quiet or calm, so `syscall()` works the limit out again after each;
+- with the GE on its thread, `geBound()` and `geReachBound()` (kernel/ge.cpp:407, :424) are at most what `geDoneAt` and
+  `geReachAt` will be once the runs handed over are folded, and they only rise; a limit from them is worked out exactly
+  (`geExactLimit()`, in `goThreaded()`, kernel.cpp:1310) before it ends a go.
+
+So inside a go the time `untilNextEvent()` points to only moves later while `cycles` keeps pace with the
+instructions, and a limit worked out at a calm call that changes none of those inputs is never below the go's. A
+change to the contention model that could move `geDoneAt` earlier would break this, and the skip with it.
+
+**W1's proof.** Each call's answer depends only on what its handler reads: its semaphore's count in the turn's view;
+whether a thread waits on it; for a CB wait, whether its callbacks are due; for the wait's refusals, the dispatch state
+and the turn's interrupts; for a counting signal, whether `reschedule()` would hand the CPU to a better thread
+(dispatching allowed, the turn's interrupts on, a ready, unsuspended thread with a lower priority number). Inside a go
+of quiet and calm calls none of these changes but by the turn's own calls:
+- **every writer of a thread's status, priority or suspension, and of `dispatchSuspended`, is a function that is
+  neither quiet nor calm, or runs between goes**, the rotation aside. The design review's round two followed all 62 of
+  `ready()`'s call sites and every other such write (`REVIEW-r2.md`, its finding 3.3): a wait's wakeup, a delete,
+  cancel, unlock or send, an event flag's set, a pool's or a TLS block's free, the UMD's change, callbacks returning, a
+  module thread's end, a timeout, the sound, the controller, a file's request or the GE (between goes, or at a call
+  taking the GE's FINISH or SIGNAL), `wakeForCallbacks()` (events.cpp:223-227, from `notifyCallback()` and `block()`),
+  `sceKernelChangeThreadPriority()` (threads.cpp:1192), the suspensions and the dispatch's functions, a thread's start
+  or end, a state loaded. The rotation (`sceKernelRotateThreadReadyQueue`, threads.cpp:1361-1381) is calm and writes
+  only the caller's own status and `readySince`, leaving it running. `sceKernelSignalSema` is calm only waking none
+  and handing the CPU to none (`woke`, `switched`: threads.cpp:815-825); the shadow declines a signal with a waiter,
+  and one where `wouldPreempt()` says the CPU would be handed over;
+- **the interrupt flag changes only by `mtic`, or by functions that aren't quiet**: `mtic` is an instruction the shadow
+  runs itself, so the turn's view is the shadow's `scc`, and `spinProve()` holds the flag back where it was by the
+  turn's end;
+- **the waiter set can't change**, and nothing makes a callback due within a go (a callback is notified between goes,
+  or by a call that is neither quiet nor calm).
+
+So each later turn starts as this one did, its calls answer the same, and part 91's argument holds as written. The
+design review's program is the case the switching check refuses: a better thread made ready while interrupts were held
+off, interrupts then turned on with `mtic`, then the signal.
+
+**W2.** `sceKernelCheckCallback`'s answer on its nothing-due path depends on the caller's notified callbacks alone,
+which nothing within a go changes (above).
+
+### Tests
+
+tests/psp/spins.cpp. Each new group is named "the GE's looks polled beside …", so that CI's GE-thread step runs it
+with the GE on its thread as well; each poll asks `sceGeDrawSync(1)` first in its turn (its anchor), as the EA games'
+do, over three lists. On both engines, with the skip on and off, every step's state the same either way
+(`bothWays()`). The turns skipped are each case's on each engine (the two the same, or one turn apart), counted in a
+scratch copy that prints them (`code/logs/inst-new.log`; never committed); the groups check thousands, or none.
+- "…a semaphore signalled and taken back each turn: skipped as run, but not one taking more than it gives"
+  (`spinsSemaphore`, W1): Shift's turn (a semaphore at 0, its most 1, signalled and taken back twice), 88,629 turns
+  skipped. A turn taking one more than it gives (one signal and two waits on a large count): none, its proof failing
+  at the closing check.
+- "…a CB wait taking a semaphore at once: skipped as run, not with its callback notified" (`spinsSemaphoreCB`, W1): a
+  CB wait on a binary semaphore, the thread's callback made and never notified, then a signal giving it back: 151,563
+  skipped. With an asynchronous read whose callback is the thread's, completed between goes (no call of the poll's
+  starts the detector afresh): 151,554, and the poll's next CB wait runs the callback once, as with every turn run.
+  Made directly at the anchor, as `spinsDirect` makes a skip, with room for 500 turns and the GE busy past them: with
+  none due the 500 turns are skipped, the state the same as with them run; with the callback notified first, none, the
+  proof failing at the CB wait, and the next turn runs it (the design review's suggestion 3: a try in the go after the
+  notification, refused).
+- "…a semaphore's waits and a signal refused: skipped as run" (`spinsSemaphoreRefused`, W1), each turn storing its
+  results: CAN_NOT_WAIT (interrupts held off round the wait with `mtic`, the anchor's call made with them on, outside
+  that), 187,950 skipped; an unknown semaphore (a deleted one's ID), ILLEGAL_COUNT for 0 and for more than its most,
+  223,761 each; a signal refused past its most only in the turn's view (a binary semaphore at 0 signalled to 1,
+  signalled again, taken back: 0, SEMAPHORE_OVERFLOW, 0), 114,585. Each stored result is the kernel's.
+- "…a semaphore's signal with another thread ready: not skipped where it hands the CPU over" (`spinsSemaphoreSwitch`,
+  W1): a binary semaphore taken and given back each turn, the signal made with interrupts held off for five turns and
+  on from the sixth. With a better thread ready (its delay ended while main held interrupts off: the design review's
+  program), none skipped, and that thread runs at the sixth turn's signal, as with every turn run; the same with the
+  anchor's call made with interrupts off and the signal with them on (its round two's anchor-off program). With one of
+  main's priority ready, or a better one suspended, 233,492 (a decline wider than `reschedule()`'s switch would lose
+  them: its suggestion 2).
+- "…a semaphore another thread waits on, or a wait that waits: not skipped" (`spinsSemaphoreWaits`, W1): a signal
+  another thread waits on (declined: it might wake it), and a wait that waits (not calm): none skipped.
+- "…a callback check with none due: skipped as run, not with the callback notified" (`spinsCallbackCheck`, W2):
+  Midnight Club's turn (the GE asked after, the movie ring's size, `sceKernelCheckCallback`), 187,950 skipped with
+  none due; with the thread's callback notified between goes by an alarm's handler, or by an asynchronous read's
+  completion, 187,941 and 187,942, the next check running it once, as with every turn run. Directly at the anchor, as
+  for the CB wait: with the callback notified first none is skipped, the proof failing at the check.
+- #295's groups and #289's kink group (W1): `bothWays()` hands back the skip-on machine's `Kernel::spinChecks`, and
+  each group checks that its own refusal was reached: the kink group the window's kind (8,099 tries refused), the
+  stalled list part way (74,345), the settling turns unsteady (3, on the recompiler), the two calls several calls
+  (1,726 in its runs, on the recompiler). The two-calls group's skip made at once also checks what the other refusals
+  need, so that its own check alone refuses it: the try made (steady, two calls, a line moved), the GE busy past the
+  20 turns, the window's time the same kind at both ends with the turns' cycles and lines added, and only the
+  several-calls count gone up (#295's review, its suggestion 1). `positioned()`'s loops end after 200,000
+  one-instruction steps with a CHECK, so that a timing change fails rather than hangs (its suggestion 2), as
+  `AtAnchor`'s do after 1,000,000.
+
+#295's four groups' refusals, counted again in the copy after this rework (`code/logs/inst-final.log`), are line for
+line what #295 counted on `45eb68d3c`: the stalled list 74,345 tries refused part way and 213 skips (5,883,259 turns);
+two calls a turn 1,727 refused with several calls, the at-once try among them, and 3 skips on the interpreter (5,842
+turns); the settling turns 3 refused unsteady and 36 skips (811,836 turns); the one-way list 1 refetch marked as
+VRAM's. The rework changed no decision in them.
+
+### Mutations
+
+Each one change to `a7552b776`'s code, kept with its logs in `code/mut/` (`NAME.diff`, `NAME-SIDE-RUN.log`), run
+through the release suite (the GE thread off), CI's PSP-timing step and its GE-thread step, with these tests and with
+master's (`8c2b1ddee`'s tests/psp/spins.cpp); groups / failed checks. With these tests every one fails in all three,
+656, 120 and 76 groups; with master's every one passes, 650/0, 114/0 and 70/0, but the closing check's:
+- `closing`, `spinProve()`'s closing check (every semaphore back where it was): 656/8, 120/8, 76/4, the turn taking
+  one more than it gives skipped, its states differing after step 1. Master's tests catch it too, 650/4, 114/4, 70/0:
+  "spins refused"'s twist signalling a semaphore that counts, now worked out, skips some 35,780 turns (the GE-thread
+  step doesn't run that group).
+- `waitcalm`, the wait's `calm` where it takes its count at once: 656/12, 120/12, 76/12; Shift's turn, the CB wait
+  (with the read too), the signal refused in the turn's view, and the thread of main's priority and the suspended
+  one, none skipped.
+- `cbcalm`, the CB wait's (a CB wait taken at once never calm): 656/4, 120/4, 76/4; the CB wait, none skipped.
+- `cbdue`, the shadow's `callbacksDue()` check in the CB wait: 656/2, 120/2, 76/2; the direct try with the callback
+  notified skips its 500 turns, its proof passing. The runs with the read still pass, as the design review's
+  suggestion 3 suspected such runs might: the direct try is what catches it.
+- `refcalm-cannotwait`, `refcalm-unknown`, `refcalm-count`, each refusal's `calm`: 656/2, 656/2 and 656/4 (and the
+  same in the two steps); CAN_NOT_WAIT's, the unknown semaphore's and the two illegal counts' cases, none skipped.
+- `refcode-cannotwait`, `refcode-unknown`, `refcode-count`, the shadow answering each refusal with another code:
+  656/2, 656/2, 656/4 (the same in the steps); the stored result unlike memory's, the proof failing, none skipped.
+- `held`, dropped from the signal's refusal: 656/12, 120/12, 76/12; a signal after the turn's own wait refused on the
+  shadow where the kernel takes it, so none skipped in the CB wait (with the read, and its direct try with none due),
+  the refused signal's case, and the thread of main's priority and the suspended one.
+- `preempt`, the counting signal's `wouldPreempt()` check: 656/8, 120/8, 76/8; both cases with a better thread skip
+  (2,090 and 2,044 turns), their states differing after step 1.
+- `preempt-cpuflag`, `wouldPreempt()` given `interruptsEnabled` on the shadow: 656/4, 120/4, 76/4; the anchor-off
+  case skips 2,044 turns, its states differing after step 1.
+- `refused-cpuflag`, `semaphoreWaitRefused()` given `interruptsEnabled` on the shadow: 656/6, 120/6, 76/6;
+  CAN_NOT_WAIT's case none skipped, and the anchor-off case 2,044, its states differing (its wait refused on the
+  shadow where it takes the count).
+- `preempt-equal` (`<=` for `<`) and `preempt-suspended` (suspended threads counted): 656/2, 120/2, 76/2 each; the
+  thread of main's priority's case, or the suspended one's, none skipped.
+- `checkcalm`, the callback check's `calm` on its nothing-due path: 656/6, 120/6, 76/6; every callback-check case,
+  none skipped.
+- `pending`, the shadow's pending check: 656/2, 120/2, 76/2; the direct try with the callback notified skips its 500
+  turns, its proof passing (the runs with the timer and the read pass, as for `cbdue`).
+
+`cbdue`'s first runs didn't build: with the check deleted, `callbacks` went unused and `-Werror=unused-parameter`
+stopped the build. They were run again with `(void)callbacks;` in its place; the failed logs are
+`code/mut/buildfail-cbdue-*`.
+
+### Checks
+
+On `a7552b776`, the worktree clean; each log in `code/logs/` starts with the tree and its status lines:
+- the release suite with the GE thread off: 656 groups, 0 failures; with it on: 656, 0;
+- CI's PSP-timing step: 120, 0; its GE-thread step: 76, 0;
+- the six new groups and #295's four, sanitized (the debug build, ASan and UBSan): the thread off 10, 0; on 10, 0; no
+  sanitizer report;
+- W1's commit alone (`c793ab17d`) through the release suite, the thread off: 655, 0;
+- `git diff --check` and `git show --check` clean on each commit; no added line over 120 columns.
+
+### Left
+
+- The games: the exactness script the design specifies (`DESIGN-spin-widening-r3.md:278-313`, with its review's
+  finding 3.2: each frame's hashes over `root->serialize(true)`'s bytes, `kernel.spun` in the summary, the final
+  state's frame named) and its runs, and the host cost (`polls.sh`'s eight games, host instructions): their own round.
+- F3, after this; F2 and F4 later (F4's hole test reads Y on the fourth turn and X on the fifth, as #295's handoff
+  records); Dante's Inferno's loop, a design of its own.
+- The calm probe's count of W2's context path (the design review's round one, its suggestion 6): not done.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/spinwide/`: the designs (`DESIGN-spin-widening-r3.md`), `r2/` and `r3/` (phase
+1's measurements and the prototypes), `tests/` (#295's), `code/` (this part's: the suites' logs in `logs/`, the
+mutations' diffs and logs in `mut/`, the counts taken in a copy in `inst/` and `logs/inst-*.log`). The reviews:
+`scratch/review-spinwide/` (the design's), `scratch/review-295/`.

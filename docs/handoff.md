@@ -35,6 +35,64 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP kernel: the polling skip widened to the EA games' and Midnight Club's loops — 2026-10-21
+
+Branch `cursor/psp-spin-widening-cachy`, from master `8c2b1ddee` (#295): W1 (`c793ab17d`), W2 (`a7552b776`) and the
+docs. ares/psp/kernel (threads.cpp, interrupts.cpp, events.cpp, spins.cpp, kernel.cpp, kernel.hpp),
+tests/psp/spins.cpp, docs/psp-core.md (part 116; part 105's Left) and this file (part 105's entry's Left; #295's
+entry). The design: `~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r3.md`, passed by its
+review's round two (`~/phobos-work/scratch/review-spinwide/REVIEW-r2.md`). Notes, scripts and logs:
+`~/phobos-work/scratch/psp-ge-profile/spinwide/code/`. No game was run: the games' exactness and host cost are the
+next round's.
+- **What**: W1, a semaphore's wait taking its count at once (unless its callbacks run) and its refusals (but
+  ILLEGAL_CONTEXT) made calm, and a spin's turn working out its waits and counting signals on the shadow
+  (`spinWaitSemaphore()`, `spinSignalSema()`), through decisions the kernel and the shadow share (`mayWaitRefused()`,
+  `semaphoreWaitRefused()`, `signalRefused()` with `held`, `wouldPreempt()`), each given the interrupts as the turn
+  has them; `spinProve()` passes only with every semaphore back where it was. W2, a callback check with none due made
+  calm and worked out (`spinCheckCallback()`, declining the context path and a check with one due). The skip is
+  otherwise unchanged; `spinSkip()` counts each of the PSP's GE timing's refusals for tests (`Kernel::spinChecks`),
+  deciding nothing and kept in no state. Part 116 has the exactness argument: the go's end, with all three of
+  `geDriven()`'s callers; W1's proof; the rule that every writer of a thread's status, priority or suspension, and of
+  `dispatchSuspended`, is neither quiet nor calm or runs between goes, the rotation aside.
+- **Why**: the EA games' loops (Need for Speed: Shift, Burnout Dominator and Legends) signal a semaphore and take it
+  back with a wait that succeeds at once, twice a turn, and Midnight Club: L.A. Remix's checks its callbacks with none
+  due: neither call was calm, so the detector started afresh every turn and the loops were never skipped (part 105's
+  Left, closed). The design's prototype took those games' host instructions under the PSP's timing down 50-79% (the
+  EA three) and 24% (Midnight Club), every state master's (r3's `compare-runs.txt`); this code's own runs come next.
+- **Tests** (tests/psp/spins.cpp; each new group named "the GE's looks polled beside …", so that CI's GE-thread step
+  runs it with the thread on too; part 116 gives each case's turns): Shift's turn skipped as run (88,629 turns) and
+  one taking more than it gives not; a CB wait skipped (151,563), an asynchronous read's callback run once at the next
+  CB wait as with every turn run, and a try made directly with the callback notified refused; waits refused
+  (CAN_NOT_WAIT with the anchor's call made with interrupts on, an unknown semaphore, ILLEGAL_COUNT twice) and a
+  signal refused only in the turn's view, skipped, each result the kernel's; a signal with a better thread ready not
+  skipped, the anchor's call made with interrupts on or off, and with a thread of main's priority, or a better one
+  suspended, skipped (233,492); a signal a thread waits on, and a wait that waits, not skipped; W2's callback check
+  skipped with none due (187,950), the callback notified by a timer's handler or a read run once at the next check,
+  and a try made directly with it notified refused. #295's groups and #289's kink group check their own refusals
+  through `Kernel::spinChecks`; the two-calls group's skip at once also checks what the other refusals need, and its
+  `positioned()` loops are bounded (#295's review, suggestions 1 and 2).
+- **Mutations** (`code/mut/`: each diff and each run's log), each through the release suite with the GE thread off,
+  CI's PSP-timing step and its GE-thread step, failed checks. With these tests all 18 fail in all three (656, 120
+  and 76 groups), the same number in each but `closing`'s: `closing` 8, 8, 4; `waitcalm` 12; `cbcalm` 4; `cbdue` 2;
+  the refusals' `calm` 2, 2, 4 and their codes 2, 2, 4; `held` 12; `preempt` 8; `preempt-cpuflag` 4;
+  `refused-cpuflag` 6; `preempt-equal` 2; `preempt-suspended` 2; `checkcalm` 6; `pending` 2. With master's tests
+  every one passes (650/0, 114/0, 70/0) but `closing`, 650/4, 114/4, 70/0, through "spins refused"'s semaphore that
+  counts. `cbdue` and `pending` fail only in the try made directly. `cbdue`'s first runs didn't build (its parameter
+  left unused); they were run again with `(void)callbacks;`.
+- **#295's groups' counts, taken again** in a scratch copy after the rework (`code/logs/inst-final.log`): line for
+  line what #295 counted on `45eb68d3c` (74,345 refused part way and 213 skips; 1,727 refused with several calls and
+  3 skips; 3 refused unsteady and 36 skips; 1 refetch marked as VRAM's).
+- **Checks** on `a7552b776`, the worktree clean (each log in `code/logs/` starts with the tree and its status lines):
+  the release suite with the GE thread off 656 groups, 0 failures, on 656, 0; CI's PSP-timing step 120, 0; its
+  GE-thread step 76, 0; the six new groups and #295's four sanitized (ASan and UBSan), the thread off 10, 0 and on 10,
+  0, no sanitizer report; W1's commit alone (`c793ab17d`) through the release suite, the thread off, 655, 0.
+  `git diff --check` and `git show --check` clean on each commit; no added line over 120 columns.
+- **Departures from the prototype** (r3's `proto-r3.diff`; the two set against each other in
+  `code/proto-vs-final.diff`, every decision the same): split into W1 and W2; `semaphoreWaitRefused()` hands back the
+  semaphore it found (the design review's suggestion 1), no longer `const`; `spinSkip()`'s counters for tests
+  (#295's review, suggestion 1); the comments the prototype left stale, and its "(W1)" and "(W2)" labels.
+- Independent review: not yet.
+
 ## Tests: the spin skip's untested refusals and the GE thread's refetch charge — 2026-10-21
 
 Branch `cursor/psp-spin-tests-cachy`, from master `c837d1868` (#291), master `8d85eda9a` (#293) merged in
@@ -81,7 +139,8 @@ scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
   on 650, 0; CI's PSP-timing step 114, 0; its GE-thread step 70, 0; the four groups sanitized (ASan and UBSan), the
   thread off 4, 0 and on 4, 0. `git diff --check` and `git show --check` clean; no added line over 120 columns; the
   diff from master `8d85eda9a` is the two test files, docs/handoff.md and docs/psp-core.md.
-- **Departures from F1's constructions** (the review's L1 and its suggestion 3):
+- **Departures from F1's constructions** (besides the two-calls group's and the mover's, above; the review's L1 and
+  its suggestion 3):
   - The settling group reads its new line on the fifth turn, not on the fourth as F1's construction does (phase 1's
     DESIGN-spin-widening.md:206-212). spinTurn() counts turns from the spin's third call, so the first try compares
     the fourth and fifth turns; with F1's construction the fifth turn moves nothing, so a skip would be exact without
@@ -1233,6 +1292,8 @@ evidence. Clean room: our code, uOFW for the GE driver's behaviour; no PPSSPP or
 - **Checks**: tests/psp sanitized: 582 groups, 0 failures; CI green.
 - **Left**: Shift's loop (a wait that succeeds at once and its signal in the same turn: no net change, no waiter) as
   a spin's turn is its own pull request, after this one.
+  Done since: W1, in the entry "PSP kernel: the polling skip widened to the EA games' and Midnight Club's loops"
+  (2026-10-21; part 116).
 
 ## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's captures' 333/166, read before the game ran — 2026-10-16
 
