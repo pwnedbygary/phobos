@@ -37,21 +37,24 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
 
-Branch `cursor/license-notices-cachy`, from master `8d85eda9a` (#293). LICENSE and this file; no code or packaging
-change. Notes, listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
-`~/phobos-work/scratch/prompts/license-notices.txt` and `license-notices-r2.txt`).
+Branch `cursor/license-notices-cachy`, from master `8d85eda9a` (#293), with master `8c2b1ddee` (#295) merged in.
+LICENSE, this file and LicenseNoticesTest.kt (three more required names); no other code, no packaging change. Notes,
+listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
+`~/phobos-work/scratch/prompts/license-notices.txt`, `license-notices-r2.txt` and `license-notices-r3.txt`).
 - **What**: LICENSE gains the notices of the third-party code inside what the builds ship: SDL 3.2.30 and the code it
-  bundles; MoltenVK 1.4.2 and the libraries in its dylib; the AppImage's runtime and the libraries linked into it; and
-  its "Android and Kotlin libraries" notice names the rest of the Maven libraries the APKs carry. 17 blocks, 38
-  notices to 55; the Apache text's "Used by" line names MoltenVK, SPIRV-Cross and SPIRV-Tools.
+  bundles, with PipeWire's SPA header code; MoltenVK 1.4.2 and the libraries in its dylib; the AppImage's runtime and
+  the libraries linked into it; the NDK's libc++ in the APKs; and its "Android and Kotlin libraries" notice names the
+  rest of the Maven libraries the APKs carry. 19 blocks, 38 notices to 57; the Apache text's "Used by" line names
+  MoltenVK, SPIRV-Cross and SPIRV-Tools.
 - **Why**: the owner's choice (21 Oct, ~18:27): "LICENSE: a small PR adding the notices for whatever the builds
   actually include." Building the website, its author had found LICENSE naming none of SDL 3, MoltenVK, VMA, jansson or
   GLFW. Round one left the code inside SDL, MoltenVK's dylib and the AppImage's runtime for the coordinator, who put it
-  in this PR (round two), as it ships.
+  in this PR (round two), as it ships; round three made the independent review's fixes.
 - **How it was established**: from the build files (CMakeLists.txt, the packaging scripts, desktop.yml, android.yml,
   build.gradle.kts) and from the artifacts: v2.4.0's AppImage, Windows zip, macOS zip and APKs and nightly-216017's
   APKs, downloaded with gh (each file's sha256 GitHub's), read as archives (the AppImage's squashfs from its offset,
-  944,632, with 7z), their binaries by strings and symbols. Nothing was run.
+  944,632, with 7z), their binaries by strings and symbols; in round three also this PR's CI AppImage, macOS zip and
+  APKs (runs 39693815936 and 39693816063). Nothing was run.
 - **Added in round one**: SDL 3.2.30, linked statically into all three desktop programs (FetchContent,
   `SDL3::SDL3-static`): each carries `SDL-3.2.30-release-3.2.30`. MoltenVK 1.4.2:
   `Contents/Frameworks/libMoltenVK.dylib` in the macOS app, whose `Resources/LICENSE-MoltenVK` is MoltenVK's LICENSE at
@@ -65,30 +68,45 @@ change. Notes, listings and checksums: `~/phobos-work/scratch/license-notices/` 
   from, and a pointer to the Apache text; cereal: its BSD-3-Clause LICENSE. Beyond the brief's list, SPIRV-Headers
   `29981f65`: SPIRV-Tools' tables are generated from its grammar files (their names, the core grammar's to Arm's TOSA
   set's, are in the dylib's strings) and SPIRV-Cross compiles its spirv.hpp's inline functions; its block carries its
-  LICENSE's notice, the grammars' own statements (Khronos's, Arm's) and the MIT text they name.
+  LICENSE's notice, each shipped grammar's own statement (Khronos's; Arm's for TOSA, the motion engine, graph debug
+  info and, from round three, experimental ML operations, `Arm.ExperimentalMLOperations.` being in the dylib) and the
+  MIT text they name.
 - **Round two, SDL's bundled code**, by symbols (the Linux and macOS programs keep theirs) and by strings or bytes (the
   stripped Phobos.exe), each block word for word from SDL's tree at `release-3.2.30`, its first line naming the
-  platforms. In all three: HIDAPI (the BSD-style choice, LICENSE-bsd.txt; hidraw, Windows and macOS backends), yuv2rgb
-  (its YUV2RGB table, computed from its source, in all three), stb_image 2.30's JPEG decoder (its JPEG messages in all
-  three), SDL_rotate from SDL_gfx (on Windows by the software renderer, whose one string is there and which calls it),
-  Valve's controller table and Max Maisel's Steam Deck driver (and Igalia's X11 settings, Linux), under SDL's zlib
-  license with their own copyright lines. On Linux only: the X11 EDID parser, the XSETTINGS client, imKStoUCS,
-  xdg-user-dirs' lookup functions and the 22 Wayland protocol files, each one's every interface in the program (21
-  share one permission notice, given once after their copyright lines). Left out: SDL's libm, OpenVR and the libusb
-  backend (in no binary: no symbols or strings, and three fdlibm tables in none), Valve's two Steam headers and the
-  Khronos, Mesa and Microsoft headers (declarations and constants only), and public-domain code (dlmalloc, the CRCs,
-  murmur3, PDCLib's strtok_r, the VGA font).
-- **Round two, the AppImage's runtime** (its first 944,632 bytes): type2-runtime commit `8f39b89` by its version
-  string, built on Alpine 3.21 (its `.comment`), linked (its Makefile at that commit) with musl 1.2.5, libfuse 3.15.0
-  (patched by type2-runtime), squashfuse 0.5.2, zstd 1.5.6, zlib 1.3.2 (their version strings) and mimalloc 2.1.7, which
-  the runtime's own LICENSE omits. One block after MinGW-w64's: each part's license and source; libfuse's LGPL2.txt,
-  zstd 1.5.6's LICENSE and zlib 1.3.2's terms are word for word texts LICENSE has (FFmpeg's LGPL 2.1, Zstandard's,
-  zlib's), so pointed to; the rest word for word, musl's COPYRIGHT indented (two of its lines are 70-dash rules).
+  platforms. In all three: HIDAPI (the BSD-style choice, LICENSE-bsd.txt, and from round three the lines its three
+  backends carry, "libusb/hidapi Team ... Copyright 2022"; hidraw, Windows and macOS backends), yuv2rgb (its YUV2RGB
+  table, computed from its source, in all three), stb_image 2.30's JPEG decoder (its JPEG messages in all three),
+  SDL_rotate from SDL_gfx (on Windows by the software renderer, whose one string is there and which calls it). Under
+  SDL's zlib license with their own copyright lines, in all three: Valve's controller table, Max Maisel's Steam Deck
+  driver and, from round three, Gareth McCaughan's qsort and Collabora's SDL_ReadSurfacePixel (both inferred on
+  Windows: no LTO or section garbage collection in the desktop build, so SDL's objects go in whole); on Linux: Igalia's
+  X11 settings and, from round three, Collabora's evdev capabilities, NVIDIA's X11 OpenGL code and Wim Taymans's
+  PipeWire camera driver. On Linux only: the X11 EDID parser, the XSETTINGS client, imKStoUCS, xdg-user-dirs' lookup
+  functions, the 22 Wayland protocol files, each one's every interface in the program (21 share one permission notice,
+  given once after their copyright lines), and from round three PipeWire's SPA header code (Ubuntu 22.04's
+  0.3.48-1ubuntu3.2: 39 SPA and 29 pipewire headers reached, five copyright lines, one MIT text; four spa_pod_*
+  functions kept out of line). Left out: SDL's libm, OpenVR and the libusb backend (in no binary: no symbols or
+  strings, and three fdlibm tables in none), Valve's two Steam headers and the Khronos, Mesa and Microsoft headers
+  (declarations and constants only), SDL's test library (not built: no SDLTest_ symbols) and public-domain code
+  (dlmalloc, the CRCs, murmur3, PDCLib's strtok_r, the VGA font).
+- **The AppImage's runtime** (its first 944,632 bytes): type2-runtime's continuous build, which appimagetool downloads
+  when the AppImage is made, naming its own commit: `8f39b89` in v2.4.0's, `fedfad51a` in this PR's CI AppImage
+  (`type2-runtime/commit/fedfad5`; the review's M1, for which round three rewords the notice). Built on Alpine 3.21 (its
+  `.comment`), linked (type2-runtime's Makefile) with musl, libfuse 3.15.0 (patched by type2-runtime), squashfuse 0.5.2,
+  zstd, zlib and mimalloc, which the runtime's own LICENSE omits; in 2.4.0's, musl 1.2.5, zstd 1.5.6 and zlib 1.3.2
+  (their version strings) and mimalloc 2.1.7 (inferred). One block after MinGW-w64's: each part's license and its
+  project's source; libfuse's LGPL2.txt, zstd's LICENSE and zlib's terms are word for word texts LICENSE has (FFmpeg's
+  LGPL 2.1, Zstandard's, zlib's), so pointed to; the rest word for word, musl's COPYRIGHT indented (two of its lines
+  are 70-dash rules). No Alpine package revisions: a runtime doesn't record them.
 - **The runtime isn't pinned**: scripts/package-linux-appimage.sh fetches appimagetool's continuous build, which
-  downloads type2-runtime's continuous runtime unless given `--runtime-file` (src/appimagetool_fetch_runtime.cpp);
-  that runtime is now built from a later commit (`fedfad51a`, 19 Oct). Pinning, a fetched runtime checked by sha256 and
-  passed with `--runtime-file`, is a few lines, but type2-runtime's one fixed release, `20251108`, predates `8f39b89`'s
-  change that creates extraction directories with mode 0700; for the coordinator to queue, or not, as its own PR.
+  downloads type2-runtime's continuous runtime unless given `--runtime-file` (src/appimagetool_fetch_runtime.cpp), and
+  the notice is worded for that. type2-runtime's one fixed release, `20251108`, predates `8f39b89`'s change that creates
+  extraction directories with mode 0700. Left for the owner or later PRs: the pin (a hosted copy checked by sha256,
+  passed with `--runtime-file`, and a CI step comparing the runtime's commit string with the notice), libfuse's source
+  beside each build (LGPL 2.1 §6), and appimagetool and linuxdeploy pinned.
+- **What the AppImage bundles**: this PR's CI AppImage (run 39693815936, read as an archive) holds two shared
+  libraries, usr/lib/libavcodec.so.63 and libavutil.so.61, FFmpeg's, under its notice; besides them, the runtime,
+  usr/bin/phobos, AppRun, the desktop files and icons, the data folders and LICENSE and COPYING.
 - **In the repository, in no build**: VMA (nothing includes `vk_mem_alloc.h`), jansson (`thirdparty/jansson` holds only
   `jansson_config.h`, an include path nothing uses), librashader (two headers nothing includes; no library in any
   package), GLFW (`thirdparty/GLFW` is a five-function stub Phobos wrote, no GLFW code, and no binary keeps it); none
@@ -108,15 +126,20 @@ change. Notes, listings and checksums: `~/phobos-work/scratch/license-notices/` 
   JSpecify's annotations, each with its holder from its sources. All Apache-2.0.
 - **The Windows zip** carries `LICENSE.txt` and `COPYING.txt` (scripts/package-windows.sh:48-49; v2.4.0's has both),
   so no packaging change.
-- **atomicfu and libc++**: atomicfu stays named in the Android libraries notice, and the NDK's libc++, static in the
-  APKs' native libraries, gets no notice, as its license (Apache 2.0 with the LLVM exception) asks for none.
+- **atomicfu and libc++**: atomicfu stays named in the Android libraries notice. libc++ is linked statically into
+  three of the APKs' native libraries; its license is Apache 2.0 with the LLVM Exceptions, which ask for no notice in
+  object code, but code not relicensed keeps LLVM's legacy license, and whether any is in the APKs isn't known, so it
+  has a short notice (round three: the review's L3).
 - **Checks**: LicensesScreen's split re-implemented (python3 -B): 38 notices on master, 40 after round one, 55 after
-  round two (56 in the APK with COPYING's); each round-two block's words against its sources, whitespace normalised (91
-  checks, all holding); master's assembly equals nightly-216017's `assets/licenses/LICENSE.txt` byte for byte;
-  LicenseNoticesTest holds by reading (it pins no count, but the first two titles, unique titles and 16 names each
-  starting one; its assertions mirrored in Python hold); `git diff --check` and `git show --check` clean. CI runs the
-  unit tests; its runs go in the PR's body.
-- Independent review: not yet.
+  round two, 57 after round three (58 in the APK with COPYING's), titles unique, no notice line exactly 70 dashes; each
+  round-two block's words against its sources, whitespace normalised (91 checks, at round two's head), and at round
+  three's its new and changed lines (33) and the review's own 119 (its verbatim.py), all holding; master's assembly
+  equals nightly-216017's `assets/licenses/LICENSE.txt` byte for byte, and round two's head's APKs carry its LICENSE so
+  assembled; LicenseNoticesTest holds by reading (it pins no count, but the first two titles, unique titles and, from
+  round three, 19 names each starting one; its assertions mirrored in Python hold); `git diff --check` and `git show
+  --check` clean. CI runs the unit tests; its runs go in the PR's body.
+- Independent review: NEEDS CHANGES for `94d7802d1` (runtime notice names `8f39b89`; its own AppImage has `fedfad51a`).
+  Fixed after it: M1, L1 to L4 and the HIDAPI and test suggestions in `24ca53ef6` to `a568e627a`; N1 in the PR body.
 
 ## Tests: the spin skip's untested refusals and the GE thread's refetch charge — 2026-10-21
 
