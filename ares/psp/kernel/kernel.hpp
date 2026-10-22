@@ -403,6 +403,7 @@ struct Kernel {
   auto spinWaitSema(SpinShadow& shadow, u64 time) -> bool;
   auto spinWaitSemaCB(SpinShadow& shadow, u64 time) -> bool;
   auto spinWaitSemaphore(SpinShadow& shadow, bool callbacks) -> bool;
+  auto spinCheckCallback(SpinShadow& shadow, u64 time) -> bool;
   auto spinMpegRingbufferAvailableSize(SpinShadow& shadow, u64 time) -> bool;
   auto spinGetVcount(SpinShadow& shadow, u64 time) -> bool;
   auto spinGeListSync(SpinShadow& shadow, u64 time) -> bool;

@@ -7,14 +7,14 @@
 //off, with a GE profile recording, and with the PSP's GE timing, each turn moving lines of the CPU's caches, or begun
 //after a sleep and not skipped across the kink in its busy window's push; also beside a semaphore signalled and taken
 //back with waits that succeed at once, as the EA games' loops do, with a CB wait, with waits and a signal refused, and
-//with a signal that hands the CPU to no thread ready), skipped;
+//with a signal that hands the CPU to no thread ready, and beside a callback check finding none due), skipped;
 //loops that aren't one turn over and over (a count stored, a register counting, an FPU register adding up, the thread's
 //run time read, the clock polled, a semaphore that counts, a turn taking one more of a semaphore than it gives, another
 //priority's line rotated, a store into its own compiled code), or whose turn would hand the CPU to a better thread, or
 //signals a semaphore a thread waits on, or waits, not skipped. And skips made directly, against the same turns run:
 //every register and byte, the clock, the ready order's count and the run time the last turn wrote (to the cycle); the
-//turns' boundaries, none outside a go or with a thread of the caller's priority ready, nor past a CB wait's callback
-//notified as a turn begins; and the pages a turn may store to.
+//turns' boundaries, none outside a go or with a thread of the caller's priority ready, nor past a callback notified as
+//a turn begins (its CB wait's, or its callback check's); and the pages a turn may store to.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -1540,6 +1540,84 @@ static auto spinsSemaphoreWaits() -> void {
   }
 }
 
+//How a poll's callback check comes to find the thread's callback due (callbackPoll()): never (Nothing); notified by a
+//timer's handler (Timer: an alarm 3 milliseconds on, between goes); or by an asynchronous read's completion, between
+//goes (Read: readAsync()).
+enum class Due : u32 { Nothing, Timer, Read };
+
+//A poll of the GE that also asks the movie ring how full it is and checks the thread's callbacks each turn
+//(sceKernelCheckCallback: Midnight Club: L.A. Remix's loop is such checks): main makes its callback (threadCallback())
+//and queues a list of 16 sprites (geSprites()), and till the GE says it's done asks sceGeDrawSync(1), the turn's first
+//call and so its anchor, then sceMpegRingbufferAvailableSize and sceKernelCheckCallback, storing each result at Answers
+//on; three lists, the clock noted after each. A check finding the callback notified runs it. With stick (Read): the
+//memory stick's host folder, for readAsync().
+auto callbackPoll(KernelMachine& m, Due due, const std::string& stick = {}) -> Anchor {
+  threadCallback(m);
+  m.system.memory.write(4, Ring + 0, 64);  //packets
+  m.system.memory.write(4, Ring + 12, 0);  //holding data
+  m.system.memory.write(4, Ring + 40, 0);
+  Assembler main{m, 0x0880'1000};
+  main.li(a0, m.string("cb")); main.li(a1, 0x0880'4800); main.li(a2, 0); main.call("sceKernelCreateCallback");
+  main.put(addu(s7, v0, zero));
+  if(due == Due::Timer) {  //(its handler notifies the callback, whose ID is the alarm's argument)
+    Assembler handler{m, 0x0880'3800};
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    handler.li(a1, 1); handler.call("sceKernelNotifyCallback");
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.put(addu(v0, zero, zero)); handler.put(jr(ra)); handler.put(nop);  //(0: the alarm ends)
+    main.li(a0, 3000); main.li(a1, 0x0880'3800); main.put(addu(a2, s7, zero)); main.call("sceKernelSetAlarm");
+  }
+  if(due == Due::Read) readAsync(m, main, stick);
+  geSprites(m, GeList, GeVertices);
+  main.li(s4, 0);
+  u32 round = main.here();
+  main.put(addiu(s4, s4, 1));
+  main.li(a0, GeList); main.li(a1, 0); main.li(a2, 0xffff'ffff); main.li(a3, 0);
+  main.call("sceGeListEnQueue");
+  u32 poll = main.here();
+  main.li(a0, 1); main.call("sceGeDrawSync");
+  Anchor anchor{m.stub("sceGeDrawSync") + 4, main.here()};
+  main.put(addu(s5, v0, zero));
+  main.li(a0, Ring); main.call("sceMpegRingbufferAvailableSize");
+  main.li(t0, Answers); main.put(sw(v0, 0, t0));
+  main.call("sceKernelCheckCallback");
+  main.li(t0, Answers + 4); main.put(sw(v0, 0, t0));
+  main.put(bne(s5, zero, branchTo(main, poll))); main.put(nop);
+  main.call("sceKernelGetSystemTimeLow");
+  main.put(sll(t1, s4, 2)); main.li(t2, Seen); main.put(addu(t2, t2, t1)); main.put(sw(v0, 0, t2));
+  main.put(sltiu(t3, s4, Rounds));
+  main.put(bne(t3, zero, branchTo(main, round))); main.put(nop);
+  main.call("sceKernelExitGame");
+  return anchor;
+}
+
+//A callback check finding none due each turn of a poll (callbackPoll()): calm, worked out on the shadow, and the turns
+//skipped (thousands) as run. With the thread's callback notified by a timer's handler, or by an asynchronous read's
+//completion, between goes, the next check runs it, once, as with every turn run. And directly (notifiedDirectly()): a
+//try with the callback notified isn't skipped, the proof stopping at the check. Every step's state the same either way,
+//on both engines.
+static auto spinsCallbackCheck() -> void {
+  HostFolder stick;
+  stick.put("DATA.BIN", std::string(4000, 'd'));
+  for(bool recompile : {false, true}) {
+    for(auto due : {Due::Nothing, Due::Timer, Due::Read}) {
+      u64 skipped = 0;
+      auto program = [&stick, due](KernelMachine& m) { callbackPoll(m, due, stick.path.string()); };
+      CHECK(bothWays(program, recompile, 32, skipped), true);
+      if(skipped <= 1000) std::printf("  due %u skipped %llu turns\n", u32(due), (unsigned long long)skipped);
+      CHECK(skipped > 1000, true);
+      auto m = machine(program, recompile, true);
+      m->kernel.run(Step * 32);
+      CHECK(m->kernel.exited, true);
+      CHECK(m->system.memory.read(4, CallbackRuns), due == Due::Nothing ? 0u : 1u);
+    }
+  }
+  FastTimed fastTimed;
+  Unthreaded unthreaded;
+  AtAnchor atAnchor{[](KernelMachine& m) { return callbackPoll(m, Due::Nothing); }, {}};
+  notifiedDirectly(atAnchor);
+}
+
 auto spinTests() -> Tests {
   return {
     {"spins skipped as run", spinsSkipped}, {"spins refused", spinsRefused}, {"a spin skipped directly", spinsDirect},
@@ -1569,6 +1647,8 @@ auto spinTests() -> Tests {
      "over", spinsSemaphoreSwitch},
     {"the GE's looks polled beside a semaphore another thread waits on, or a wait that waits: not skipped",
      spinsSemaphoreWaits},
+    {"the GE's looks polled beside a callback check with none due: skipped as run, not with the callback notified",
+     spinsCallbackCheck},
   };
 }
 

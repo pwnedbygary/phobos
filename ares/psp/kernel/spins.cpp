@@ -6,9 +6,10 @@
 //reader thread feeds it; Resistance asks the GE whether its list is done (sceGeListSync(id, 1)), with the PSP's GE
 //timing some 285,000 times a frame, till it is; Need for Speed: Shift asks sceGeDrawSync(1) some 45,000 times a frame,
 //each turn also signalling a semaphore and taking it back, twice, with waits that succeed at once (calm: they wake no
-//thread and hand the CPU to none), as Burnout Dominator's and Legends' turns do. A system call costs the clock one
-//cycle, so a turn of such a loop is a few dozen cycles of the PSP's time, and nothing else happens till the CPU's go
-//ends at the next thing due (Kernel::run(): only system functions bring that end sooner, and these, quiet or calm,
+//thread and hand the CPU to none), as Burnout Dominator's and Legends' turns do; and Midnight Club: L.A. Remix checks
+//its callbacks (sceKernelCheckCallback) some 8,000 times a frame with none due (calm). A system call costs the clock
+//one cycle, so a turn of such a loop is a few dozen cycles of the PSP's time, and nothing else happens till the CPU's
+//go ends at the next thing due (Kernel::run(): only system functions bring that end sooner, and these, quiet or calm,
 //don't).
 //
 //So once a loop has come round the same way a few times, the kernel proves that its next turn leaves everything a
@@ -436,6 +437,15 @@ auto Kernel::spinWaitSema(SpinShadow& shadow, u64) -> bool {
 
 auto Kernel::spinWaitSemaCB(SpinShadow& shadow, u64) -> bool {
   return spinWaitSemaphore(shadow, true);
+}
+
+//Nothing due to run: 0. Not its ILLEGAL_CONTEXT path (from a handler or a callback: the kernel's call there isn't calm,
+//so no turn making it is skipped), nor a check with one due, which runs it.
+auto Kernel::spinCheckCallback(SpinShadow& shadow, u64) -> bool {
+  if(interrupting || (current && current->inCallback)) return false;
+  if(current && pendingCallback(*current)) return false;
+  shadow.ipu.r[2] = 0;
+  return true;
 }
 
 auto Kernel::spinMpegRingbufferAvailableSize(SpinShadow& shadow, u64) -> bool {

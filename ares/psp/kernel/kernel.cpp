@@ -888,6 +888,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
           {"sceKernelSignalSema", &Kernel::spinSignalSema},
           {"sceKernelWaitSema", &Kernel::spinWaitSema},
           {"sceKernelWaitSemaCB", &Kernel::spinWaitSemaCB},
+          {"sceKernelCheckCallback", &Kernel::spinCheckCallback},
           {"sceMpegRingbufferAvailableSize", &Kernel::spinMpegRingbufferAvailableSize},
           {"sceDisplayGetVcount", &Kernel::spinGetVcount},
           {"sceGeListSync", &Kernel::spinGeListSync},
