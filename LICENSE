@@ -1834,6 +1834,64 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
+libc++ (the Android NDK's, linked statically into the APKs' native libraries)
+https://github.com/llvm/llvm-project/tree/main/libcxx
+
+Three of the APKs' native libraries carry libc++ code, linked statically
+(none loads libc++_shared.so): libphobos_android.so and libadrenotools'
+libhook_impl.so, built with the NDK's clang 19.0.1 (based on LLVM
+r530567e: Android's toolchain/llvm-project at 97a699bf4812), and AndroidX
+DataStore's libdatastore_shared_counter.so, as Google builds it (clang
+14.0.7). libcxx/LICENSE.TXT, the same at both Android revisions and at
+LLVM's releases 14 to 20, puts LLVM's code under the Apache License 2.0,
+whose text appears above, with the LLVM Exceptions, which follow; libc++'s
+code that remains under LLVM's legacy license is dual licensed, as the
+paragraph after them says, and is used here under the MIT license, whose
+text closes this notice.
+
+---- LLVM Exceptions to the Apache 2.0 License ----
+
+As an exception, if, as a result of your compiling your source code, portions
+of this Software are embedded into an Object form of such source code, you
+may redistribute such embedded portions in such Object form without complying
+with the conditions of Sections 4(a), 4(b) and 4(d) of the License.
+
+In addition, if you combine or link compiled forms of this Software with
+software that is licensed under the GPLv2 ("Combined Software") and if a
+court of competent jurisdiction determines that the patent provision (Section
+3), the indemnity provision (Section 9) or other Section of the License
+conflicts with the conditions of the GPLv2, you may retroactively and
+prospectively choose to deem waived or otherwise exclude such Section(s) of
+the License, but only in their entirety and only with respect to the Combined
+Software.
+
+The libc++ library is dual licensed under both the University of Illinois
+"BSD-Like" license and the MIT license.  As a user of this code you may choose
+to use it under either license.  As a contributor, you agree to allow your code
+to be used under both.
+
+Copyright (c) 2009-2014 by the contributors listed in CREDITS.TXT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 FFmpeg (libavcodec and libavutil: in the APK and beside the desktop program)
 https://ffmpeg.org
 
