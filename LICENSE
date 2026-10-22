@@ -3591,10 +3591,12 @@ SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
 https://www.khronos.org/registry/
 
 and extinst.tosa.001000.1 and extinst.arm.motion-engine.100, then
-extinst.nonsemantic.graph.debuginfo:
+extinst.nonsemantic.graph.debuginfo, then
+extinst.arm.experimental-ml-operations:
 
 SPDX-FileCopyrightText: 2022-2025 Arm Ltd.
 SPDX-FileCopyrightText: 2022-2026 Arm Ltd.
+SPDX-FileCopyrightText: 2025 Arm Ltd.
 SPDX-License-Identifier: MIT
 
 The MIT License, as SPIRV-Headers' LICENSES/MIT.txt gives it:
