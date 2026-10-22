@@ -180,8 +180,8 @@ You can contact the author at:
 
 Apache License 2.0
 
-Used by Vulkan-Headers, font-rs and the Android and Kotlin libraries listed
-near the end of this file.
+Used by Vulkan-Headers, MoltenVK, SPIRV-Cross, SPIRV-Tools, font-rs and
+the Android and Kotlin libraries listed near the end of this file.
 
                                  Apache License
                            Version 2.0, January 2004
@@ -1834,6 +1834,64 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
+libc++ (the Android NDK's, linked statically into the APKs' native libraries)
+https://github.com/llvm/llvm-project/tree/main/libcxx
+
+Three of the APKs' native libraries carry libc++ code, linked statically
+(none loads libc++_shared.so): libphobos_android.so and libadrenotools'
+libhook_impl.so, built with the NDK's clang 19.0.1 (based on LLVM
+r530567e: Android's toolchain/llvm-project at 97a699bf4812), and AndroidX
+DataStore's libdatastore_shared_counter.so, as Google builds it (clang
+14.0.7). libcxx/LICENSE.TXT, the same at both Android revisions and at
+LLVM's releases 14 to 20, puts LLVM's code under the Apache License 2.0,
+whose text appears above, with the LLVM Exceptions, which follow; libc++'s
+code that remains under LLVM's legacy license is dual licensed, as the
+paragraph after them says, and is used here under the MIT license, whose
+text closes this notice.
+
+---- LLVM Exceptions to the Apache 2.0 License ----
+
+As an exception, if, as a result of your compiling your source code, portions
+of this Software are embedded into an Object form of such source code, you
+may redistribute such embedded portions in such Object form without complying
+with the conditions of Sections 4(a), 4(b) and 4(d) of the License.
+
+In addition, if you combine or link compiled forms of this Software with
+software that is licensed under the GPLv2 ("Combined Software") and if a
+court of competent jurisdiction determines that the patent provision (Section
+3), the indemnity provision (Section 9) or other Section of the License
+conflicts with the conditions of the GPLv2, you may retroactively and
+prospectively choose to deem waived or otherwise exclude such Section(s) of
+the License, but only in their entirety and only with respect to the Combined
+Software.
+
+The libc++ library is dual licensed under both the University of Illinois
+"BSD-Like" license and the MIT license.  As a user of this code you may choose
+to use it under either license.  As a contributor, you agree to allow your code
+to be used under both.
+
+Copyright (c) 2009-2014 by the contributors listed in CREDITS.TXT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 FFmpeg (libavcodec and libavutil: in the APK and beside the desktop program)
 https://ffmpeg.org
 
@@ -2717,6 +2775,988 @@ DEALINGS IN THE SOFTWARE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
+AppImage runtime (type2-runtime, the start of the Linux AppImage, with the libraries linked into it)
+https://github.com/AppImage/type2-runtime
+
+The Linux AppImage begins with the AppImage runtime, the program that
+mounts or extracts the image after it: type2-runtime's continuous build,
+which appimagetool downloads when the AppImage is made. The runtime names
+its own commit (run the AppImage with --appimage-version); Phobos 2.4.0's
+is 8f39b89. It is built on Alpine Linux 3.21 and statically linked with
+musl, libfuse 3.15.0 (patched by type2-runtime), squashfuse 0.5.2, zstd,
+zlib and mimalloc (in Phobos 2.4.0: musl 1.2.5, zstd 1.5.6, zlib 1.3.2 and
+mimalloc 2.1.7). Its parts, their licenses and where their source is:
+
+- type2-runtime: its LICENSE, below.
+  https://github.com/AppImage/type2-runtime
+- musl libc: its COPYRIGHT, below (musl 1.2.5's).
+  https://musl.libc.org, with Alpine 3.21's patches:
+  https://git.alpinelinux.org/aports/tree/main/musl?h=3.21-stable
+- libfuse 3.15.0: Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>,
+  under the GNU Lesser General Public License, version 2.1, whose text
+  appears in FFmpeg's notice above.
+  https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz,
+  with type2-runtime's patches/libfuse/mount.c.diff applied.
+- squashfuse 0.5.2: its LICENSE, below.
+  https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz
+- zstd: under the BSD license whose text, with its copyright line, appears
+  in Zstandard's notice above (zstd 1.5.6's text).
+  https://github.com/facebook/zstd
+- zlib: under the license whose text appears in zlib's notice above; zlib
+  1.3.2's copyright line is Copyright (C) 1995-2026 Jean-loup Gailly and
+  Mark Adler.
+  https://github.com/madler/zlib
+- mimalloc: its LICENSE, below (mimalloc 2.1.7's).
+  https://github.com/microsoft/mimalloc
+
+type2-runtime's LICENSE:
+
+MIT License
+
+Copyright (c) 2004-23 probonopd
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The AppImage runtime executable contains statically linked code from
+the following third party libraries, which are licensed under
+the following terms:
+
+* musl libc, licensed under the terms of
+  https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
+* libfuse, licensed under the terms of
+  https://github.com/libfuse/libfuse/blob/master/LGPL2.txt
+* squashfuse, licensed under the terms of
+  https://github.com/vasi/squashfuse/blob/master/LICENSE
+* libzstd, licensed under the terms of
+  https://github.com/facebook/zstd/blob/dev/LICENSE
+* zlib, licensed under the terms of
+  https://zlib.net/zlib_license.html
+
+musl's COPYRIGHT, indented so that its two rules don't divide this
+notice:
+
+  musl as a whole is licensed under the following standard MIT license:
+
+  ----------------------------------------------------------------------
+  Copyright © 2005-2020 Rich Felker, et al.
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+  ----------------------------------------------------------------------
+
+  Authors/contributors include:
+
+  A. Wilcox
+  Ada Worcester
+  Alex Dowad
+  Alex Suykov
+  Alexander Monakov
+  Andre McCurdy
+  Andrew Kelley
+  Anthony G. Basile
+  Aric Belsito
+  Arvid Picciani
+  Bartosz Brachaczek
+  Benjamin Peterson
+  Bobby Bingham
+  Boris Brezillon
+  Brent Cook
+  Chris Spiegel
+  Clément Vasseur
+  Daniel Micay
+  Daniel Sabogal
+  Daurnimator
+  David Carlier
+  David Edelsohn
+  Denys Vlasenko
+  Dmitry Ivanov
+  Dmitry V. Levin
+  Drew DeVault
+  Emil Renner Berthing
+  Fangrui Song
+  Felix Fietkau
+  Felix Janda
+  Gianluca Anzolin
+  Hauke Mehrtens
+  He X
+  Hiltjo Posthuma
+  Isaac Dunham
+  Jaydeep Patil
+  Jens Gustedt
+  Jeremy Huntwork
+  Jo-Philipp Wich
+  Joakim Sindholt
+  John Spencer
+  Julien Ramseier
+  Justin Cormack
+  Kaarle Ritvanen
+  Khem Raj
+  Kylie McClain
+  Leah Neukirchen
+  Luca Barbato
+  Luka Perkov
+  M Farkas-Dyck (Strake)
+  Mahesh Bodapati
+  Markus Wichmann
+  Masanori Ogino
+  Michael Clark
+  Michael Forney
+  Mikhail Kremnyov
+  Natanael Copa
+  Nicholas J. Kain
+  orc
+  Pascal Cuoq
+  Patrick Oppenlander
+  Petr Hosek
+  Petr Skocik
+  Pierre Carrier
+  Reini Urban
+  Rich Felker
+  Richard Pennington
+  Ryan Fairfax
+  Samuel Holland
+  Segev Finer
+  Shiz
+  sin
+  Solar Designer
+  Stefan Kristiansson
+  Stefan O'Rear
+  Szabolcs Nagy
+  Timo Teräs
+  Trutz Behn
+  Valentin Ochs
+  Will Dietz
+  William Haddon
+  William Pitcock
+
+  Portions of this software are derived from third-party works licensed
+  under terms compatible with the above MIT license:
+
+  The TRE regular expression implementation (src/regex/reg* and
+  src/regex/tre*) is Copyright © 2001-2008 Ville Laurikari and licensed
+  under a 2-clause BSD license (license text in the source files). The
+  included version has been heavily modified by Rich Felker in 2012, in
+  the interests of size, simplicity, and namespace cleanliness.
+
+  Much of the math library code (src/math/* and src/complex/*) is
+  Copyright © 1993,2004 Sun Microsystems or
+  Copyright © 2003-2011 David Schultz or
+  Copyright © 2003-2009 Steven G. Kargl or
+  Copyright © 2003-2009 Bruce D. Evans or
+  Copyright © 2008 Stephen L. Moshier or
+  Copyright © 2017-2018 Arm Limited
+  and labelled as such in comments in the individual source files. All
+  have been licensed under extremely permissive terms.
+
+  The ARM memcpy code (src/string/arm/memcpy.S) is Copyright © 2008
+  The Android Open Source Project and is licensed under a two-clause BSD
+  license. It was taken from Bionic libc, used on Android.
+
+  The AArch64 memcpy and memset code (src/string/aarch64/*) are
+  Copyright © 1999-2019, Arm Limited.
+
+  The implementation of DES for crypt (src/crypt/crypt_des.c) is
+  Copyright © 1994 David Burren. It is licensed under a BSD license.
+
+  The implementation of blowfish crypt (src/crypt/crypt_blowfish.c) was
+  originally written by Solar Designer and placed into the public
+  domain. The code also comes with a fallback permissive license for use
+  in jurisdictions that may not recognize the public domain.
+
+  The smoothsort implementation (src/stdlib/qsort.c) is Copyright © 2011
+  Valentin Ochs and is licensed under an MIT-style license.
+
+  The x86_64 port was written by Nicholas J. Kain and is licensed under
+  the standard MIT terms.
+
+  The mips and microblaze ports were originally written by Richard
+  Pennington for use in the ellcc project. The original code was adapted
+  by Rich Felker for build system and code conventions during upstream
+  integration. It is licensed under the standard MIT terms.
+
+  The mips64 port was contributed by Imagination Technologies and is
+  licensed under the standard MIT terms.
+
+  The powerpc port was also originally written by Richard Pennington,
+  and later supplemented and integrated by John Spencer. It is licensed
+  under the standard MIT terms.
+
+  All other files which have no copyright comments are original works
+  produced specifically for use as part of this library, written either
+  by Rich Felker, the main author of the library, or by one or more
+  contibutors listed above. Details on authorship of individual files
+  can be found in the git version control history of the project. The
+  omission of copyright and license comments in each file is in the
+  interest of source tree size.
+
+  In addition, permission is hereby granted for all public header files
+  (include/* and arch/*/bits/*) and crt files intended to be linked into
+  applications (crt/*, ldso/dlstart.c, and arch/*/crt_arch.h) to omit
+  the copyright notice and permission notice otherwise required by the
+  license, and to use these files without any requirement of
+  attribution. These files include substantial contributions from:
+
+  Bobby Bingham
+  John Spencer
+  Nicholas J. Kain
+  Rich Felker
+  Richard Pennington
+  Stefan Kristiansson
+  Szabolcs Nagy
+
+  all of whom have explicitly granted such permission.
+
+  This file previously contained text expressing a belief that most of
+  the files covered by the above exception were sufficiently trivial not
+  to be subject to copyright, resulting in confusion over whether it
+  negated the permissions granted in the license. In the spirit of
+  permissive licensing, and of not having licensing issues being an
+  obstacle to adoption, that text has been removed.
+
+squashfuse's LICENSE:
+
+The squashfuse distribution as a whole is copyright Dave
+Vasilevsky and is subject to the copyright notice reproduced at
+the bottom of this file.
+
+The file squashfs_fs.h is copyright Phillip Lougher and, with his permission,
+subject to the same license.
+
+
+Copyright (c) 2012 Dave Vasilevsky <dave@vasilevsky.ca>
+                   Phillip Lougher <phillip@squashfs.org.uk>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+mimalloc's LICENSE:
+
+MIT License
+
+Copyright (c) 2018-2021 Microsoft Corporation, Daan Leijen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SDL 3.2.30 (linked into the desktop program: Linux, Windows and macOS)
+https://github.com/libsdl-org/SDL
+
+Copyright (C) 1997-2025 Sam Lantinga <slouken@libsdl.org>
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+HIDAPI (in SDL 3.2.30, src/hidapi: Linux, Windows and macOS)
+https://github.com/libusb/hidapi
+
+SDL's joystick code compiles in its copy of HIDAPI: the hidraw backend on
+Linux (linux/hid.c), the Windows one (windows/hid.c) and the macOS one
+(mac/hid.c). Those three files carry:
+
+Alan Ott
+Signal 11 Software
+
+libusb/hidapi Team
+
+Copyright 2022, All Rights Reserved.
+
+HIDAPI can be used under one of three licenses; Phobos uses it under the
+BSD-style one, SDL's src/hidapi/LICENSE-bsd.txt:
+
+Copyright (c) 2010, Alan Ott, Signal 11 Software
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright notice,
+      this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of Signal 11 Software nor the names of its
+      contributors may be used to endorse or promote products derived from
+      this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+yuv2rgb (in SDL 3.2.30, src/video/yuv2rgb: Linux, Windows and macOS)
+https://github.com/descampsa/yuv2rgb
+
+SDL's conversions between YUV and RGB pixel formats. Its
+src/video/yuv2rgb/LICENSE:
+
+Copyright (c) 2016, Adrien Descamps
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of yuv2rgb nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+stb_image 2.30 (in SDL 3.2.30, src/video/stb_image.h, its JPEG decoder: Linux, Windows and macOS)
+https://github.com/nothings/stb
+
+SDL decodes MJPEG frames with it (src/video/SDL_stb.c). Its license,
+from the end of the file:
+
+------------------------------------------------------------------------------
+This software is available under 2 licenses -- choose whichever you prefer.
+------------------------------------------------------------------------------
+ALTERNATIVE A - MIT License
+Copyright (c) 2017 Sean Barrett
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+------------------------------------------------------------------------------
+ALTERNATIVE B - Public Domain (www.unlicense.org)
+This is free and unencumbered software released into the public domain.
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
+software, either in source code form or as a compiled binary, for any purpose,
+commercial or non-commercial, and by any means.
+In jurisdictions that recognize copyright laws, the author or authors of this
+software dedicate any and all copyright interest in the software to the public
+domain. We make this dedication for the benefit of the public at large and to
+the detriment of our heirs and successors. We intend this dedication to be an
+overt act of relinquishment in perpetuity of all present and future rights to
+this software under copyright law.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+------------------------------------------------------------------------------
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SDL_rotate (in SDL 3.2.30, src/render/software/SDL_rotate.c, from SDL_gfx: Linux, Windows and macOS)
+
+The software renderer rotates textures with it. Its notice:
+
+SDL_rotate.c: rotates 32bit or 8bit surfaces
+
+Shamelessly stolen from SDL_gfx by Andreas Schiffler. Original copyright follows:
+
+Copyright (C) 2001-2011  Andreas Schiffler
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+   1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+
+   2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+
+   3. This notice may not be removed or altered from any source
+   distribution.
+
+Andreas Schiffler -- aschiffler at ferzkopp dot net
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SDL 3.2.30's files by other authors (the first four in Linux, Windows and macOS; the other four in Linux)
+
+These carry their own copyright lines under the license text of SDL's
+notice above, the zlib license, word for word:
+- src/joystick/controller_type.c, controller_type.h and controller_list.h,
+  the table of game controllers SDL recognises:
+  Copyright (C) Valve Corporation
+- src/joystick/hidapi/SDL_hidapi_steamdeck.c, the Steam Deck's driver:
+  Copyright (C) 2023 Max Maisel <max.maisel@posteo.de>
+- src/stdlib/SDL_qsort.c, the sort SDL always uses:
+  Copyright (c) 1998-2021 Gareth McCaughan
+- src/video/SDL_surface.c's SDL_ReadSurfacePixel:
+  This function Copyright 2023 Collabora Ltd., contributed to SDL under the
+  ZLib license
+- src/video/x11/SDL_x11settings.c and SDL_x11settings.h, its X11 settings:
+  Copyright 2024 Igalia S.L.
+- src/core/linux/SDL_evdev_capabilities.c and SDL_evdev_capabilities.h,
+  how it classes input devices:
+  Copyright (C) 2020 Collabora Ltd.
+- src/video/x11/SDL_x11opengl.c, its OpenGL code for X11:
+  Copyright (C) 2021 NVIDIA Corporation
+- src/camera/pipewire/SDL_camera_pipewire.c, its PipeWire camera driver:
+  Copyright (C) 2024 Wim Taymans <wtaymans@redhat.com>
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+EDID parser (in SDL 3.2.30, src/video/x11/edid-parse.c and edid.h: Linux)
+
+SDL's X11 code reads displays' EDID with it. Its notice:
+
+Copyright 2007 Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+on the rights to use, copy, modify, merge, publish, distribute, sub
+license, and/or sell copies of the Software, and to permit persons to whom
+the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.  IN NO EVENT SHALL
+THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+XSETTINGS client (in SDL 3.2.30, src/video/x11/xsettings-client.c and xsettings-client.h: Linux)
+
+SDL's X11 code reads the desktop's settings with it. Its notice:
+
+Copyright © 2001, 2007 Red Hat, Inc.
+Copyright 2024 Igalia S.L.
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation, and that the name of Red Hat not be used in advertising or
+publicity pertaining to distribution of the software without specific,
+written prior permission.  Red Hat makes no representations about the
+suitability of this software for any purpose.  It is provided "as is"
+without express or implied warranty.
+
+RED HAT DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING ALL
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL RED HAT
+BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
+OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+Author:  Owen Taylor, Red Hat, Inc.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+imKStoUCS (in SDL 3.2.30, src/events/imKStoUCS.c and imKStoUCS.h: Linux)
+
+SDL's X11 and Wayland code maps keysyms to Unicode with it. Its notice:
+
+Copyright (C) 2003-2006,2008 Jamey Sharp, Josh Triplett
+Copyright © 2009 Red Hat, Inc.
+Copyright 1990-1992,1999,2000,2004,2009,2010 Oracle and/or its affiliates.
+All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+xdg-user-dirs (in SDL 3.2.30, src/filesystem/unix/SDL_sysfilesystem.c: Linux)
+https://gitlab.freedesktop.org/xdg/xdg-user-dirs
+
+SDL's two xdg_user_dir_lookup functions are copied from its
+xdg-user-dir-lookup.c and adapted. Their notice:
+
+Copyright (c) 2007 Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+Wayland protocols (in SDL 3.2.30, its wayland-protocols folder: Linux)
+https://github.com/libsdl-org/SDL/tree/release-3.2.30/wayland-protocols
+
+SDL generates its Wayland code from these 22 protocol files, and the Linux
+program holds every interface each one defines. Each file's notice is its
+copyright lines and a permission notice: for the first 21 files, the one
+after their list, word for word; text-input-unstable-v3.xml's is its own,
+last.
+
+alpha-modifier-v1.xml:
+Copyright © 2024 Xaver Hugl
+color-management-v1.xml:
+Copyright 2019 Sebastian Wick
+Copyright 2019 Erwin Burema
+Copyright 2020 AMD
+Copyright 2020-2024 Collabora, Ltd.
+Copyright 2024 Xaver Hugl
+Copyright 2022-2025 Red Hat, Inc.
+cursor-shape-v1.xml:
+Copyright 2018 The Chromium Authors
+Copyright 2023 Simon Ser
+fractional-scale-v1.xml:
+Copyright © 2022 Kenny Levinsen
+frog-color-management-v1.xml:
+Copyright © 2023 Joshua Ashton for Valve Software
+Copyright © 2023 Xaver Hugl
+idle-inhibit-unstable-v1.xml:
+Copyright © 2015 Samsung Electronics Co., Ltd
+input-timestamps-unstable-v1.xml:
+Copyright © 2017 Collabora, Ltd.
+keyboard-shortcuts-inhibit-unstable-v1.xml:
+Copyright © 2017 Red Hat Inc.
+pointer-constraints-unstable-v1.xml:
+Copyright © 2014      Jonas Ådahl
+Copyright © 2015      Red Hat Inc.
+primary-selection-unstable-v1.xml:
+Copyright © 2015, 2016 Red Hat
+relative-pointer-unstable-v1.xml:
+Copyright © 2014      Jonas Ådahl
+Copyright © 2015      Red Hat Inc.
+tablet-v2.xml:
+Copyright 2014 © Stephen "Lyude" Chandler Paul
+Copyright 2015-2016 © Red Hat, Inc.
+viewporter.xml:
+Copyright © 2013-2016 Collabora, Ltd.
+wayland.xml:
+Copyright © 2008-2011 Kristian Høgsberg
+Copyright © 2010-2011 Intel Corporation
+Copyright © 2012-2013 Collabora, Ltd.
+xdg-activation-v1.xml:
+Copyright © 2020 Aleix Pol Gonzalez <aleixpol@kde.org>
+Copyright © 2020 Carlos Garnacho <carlosg@gnome.org>
+xdg-decoration-unstable-v1.xml:
+Copyright © 2018 Simon Ser
+xdg-dialog-v1.xml:
+Copyright © 2023 Carlos Garnacho
+xdg-foreign-unstable-v2.xml:
+Copyright © 2015-2016 Red Hat Inc.
+xdg-output-unstable-v1.xml:
+Copyright © 2017 Red Hat Inc.
+xdg-shell.xml:
+Copyright © 2008-2013 Kristian Høgsberg
+Copyright © 2013      Rafael Antognolli
+Copyright © 2013      Jasper St. Pierre
+Copyright © 2010-2013 Intel Corporation
+Copyright © 2015-2017 Samsung Electronics Co., Ltd
+Copyright © 2015-2017 Red Hat Inc.
+xdg-toplevel-icon-v1.xml:
+Copyright © 2023-2024 Matthias Klumpp
+Copyright ©      2024 David Edmundson
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+text-input-unstable-v3.xml:
+Copyright © 2012, 2013 Intel Corporation
+Copyright © 2015, 2016 Jan Arne Petersen
+Copyright © 2017, 2018 Red Hat, Inc.
+Copyright © 2018       Purism SPC
+
+Permission to use, copy, modify, distribute, and sell this
+software and its documentation for any purpose is hereby granted
+without fee, provided that the above copyright notice appear in
+all copies and that both that copyright notice and this permission
+notice appear in supporting documentation, and that the name of
+the copyright holders not be used in advertising or publicity
+pertaining to distribution of the software without specific,
+written prior permission.  The copyright holders make no
+representations about the suitability of this software for any
+purpose.  It is provided "as is" without express or implied
+warranty.
+
+THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
+SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+PipeWire's SPA headers (in SDL 3.2.30's PipeWire audio and camera drivers: Linux)
+https://gitlab.freedesktop.org/pipewire/pipewire
+
+SDL's PipeWire drivers include eight of PipeWire's SPA headers, and its
+pipewire.h and extensions/metadata.h, which reach 39 SPA headers and 29
+pipewire headers in all; their static inline functions compile into the
+Linux program, which keeps out-of-line copies of spa_pod_builder_add,
+spa_pod_builder_addv, spa_pod_parser_get and spa_pod_parser_can_collect.
+The Linux job builds against Ubuntu 22.04's PipeWire, 0.3.48-1ubuntu3.2.
+At 0.3.48 those headers carry these copyright lines, each with the MIT
+text that follows:
+
+Copyright © 2018 Wim Taymans
+Copyright © 2019 Wim Taymans
+Copyright © 2020 Wim Taymans
+Copyright © 2021 Wim Taymans
+Copyright © 2021 Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+MoltenVK 1.4.2 (libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/KhronosGroup/MoltenVK
+
+Copyright (c) 2015-2026 The Brenwill Workshop Ltd. (http://www.brenwill.com)
+Licensed under the Apache License 2.0, whose text appears above.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SPIRV-Cross (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/KhronosGroup/SPIRV-Cross
+
+At 6c09849fe88c48eaed08413aa022aaa136a3a057, the revision MoltenVK 1.4.2
+pins: its parser and its GLSL, MSL and reflection compilers.
+
+Copyright 2015-2021 Arm Limited
+Copyright 2016-2021 Arm Limited
+Copyright 2018-2021 Arm Limited
+Copyright 2016-2021 The Brenwill Workshop Ltd.
+Copyright 2018-2021 Bradley Austin Davis
+Copyright 2019-2021 Hans-Kristian Arntzen
+SPDX-License-Identifier: Apache-2.0 OR MIT, used here under the Apache
+License 2.0, whose text appears above. Its copy of Khronos's spirv.hpp is
+under SPIRV-Headers' notice, after SPIRV-Tools'.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SPIRV-Tools (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/KhronosGroup/SPIRV-Tools
+
+At 0d6fd73ca73830ccab5fa1f00ed5ed40124e2c55, the revision MoltenVK 1.4.2
+pins: its core library (its instruction tables, binary parser,
+disassembler and text assembler), none of its optimizer, validator,
+reducer, linker, linter or differ.
+
+Copyright (c) 2015-2016 The Khronos Group Inc.
+Copyright (c) 2015-2020 The Khronos Group Inc.
+Copyright (c) 2015-2022 The Khronos Group Inc.
+Copyright (c) 2025 The Khronos Group Inc.
+Copyright (c) 2016 Google Inc.
+Copyright (c) 2017 Google Inc.
+Copyright (c) 2018 Google Inc.
+Copyright (c) 2023 Google Inc.
+Copyright (c) 2024 Google LLC
+Copyright (c) 2025 Google LLC
+Copyright 2025 Google LLC
+Modifications Copyright (C) 2020 Advanced Micro Devices, Inc. All rights reserved.
+Modifications Copyright (C) 2020-2024 Advanced Micro Devices, Inc. All rights reserved.
+Modifications Copyright (C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Licensed under the Apache License 2.0, whose text appears above. Its
+instruction tables are generated from SPIRV-Headers' grammar files (the
+next notice).
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SPIRV-Headers (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/KhronosGroup/SPIRV-Headers
+
+At 29981f65241605e08b0ede4cfeb999fe3b723c6a, the revision MoltenVK 1.4.2
+pins. SPIRV-Tools generates its instruction tables from the grammar files
+in its include/spirv/unified1, and SPIRV-Cross compiles the inline
+functions of its own copy of spirv.hpp. Its LICENSE's notice for its
+files:
+
+Copyright (c) 2015-2024 The Khronos Group Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and/or associated documentation files (the
+"Materials"), to deal in the Materials without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Materials, and to
+permit persons to whom the Materials are furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Materials.
+
+MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS
+KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS
+SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
+   https://www.khronos.org/registry/
+
+THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+The grammar files that ship also state their own copyright and license:
+the core grammar and extinst.opencl.std.100 (and SPIRV-Cross's spirv.hpp),
+extinst.glsl.std.450, extinst.debuginfo,
+extinst.nonsemantic.shader.debuginfo.100 and extinst.opencl.debuginfo.100,
+and extinst.nonsemantic.shader.debuginfo, in that order:
+
+Copyright: 2014-2024 The Khronos Group Inc.
+Copyright (c) 2014-2024 The Khronos Group Inc.
+Copyright: 2017-2024 The Khronos Group Inc.
+Copyright: 2018-2024 The Khronos Group Inc.
+Copyright: 2018-2026 The Khronos Group Inc.
+License: MIT
+
+MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS
+KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS
+SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
+https://www.khronos.org/registry/
+
+and extinst.tosa.001000.1 and extinst.arm.motion-engine.100, then
+extinst.nonsemantic.graph.debuginfo, then
+extinst.arm.experimental-ml-operations:
+
+SPDX-FileCopyrightText: 2022-2025 Arm Ltd.
+SPDX-FileCopyrightText: 2022-2026 Arm Ltd.
+SPDX-FileCopyrightText: 2025 Arm Ltd.
+SPDX-License-Identifier: MIT
+
+The MIT License, as SPIRV-Headers' LICENSES/MIT.txt gives it:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+cereal (in libMoltenVK.dylib, in the macOS app's Contents/Frameworks)
+https://github.com/USCiLab/cereal
+
+At a56bad8bbb770ee266e930c95d37fff2a5be7fea, the revision MoltenVK 1.4.2
+pins: its binary archives, none of the JSON or XML code it bundles.
+
+Copyright (c) 2013-2022, Randolph Voorhies, Shane Grant
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the
+      names of its contributors may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 Vulkan-Headers (thirdparty/Vulkan-Headers, ares/n64/vulkan/parallel-rdp/vulkan-headers)
 https://github.com/KhronosGroup/Vulkan-Headers
 
@@ -2827,16 +3867,34 @@ Android and Kotlin libraries
 
 Licensed under the Apache License 2.0, whose text appears above:
   AndroidX (core-ktx, appcompat, activity-compose, navigation-compose,
-  lifecycle-viewmodel-compose, datastore-preferences, documentfile),
-  Jetpack Compose (ui, ui-graphics, material3, material-icons-extended),
+  lifecycle-viewmodel-compose, datastore-preferences, documentfile, and
+  the libraries they use from these AndroidX groups: activity, annotation,
+  appcompat, arch.core, autofill, cardview, collection, concurrent,
+  constraintlayout, coordinatorlayout, core, cursoradapter, customview,
+  datastore, drawerlayout, dynamicanimation, emoji2, exifinterface,
+  fragment, graphics, interpolator, legacy, lifecycle, loader,
+  localbroadcastmanager, navigation, print, profileinstaller,
+  recyclerview, resourceinspection, savedstate, startup, tracing,
+  transition, vectordrawable, versionedparcelable, viewpager and
+  viewpager2),
+  Jetpack Compose (ui, ui-graphics, ui-tooling-preview, material3,
+  material-icons-extended, and the Compose libraries they use: animation,
+  animation-core, foundation, foundation-layout, material-icons-core,
+  material-ripple, runtime, runtime-saveable, ui-geometry, ui-text,
+  ui-unit and ui-util),
+  Accompanist Drawable Painter,
   Material Components for Android and Material Icons
   (including res/drawable/ic_*.xml): Copyright The Android Open Source
   Project and Google LLC.
-  Kotlin standard library, kotlinx.coroutines and atomicfu: Copyright
-  JetBrains s.r.o. and contributors.
+  Kotlin standard library, kotlinx.coroutines, atomicfu, Kotlin's
+  Parcelize and Android Extensions runtimes and JetBrains' Java
+  annotations: Copyright JetBrains s.r.o. and contributors.
   Coil: Copyright Coil Contributors.
   OkHttp and Okio: Copyright Square, Inc.
   AndroidSVG: Copyright Paul LeBeau, Cave Rock Software Ltd.
+  Guava's ListenableFuture: Copyright The Guava Authors.
+  Error Prone annotations: Copyright The Error Prone Authors.
+  JSpecify annotations: Copyright The JSpecify Authors.
 
 Public Suffix List (inside OkHttp, okhttp3/internal/publicsuffix/publicsuffixes.gz),
 compiled from https://publicsuffix.org/list/public_suffix_list.dat and
