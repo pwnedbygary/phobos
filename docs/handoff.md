@@ -40,11 +40,10 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 Branch `cursor/psp-spin-widening-cachy`, from master `8c2b1ddee` (#295): W1 (`c793ab17d`), W2 (`a7552b776`) and the
 docs. ares/psp/kernel (threads.cpp, interrupts.cpp, events.cpp, spins.cpp, kernel.cpp, kernel.hpp),
 tests/psp/spins.cpp, docs/psp-core.md (part 116; part 105's Left) and this file (part 105's entry's Left; #295's
-entry). The design: `~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r3.md`, passed by its
-review's round two (`~/phobos-work/scratch/review-spinwide/REVIEW-r2.md`). Notes, scripts and logs:
-`~/phobos-work/scratch/psp-ge-profile/spinwide/code/`. No game was run: the games' exactness and host cost are the
-next round's (the second round ran them: below). Master `062dd53e2` (#296) merged in as `760ee14a7` (only this file
-conflicted; both entries kept).
+entry). The design: its third round, passed by its review's round two; the design, its reviews and the notes, scripts
+and logs are kept outside the repository. No game was run: the games' exactness and host cost are the next round's
+(the second round ran them: below). Master `062dd53e2` (#296) merged in as `760ee14a7` (only this file conflicted;
+both entries kept).
 - **What**: W1, a semaphore's wait taking its count at once (unless its callbacks run) and its refusals (but
   ILLEGAL_CONTEXT) made calm, and a spin's turn working out its waits and counting signals on the shadow
   (`spinWaitSemaphore()`, `spinSignalSema()`), through decisions the kernel and the shadow share (`mayWaitRefused()`,
@@ -106,8 +105,9 @@ conflicted; both entries kept).
   the other four games within 0.01%; every state at frame 3,600 master's.
 - Independent review: PASS on `2ddcb6237`, independent and read-only (round one: no high or medium finding; one low,
   the PR description's CI image version, corrected there; two informational, the conflict with #296's entry, resolved
-  in the merge, and W1's message's "the PSP's" for the kernel's results). The merge and the second round's docs: not
-  yet.
+  in the merge, and W1's message's "the PSP's" for the kernel's results). The merge, the second round's docs and the
+  removal of local paths from this entry and part 116 go to a delta review; its verdict is in the message of the
+  commit that merges this branch into master.
 
 ## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
 

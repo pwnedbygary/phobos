@@ -20059,15 +20059,14 @@ independent review, with its runs).
 ## Part 116: the polling skip widened — a semaphore taken at once and a callback check with none due, made calm
 
 On branch `cursor/psp-spin-widening-cachy`, from master `8c2b1ddee` (#295), in three commits: W1 (`c793ab17d`), W2
-(`a7552b776`) and these docs. The task, the owner's order of 19 Oct (the games much slower with the PSP's GE timing),
-as the design's third round has it
-(`~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r3.md`, which its review's second round passed:
-`~/phobos-work/scratch/review-spinwide/REVIEW-r2.md`): the EA games' polls (Need for Speed: Shift, Burnout Dominator
-and Legends) signal a semaphore and take it back with a wait that succeeds at once, twice a turn, and Midnight Club:
-L.A. Remix's poll checks its callbacks with none due. Neither call was calm, so part 91's detector started afresh
-every turn and part 105's skip never reached those loops. Clean room: Phobos's own code and uOFW; nothing of PPSSPP or
-JPCSP. Save states are unchanged: nothing new is kept. The games' exactness and host cost came in a second round, on
-the branch with master `062dd53e2` (#296) merged in (The games, below).
+(`a7552b776`) and these docs. The task, the owner's order of 19 Oct (the games much slower with the PSP's GE timing), as
+the design's third round has it (which its review's second round passed; both are kept outside the repository): the EA
+games' polls (Need for Speed: Shift, Burnout Dominator and Legends) signal a semaphore and take it back with a wait that
+succeeds at once, twice a turn, and Midnight Club: L.A. Remix's poll checks its callbacks with none due. Neither call
+was calm, so part 91's detector started afresh every turn and part 105's skip never reached those loops. Clean room:
+Phobos's own code and uOFW; nothing of PPSSPP or JPCSP. Save states are unchanged: nothing new is kept. The games'
+exactness and host cost came in a second round, on the branch with master `062dd53e2` (#296) merged in (The games,
+below).
 
 ### What changed
 
@@ -20319,7 +20318,9 @@ Round one, independent and read-only, on `2ddcb6237`: PASS, with no high or medi
 pull request's description rather than the tree (its CI section gave the Hosted Compute Agent's version as the
 sanitized job's runner image), corrected there; two informational: the conflict with master's docs/handoff.md (#296),
 resolved in the merge `760ee14a7` keeping both entries, and W1's message calling the refused waits' results the PSP's,
-where its test shows they're the kernel's. The merge and the second round's docs aren't reviewed yet.
+where its test shows they're the kernel's. The merge, the second round's docs and the removal of local paths from
+this part and its handoff entry go to a delta review; its verdict is in the message of the commit that merges this
+branch into master.
 
 ### Left
 
@@ -20330,7 +20331,6 @@ where its test shows they're the kernel's. The merge and the second round's docs
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/spinwide/`: the designs (`DESIGN-spin-widening-r3.md`), `r2/` and `r3/` (phase
-1's measurements and the prototypes), `tests/` (#295's), `code/` (this part's: the suites' logs in `logs/`, the
-mutations' diffs and logs in `mut/`, the counts taken in a copy in `inst/` and `logs/inst-*.log`). The reviews:
-`scratch/review-spinwide/` (the design's), `scratch/review-295/`.
+Kept outside the repository: the designs, phase 1's measurements and the prototypes, #295's tests, this part's notes
+(the suites' logs, the mutations' diffs and logs, the counts taken in a copy, the second round's scripts, runs and
+tables) and the reviews (the design's, #295's and this part's).
