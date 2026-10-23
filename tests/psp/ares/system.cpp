@@ -938,6 +938,127 @@ auto presentedFrame() -> void {
   root->unload();
 }
 
+//A GPU that stops answering while it presents on the host's window (Android's Vulkan renderer) lets go of the window
+//at the next frame, its backend given no window (which drops its surface, with its swapchain, from it), so that the
+//host can draw the software renderer's frames on it; one that presents keeps the window, and so does one that has
+//given presenting up without being lost (Vulkan's lets go of its surface itself then). The same with the GE on its
+//thread (option "GE Thread"), whose frames' ends present there, each frame checked once the thread has drained. A
+//pretend GPU (no Vulkan needed) holds the window it was given last, as Vulkan's does. A lost GPU's backend is given
+//no window again at each frame after, where Vulkan's lets go of what a run that never ended kept held (releaseHeld()).
+auto lostGpuLetsGoOfTheWindow() -> void {
+  std::printf("a GPU lost while it presents: the host's window let go of\n");
+  using ares::PlayStationPortable::GPU;
+  struct Pretend : GPU::Backend {
+    void* shown = nullptr;
+    int noWindow = 0;  //(the times it was given none)
+    bool gaveUp = false;
+    auto name() const -> std::string override { return "pretend"; }
+    auto makeTarget(u32, u32) -> u32 override { return 1; }
+    auto dropTarget(u32) -> void override {}
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return 1; }
+    auto dropTexture(u32) -> void override {}
+    auto submit(const GPU::Recorded&) -> bool override { return presented = true; }
+    auto finish(const GPU::Recorded&) -> bool override { return presented = true; }
+    auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
+    auto presents() const -> bool override { return !gaveUp; }
+    auto window(void* window) -> void override { shown = window, noWindow += !window; }
+  };
+  for(std::string thread : {"Off", "On"}) {
+    std::string on = " (GE Thread " + thread + ")";
+    host.game.reset();
+    PlayStationPortable::option("GE Thread", thread.c_str());
+    Node::System root;
+    if(!CHECK(start(root), "the PSP starts" + on)) break;
+    bool threaded = (bool)psp.geThreading;
+    CHECK(threaded == (thread == "On"), "the GE on its thread as asked" + on);
+    if(threaded) psp.threadGE(false);  //(the GPU the render GE's as the thread starts: threadGE())
+    auto backend = std::make_unique<Pretend>();
+    auto& pretend = *backend;
+    psp.gpu = std::make_unique<GPU>(std::move(backend));
+    psp.ge.setRenderer(psp.gpu.get());
+    if(threaded) psp.threadGE(true);
+    psp.kernel.exited = true;  //(nothing runs: each frame is its picture alone)
+    auto frame = [&] { root->run(); if(psp.geThreading) psp.geThreading->drain(); };
+    int surface = 0;  //(the host's window, as the host hands it over)
+    PlayStationPortable::window(&surface);
+    frame(), frame();
+    CHECK(pretend.shown == &surface, "presenting: the host's window the GPU's" + on);
+    CHECK(PlayStationPortable::presenting(), "and the frames presented on it" + on);
+    pretend.gaveUp = true;
+    frame();
+    CHECK(!PlayStationPortable::presenting(), "given up, not lost: no frame presented" + on);
+    CHECK(pretend.shown == &surface, "but the window kept" + on);
+    pretend.gaveUp = false;
+    frame();
+    CHECK(PlayStationPortable::presenting(), "presenting again" + on);
+    pretend.lost = true;
+    frame();
+    CHECK(pretend.shown == nullptr, "lost: the window let go of at the next frame" + on);
+    CHECK(!PlayStationPortable::presenting(), "and no frame presented" + on);
+    int asked = pretend.noWindow;
+    frame();
+    CHECK(pretend.shown == nullptr, "and not taken back" + on);
+    CHECK(pretend.noWindow > asked, "the backend given no window again at the next frame" + on);
+    PlayStationPortable::window(nullptr);
+    frame();
+    root->unload();
+  }
+  PlayStationPortable::option("GE Thread", "Off");
+}
+
+//A screenshot's settle() (the picture presented last kept at once, where Android's Vulkan renderer presents) with the
+//GE on its thread: that thread presents at frames' ends, a frame behind at most, so settle() drains it before it
+//touches the GPU. A pretend GPU (no Vulkan needed) slow to present one frame: settle() is back once it has.
+auto settleWaitsForTheGeThread() -> void {
+  std::printf("settle() with the GE on its thread: the thread drained first\n");
+  using ares::PlayStationPortable::GPU;
+  struct Pretend : GPU::Backend {
+    std::atomic<bool> slow{false};
+    std::atomic<u32> submitted{0};
+    auto name() const -> std::string override { return "pretend"; }
+    auto makeTarget(u32, u32) -> u32 override { return 1; }
+    auto dropTarget(u32) -> void override {}
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return 1; }
+    auto dropTexture(u32) -> void override {}
+    auto submit(const GPU::Recorded&) -> bool override {
+      if(slow) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      submitted++;
+      return presented = true;
+    }
+    auto finish(const GPU::Recorded&) -> bool override { return presented = true; }
+    auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
+    auto presents() const -> bool override { return true; }
+    auto window(void*) -> void override {}
+  };
+  host.game.reset();
+  PlayStationPortable::option("GE Thread", "On");
+  Node::System root;
+  if(CHECK(start(root), "the PSP starts, GE Thread On") && CHECK((bool)psp.geThreading, "the GE on its thread")) {
+    psp.threadGE(false);  //(the GPU the render GE's as the thread starts: threadGE())
+    auto backend = std::make_unique<Pretend>();
+    auto& pretend = *backend;
+    psp.gpu = std::make_unique<GPU>(std::move(backend));
+    psp.ge.setRenderer(psp.gpu.get());
+    psp.threadGE(true);
+    psp.kernel.exited = true;  //(nothing runs: each frame is its picture alone)
+    int surface = 0;
+    PlayStationPortable::window(&surface);
+    root->run(), root->run();
+    psp.geThreading->drain();
+    CHECK(PlayStationPortable::presenting(), "the frames presented on the host's window");
+    u32 before = pretend.submitted;
+    pretend.slow = true;
+    root->run();  //(handed to the thread, 200 ms presenting it; run() waits for a frame behind at most)
+    PlayStationPortable::settle();
+    CHECK(pretend.submitted == before + 1, "settle() back once the thread has presented the frame handed to it");
+    pretend.slow = false;
+    PlayStationPortable::window(nullptr);
+    root->run();
+    root->unload();
+  }
+  PlayStationPortable::option("GE Thread", "Off");
+}
+
 //The frames a program shows reach the front end, with the GE on its thread (option "GE Thread": that thread takes
 //each frame's picture as it comes to the frame's end), as without it: each frame's own where the front end asks for it
 //(exactFrame, as the runner asks for its PNGs' frames), else the newest the thread has taken, which is that frame's or
@@ -1236,6 +1357,8 @@ auto main() -> int {
   drawingThreads();
   geThreadAndPspTiming();
   presentedFrame();
+  lostGpuLetsGoOfTheWindow();
+  settleWaitsForTheGeThread();
   bool programsRun = false;
   if(auto programs = std::getenv("PSP_TEST_PROGRAMS"); programs && fs::exists(fs::path{programs} / "hello.elf")) {
     programsRun = true;

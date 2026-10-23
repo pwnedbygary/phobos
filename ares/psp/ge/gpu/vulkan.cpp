@@ -57,7 +57,7 @@
   F(vkGetPhysicalDeviceSurfaceFormatsKHR) F(vkGetPhysicalDeviceSurfacePresentModesKHR)
 #define PSP_VULKAN_SWAPCHAIN(F) \
   F(vkCreateSwapchainKHR) F(vkDestroySwapchainKHR) F(vkGetSwapchainImagesKHR) F(vkAcquireNextImageKHR) \
-  F(vkQueuePresentKHR) F(vkCreateSemaphore) F(vkDestroySemaphore)
+  F(vkQueuePresentKHR) F(vkCreateSemaphore) F(vkDestroySemaphore) F(vkGetFenceStatus)
 
 struct VulkanFunctions {
   PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
@@ -212,7 +212,9 @@ struct VulkanBackend : GPU::Backend {
   Buffer readback;
   std::vector<std::pair<u64, u64>> readbacks;  //the last finish()'s: where each one's colors and stencils are
   std::vector<std::pair<u32, u32>> readbackSizes;
-  bool timedOut = false;  //a run never finished: what it uses may still be in use, so nothing is destroyed
+  //A run never finished: what it uses may still be in use, so nothing is destroyed (but presenting's surface and
+  //swapchain, held till the runs have ended: releaseHeld())
+  bool timedOut = false;
   //(a higher resolution's: memory's colors and depths for copy.frag, its pipelines (MODE 0-2) and their layout, the
   //picture targets are shrunk into to be read back, and the stencils read back a row of each pixel's at a time, each
   //made the PSP's size after the wait: readback n's, its width and height)
@@ -267,6 +269,11 @@ struct VulkanBackend : GPU::Backend {
   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
   VkExtent2D swapExtent{};
   std::vector<Swapped> swapImages;
+  //(swapchains, their images, and surfaces let go of after a run never ended, timedOut: held, the window still
+  //connected to its surface, till every run has ended, then destroyed: releaseHeld())
+  std::vector<Swapped> heldImages;
+  std::vector<VkSwapchainKHR> heldSwapchains;
+  std::vector<VkSurfaceKHR> heldSurfaces;
   VkFormat presentFormat = VK_FORMAT_UNDEFINED;
   VkRenderPass presentPass = VK_NULL_HANDLE;
   VkShaderModule presentModule = VK_NULL_HANDLE;
@@ -334,6 +341,8 @@ struct VulkanBackend : GPU::Backend {
       if(transformLayout) vk.vkDestroyDescriptorSetLayout(device, transformLayout, nullptr);
       if(renderPass) vk.vkDestroyRenderPass(device, renderPass, nullptr);
       vk.vkDestroyDevice(device, nullptr);
+    } else if(device) {
+      dropSurface(), releaseHeld();  //(the rest left as it is, but the window let go of where the runs have ended)
     }
     if(!timedOut && instance) vk.vkDestroyInstance(instance, nullptr);
     #if !defined(_WIN32)
@@ -429,6 +438,11 @@ struct VulkanBackend : GPU::Backend {
     if(r.set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &r.set);
     if(r.frame) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &r.frame);
     destroy(r.color), destroy(r.depth);
+  }
+  auto destroy(Swapped& image) -> void {
+    if(image.framebuffer) vk.vkDestroyFramebuffer(device, image.framebuffer, nullptr);
+    if(image.view) vk.vkDestroyImageView(device, image.view, nullptr);
+    if(image.rendered) vk.vkDestroySemaphore(device, image.rendered, nullptr);
   }
 
   //A target's pictures, rows of the PSP's tall (and its width), at the scale: the colors (sampled too, to be shown,
@@ -1785,8 +1799,10 @@ struct VulkanBackend : GPU::Backend {
   }
 
   //Presenting: a new window (none: let go of) dropped the surface of the one before, which disconnects from it so
-  //that the host can draw on it; the same one again may have changed size.
+  //that the host can draw on it; the same one again may have changed size. First, what a run that never ended kept
+  //held is let go of once every run has ended (GPU::letGo() asks with no window each frame the GPU is lost).
   auto window(void* next) -> void override {
+    releaseHeld();
     if(next == shownOn) return void(rebuild = rebuild || swapchain);
     dropSurface();
     shownOn = next, failed = false;
@@ -1800,25 +1816,43 @@ struct VulkanBackend : GPU::Backend {
   }
 
   //The swapchain's images and the swapchain let go of, once the GPU is done with them (where a run never ended,
-  //they're left: the GPU may still use them)
+  //held, as the GPU may still use them: releaseHeld())
   auto dropSwapchain() -> void {
     if(!swapchain && swapImages.empty()) return;
-    if(!timedOut) {
-      waitAll();
+    if(!timedOut) waitAll();
+    if(timedOut) {
+      heldImages.insert(heldImages.end(), swapImages.begin(), swapImages.end());
+      if(swapchain) heldSwapchains.push_back(swapchain);
+    } else {
       vk.vkDeviceWaitIdle(device);  //(presents too)
-      for(auto& image : swapImages) {
-        if(image.framebuffer) vk.vkDestroyFramebuffer(device, image.framebuffer, nullptr);
-        if(image.view) vk.vkDestroyImageView(device, image.view, nullptr);
-        if(image.rendered) vk.vkDestroySemaphore(device, image.rendered, nullptr);
-      }
+      for(auto& image : swapImages) destroy(image);
       if(swapchain) vk.vkDestroySwapchainKHR(device, swapchain, nullptr);
     }
     swapImages.clear(), swapchain = VK_NULL_HANDLE, rebuild = false;
   }
   auto dropSurface() -> void {
     dropSwapchain();
-    if(surface && !timedOut) vk.vkDestroySurfaceKHR(instance, surface, nullptr);
+    if(surface && timedOut) heldSurfaces.push_back(surface);
+    else if(surface) vk.vkDestroySurfaceKHR(instance, surface, nullptr);
     surface = VK_NULL_HANDLE;
+  }
+  //What dropSwapchain() and dropSurface() held after a run never ended, destroyed once every run has: each busy
+  //slot's fence signalled, or the device lost (which a fence polled again comes to say). Any other answer, from a
+  //fence or from the wait for the device, leaves them held till the next call. The surfaces go last, and with them
+  //the window's connection, so that the host can draw on it.
+  auto releaseHeld() -> void {
+    if(heldImages.empty() && heldSwapchains.empty() && heldSurfaces.empty()) return;
+    for(auto& slot : slots) {
+      if(!slot.busy) continue;
+      VkResult status = vk.vkGetFenceStatus(device, slot.fence);
+      if(status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) return;
+    }
+    VkResult idle = vk.vkDeviceWaitIdle(device);  //(presents too)
+    if(idle != VK_SUCCESS && idle != VK_ERROR_DEVICE_LOST) return;
+    for(auto& image : heldImages) destroy(image);
+    for(auto held : heldSwapchains) vk.vkDestroySwapchainKHR(device, held, nullptr);
+    for(auto held : heldSurfaces) vk.vkDestroySurfaceKHR(instance, held, nullptr);
+    heldImages.clear(), heldSwapchains.clear(), heldSurfaces.clear();
   }
   auto dropPresentPass() -> void {
     for(auto& pipeline : presentPipelines) {

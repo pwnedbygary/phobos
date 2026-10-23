@@ -24,7 +24,7 @@ class HeldCrossReplayTest {
     private var sticksSent = FloatArray(4)
     private val hotkeysRun = mutableListOf<String>()
     private var mappings: Map<Int, String> = DEFAULT_MAPPINGS
-    private var hotkeys: Map<String, List<Int>> = DEFAULT_HOTKEYS
+    private var hotkeys: Map<String, List<List<Int>>> = DEFAULT_HOTKEYS
     private var rightStick = PspRightStick.OFF
     private lateinit var coreInput: GameInputState.CoreInput
 
@@ -43,6 +43,8 @@ class HeldCrossReplayTest {
             return true
         }
         override fun stopFastForward() {}
+        override fun frameAdvanceHeld(held: Boolean) {}
+        override fun slowMotionHeld(held: Boolean) {}
     }
     private val gameKeys = GameKeys(screen)
 
@@ -207,22 +209,23 @@ class HeldCrossReplayTest {
         key(BUTTON_SELECT, down = false)
         hotkeysRun.clear()
 
-        // With Cross held, the same presses run nothing: R1, Square and the D-pad are the game's, and Cross stays.
+        // With Cross held, the same presses run nothing: their extra key means no exact match, and
+        // the action keys are held back while the modifier is down. Cross stays.
         val from = pushes.size
         key(BUTTON_A, down = true)
         key(BUTTON_SELECT, down = true)
         key(BUTTON_R1, down = true)
-        assertEquals(Input.R1, GameInputState.buttons and Input.R1)
+        assertEquals(0, GameInputState.buttons and Input.R1)
         key(BUTTON_R1, down = false)
         key(BUTTON_SELECT, down = false)
         key(BUTTON_MODE, down = true)
         key(BUTTON_X, down = true)
-        assertEquals(Input.X, GameInputState.buttons and Input.X)
+        assertEquals(0, GameInputState.buttons and Input.X)
         key(BUTTON_X, down = false)
         key(BUTTON_MODE, down = false)
         key(BUTTON_SELECT, down = true)
         move(hatX = 1f)
-        assertEquals(Input.RIGHT, GameInputState.buttons and Input.RIGHT)
+        assertEquals(0, GameInputState.buttons and Input.RIGHT)
         move()
         key(BUTTON_SELECT, down = false)
         assertTrue("ran $hotkeysRun", hotkeysRun.isEmpty())
@@ -306,17 +309,8 @@ class HeldCrossReplayTest {
             1 shl 21 to "a:14:0", 1 shl 22 to "a:14:1", 1 shl 23 to "a:11:0", 1 shl 24 to "a:11:1",
         )
 
-        /** SettingsStore's default hotkeys (Z and C, which the RP6 hasn't). */
-        val DEFAULT_HOTKEYS = mapOf(
-            "save" to listOf(101, 103), "load" to listOf(101, 102), "inc_slot" to listOf(101, 22),
-            "dec_slot" to listOf(101, 21), "pause" to listOf(101, 96), "reset" to listOf(101, 109, 108),
-            "reload" to listOf(101, 99), "quit" to listOf(101, 97), "screenshot" to listOf(101, 107),
-            "mute" to listOf(101, 100), "ff_toggle" to listOf(101, 105), "analog_toggle" to listOf(98),
-            "keyboard" to listOf(101, 104), "library" to listOf(101, 98),
-        )
-
         /** Combos an RP6 owner might set without Z or C, on Select and the Xbox button. */
-        val RP6_HOTKEYS = mapOf(
+        val RP6_HOTKEYS = hotkeysOf(
             HotkeyAction.PAUSE to listOf(BUTTON_SELECT, BUTTON_START),
             HotkeyAction.SAVE_STATE to listOf(BUTTON_SELECT, BUTTON_R1),
             HotkeyAction.LOAD_STATE to listOf(BUTTON_SELECT, BUTTON_L1),

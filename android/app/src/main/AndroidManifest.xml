@@ -7,6 +7,8 @@
     <!-- Installing Phobos's own updates from its GitHub releases; Android still asks the user each time. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- No predictive back (enableOnBackInvokedCallback false): a controller's Back button, the RP6's, then comes to
+         the window as a key, which can lead the hotkeys; Compose's BackHandlers still get what the keys leave. -->
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -15,7 +17,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:enableOnBackInvokedCallback="true"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@style/Theme.Phobos">
         <!-- singleTask: one instance, so a game a frontend starts while Phobos runs arrives in onNewIntent. -->
         <activity

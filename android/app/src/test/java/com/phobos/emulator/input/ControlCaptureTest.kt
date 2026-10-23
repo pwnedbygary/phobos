@@ -143,4 +143,31 @@ class ControlCaptureTest {
         assertTrue(capture.onJoystickMove({ if (it == 16) -1f else 0f }, now = 1_200))
         assertEquals("a:16:0", bound)
     }
+
+    @Test
+    fun aLeadCaptureEndsOnItsFirstKeyAControllersBackIncludedWhereTheNavigationBarsCancels() {
+        var lead: Int? = null
+        capture.captureLead("Back") { lead = it }
+        assertTrue(key(4, down = true, now = 1_000, systemBack = true))
+        assertNull(lead)
+        assertNull(capture.target.value)
+        // A controller's Back (the RP6's) is a key like any other, and the capture takes it at once, waiting for no more.
+        capture.captureLead("Back") { lead = it }
+        assertTrue(key(4, down = true, now = 2_000))
+        assertEquals(4, lead)
+        assertNull(capture.target.value)
+        assertTrue("its release stays with the capture", key(4, down = false, now = 2_200))
+    }
+
+    @Test
+    fun aLeadCaptureTakesATriggerAsTheKeyAHotkeyMatchesItByAndSwallowsTheKeyFollowingIt() {
+        var lead: Int? = null
+        capture.captureLead("Back") { lead = it }
+        // Axis 17 is LTRIGGER; key 104 is BUTTON_L2.
+        assertTrue(capture.onJoystickMove({ if (it == 17) 1f else 0f }, now = 1_000))
+        assertEquals(104, lead)
+        assertTrue(key(104, down = true, now = 1_020))
+        assertTrue(key(104, down = false, now = 1_300))
+        assertFalse(key(96, down = true, now = 1_400))
+    }
 }

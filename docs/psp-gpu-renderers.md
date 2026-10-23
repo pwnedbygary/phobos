@@ -592,10 +592,23 @@ them. The host's `video()` then neither locks nor draws on the window.
 - **Synchronisation**: each slot has its own `acquired` semaphore, each swapchain image its own `rendered` one, so
   nothing waits on the CPU except the acquire (100 ms at most, then the frame isn't presented).
 - **Screenshots**: a presented frame is also blitted (nearest) to the PSP's size into the slot's own buffer and kept
-  when the slot is next waited for (`GPU::shot()`), so the host's screenshot still has the picture.
+  when the slot is next waited for (`GPU::shot()`), so the host's screenshot still has the picture; since the PSP
+  follow-ups of 2026-10-21 (the handoff) a screenshot keeps it at once (`PlayStationPortable::settle()`, below).
 - **Falling back**: a surface or swapchain that can't be made gives presenting up (`failed`): the surface is let go
   so the host can lock the window again, and frames are read back as before. `presents()` doesn't depend on the
-  window being there, so the host never locks a window the GPU is about to present on.
+  window being there, so the host never locks a window the GPU is about to present on. A GPU that stops answering
+  (`lost`) gives presenting up too; since the follow-up of 2026-10-21 (the handoff) its window is let go of at the next
+  frame as well (`GPU::letGo()`, called by `System::present()`), the surface, with its swapchain, dropped from it where
+  the GPU's runs all ended, where before it stayed on the window and the host's draws on it were refused. After a wait
+  that timed out (a run that never ended, the GPU perhaps still using them) they were left as they were, the screen
+  frozen; since the follow-up of 2026-10-23 they're held, and dropped a frame or more later, once every run has ended,
+  its fence signalled or the device lost (`releaseHeld()`). Dropping the surface disconnects it from the window (the
+  swapchain alone wouldn't), which puts the window's format and scaling back to their defaults (on the RP6, 16-bit
+  buffers, dropped unless the window's size), maybe between the host's request for its frames' size, format and scaling
+  and its lock, on another thread; so the host (`PhobosHostAndroid.cpp`'s `lockFrame`) asks again at the lock after the
+  first that succeeds on a window it may not have had, and posts a buffer in neither format it writes (`RGBA_8888`,
+  `RGBX_8888`) undrawn. After such a loss the window stays the CPU's, so a game loaded again on it can't make its
+  surface: it gives presenting up and reads its frames back until the window is made again (derived, not run).
 - **The desktop** reads back (SDL owns its window, and its renderer isn't Vulkan's); MoltenVK on the M1 has no
   surface for it.
 
@@ -604,8 +617,11 @@ render resolution multiplier) informed the design here as before; none of its co
 
 Presenting reports itself: `Backend::presented` is set only when this frame's `vkQueuePresentKHR` succeeded (or was
 suboptimal), and `System::present` returns false otherwise (no window, as in the background, or an acquire that
-timed out), so that frame is read back and the host draws it. A screenshot taken just after a presented frame may be
-the frame before's: the shrunk copy is kept when its slot is next waited for, a frame or two later.
+timed out), so that frame is read back and the host draws it. The shrunk copy is kept when its slot is next waited for,
+a frame or two later, so a screenshot taken just after a presented frame was the frame before's; since the PSP
+follow-ups of 2026-10-21 the host's screenshot has it kept at once (`settle()`: between frames, the host holding the
+core, the GE thread drained first where it's on (merged from master on 2026-10-21), then the GPU's runs waited for and
+each one's copy kept), so it has the frame presented last.
 
 ## Shader blending (part 45)
 
