@@ -73,10 +73,13 @@ it off; never when a frontend launches a game directly, nor with the system's an
   reaches the window on Android 13 and later, which give it to the back callbacks first (the app opts into predictive
   back), so `IntroSplash` has one (`BackHandler`) that skips it; without it, Back left the app. After a touch, Android
   may keep the press that leaves touch mode (a D-pad's, not a typing key's): touch mode ending while the intro plays
-  counts as a press (`onUnseenPress`), and the next event of a key `IntroKeys` doesn't hold tells which it was, a
-  repeat or a release being that press's and a press the window's own; a repeat whose press didn't come counts as the
-  press too. The launch toasts (a newer Phobos, a newer driver) wait for its end, since a toast shows over the app's
-  window and the intro with it.
+  counts as a press (`onUnseenPress`, given the moment), settled by its own first repeat or its release, which are the
+  intro's (the first repeat or release of a key not pressed since), or by a press from before that moment, the one the
+  window had after all; another key's press from after it settles nothing, and with neither a repeat nor a release
+  within the system's key-repeat delay (400 ms by default: through Android 14 the Touch & hold delay, from Android 15 a
+  key-repeat setting of its own) and 600 ms more (`KEPT_PRESS_MARGIN_MS`) there was no kept press. A repeat whose press
+  didn't come counts as the press too. The launch toasts (a newer Phobos, a newer driver) wait for its end, since a
+  toast shows over the app's window and the intro with it.
 - **When it plays, desktop**: `setup()` starts it when Phobos opens to the Library given no game (a game given on the
   command line, even one that can't start, goes without it, so that game's message isn't hidden), unless settings.ini's
   `intro` is false, which the pause menu's "Intro as Phobos opens" switches (the desktop's settings are in that menu, as
@@ -97,13 +100,18 @@ it off; never when a frontend launches a game directly, nor with the system's an
     undone, half at its middle; skips at the start, midway and during the dissolve, which hurry it and undo none of it;
     a frame depending on its moment alone; rows further apart than the canvas; odd sizes; the ends of int's range (a
     window `INT_MAX` pixels across, moments at `INT_MIN` and `INT_MAX`) without undefined behaviour.
-  - JVM: `IntroTest` (9 tests): `introPlays()`'s conditions; `IntroKeys` taking every key and skipping on each press,
+  - JVM: `IntroTest` (16 tests): `introPlays()`'s conditions; `IntroKeys` taking every key and skipping on each press,
     a repeat taken without skipping again, Back taken (where it reaches the window), a key pressed during the intro
     kept until let go of, a press after it the Library's, a repeat whose press it never had skipping and kept, touch
     mode's unseen press skipping with its repeats and release taken (a brief one's release alone), a press that leaves
-    touch mode and still comes (a typing key's) leaving the Library's next key whole, touch mode ending after the intro
-    left alone, the volume keys untouched. `AppearanceSettingsTest`: the setting on by default, and off kept across
-    starts under the name `intro_animation`.
+    touch mode and still comes (a typing key's, its press from before touch mode ended) leaving the Library's next keys
+    whole, a second key pressed at once leaving the kept press's repeats and release the intro's (the RP6's case
+    below), a key pressed and let go of after the intro while the kept press waits staying the Library's, the kept
+    press lapsing with neither a repeat nor a release in time, waiting as long as the system's key-repeat delay (1.5 s,
+    the longest Touch & hold delay) and a margin more for a first repeat coming late, a press timed at the moment touch
+    mode ended taken for the one that ended it, touch mode ending again forgetting the keys pressed since it ended
+    before, touch mode ending after the intro left alone, the volume keys untouched. `AppearanceSettingsTest`: the
+    setting on by default, and off kept across starts under the name `intro_animation`.
 - **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; Gradle 9.6.0, NDK 28.2.13676358):
   - The work began on master `f373b9e7e` and moved onto `7986aef5b` when #298 merged, which changes only the PSP
     renderer, its tests and docs. What follows was run on the final tree unless it says `f373b9e7e`.
@@ -137,6 +145,21 @@ it off; never when a frontend launches a game directly, nor with the system's an
     Down held across its end leaves the Library's cursor where it was, and pressed again moves it once (with
     `introDirections`' lines taken out, the cursor moved on its own as the intro ended); `intro=false` in settings.ini,
     and a file no system loads given, each start without it.
+  - The kept press settled by itself (the owner's choice of 2026-10-23), after all of the above: it changes
+    `ui/Intro.kt`, `IntroTest` and `MainActivity.kt`'s two calls into `IntroKeys`, nothing the desktop or the native
+    code builds. Both flavours' unit tests (397 each, 0 failures) and `assembleLegacyDebug`; eight mutants, each
+    taking one of the new rules out (a second key's press settling the kept press again, a press from before touch mode
+    ended settling nothing, a key pressed since counting as the kept press, no lapse, a press timed at the moment
+    counted as another key's, the keys pressed since an earlier end of touch mode kept, a fixed second for the window,
+    no margin past the delay), each fail one or two of `IntroTest`'s tests, the first (the rule as it was) the RP6's
+    case among them. On the RP6, the intro's last test build before the change (`7f885e23…`), one with the change as
+    first made (2.4.0-349-g92ff2fd9c-intro, `1ee66463…`, its window a fixed second, as the final code's is at the
+    default delay) and one with the final code (2.4.0-350-g1356fb4dd-intro, `1fd35046…`, the RP6's Touch & hold delay
+    at its default 400 ms), from cold starts after a tap had left touch mode on: a virtual pad's D-pad down pressed
+    about 1.6 s in and held 1.6 s, its A pressed 60 ms after it, left the Library scrolled to its bottom row once the
+    intro had dissolved before the change, the D-pad's repeats reaching it (two runs), and at its top with the change
+    (two runs with each build); the D-pad held alone left it at its top with every build. No crash; the test app was
+    uninstalled after.
 - **Limits**:
   - Android was checked on the RP6 alone, in landscape: not in portrait, on other screens or Android versions, with
     TalkBack, with a keyboard (`IntroTest` alone covers a typing key leaving touch mode), turned mid-intro, or from a
@@ -149,13 +172,19 @@ it off; never when a frontend launches a game directly, nor with the system's an
   - Android 12 and later show their own splash, the launcher icon, before the app's first frame; the intro follows it,
     from black.
   - Each start to the Library takes about 5.6 s more unless the intro is skipped or switched off.
+  - A kept press is told from other keys by what `IntroKeys` saw: until its window has passed, the first repeat or
+    release of a key it hasn't seen pressed since counts as the kept press's, so a key held as the app started and let
+    go of then would be taken instead; and a second key pressed after the kept press but before the app took that one
+    up (its input's delay: a few milliseconds while the app is idle, longer while it's busy, as early in the intro)
+    counts as the press that left touch mode, settling it as before the change (both derived, not seen; with the
+    second key 60 ms after, as on the RP6, the change holds).
 - **Next**: the pull request's CI (passed: on `5b960adf1`, the new step's first run, and on the master merge
   `92ff2fd9c`); the two changes the owner chose on 2026-10-23, the desktop skipping the intro when the system asks for
-  less motion, and a D-pad press Android keeps (above) settled by itself, not by another key's press. #294 changes 9
-  of these 21 files and merges first, in the owner's order: a trial merge (`git merge-tree`) with its `73097e579`
-  conflicts in `MainActivity.kt` (3 hunks), `desktop/main.cpp` (6) and this file (1), both reworking the same key
-  paths, so this branch resolves them when master, with #294 in it, is merged in; desktop.yml and `CMakeLists.txt`
-  merge cleanly.
+  less motion, and a D-pad press Android keeps (above) settled by itself, not by another key's press (done: above).
+  #294 changes 9 of these 21 files and merges first, in the owner's order: a trial merge (`git merge-tree`) with its
+  `73097e579` conflicts in `MainActivity.kt` (3 hunks), `desktop/main.cpp` (6) and this file (1), both reworking the
+  same key paths, so this branch resolves them when master, with #294 in it, is merged in; desktop.yml and
+  `CMakeLists.txt` merge cleanly.
 
 ## Docs: private local paths out, README's Shaders line corrected — 2026-10-23
 

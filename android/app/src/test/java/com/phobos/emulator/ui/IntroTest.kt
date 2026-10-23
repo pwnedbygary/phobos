@@ -24,8 +24,11 @@ class IntroTest {
 
     private val keys = IntroKeys()
     private var skips = 0
-    private fun key(code: Int, down: Boolean, repeat: Int = 0, playing: Boolean) =
-        keys.onKey(code, down, repeat, playing) { skips++ }
+    private fun key(code: Int, down: Boolean, repeat: Int = 0, playing: Boolean, at: Long = 0L) =
+        keys.onKey(code, down, repeat, at, playing) { skips++ }
+    // repeatDelay: the system's key-repeat delay, 400 ms by default
+    private fun touchModeEnds(playing: Boolean, at: Long, repeatDelay: Long = 400L) =
+        keys.onUnseenPress(playing, at, repeatDelay) { skips++ }
 
     @Test
     fun whileItPlaysEveryKeyIsItsOwnAndEachPressSkipsIt() {
@@ -71,47 +74,137 @@ class IntroTest {
 
     @Test
     fun touchModeEndingWhileItPlaysSkipsItAndThatPressesRepeatsAndReleaseAreItsToo() {
-        keys.onUnseenPress(playing = true) { skips++ }
+        touchModeEnds(playing = true, at = 10_000)
         assertEquals(1, skips)
         // The skip has ended the intro by the first repeat (a skip takes 300 ms, Android's first repeat 400).
-        assertTrue("its repeats", key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false))
-        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 2, playing = false))
-        assertTrue("its release", key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false))
-        assertFalse("pressed again: the Library's", key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false))
+        assertTrue("its repeats",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 10_400))
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 2, playing = false, at = 10_450))
+        assertTrue("its release", key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 11_000))
+        assertFalse("pressed again: the Library's",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = false, at = 12_000))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 12_400))
         assertEquals(1, skips)
     }
 
     @Test
     fun aBriefUnseenPressHasItsReleaseTakenAndNothingAfter() {
-        keys.onUnseenPress(playing = true) { skips++ }
-        assertTrue(key(KeyEvent.KEYCODE_DPAD_UP, down = false, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_LEFT, down = true, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_LEFT, down = true, repeat = 1, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_LEFT, down = false, playing = false))
+        touchModeEnds(playing = true, at = 10_000)
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_UP, down = false, playing = false, at = 10_080))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_LEFT, down = true, playing = false, at = 10_500))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_LEFT, down = true, repeat = 1, playing = false, at = 10_900))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_LEFT, down = false, playing = false, at = 11_000))
     }
 
     @Test
     fun aPressThatLeavesTouchModeAndComesHereAnywayLeavesTheLibraryItsNextKeyWhole() {
-        // A typing key leaves touch mode and still reaches the window: there was no unseen press.
-        keys.onUnseenPress(playing = true) { skips++ }
-        assertTrue(key(KeyEvent.KEYCODE_X, down = true, playing = true))
-        assertTrue(key(KeyEvent.KEYCODE_X, down = false, playing = true))
-        // the intro over: a press and its release, then a held key's repeats and release, all the Library's
-        assertFalse(key(KeyEvent.KEYCODE_ENTER, down = true, playing = false))
-        assertFalse("the release of the Library's press", key(KeyEvent.KEYCODE_ENTER, down = false, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false))
+        // A typing key leaves touch mode and still reaches the window, its press from before touch mode ended: there
+        // was no unseen press.
+        touchModeEnds(playing = true, at = 10_000)
+        assertTrue(key(KeyEvent.KEYCODE_X, down = true, playing = true, at = 9_998))
+        assertTrue(key(KeyEvent.KEYCODE_X, down = false, playing = true, at = 10_100))
+        // the intro over: a release whose press came before it, a press and its release, then a held key's repeats
+        // and release, all the Library's
+        assertFalse(key(KeyEvent.KEYCODE_BUTTON_START, down = false, playing = false, at = 10_400))
+        assertFalse(key(KeyEvent.KEYCODE_ENTER, down = true, playing = false, at = 10_600))
+        assertFalse("the release of the Library's press",
+            key(KeyEvent.KEYCODE_ENTER, down = false, playing = false, at = 10_700))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = false, at = 11_000))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 11_400))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 11_500))
         assertEquals(2, skips)
     }
 
     @Test
+    fun aSecondKeyPressedAtOnceLeavesTheKeptPressTheIntros() {
+        // A pad's D-pad down kept by Android to leave touch mode, its A pressed 60 ms later, as on the RP6.
+        touchModeEnds(playing = true, at = 10_000)
+        assertTrue(key(KeyEvent.KEYCODE_BUTTON_A, down = true, playing = true, at = 10_060))
+        assertTrue(key(KeyEvent.KEYCODE_BUTTON_A, down = false, playing = true, at = 10_120))
+        // the intro over: the kept press's repeats and its release are still the intro's
+        assertTrue("its first repeat",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 10_400))
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 2, playing = false, at = 10_450))
+        assertTrue("its release", key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 11_600))
+        assertFalse("pressed again: the Library's",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = false, at = 12_000))
+        assertEquals(2, skips)
+    }
+
+    @Test
+    fun aKeyPressedAfterItWhileTheKeptPressWaitsIsTheLibrarysWhole() {
+        touchModeEnds(playing = true, at = 10_000)
+        // the intro over (a skip takes 300 ms), another key pressed and let go of before the kept press's first repeat
+        assertFalse(key(KeyEvent.KEYCODE_BUTTON_B, down = true, playing = false, at = 10_320))
+        assertFalse("its release, not the kept press's",
+            key(KeyEvent.KEYCODE_BUTTON_B, down = false, playing = false, at = 10_380))
+        assertTrue("the kept press's repeat",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 10_400))
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 10_500))
+    }
+
+    @Test
+    fun withNeitherARepeatNorAReleaseInTimeThereWasNoKeptPress() {
+        touchModeEnds(playing = true, at = 10_000, repeatDelay = 400)
+        // past the key-repeat delay and the margin, a release whose press came before the intro, then a key pressed
+        // and held: the Library's
+        assertFalse(key(KeyEvent.KEYCODE_BUTTON_START, down = false, playing = false, at = 11_100))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = false, at = 11_500))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 11_900))
+    }
+
+    @Test
+    fun theKeptPressWaitsAsLongAsTheSystemsKeyRepeatDelay() {
+        // The longest Touch & hold delay (the key-repeat delay through Android 14): the first repeat comes 1.5 s after
+        // the press.
+        touchModeEnds(playing = true, at = 10_000, repeatDelay = 1_500)
+        assertTrue("its first repeat",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 11_500))
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 2, playing = false, at = 11_550))
+        assertTrue("its release", key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 12_000))
+        assertFalse("pressed again: the Library's",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = false, at = 13_000))
+    }
+
+    @Test
+    fun theKeptPressWaitsAMarginMoreForAFirstRepeatComingLate() {
+        touchModeEnds(playing = true, at = 10_000, repeatDelay = 400)
+        // 550 ms past the delay, within the margin: still the kept press's
+        assertTrue("its late first repeat",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 10_950))
+        assertTrue("its release", key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 11_200))
+    }
+
+    @Test
+    fun aPressTimedAtTheMomentTouchModeEndedIsTheOneThatEndedIt() {
+        touchModeEnds(playing = true, at = 10_000)
+        assertTrue(key(KeyEvent.KEYCODE_X, down = true, playing = true, at = 10_000))
+        assertTrue(key(KeyEvent.KEYCODE_X, down = false, playing = true, at = 10_100))
+        // the intro over: there's no kept press, so a release whose press came before it is the Library's
+        assertFalse(key(KeyEvent.KEYCODE_BUTTON_START, down = false, playing = false, at = 10_300))
+    }
+
+    @Test
+    fun touchModeEndingAgainForgetsTheKeysPressedSinceItEndedBefore() {
+        touchModeEnds(playing = true, at = 10_000)
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, playing = true, at = 10_050))
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = true, at = 10_100))
+        assertTrue("the kept press's release",
+            key(KeyEvent.KEYCODE_DPAD_UP, down = false, playing = true, at = 10_150))
+        // a touch, then the D-pad's down pressed and kept by Android to leave touch mode again
+        touchModeEnds(playing = true, at = 10_200)
+        assertTrue("the second kept press's repeat",
+            key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 10_600))
+        assertTrue(key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 10_700))
+        assertEquals(3, skips)
+    }
+
+    @Test
     fun touchModeEndingAfterItIsTheLibrarysBusiness() {
-        keys.onUnseenPress(playing = false) { skips++ }
+        touchModeEnds(playing = false, at = 10_000)
         assertEquals(0, skips)
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false))
-        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = true, repeat = 1, playing = false, at = 10_400))
+        assertFalse(key(KeyEvent.KEYCODE_DPAD_DOWN, down = false, playing = false, at = 10_500))
     }
 
     @Test

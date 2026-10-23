@@ -2,12 +2,14 @@ package com.phobos.emulator
 
 import android.animation.ValueAnimator
 import android.os.Bundle
+import android.os.SystemClock
 import android.net.Uri
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -204,7 +206,7 @@ class MainActivity : ComponentActivity() {
                 // While the intro plays every key is its own and skips it (IntroKeys), the volume keys aside.
                 if (event.action != KeyEvent.ACTION_MULTIPLE &&
                     introKeys.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount,
-                        introPlaying) { introSkipped = true }
+                        event.eventTime, introPlaying) { introSkipped = true }
                 ) return true
                 // A press being captured for a binding goes nowhere else — including the screensaver.
                 val systemBack = event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
@@ -250,7 +252,8 @@ class MainActivity : ComponentActivity() {
         // the rest of the screen (hasWindowFocus is true only after that).
         window.decorView.viewTreeObserver.addOnTouchModeChangeListener { inTouchMode ->
             if (!inTouchMode && window.decorView.hasWindowFocus()) {
-                introKeys.onUnseenPress(introPlaying) { introSkipped = true }
+                introKeys.onUnseenPress(introPlaying, SystemClock.uptimeMillis(),
+                    ViewConfiguration.getKeyRepeatTimeout().toLong()) { introSkipped = true }
             }
         }
 
