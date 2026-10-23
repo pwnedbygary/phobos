@@ -1971,8 +1971,12 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
   if(!rows || end > Memory::VRAMSize) return false;
   //(the pixels other targets drew in its pages moved first into the target of its format and width that a frame
   //buffer there would draw into (move()), where they can all be: God of War samples the four shadows it drew as
-  //5650 over a page of the 8888 it drew before and a row the frame buffer below drew. But not pages the PRIM draws
-  //in, from which its own drawing would move them again: Midnight Club 3's menu samples its frame buffer as a texture
+  //5650 over a page of the 8888 it drew before and a row the frame buffer below drew. But not where it can be taken
+  //as it is, from one target or from two frame buffers one below the other, no row held at another's (take(), not
+  //cutting), which leaves every page its target's: Burnout Legends' car select samples its frame buffer as a texture
+  //of 1024 rows, whose rows past its picture are the frame buffer shown, and moved, that one's pages were the
+  //texture's target's, and above 1x it was shown as memory's picture (shownTarget()). Nor pages the PRIM draws in,
+  //from which its own drawing would move them again: Midnight Club 3's menu samples its frame buffer as a texture
   //512 rows tall, whose last rows are the frame buffer below, which the PRIM draws into, and moved, all of that one's
   //pixels went into the texture's target and back each frame. Those are taken in two parts first, below, and moved
   //only where they can't be.)
@@ -2022,9 +2026,10 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
     }
     moving.clear();
   };
-  //(palette indices with their palette on the GPU, where it has room for it)
-  auto taken = [&] {
-    if(!take(texture, offset, end, width, rows, direct || indexed, exact, taking)) return false;
+  //(palette indices with their palette on the GPU, where it has room for it; cutting: rows past a frame buffer that
+  //can't be a second part held at the last before it, where they aren't known exactly, as take() may)
+  auto taken = [&](bool cutting) {
+    if(!take(texture, offset, end, width, rows, direct || indexed, exact || !cutting, taking)) return false;
     auto& h = *held;  //(texels past those held are the last held's)
     auto r = taking();
     s32 right = h.width - 1, bottom = h.rows - 1;
@@ -2035,11 +2040,14 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
     if(!held->palette) held.reset();
     return held.has_value();
   };
-  if(!moving.empty() && !drawnIn) moveIn();
-  if(taken()) return true;
+  if(!moving.empty() && !drawnIn) {
+    if(taken(false)) return true;
+    moveIn();
+  }
+  if(taken(true)) return true;
   if(moving.empty()) return false;
   moveIn();
-  return taken();
+  return taken(true);
 }
 
 //(a texture it doesn't hold, the GE decodes from memory, which finishes first where its rows reach pixels the GPU
@@ -2302,7 +2310,9 @@ auto GPU::forget(GE& ge) -> void {
 //rest: every other target's read back, VRAM's pages given back, and the targets filled again from memory after.)
 //The target the frame buffer at VRAM's offset address (stride pixels a row, in GE format) is shown from, width x
 //height of it: none where the GPU doesn't hold the newest of every pixel shown (no such target, or rows it hasn't,
-//or pages another target or the CPU has changed since), or hasn't drawn there since memory last had it all.
+//or pages another target or the CPU has changed since), or, at 1x, hasn't drawn there since memory last had it all.
+//Above 1x a target memory has had all of since (a finish, which another frame buffer's PRIM may ask for) is still
+//the picture: memory has its pixels narrowed, and memory's changes since are heard (written()) and revived first.
 auto GPU::shownTarget(u32 address, u32 stride, u32 format, u32 width, u32 height) -> Target* {
   Target* t = nullptr;
   for(auto& candidate : targets) {
@@ -2313,7 +2323,7 @@ auto GPU::shownTarget(u32 address, u32 stride, u32 format, u32 width, u32 height
   if(!t || t->stale || t->rows < height || width > t->stride) return nullptr;
   if(t->besideReaches(0, 0, width - 1, height - 1)) revive(*t, t->beside);  //(memory's newer bytes in what's shown)
   if(t->deadReaches(0, 0, width - 1, height - 1)) revive(*t, t->dead);
-  //(every page shown the target's or no one's, and one at least the target's: else memory has it, or another)
+  //(every page shown the target's or no one's, and, at 1x, one at least the target's: else memory has it, or another)
   u32 bytes = t->bytes(), end = address + ((height - 1) * stride + width) * bytes;
   if(end > Memory::VRAMSize) return nullptr;
   bool owned = false;
@@ -2321,7 +2331,7 @@ auto GPU::shownTarget(u32 address, u32 stride, u32 format, u32 width, u32 height
     if(owners[page] && owners[page] != t) return nullptr;
     owned |= owners[page] == t;
   }
-  return owned ? t : nullptr;
+  return owned || backend->scale > 1 ? t : nullptr;
 }
 
 auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, std::vector<u32>& pixels, u32 at)

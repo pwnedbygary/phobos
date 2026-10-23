@@ -35,6 +35,53 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Master merged into the hotkey branch a third time: its 13 commits since the second merge, part 116's polling skip, #299's license notice and part 117's Burnout Legends at 4x — 2026-10-23
+
+Branch `improved-hotkeys`, on `54c7077c3` (the entry below), with master `7986aef5b` merged into it as a merge commit:
+the draft pull request (#294) has conflicted with master since #297, #299 and #298 were merged, in this file alone,
+and GitHub runs no `pull_request` workflow while a pull request has a merge conflict, so the owner's follow-ups, which
+go on #294 as reviewed commits, would have had no CI. Master's 13 commits since `062dd53e2`, which the second merge
+(two entries below) brought in, come in whole: #297, part 116, the PSP kernel's polling skip widened to the EA games'
+and Midnight Club's loops (`ares/psp/kernel/`, `tests/psp/spins.cpp`, `docs/psp-core.md`); #299, LLVM's other runtime
+libraries under libc++'s notice in `LICENSE` (and `LicenseNoticesTest.kt`), with #296's review nits; and #298, part
+117, Burnout Legends at 4x shown from the GPU after a finish and past a texture's move (`ares/psp/ge/gpu/gpu.cpp`,
+`tests/psp/gpu.cpp`, `docs/psp-gpu-renderers.md`, `docs/psp-core.md`); #297's and #298's entries below the branch's,
+#299's changes in #296's entry. Changed by the merge beyond what either side had: this file (this entry, and a blank
+line between the branch's entries and master's) and the hotkey row of `docs/implementation-plan.md`.
+- **The conflict**, one: `docs/handoff.md`, where both sides added entries at the top. The branch's 17 stay together
+  above master's, each side's in its own order and words, as the first two merges kept them (the file less the
+  branch's entries and the blank line after them is master's, byte for byte). Git merged on its own the other files
+  both sides changed (`ares/psp/ge/gpu/gpu.cpp`, `docs/implementation-plan.md`, `docs/psp-gpu-renderers.md`); the 11
+  only master changed are master's, byte for byte, and the merge changed none that only the branch changed.
+- **Where the two meet**: `ares/psp/ge/gpu/gpu.cpp`, where part 117 changes `GPU::holds` and `GPU::shownTarget` (and
+  the comment above it), and the branch had added `GPU::settle()` (a PSP screenshot's settle: the PSP follow-ups'
+  entry); apart in the file, git merged them. The whole PSP suite, master's new groups among them, ran as CI runs it.
+  Part 116 changes the PSP kernel, which the branch doesn't touch; `LICENSE` goes into every package the builds make,
+  and its test runs with Android's JVM tests. The desktop program and the Android library compile the PSP core, so
+  both were built again.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358 and the SDK's
+  CMake 3.22.1 for the Android library):
+  - The whole PSP suite (`tests/psp/run-tests.sh`), every requirement CI names required, on Mesa's CPU Vulkan driver
+    (lavapipe) alone, as on CI's runners (the loader limited to it with `VK_DRIVER_FILES`): as CI's "PSP system tests,
+    built as the app is" job runs it, 658 groups pass and 1 is skipped, as on CI ("gpu without rasterization order,
+    barriers only where reading primitives overlap", which needs a GPU reading out of order); then 76 pass with the GE
+    on its thread and 121 with the PSP's GE timing. As CI's "PSP system tests" job runs it, built for debugging with
+    AddressSanitizer and UndefinedBehaviorSanitizer: 658 pass and the same 1 is skipped, with no sanitizer report and
+    no warning.
+  - The release builds had GCC 16.2.1's false warning in `tests/psp/movies.cpp` (the second merge's entry) shown but
+    not an error (`CXX="c++ -Wno-error=array-bounds"`): it showed twice, both there, and no other warning did. A change
+    of its own settles it in the code (the owner's sixth follow-up).
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`): 415 checks, 0 failed.
+  - The desktop: the program and the host test built again; ctest passes, and the host test, run on its own, prints
+    220 checks, 0 failed.
+  - Android: both flavours' JVM tests pass (457 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,666,023 bytes, SHA-256 `0aac4fe6ba53bdd63e6f3e79143bb8f745540ee74ec51205abee7973fe39ab77`).
+- **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull
+  request's CI builds the desktop program and runs its host test); the PSP suite ran on lavapipe alone, not on this
+  machine's GPU as well, as the second merge's did.
+- **Next**: the pull request's CI on the merge; a PSP system dialog's hotkeys from a hat D-pad (the owner's fifth
+  follow-up); and the entry below's Next, less the merge.
+
 ## A controller going away on Android with a tap's key held no longer runs the tap: the tap waits 100 ms, and the keys forgotten as the controller goes drop it — 2026-10-23
 
 Branch `improved-hotkeys` (#294), on `833fe8cbe`. The desktop's fix for a pad unplugged with Guide held (`8d2f75a10`)
@@ -1976,6 +2023,122 @@ machine (see Checks).
   system and its window behaviour, per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull
   request.
 
+## PSP Vulkan: Burnout Legends at 4x shown from the GPU, after a finish and past a texture's move — 2026-10-22
+
+Branch `cursor/psp-upscale-shown-cachy`, from master `062dd53e2`, with master `f373b9e7e` (#297 and #299) merged in.
+ares/psp/ge/gpu/gpu.cpp, tests/psp/gpu.cpp, docs/psp-core.md (part 117), docs/psp-gpu-renderers.md ("Upscaling",
+"Presenting", part 49's RP6 line), docs/implementation-plan.md (package 10's row) and this file.
+The owner's report (22 Oct, the RP6, Vulkan (fast) at 4x and 5x): the PSP still looked native; his screenshot of
+Burnout Legends' "Select a Compact" was 4x4 blocks. The investigation's notes, frames, scripts and logs are kept
+outside the repository.
+- **What** (part 117):
+  - `GPU::shownTarget()`: above 1x a target owning no page shown is shown where its other checks pass. A finish
+    another frame buffer asked for had given its pages back (Burnout's movie-backed menus refuse a full-screen sprite
+    each frame), and every frame was memory's 480x272. At 1x as before.
+  - `GPU::holds()`: a texture running from one frame buffer into the one below it is taken in two parts, nothing cut,
+    before anything is moved; moved only where it can't be. Burnout's car select samples its picture as a texture of
+    1024 rows, and the move gave the frame shown's pages to the other target.
+  - Three tests, `gpuShownAfterFinish`, `gpuShownBelowTexture` and `gpuBelowTextureTexels` (the two-part take's texels
+    against the software renderer at 1x), passing with the GE on the emulation thread and on its own. In scratch
+    builds the GPU group fails 2 checks without `shownTarget()`'s clause (the first test), 5 without `holds()`' rule
+    (the second and the third), 7 without either, and 5 with the second part copied a row off (the third and
+    gpuStackedTexture).
+- **Measured** (the desktop runner, RADV): Burnout at 4x 521 to 4,988 of 4,990 frames from the GPU, 4x4 blocks with
+  detail none to 27.3-27.8% (menus) and 59% (car select); at 1x the same pictures byte for byte, compared by the frame
+  each arrived in and in dense captures. At 4x, the same frames byte for byte: Midnight Club 3, Liberty City Stories
+  (its 88 moves now none), Lumines, God of War: Chains of Olympus (its 76,752 moves kept), Colin McRae Rally 2005 and
+  Dirt 2.
+- **Checks** (GCC 16.2.1, RADV): the sanitized suite, master 650 groups, 0 failures, with the change 653, 0; its GPU
+  group with the GE on its thread 81, 0; the GPU group on lavapipe, master 78, 0 (one skipped), with the change 81, 0
+  (the same one); release with `-Wno-error=array-bounds` (GCC 16's false positives in movies.cpp), master 650, 0, with
+  the change 653, 0. `tools/psp-runner/build-android.sh` (NDK r28, the app's release flags) builds it.
+  `git diff --check` clean; no added line over 120 columns.
+- **Left**: Burnout's top banner at 4x has a dark line at the bottom of native row 63 (a 512x64 sprite filtered over
+  its texture's last row into its first, which repeats): in the 4x target before this change too, shown now; a
+  follow-up. The RP6 not run (the same functions present there).
+- Independent review: its first round (NEEDS CHANGES) found `gpuShownAfterFinish` failing with the GE on its thread;
+  fixed here, with a texel oracle for the two-part take and the docs' nits. The delta review's verdict is in the commit
+  message; the look at master's merge into this branch (#297's and #299's docs beside these), in the message of the
+  commit merging this branch into master.
+
+## PSP kernel: the polling skip widened to the EA games' and Midnight Club's loops — 2026-10-21
+
+Branch `cursor/psp-spin-widening-cachy`, from master `8c2b1ddee` (#295): W1 (`c793ab17d`), W2 (`a7552b776`) and the
+docs. ares/psp/kernel (threads.cpp, interrupts.cpp, events.cpp, spins.cpp, kernel.cpp, kernel.hpp),
+tests/psp/spins.cpp, docs/psp-core.md (part 116; part 105's Left) and this file (part 105's entry's Left; #295's
+entry). The design: its third round, passed by its review's round two; the design, its reviews and the notes, scripts
+and logs are kept outside the repository. No game was run: the games' exactness and host cost are the next round's
+(the second round ran them: below). Master `062dd53e2` (#296) merged in as `760ee14a7` (only this file conflicted;
+both entries kept).
+- **What**: W1, a semaphore's wait taking its count at once (unless its callbacks run) and its refusals (but
+  ILLEGAL_CONTEXT) made calm, and a spin's turn working out its waits and counting signals on the shadow
+  (`spinWaitSemaphore()`, `spinSignalSema()`), through decisions the kernel and the shadow share (`mayWaitRefused()`,
+  `semaphoreWaitRefused()`, `signalRefused()` with `held`, `wouldPreempt()`), each given the interrupts as the turn
+  has them; `spinProve()` passes only with every semaphore back where it was. W2, a callback check with none due made
+  calm and worked out (`spinCheckCallback()`, declining the context path and a check with one due). The skip is
+  otherwise unchanged; `spinSkip()` counts each of the PSP's GE timing's refusals for tests (`Kernel::spinChecks`),
+  deciding nothing and kept in no state. Part 116 has the exactness argument: the go's end, with all three of
+  `geDriven()`'s callers; W1's proof; the rule that every writer of a thread's status, priority or suspension, and of
+  `dispatchSuspended`, is neither quiet nor calm or runs between goes, the rotation aside.
+- **Why**: the EA games' loops (Need for Speed: Shift, Burnout Dominator and Legends) signal a semaphore and take it
+  back with a wait that succeeds at once, twice a turn, and Midnight Club: L.A. Remix's checks its callbacks with none
+  due: neither call was calm, so the detector started afresh every turn and the loops were never skipped (part 105's
+  Left, closed). The design's prototype took those games' host instructions under the PSP's timing down 50-79% (the
+  EA three) and 24% (Midnight Club), every state master's (its runs kept outside the repository); this code's own
+  runs, the second round's: 79%, 71% and 50%, and 24%, every state master's. Both are the host instructions of the
+  headless runner's -O1 build on one x86-64 desktop, not the app's build (The games, below).
+- **Tests** (tests/psp/spins.cpp; each new group named "the GE's looks polled beside …", so that CI's GE-thread step
+  runs it with the thread on too; part 116 gives each case's turns): Shift's turn skipped as run (88,629 turns) and
+  one taking more than it gives not; a CB wait skipped (151,563), an asynchronous read's callback run once at the next
+  CB wait as with every turn run, and a try made directly with the callback notified refused; waits refused
+  (CAN_NOT_WAIT with the anchor's call made with interrupts on, an unknown semaphore, ILLEGAL_COUNT twice) and a
+  signal refused only in the turn's view, skipped, each result the kernel's; a signal with a better thread ready not
+  skipped, the anchor's call made with interrupts on or off, and with a thread of main's priority, or a better one
+  suspended, skipped (233,492); a signal a thread waits on, and a wait that waits, not skipped; W2's callback check
+  skipped with none due (187,950), the callback notified by a timer's handler or a read run once at the next check,
+  and a try made directly with it notified refused. #295's groups and #289's kink group check their own refusals
+  through `Kernel::spinChecks`; the two-calls group's skip at once also checks what the other refusals need, and its
+  `positioned()` loops are bounded (#295's review, suggestions 1 and 2).
+- **Mutations** (the diffs and logs kept outside the repository), each through the release suite, the GE thread off,
+  CI's PSP-timing step and its GE-thread step, failed checks. With these tests all 18 fail in all three (656, 120
+  and 76 groups), the same number in each but `closing`'s: `closing` 8, 8, 4; `waitcalm` 12; `cbcalm` 4; `cbdue` 2;
+  the refusals' `calm` 2, 2, 4 and their codes 2, 2, 4; `held` 12; `preempt` 8; `preempt-cpuflag` 4;
+  `refused-cpuflag` 6; `preempt-equal` 2; `preempt-suspended` 2; `checkcalm` 6; `pending` 2. With master's tests
+  every one passes (650/0, 114/0, 70/0) but `closing`, 650/4, 114/4, 70/0, through "spins refused"'s semaphore that
+  counts. `cbdue` and `pending` fail only in the try made directly. `cbdue`'s first runs didn't build (its parameter
+  left unused); they were run again with `(void)callbacks;`.
+- **#295's groups' counts, taken again** in a scratch copy after the rework (its log kept outside the repository):
+  line for line what #295 counted on `45eb68d3c` (74,345 refused part way and 213 skips; 1,727 refused with several
+  calls and 3 skips; 3 refused unsteady and 36 skips; 1 refetch marked as VRAM's).
+- **Checks** on `a7552b776`, the worktree clean (each log, kept outside the repository, starts with the tree and its
+  status lines): the release suite with the GE thread off 656 groups, 0 failures, on 656, 0; CI's PSP-timing step
+  120, 0; its GE-thread step 76, 0; the six new groups and #295's four sanitized (ASan and UBSan), the thread off 10,
+  0 and on 10, 0, no sanitizer report; W1's commit alone (`c793ab17d`) through the release suite, the thread off,
+  655, 0. `git diff --check` and `git show --check` clean on each commit; no added line over 120 columns.
+- **Departures from the prototype** (the design's third round's; the two set against each other in a diff kept outside
+  the repository, every decision the same): split into W1 and W2; `semaphoreWaitRefused()` hands back the semaphore
+  it found (the design review's suggestion 1), no longer `const`; `spinSkip()`'s counters for tests (#295's review,
+  suggestion 1); the comments the prototype left stale, and its "(W1)" and "(W2)" labels.
+- **The games** (the second round; part 116's "The games"): master `062dd53e2` against `760ee14a7`, each runner with
+  the same scratch patch (each frame's XXH3-128 of `root->serialize(true)`'s bytes, `kernel.spun` in the summary, the
+  saved state's frame named). Exactness from boot, 2,400 frames, the Software renderer: Burnout Dominator, Need for
+  Speed: Shift, Burnout Legends, Midnight Club: L.A. Remix and Resistance: Retribution, both GE timings, the GE thread
+  off and on, every frame's state master's in all 20 configurations (48,000 frames), and the state saved at the top of
+  frame 2,400 (after 2,399 frames) too. Master skips none of the four games' loops; the branch skips 3.5 to 41.6
+  million turns in each, and as many of Resistance's as master. Host cost, eight polling games (3,600 frames, Vulkan
+  fast with late frames, the GE thread off, two rounds taking turns), in the emulation thread's user-mode host
+  instructions a frame, from the headless runner as tools/psp-runner/build.sh builds it (-O1, `BUILD_DEBUG`, GCC 16)
+  on one x86-64 desktop; the Android app builds at -O3 with LTO and wasn't measured, nor were the RP6 and the Mac:
+  under the PSP's timing Dominator 147.56 to 30.55 M (−79.3%), Shift 133.06 to 38.26 (−71.2%), Legends 220.96 to
+  110.82 (−49.8%), Midnight Club 93.46 to 71.49 (−23.5%); under "Fast" −26.0%, −32.4%, −5.6% and −16.1%; the other
+  four games within 0.01%; every state at frame 3,600 master's.
+- Independent review: PASS on `2ddcb6237`, independent and read-only (round one: no high or medium finding; one low,
+  the PR description's CI image version, corrected there; two informational, the conflict with #296's entry, resolved
+  in the merge, and W1's message's "the PSP's" for the kernel's results). The delta round on the merge, `869dd95af`
+  and `b1bb7b449` found two wording matters (NEEDS CHANGES): files kept outside the repository still named by path,
+  and the host costs' build and host unsaid. The docs commit that adds this line fixes them; the delta round's verdict
+  on it goes in the message of the commit merging this branch into master.
+
 ## Licenses: the notices of the third-party code the builds ship that LICENSE lacked — 2026-10-21
 
 Branch `cursor/license-notices-cachy`, from master `8d85eda9a` (#293), with master `8c2b1ddee` (#295) merged in.
@@ -2025,7 +2188,7 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
   PipeWire camera driver. On Linux only: the X11 EDID parser, the XSETTINGS client, imKStoUCS, xdg-user-dirs' lookup
   functions, the 22 Wayland protocol files, each one's every interface in the program (21 share one permission notice,
   given once after their copyright lines), and from round three PipeWire's SPA header code (Ubuntu 22.04's
-  0.3.48-1ubuntu3.2: 39 SPA and 29 pipewire headers reached, five copyright lines, one MIT text; four spa_pod_*
+  0.3.48-1ubuntu3.2: 39 SPA and 30 pipewire headers reached, five copyright lines, one MIT text; four spa_pod_*
   functions kept out of line). Left out: SDL's libm, OpenVR and the libusb backend (in no binary: no symbols or
   strings, and three fdlibm tables in none), Valve's two Steam headers and the Khronos, Mesa and Microsoft headers
   (declarations and constants only), SDL's test library (not built: no SDLTest_ symbols) and public-domain code
@@ -2034,8 +2197,8 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
   when the AppImage is made, naming its own commit: `8f39b89` in v2.4.0's, `fedfad51a` in this PR's CI AppImage
   (`type2-runtime/commit/fedfad5`; the review's M1, for which round three rewords the notice). Built on Alpine 3.21 (its
   `.comment`), linked (type2-runtime's Makefile) with musl, libfuse 3.15.0 (patched by type2-runtime), squashfuse 0.5.2,
-  zstd, zlib and mimalloc, which the runtime's own LICENSE omits; in 2.4.0's, musl 1.2.5, zstd 1.5.6 and zlib 1.3.2
-  (their version strings) and mimalloc 2.1.7 (inferred). One block after MinGW-w64's: each part's license and its
+  zstd, zlib and mimalloc, which the runtime's own LICENSE omits; in 2.4.0's, zstd 1.5.6 and zlib 1.3.2 (their
+  version strings), musl 1.2.5 and mimalloc 2.1.7 (inferred). One block after MinGW-w64's: each part's license and its
   project's source; libfuse's LGPL2.txt, zstd's LICENSE and zlib's terms are word for word texts LICENSE has (FFmpeg's
   LGPL 2.1, Zstandard's, zlib's), so pointed to; the rest word for word, musl's COPYRIGHT indented (two of its lines
   are 70-dash rules). No Alpine package revisions: a runtime doesn't record them.
@@ -2068,9 +2231,14 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
 - **The Windows zip** carries `LICENSE.txt` and `COPYING.txt` (scripts/package-windows.sh:48-49; v2.4.0's has both),
   so no packaging change.
 - **atomicfu and libc++**: atomicfu stays named in the Android libraries notice. libc++ is linked statically into
-  three of the APKs' native libraries; its license is Apache 2.0 with the LLVM Exceptions, which ask for no notice in
-  object code, but code not relicensed keeps LLVM's legacy license, and whether any is in the APKs isn't known, so it
-  has a short notice (round three: the review's L3).
+  three of the APKs' native libraries, with LLVM's other runtime libraries: libc++abi and libunwind in
+  libphobos_android.so and libhook_impl.so (their own messages), and compiler-rt's builtins in those, in
+  libdatastore_shared_counter.so and FFmpeg's libavcodec.so and libavutil.so (its Android atomics check, `ro.arch` and
+  `exynos9810` with a `getauxval` import) and, from Apple's toolchain, in the macOS app's Phobos and libMoltenVK.dylib
+  (`___isOSVersionAtLeast`, both architectures). Their license is Apache 2.0 with the LLVM Exceptions, which ask for no
+  notice in object code, but code not relicensed keeps LLVM's legacy license, and whether any is in the builds isn't
+  known, so they have a short notice (round three: the review's L3, for libc++; the follow-up: R2-L1, for the others,
+  whose LICENSE.TXT files are libc++'s but for their names and compiler-rt's MIT copyright line).
 - **Checks**: LicensesScreen's split re-implemented (python3 -B): 38 notices on master, 40 after round one, 55 after
   round two, 57 after round three (58 in the APK with COPYING's), titles unique, no notice line exactly 70 dashes; each
   round-two block's words against its sources, whitespace normalised (91 checks, at round two's head), and at round
@@ -2081,6 +2249,8 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
   --check` clean. CI runs the unit tests; its runs go in the PR's body.
 - Independent review: NEEDS CHANGES for `94d7802d1` (runtime notice names `8f39b89`; its own AppImage has `fedfad51a`).
   Fixed after it: M1, L1 to L4 and the HIDAPI and test suggestions in `24ca53ef6` to `a568e627a`; N1 in the PR body.
+- Follow-up, from master `062dd53e2`: R2-L1 and R2-N1 to R2-N3 from the review's second round; libc++ in the Apache
+  text's "Used by" line; LicenseNoticesTest requires "SDL 3.2.30 (", which only SDL's own notice starts.
 
 ## Tests: the spin skip's untested refusals and the GE thread's refetch charge — 2026-10-21
 
@@ -2128,7 +2298,8 @@ scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
   on 650, 0; CI's PSP-timing step 114, 0; its GE-thread step 70, 0; the four groups sanitized (ASan and UBSan), the
   thread off 4, 0 and on 4, 0. `git diff --check` and `git show --check` clean; no added line over 120 columns; the
   diff from master `8d85eda9a` is the two test files, docs/handoff.md and docs/psp-core.md.
-- **Departures from F1's constructions** (the review's L1 and its suggestion 3):
+- **Departures from F1's constructions** (besides the two-calls group's and the mover's, above; the review's L1 and
+  its suggestion 3):
   - The settling group reads its new line on the fifth turn, not on the fourth as F1's construction does (phase 1's
     DESIGN-spin-widening.md:206-212). spinTurn() counts turns from the spin's third call, so the first try compares
     the fourth and fifth turns; with F1's construction the fifth turn moves nothing, so a skip would be exact without
@@ -3280,6 +3451,8 @@ evidence. Clean room: our code, uOFW for the GE driver's behaviour; no PPSSPP or
 - **Checks**: tests/psp sanitized: 582 groups, 0 failures; CI green.
 - **Left**: Shift's loop (a wait that succeeds at once and its signal in the same turn: no net change, no waiter) as
   a spin's turn is its own pull request, after this one.
+  Done since: W1, in the entry "PSP kernel: the polling skip widened to the EA games' and Midnight Club's loops"
+  (2026-10-21; part 116).
 
 ## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's captures' 333/166, read before the game ran — 2026-10-16
 

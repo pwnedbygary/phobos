@@ -180,8 +180,9 @@ You can contact the author at:
 
 Apache License 2.0
 
-Used by Vulkan-Headers, MoltenVK, SPIRV-Cross, SPIRV-Tools, font-rs and
-the Android and Kotlin libraries listed near the end of this file.
+Used by Vulkan-Headers, MoltenVK, SPIRV-Cross, SPIRV-Tools, font-rs,
+libc++ and LLVM's other runtime libraries, and the Android and Kotlin
+libraries listed near the end of this file.
 
                                  Apache License
                            Version 2.0, January 2004
@@ -1834,7 +1835,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-libc++ (the Android NDK's, linked statically into the APKs' native libraries)
+libc++ and LLVM's other runtime libraries (the Android NDK's, in the APKs; compiler-rt's also in the macOS app)
 https://github.com/llvm/llvm-project/tree/main/libcxx
 
 Three of the APKs' native libraries carry libc++ code, linked statically
@@ -1842,12 +1843,20 @@ Three of the APKs' native libraries carry libc++ code, linked statically
 libhook_impl.so, built with the NDK's clang 19.0.1 (based on LLVM
 r530567e: Android's toolchain/llvm-project at 97a699bf4812), and AndroidX
 DataStore's libdatastore_shared_counter.so, as Google builds it (clang
-14.0.7). libcxx/LICENSE.TXT, the same at both Android revisions and at
-LLVM's releases 14 to 20, puts LLVM's code under the Apache License 2.0,
-whose text appears above, with the LLVM Exceptions, which follow; libc++'s
-code that remains under LLVM's legacy license is dual licensed, as the
-paragraph after them says, and is used here under the MIT license, whose
-text closes this notice.
+14.0.7). LLVM's libc++abi and libunwind are linked with libc++ into
+libphobos_android.so and libhook_impl.so, and compiler-rt's builtins are
+in those, in libdatastore_shared_counter.so, in FFmpeg's libavcodec.so
+and libavutil.so (built with the same NDK) and, from Apple's toolchain,
+in the macOS app's Phobos and libMoltenVK.dylib. libcxx/LICENSE.TXT, the
+same at both Android revisions and at LLVM's releases 14 to 20, puts
+LLVM's code under the Apache License 2.0, whose text appears above, with
+the LLVM Exceptions, which follow; libc++'s code that remains under
+LLVM's legacy license is dual licensed, as the paragraph after them says,
+and is used here under the MIT license, whose text closes this notice.
+libcxxabi/, libunwind/ and compiler-rt/LICENSE.TXT, each the same at both
+Android revisions, are libc++'s text with each library's name in that
+paragraph, and their legacy code is used here the same way; compiler-rt's
+MIT text has its own copyright line (2009-2015), given below libc++'s.
 
 ---- LLVM Exceptions to the Apache 2.0 License ----
 
@@ -1871,6 +1880,7 @@ to use it under either license.  As a contributor, you agree to allow your code
 to be used under both.
 
 Copyright (c) 2009-2014 by the contributors listed in CREDITS.TXT
+Copyright (c) 2009-2015 by the contributors listed in CREDITS.TXT
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -3554,11 +3564,11 @@ PipeWire's SPA headers (in SDL 3.2.30's PipeWire audio and camera drivers: Linux
 https://gitlab.freedesktop.org/pipewire/pipewire
 
 SDL's PipeWire drivers include eight of PipeWire's SPA headers, and its
-pipewire.h and extensions/metadata.h, which reach 39 SPA headers and 29
+pipewire.h and extensions/metadata.h, which reach 39 SPA headers and 30
 pipewire headers in all; their static inline functions compile into the
 Linux program, which keeps out-of-line copies of spa_pod_builder_add,
 spa_pod_builder_addv, spa_pod_parser_get and spa_pod_parser_can_collect.
-The Linux job builds against Ubuntu 22.04's PipeWire, 0.3.48-1ubuntu3.2.
+The Linux job builds against Ubuntu 22.04's PipeWire 0.3.48.
 At 0.3.48 those headers carry these copyright lines, each with the MIT
 text that follows:
 

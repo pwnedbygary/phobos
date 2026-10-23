@@ -539,7 +539,10 @@ images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
   renderer would.
 - **Render to texture**: a copy of a target for a texture keeps the target's scale (`Texture::textureScale`), and
   the shader samples it with its coordinates multiplied by that, so a frame buffer used as a texture keeps its
-  detail.
+  detail. A texture running on from one frame buffer into the one below it is taken in two parts, each from its own
+  target, before anything is moved (part 117, `holds()`): a move would give the lower one's pages to the texture's
+  target, and then the lower one, where it's the frame shown, couldn't be shown from its target (Burnout Legends'
+  car select samples its picture as a texture of 1024 rows, held to 512, its rows 272-511 the frame shown).
 - **2D triangles' edges** (part 49): above 1x a 2D triangle's texture coordinates are held inside its corners' by
   what half a pixel moves them, half a texel at most (`triangle()`, from the coordinates' slope across the screen;
   the vertex's "held" flag; `draw.frag` clamps them), which is as far as its pixels' middles reach at 1x. The GPU's
@@ -555,14 +558,22 @@ path (SDL owns its window), and Android's when the swapchain can't be had. Above
 scale but shown at 4x; the read-back's CPU cost grows with the square of the scale (Lumines on the M1: 3 s of the
 CPU for 1,500 frames at 1x, 21 s at 4x).
 
+Above 1x the picture is the shown target's even where a finish has put everything in memory since that target last
+drew, and so no page is its (part 117, `shownTarget()`): a finish another frame buffer asks for (a PRIM the GPU
+refuses, the CPU reaching pixels it drew) leaves memory the target's pixels narrowed, and memory's changes since are
+heard (`written()`) and taken into the target before it's shown, as before a draw. Before part 117 such a frame was
+memory's 480x272 picture: Burnout Legends' movie-backed menus refuse a full-screen sprite each frame, and every frame
+at 4x was native. At 1x memory's picture is the same, and it's still taken.
+
 ## Presenting (part 44)
 
 On Android the renderer presents on the window itself, with no read-back: a `Present` command at the end of a
-frame's recording (`GPU::show()`) draws the shown target, or memory's picture where the target can't give it, onto
-an image of a swapchain on the host's `ANativeWindow`, over the whole of it (the app's view already has the
-picture's shape). `present.frag` scales it "sharp bilinear", as the host's whole multiple and the compositor did
-before: each pixel a block, blended with the next only over the window pixel between them. It also narrows a 16-bit
-frame buffer's colours as memory would keep them. The host's `video()` then neither locks nor draws on the window.
+frame's recording (`GPU::show()`) draws the shown target, or memory's picture where the target can't give it (above
+1x a target gives it after a finish too: part 117, above), onto an image of a swapchain on the host's
+`ANativeWindow`, over the whole of it (the app's view already has the picture's shape). `present.frag` scales it
+"sharp bilinear", as the host's whole multiple and the compositor did before: each pixel a block, blended with the
+next only over the window pixel between them. It also narrows a 16-bit frame buffer's colours as memory would keep
+them. The host's `video()` then neither locks nor draws on the window.
 - **The window** is handed over by the host (`PlayStationPortable::window()`, holding a reference with
   `ANativeWindow_acquire`) and given to the GPU on the emulation thread as the next frame is shown (`handWindow()`).
   The surface is made from it (`VK_KHR_android_surface`) lazily, the swapchain when a frame is first presented:
@@ -647,9 +658,10 @@ sample went from 68.7% of pixels the same to 100%.
 On the RP6 (Adreno 740, Turnip from the Driver Manager, in order; logcat's "PSP" start-up line says which way:
 "blending in the shader, in order" or "overlaps apart"): Lumines' menus 60 frames a second at Native (5.2 ms a
 frame); Burnout Legends' menu, its 3D attract scene behind, 60 at Native (14.4 ms) and 51.4 at 4x (18.3 ms, a
-heavier attract scene, the GPU 20% busy); the pictures right to the eye. The GPU tests, built for Android and run
-on the Adreno's own driver (no rasterization-order access: `cmd gpu vkjson`), pass with the draws split. (Part 49:
-in games that driver's reads go wrong, and nothing reads there now.)
+heavier attract scene, the GPU 20% busy); the pictures right to the eye (a speed check: part 117 found Burnout's
+menus shown at 4x as memory's 480x272 picture, on the desktop and in the owner's screenshot from the RP6). The GPU
+tests, built for Android and run on the Adreno's own driver (no rasterization-order access: `cmd gpu vkjson`), pass
+with the draws split. (Part 49: in games that driver's reads go wrong, and nothing reads there now.)
 
 ### Without rasterization order (part 49)
 
