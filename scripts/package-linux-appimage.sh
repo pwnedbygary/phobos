@@ -4,8 +4,13 @@
 #   scripts/package-linux-appimage.sh [build directory]
 # GPU drivers stay on the host: Phobos opens the system's libvulkan.so.1 at run time. FFmpeg's
 # libavcodec and libavutil (the PSP's music and movies), in a build with them, go in usr/lib.
+# linuxdeploy, appimagetool and the AppImage's runtime are the builds scripts/appimage-pins.sh pins.
+# The runtime links libfuse statically, so libfuse's source, type2-runtime's patch to it and
+# type2-runtime's source go in dist/ beside the AppImage (LICENSE, "AppImage runtime").
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/appimage-pins.sh
+source "$ROOT/scripts/appimage-pins.sh"
 BUILD="$(cd "${1:-$ROOT/build/linux-x64}" && pwd)"
 VERSION="$(git -C "$ROOT" describe --tags --match 'v[0-9]*' 2>/dev/null | sed 's/^v//' || true)"
 VERSION="${VERSION:-0.0.0-dev}"
@@ -16,14 +21,35 @@ APPDIR="$ROOT/build/AppDir"
 OUTPUT="$DIST/Phobos-$VERSION-x86_64.AppImage"
 mkdir -p "$TOOLS" "$DIST"
 
+# fetch NAME SHA256 URL...: $TOOLS/NAME, used only if its SHA-256 is the one pinned. A copy kept from
+# an earlier run is checked again and downloaded again if it isn't; a download is kept only if it is.
 fetch() {
-  if [[ ! -x "$TOOLS/$1" ]]; then
-    curl -fL --retry 3 "$2" -o "$TOOLS/$1"
-    chmod +x "$TOOLS/$1"
+  local file="$TOOLS/$1" sha256="$2" url
+  shift 2
+  if [[ -f "$file" && "$(sha256sum < "$file" | cut -d' ' -f1)" != "$sha256" ]]; then
+    echo "$file isn't the build pinned (SHA-256 $sha256); downloading it again" >&2
+    rm -f "$file"
   fi
+  for url in "$@"; do
+    if [[ -f "$file" ]]; then break; fi
+    rm -f "$file.download"
+    if curl -fL --retry 3 "$url" -o "$file.download" &&
+      [[ "$(sha256sum < "$file.download" | cut -d' ' -f1)" == "$sha256" ]]; then
+      mv "$file.download" "$file"
+    else
+      echo "$url didn't give the build pinned (SHA-256 $sha256)" >&2
+      rm -f "$file.download"
+    fi
+  done
+  test -f "$file" || { echo "No download of $(basename "$file") had the SHA-256 pinned, $sha256" >&2; exit 1; }
 }
-fetch linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-fetch appimagetool-x86_64.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+fetch linuxdeploy-x86_64.AppImage "$LINUXDEPLOY_SHA256" "$LINUXDEPLOY_URL"
+fetch appimagetool-x86_64.AppImage "$APPIMAGETOOL_SHA256" "$APPIMAGETOOL_URL"
+chmod +x "$TOOLS/linuxdeploy-x86_64.AppImage" "$TOOLS/appimagetool-x86_64.AppImage"
+fetch "$RUNTIME_FILE" "$RUNTIME_SHA256" "${RUNTIME_URLS[@]}"
+fetch "$LIBFUSE_SOURCE" "$LIBFUSE_SOURCE_SHA256" "$LIBFUSE_SOURCE_URL"
+fetch "$LIBFUSE_PATCH" "$LIBFUSE_PATCH_SHA256" "$LIBFUSE_PATCH_URL"
+fetch "$RUNTIME_SOURCE" "$RUNTIME_SOURCE_SHA256" "${RUNTIME_SOURCE_URLS[@]}"
 
 # Both tools are AppImages themselves; this runs them without FUSE (containers, CI).
 export APPIMAGE_EXTRACT_AND_RUN=1
@@ -68,9 +94,13 @@ for needed in $(needs "$APPDIR/usr/bin/phobos"); do
 done
 
 rm -f "$OUTPUT" "$OUTPUT.zsync"
-(cd "$DIST" && "$TOOLS/appimagetool-x86_64.AppImage" --no-appstream \
+# appimagetool starts by changing to $OWD when it's set (a shell started from an AppImage has it set), and the
+# .zsync is written where appimagetool runs; without OWD that's dist/, beside the AppImage.
+(cd "$DIST" && env -u OWD "$TOOLS/appimagetool-x86_64.AppImage" --no-appstream --runtime-file "$TOOLS/$RUNTIME_FILE" \
   -u "gh-releases-zsync|${REPOSITORY%%/*}|${REPOSITORY##*/}|latest|Phobos-*x86_64.AppImage.zsync" \
   "$APPDIR" "$OUTPUT")
 test -f "$OUTPUT.zsync" || { echo "appimagetool wrote no $OUTPUT.zsync" >&2; exit 1; }
+for source in "$LIBFUSE_SOURCE" "$LIBFUSE_PATCH" "$RUNTIME_SOURCE"; do cp "$TOOLS/$source" "$DIST/"; done
 echo "$OUTPUT"
 echo "$OUTPUT.zsync"
+printf '%s\n' "$DIST/$LIBFUSE_SOURCE" "$DIST/$LIBFUSE_PATCH" "$DIST/$RUNTIME_SOURCE"
