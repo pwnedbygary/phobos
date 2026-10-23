@@ -20340,3 +20340,99 @@ the commit merging this branch into master.
 Kept outside the repository: the designs, phase 1's measurements and the prototypes, #295's tests, this part's notes
 (the suites' logs, the mutations' diffs and logs, the counts taken in a copy, the second round's scripts, runs and
 tables) and the reviews (the design's, #295's and this part's).
+
+## Part 117: Vulkan above 1x — Burnout Legends' frames shown from the GPU, after a finish and past a texture's move
+
+The owner, 22 Oct, on the RP6 with Vulkan (fast) at 4x and 5x: "it still appeared to be native resolution". His
+screenshot of Burnout Legends' "Select a Compact" at 4x was 4x4 blocks of one colour, its text too. The desktop's
+runner at `062dd53e2` (RADV, an RX 9070 XT) drew Burnout's menus the same way, every 4x frame exact 4x4 blocks, while
+Midnight Club 3's 3D title had detail inside 70% of its 4x4 blocks: the core's, not Android's.
+
+### Why
+
+- **The frame shown is `GPU::shownTarget()`'s** (gpu.cpp), read back by `picture()` on the desktop and presented by
+  `show()` on Android; where it finds no target the frame is memory's, 480x272. For Burnout it found none, in two
+  ways (a scratch build logging its checks, never committed):
+- **The movie-backed menus.** Each frame begins with a full-screen sprite whose texture (8888 at VRAM 0x176000,
+  declared 512x512) the GPU can't have: `begin()` refuses it, and the refusal's finish (draw.cpp) puts every target's
+  pixels in memory and gives back every page, the frame shown's too. Its target still held its pixels and nothing had
+  changed them, but it owned no page shown, and `shownTarget()`'s last check ("one at least the target's") took
+  memory's: 198 of 201 frames.
+- **The car select.** Two 2D strips sample its frame buffer at VRAM 0 as a texture of 1024 rows, 512 wide. Their v
+  starts at 0 and repeats, so their rows aren't known (a triangle's steps may take v a hair past its corners': draw.cpp)
+  and the texture is held to 512, its last 240 rows the other frame buffer, the one shown. `holds()` moved that one's
+  pixels there into the texture's target before taking the texture (since part 67 it took two parts first only where
+  the PRIM draws in those pages), so pages of the frame shown were another target's; and both targets had 512 rows,
+  each over the other, so the next finish (the game's CPU stores into the shown frame's first row every fourth frame)
+  left each stale by the other's read-back. Of 191 frames, 143 stale and 48 with pages another's.
+
+### The change (ares/psp/ge/gpu/gpu.cpp)
+
+- **`shownTarget()`**: above 1x, a target that owns no page shown is shown where every other check passes (not stale,
+  its rows filled, no page another's, memory's newer bytes revived). After a finish memory holds its pixels narrowed
+  and every target's rows are watched again, and memory's changes since (the CPU's stores, block transfers, the
+  software renderer's drawing, HLE's writes: `Memory::changed()`) reach `written()`, which keeps them beside its pixels
+  or makes it stale; so it's the newest picture of what it covers, at its scale. At 1x the check stays, and memory's
+  picture, the same, is taken.
+- **`holds()`**: where it would first move other targets' pixels into the texture's target (pages the PRIM doesn't
+  draw in), it first takes the texture as it is, from one target or two frame buffers one below the other, no row held
+  at another's (`take()`, not cutting), and moves only where that can't be done. The texels are those the move and then
+  the take would give; the pages stay their targets'. A texture over a target of another format or row width can't be
+  taken in parts (`take()`'s `fits()`), so God of War's shadows (5650 over an 8888 page) move as before.
+
+### Measured (the desktop runner, Vulkan (fast), GE timing Fast; the route to "Select a Compact", 4990 frames)
+
+- **Burnout at 4x**: frames from the GPU 521 to 4,988; 4x4 blocks with detail inside none to 27.3-27.8% on the menus,
+  59% on the car select, 17-19% on the title over its movie; moves 65 to 0, finishes 2,176 to 2,111. Averaged down to
+  480x272 and against 1x's frames, the mean difference goes from 2.3-7.0 to 2.8-9.0: sharper edges (the header's
+  rows 27 and 43), the same content.
+- **Burnout at 1x**: the pictures the same byte for byte, compared by the frame each arrived in (the runner's capture
+  can slip a frame on a busy host): 59 of 59 frames of the car select, 20 of 20 of the name screen, 43 of 44 along the
+  route, the 44th the next frame's picture, the same again run afresh.
+- **Others at 4x, the same byte for byte** (3000 frames each, 9 compared): Midnight Club 3's title (1,310 frames from
+  the GPU either way), Grand Theft Auto: Liberty City Stories (1,190; its moves 88 to 0), Lumines (2,892), God of War:
+  Chains of Olympus (2,956; its 76,752 moves kept), Colin McRae Rally 2005 (1,528 to 1,531) and Dirt 2 (2,998).
+- **A picture the CPU writes**: Burnout's intro movie and its title over it, written by the movie's colour conversion
+  (`memory.copyIn()`), come from the GPU now, sharper and as 1x's (averaged down, 3.1 to 3.4 and 2.3 to 2.8 from it).
+
+### Tests and checks
+
+- **"gpu a frame drawn above 1x, then a finish another frame buffer's refused PRIM asks for…"**
+  (`gpuShownAfterFinish`): a frame at 2x with detail between the PSP's pixels (`farFloor()`, gpuDepthEarly's 3D
+  floor: 2D sprites take the GE's steps, the same at every scale), then a PRIM elsewhere the GPU refuses (rows past a
+  target's 512) finishes; the frame comes from its target, the picture it was before, and a CPU store after shows. At
+  1x, memory's.
+- **"gpu a frame buffer sampled as a texture running on into the one shown below it…"** (`gpuShownBelowTexture`): a
+  frame buffer right below another, which a 2D strip whose v starts at 0, repeating, samples as a 64x128 texture into
+  a third: no move, no finish, and the one below shown from its target, the picture it was before, at 2x and at 1x.
+- **"gpu that texture taken in two parts, rows not known, at 1x: the software renderer's texels"**
+  (`gpuBelowTextureTexels`): the strip, sampling two frame buffers drawn with sprites texel for texel, beside a machine
+  with the software renderer: every byte of VRAM the same, and nothing moved.
+- Each picture is taken after `drainThreads()`: with the GE on its thread (`PHOBOS_TESTS_GE_THREAD=On`) the GPU is
+  that thread's till it's done, and the first test had looked before the thread heard the CPU's store (the
+  independent review's first round). The three pass with the GE on either thread.
+- In scratch builds (the GPU group, the GE on the emulation thread): without `shownTarget()`'s clause, 2 failed checks
+  (the first test's frame not shown, before and after the store); without `holds()`' rule, 5 (the second test's move
+  and frame not shown at each scale, the third's move); without either, 7; with a two-part take's second part copied
+  from its frame buffer's row 1, 5 (the third test's VRAM and gpuStackedTexture's four). With the change, none.
+- **The suites** (GCC 16.2.1, RADV; CI has GCC 13 and lavapipe): sanitized (ASan and UBSan), master 650 groups and 0
+  failures, with the change 653 and 0, its GPU group with the GE on its thread 81 and 0; the GPU group on lavapipe,
+  master 78 and 0 (one skipped: lavapipe reads in order), with the change 81 and 0 (the same one skipped); release
+  (GCC 16 needs `-Wno-error=array-bounds` for its false positives in test files this doesn't touch, movies.cpp),
+  master 650 and 0, with the change 653 and 0. The runner built for Android as the app's release build compiles the
+  core (`tools/psp-runner/build-android.sh`, NDK r28) builds. `git diff --check` clean; no added line over 120 columns.
+
+### Left
+
+- **Burnout's top banner above 1x** has a dark line along the bottom half of native row 63: its 512x64 sprite (CLUT8
+  in RAM, filtered, repeating) takes the texture's first row past its last. It was drawn into the 4x target before this
+  part too, and hidden because the frame was memory's. It's how every game's filtered, repeating sprite edge samples
+  above 1x, outside this part: a rule and tests of its own.
+- **Cost**, as the independent review measured it on the desktop runner (`-O1`, RADV, a shared host): Burnout's route
+  at 4x ran at 109.3 and 112.2 frames a second on master against 82.5 and 84.2 with the change (-24.5% and -25.0%;
+  to frame 2,600 alone, 112.2 against 86.5, -23%), the GPU waiting only 0.60-0.79 to 0.93-0.94 ms a frame; so it's
+  mostly the host taking a 1920x1088 picture each frame where memory's 480x272 was taken, what every game already
+  shown from the GPU at 4x pays. And two parts where a move was (the car select: 2,953 to 3,667 copies in 4,990
+  frames). Android presents the target with no read-back; the RP6 not timed.
+- **The RP6** not run: Android presents through the same `shownTarget()`.
+- The investigation's notes, frames, scripts and logs are kept outside the repository.

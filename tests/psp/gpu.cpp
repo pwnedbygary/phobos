@@ -5685,6 +5685,169 @@ static auto gpuGlowPretend() -> void {
   s.ge.setRenderer(nullptr), again.ge.setRenderer(nullptr);
 }
 
+//A picture with detail between the PSP's pixels above 1x, in the frame buffer prepare() left: 3D, gpuDepthEarly's
+//floor, four columns going off into the distance in two colors (2D sprites take the GE's steps, the same at every
+//scale)
+static auto farFloor(System& s) -> void {
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  auto& c = s.ge.commands;
+  c[GE::VertexType] = 0x19c, c[GE::MaxZ] = 0xffff;
+  for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+  for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+  s.ge.projection[0] = s.ge.projection[5] = f24(1);
+  s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+  c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(32767.5f);
+  c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32767.5f);
+  c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+  u32 to = GPUVertices;
+  for(u32 column = 0; column < 4; column++) {
+    float x0 = -10 + column * 5.0f, x1 = x0 + 5, near = -1.0005f, far = -9.999f;
+    float corners[6][3] = {{x0, -0.8f, near}, {x1, -0.8f, near}, {x1, -0.8f, far},
+                           {x0, -0.8f, near}, {x1, -0.8f, far}, {x0, -0.8f, far}};
+    for(auto& corner : corners) {
+      s.memory.write(4, to, column & 1 ? 0xffff'ffff : 0xff20'4060), to += 4;
+      for(float value : corner) s.memory.write(4, to, bitsOf(value)), to += 4;
+    }
+  }
+  s.ge.vertexAddress = GPUVertices;
+  s.ge.primitive(GE::Triangles, 24);
+}
+
+//A frame drawn above 1x, then every target's pixels put in memory and their pages given back by a finish another
+//frame buffer's PRIM asks for (one the GPU refuses: rows past the 512 a target has, nowhere near this frame):
+//nothing has changed the frame since, so it's shown from its target still, the picture it showed before the finish,
+//not memory's at 1x (Burnout Legends' menus at 4x: a full-screen sprite each frame whose texture the GPU can't have,
+//and every frame shown 480x272); memory's change to it after the finish shown with it. At 1x, memory's picture, the
+//same, as before.
+static auto gpuShownAfterFinish() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Frame = 0x4'0000;
+  for(u32 scale : {2u, 1u}) {
+    if(!scaleTaken(gpu, scale)) continue;
+    gpu->resolution(scale);
+    System s;
+    s.ge.setRenderer(gpu);
+    prepare(s, Frame, 3);
+    farFloor(s);
+    std::vector<u32> before, picture;
+    drainThreads();  //(before each picture: with the GE on its thread, the GPU is that thread's till it's done)
+    CHECK(gpu->picture(Frame, 64, 3, 64, 48, before, scale), true);  //(its pages the target's: from it)
+    u32 width = 64 * scale, detailed = 0;  //(the PSP's pixels whose samples differ)
+    for(u32 y = 0; y < 48 && before.size() == u64(width) * 48 * scale; y++) {
+      for(u32 x = 0; x < 64; x++) {
+        u32 corner = before[y * scale * width + x * scale];
+        bool one = true;
+        for(u32 dy = 0; dy < scale; dy++) {
+          for(u32 dx = 0; dx < scale; dx++) one = one && before[(y * scale + dy) * width + x * scale + dx] == corner;
+        }
+        detailed += !one;
+      }
+    }
+    CHECK(detailed > 0, scale > 1);
+    u64 finishes = stats(gpu).finishes;
+    prepare(s, 0x8'0000, 3);
+    s.ge.commands[GE::Scissor2] = 63 | 1023 << 10;
+    sprite(s, {{{0, 0, 4, 520}, {0, 0, 40, 530}}, 0xff33'66cc});  //(rows 520-529: past the target's 512)
+    CHECK(stats(gpu).finishes > finishes, true);
+    drainThreads();
+    bool shown = gpu->picture(Frame, 64, 3, 64, 48, picture, scale);
+    CHECK(shown, scale > 1);
+    if(shown) CHECK(picture == before, true);
+    s.memory.write(4, Memory::VRAMBase + Frame + (40 * 64 + 50) * 4, 0xff00'ff00);
+    drainThreads();  //(and it has heard the store)
+    shown = gpu->picture(Frame, 64, 3, 64, 48, picture, scale);
+    CHECK(shown, scale > 1);
+    if(shown) CHECK(picture[40 * scale * width + 50 * scale] & 0xff'ffff, 0x00'ff00u);
+    s.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+
+//A frame buffer sampled as a texture taller than its picture, whose rows run on into the frame buffer below it, the
+//one shown, by a PRIM drawing elsewhere whose rows aren't known exactly (a 2D strip whose v starts at 0, repeating):
+//taken as it is, each part from its own target, nothing moved or finished, so the frame buffer below keeps its pages
+//and is shown from its target, the picture it showed before (Burnout Legends' car select at 4x: the pages moved into
+//the texture's target, and the frame buffer shown as memory's picture at 1x). At each scale.
+static auto gpuShownBelowTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Lower = 48 * 64 * 4;  //(the upper frame buffer's rows 48 on)
+  for(u32 scale : {2u, 1u}) {
+    if(!scaleTaken(gpu, scale)) continue;
+    gpu->resolution(scale);
+    System s;
+    s.ge.setRenderer(gpu);
+    prepare(s, 0, 3);
+    sprite(s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
+    sprite(s, {{{0, 0, 8, 6}, {0, 0, 40, 30}}, 0xff80'c0f0});
+    prepare(s, Lower, 3);
+    farFloor(s);
+    std::vector<u32> before, picture;
+    drainThreads();  //(before each picture: with the GE on its thread, the GPU is that thread's till it's done)
+    CHECK(gpu->picture(Lower, 64, 3, 64, 48, before, scale), true);
+    auto was = stats(gpu);
+    prepare(s, 0x2'0000, 3);
+    texture(s, Memory::VRAMBase, 64, 128, 64);
+    float corners[4][4] = {{0, 0, 0, 0}, {64, 0, 64, 0}, {0, 96, 0, 48}, {64, 96, 64, 48}};  //(u, v, x, y)
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(float value : {corner[0], corner[1]}) s.memory.write(4, to, bitsOf(value)), to += 4;
+      s.memory.write(4, to, 0xffff'ffff), to += 4;
+      for(float value : {corner[2], corner[3], 0.0f}) s.memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::TriangleStrip, 4);
+    CHECK(stats(gpu).copies > was.copies, true);
+    CHECK(stats(gpu).moves, was.moves);
+    CHECK(stats(gpu).finishes, was.finishes);
+    drainThreads();
+    bool shown = gpu->picture(Lower, 64, 3, 64, 48, picture, scale);
+    CHECK(shown, true);
+    if(shown) CHECK(picture == before, true);
+    s.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+
+//gpuShownBelowTexture's texture, taken in two parts with its rows not known, against the software renderer at 1x: the
+//strip, its v from 0, repeating, samples the frame buffer texel for texel as a texture of 128 rows, its rows 48-95
+//the frame buffer below, both drawn with sprites (exact in either renderer); every byte of VRAM the same, nothing
+//moved.
+static auto gpuBelowTextureTexels() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Lower = 48 * 64 * 4;
+  std::mt19937 random{20261022};
+  auto upper = randomSprites(random, 20, false), lower = randomSprites(random, 20, false);
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : upper) sprite(*s, one);
+    prepare(*s, Lower, 3);
+    for(auto& one : lower) sprite(*s, one);
+  }
+  auto was = stats(gpu);
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0x2'0000, 3);
+    s->ge.commands[GE::Scissor2] = 63 | 95 << 10;
+    texture(*s, Memory::VRAMBase, 64, 128, 64);
+    float corners[4][4] = {{0, 0, 0, 0}, {64, 0, 64, 0}, {0, 96, 0, 96}, {64, 96, 64, 96}};  //(u, v, x, y)
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(float value : {corner[0], corner[1]}) s->memory.write(4, to, bitsOf(value)), to += 4;
+      s->memory.write(4, to, 0xffff'ffff), to += 4;
+      for(float value : {corner[2], corner[3], 0.0f}) s->memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s->ge.vertexAddress = GPUVertices;
+    s->ge.primitive(GE::TriangleStrip, 4);
+  }
+  CHECK(stats(gpu).moves, was.moves);
+  CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
@@ -5784,6 +5947,12 @@ auto gpuTests() -> Tests {
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
+    {"gpu a frame drawn above 1x, then a finish another frame buffer's refused PRIM asks for: shown from its target "
+     "still, memory's later change with it; at 1x, memory's picture", gpuShownAfterFinish},
+    {"gpu a frame buffer sampled as a texture running on into the one shown below it, rows not known: taken in two "
+     "parts, nothing moved, the one below shown from its target", gpuShownBelowTexture},
+    {"gpu that texture taken in two parts, rows not known, at 1x: the software renderer's texels",
+     gpuBelowTextureTexels},
     {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
     {"gpu pipelines kept between sessions", gpuPipelineCache},
     {"gpu render to texture through palettes: looked up on the GPU, or decoded, the box where the whole would wait",

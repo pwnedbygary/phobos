@@ -35,6 +35,44 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: Burnout Legends at 4x shown from the GPU, after a finish and past a texture's move — 2026-10-22
+
+Branch `cursor/psp-upscale-shown-cachy`, from master `062dd53e2`, with master `f373b9e7e` (#297 and #299) merged in.
+ares/psp/ge/gpu/gpu.cpp, tests/psp/gpu.cpp, docs/psp-core.md (part 117), docs/psp-gpu-renderers.md ("Upscaling",
+"Presenting", part 49's RP6 line), docs/implementation-plan.md (package 10's row) and this file.
+The owner's report (22 Oct, the RP6, Vulkan (fast) at 4x and 5x): the PSP still looked native; his screenshot of
+Burnout Legends' "Select a Compact" was 4x4 blocks. The investigation's notes, frames, scripts and logs are kept
+outside the repository.
+- **What** (part 117):
+  - `GPU::shownTarget()`: above 1x a target owning no page shown is shown where its other checks pass. A finish
+    another frame buffer asked for had given its pages back (Burnout's movie-backed menus refuse a full-screen sprite
+    each frame), and every frame was memory's 480x272. At 1x as before.
+  - `GPU::holds()`: a texture running from one frame buffer into the one below it is taken in two parts, nothing cut,
+    before anything is moved; moved only where it can't be. Burnout's car select samples its picture as a texture of
+    1024 rows, and the move gave the frame shown's pages to the other target.
+  - Three tests, `gpuShownAfterFinish`, `gpuShownBelowTexture` and `gpuBelowTextureTexels` (the two-part take's texels
+    against the software renderer at 1x), passing with the GE on the emulation thread and on its own. In scratch
+    builds the GPU group fails 2 checks without `shownTarget()`'s clause (the first test), 5 without `holds()`' rule
+    (the second and the third), 7 without either, and 5 with the second part copied a row off (the third and
+    gpuStackedTexture).
+- **Measured** (the desktop runner, RADV): Burnout at 4x 521 to 4,988 of 4,990 frames from the GPU, 4x4 blocks with
+  detail none to 27.3-27.8% (menus) and 59% (car select); at 1x the same pictures byte for byte, compared by the frame
+  each arrived in and in dense captures. At 4x, the same frames byte for byte: Midnight Club 3, Liberty City Stories
+  (its 88 moves now none), Lumines, God of War: Chains of Olympus (its 76,752 moves kept), Colin McRae Rally 2005 and
+  Dirt 2.
+- **Checks** (GCC 16.2.1, RADV): the sanitized suite, master 650 groups, 0 failures, with the change 653, 0; its GPU
+  group with the GE on its thread 81, 0; the GPU group on lavapipe, master 78, 0 (one skipped), with the change 81, 0
+  (the same one); release with `-Wno-error=array-bounds` (GCC 16's false positives in movies.cpp), master 650, 0, with
+  the change 653, 0. `tools/psp-runner/build-android.sh` (NDK r28, the app's release flags) builds it.
+  `git diff --check` clean; no added line over 120 columns.
+- **Left**: Burnout's top banner at 4x has a dark line at the bottom of native row 63 (a 512x64 sprite filtered over
+  its texture's last row into its first, which repeats): in the 4x target before this change too, shown now; a
+  follow-up. The RP6 not run (the same functions present there).
+- Independent review: its first round (NEEDS CHANGES) found `gpuShownAfterFinish` failing with the GE on its thread;
+  fixed here, with a texel oracle for the two-part take and the docs' nits. The delta review's verdict is in the commit
+  message; the look at master's merge into this branch (#297's and #299's docs beside these), in the message of the
+  commit merging this branch into master.
+
 ## PSP kernel: the polling skip widened to the EA games' and Midnight Club's loops — 2026-10-21
 
 Branch `cursor/psp-spin-widening-cachy`, from master `8c2b1ddee` (#295): W1 (`c793ab17d`), W2 (`a7552b776`) and the
