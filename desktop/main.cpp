@@ -4,6 +4,7 @@
 #include "Library.hpp"
 #include "Platform.hpp"
 #include "PspDiscInfo.hpp"
+#include "ReducedMotion.hpp"
 #include "Settings.hpp"
 #include "PhobosHost.hpp"
 #include "PhobosIntro.hpp"
@@ -308,8 +309,8 @@ auto Shell::setup(int argc, char* argv[]) -> bool {
     launchedWithGame = game.has_value();
   }
   // Opening to the Library, not given a game (one that couldn't start says why, unhidden), the intro plays first,
-  // unless settings.ini's intro is false (the menu's switch).
-  if (argument.empty() && settings.flag("intro", true)) intro = Intro{SDL_GetTicks()};
+  // unless settings.ini's intro is false (the menu's switch) or the system asks for less motion (ReducedMotion.hpp).
+  if (argument.empty() && settings.flag("intro", true) && !systemAsksForLessMotion()) intro = Intro{SDL_GetTicks()};
   return true;
 }
 

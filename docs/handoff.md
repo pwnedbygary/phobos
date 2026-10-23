@@ -46,10 +46,10 @@ so they look the same; every time Phobos opens to the Library; any button, key o
 it off; never when a frontend launches a game directly, nor with the system's animations removed. New:
 `android/app/src/main/cpp/PhobosIntro.hpp` and `.cpp` (the renderer), `PhobosIntroArt.hpp` (its art, made by the new
 `tools/logo/build_intro.py` from `docs/images/phobos-logo.png`), `PhobosIntroJNI.cpp`, `ui/Intro.kt`,
-`ui/IntroSplash.kt`, `tests/intro/intro.cpp` and `ui/IntroTest.kt`. Changed: `CMakeLists.txt`,
-`.github/workflows/desktop.yml`, `MainActivity.kt`, `PhobosCore.kt`, `SettingsStore.kt`, `AppearanceSettingsScreen.kt`,
-`MainScaffold.kt`, `MainViewModel.kt`, `AppearanceSettingsTest.kt`, `desktop/main.cpp`, this file and a row of
-`docs/implementation-plan.md`.
+`ui/IntroSplash.kt`, `desktop/ReducedMotion.hpp` and `.cpp`, `tests/intro/intro.cpp` and `ui/IntroTest.kt`. Changed:
+`CMakeLists.txt`, `.github/workflows/desktop.yml`, `MainActivity.kt`, `PhobosCore.kt`, `SettingsStore.kt`,
+`AppearanceSettingsScreen.kt`, `MainScaffold.kt`, `MainViewModel.kt`, `AppearanceSettingsTest.kt`, `desktop/main.cpp`,
+this file and a row of `docs/implementation-plan.md`.
 - **What it shows**, in about 5.6 s: the stars and Mars come out of black (0.7 s); Mars turns, its surface a map made
   once from noise on the sphere (craters, a canyon, a volcano, ice caps) in the colours of the launcher icon's Mars,
   while the logo's moon, with its D-pad, orbits it, from behind it and across its face, small and out of focus; from
@@ -83,23 +83,30 @@ it off; never when a frontend launches a game directly, nor with the system's an
 - **When it plays, desktop**: `setup()` starts it when Phobos opens to the Library given no game (a game given on the
   command line, even one that can't start, goes without it, so that game's message isn't hidden), unless settings.ini's
   `intro` is false, which the pause menu's "Intro as Phobos opens" switches (the desktop's settings are in that menu, as
-  Fullscreen is). A key press, a pad button, a click or a touch skips it; while it plays, keys and buttons reach nothing
-  else; a direction held as it ends stays its own until let go of (`introDirections`); a game dropped on the window ends
-  it, and a message (for a dropped file no system loads) hurries it away. Unlike Android's, it doesn't follow the
-  system's animation settings (Windows' animation effects, macOS's Reduce motion, GNOME's or KDE's): SDL has no call
-  for them, so each system would need code of its own; its own switch turns it off.
+  Fullscreen is), or the system asks for less motion (`desktop/ReducedMotion.cpp`, since SDL has no call for it):
+  Windows with its animation effects off (`SystemParametersInfoW`'s `SPI_GETCLIENTAREAANIMATION`), macOS with Reduce
+  motion on (`NSWorkspace`'s `accessibilityDisplayShouldReduceMotion`, asked through the Objective-C runtime), or a
+  Linux desktop whose portal (`org.freedesktop.portal.Settings`) gives freedesktop's `reduced-motion` as 1, GNOME's
+  `enable-animations` as false or KDE's `AnimationDurationFactor` as 0. libdbus is loaded for that, not linked, as SDL
+  does; a portal that doesn't answer costs 300 ms at most, and with no session bus or no portal the intro plays. A key
+  press, a pad button, a click or a touch skips it; while it plays, keys and buttons reach nothing else; a direction
+  held as it ends stays its own until let go of (`introDirections`); a game dropped on the window ends it, and a
+  message (for a dropped file no system loads) hurries it away.
 - **Tests**:
   - `tests/intro` (CMake's `intro-tests`, built on demand under its own `-Wall -Wextra -Werror`, AddressSanitizer and
     UndefinedBehaviorSanitizer, undefined behaviour fatal; a new step in desktop.yml's Linux job runs it after the
-    build, with a summary line as the RSP test's): 12 tests, 84 checks. The canvas for windows of several shapes (worked
-    out by hand), and its covering any window with a column or a row at most to spare; every pixel opaque or 0 in all
-    four bytes; the opening from black, brightening; the moon's and the word's art each found drawn exactly once,
+    build, with a summary line as the RSP test's): 13 tests, 103 checks. The canvas for windows of several shapes
+    (worked out by hand), and its covering any window with a column or a row at most to spare; every pixel opaque or 0
+    in all four bytes; the opening from black, brightening; the moon's and the word's art each found drawn exactly once,
     centred, the word under the moon, on four window shapes, and neither while the camera still moves; the moon behind
     Mars at the start, crossing in front small and blurred with Mars sharp, ending at its art's size and sharp with
     Mars blurred, growing all the way; Mars turning; the word drawn in from the left; the dissolve's timing, never
     undone, half at its middle; skips at the start, midway and during the dissolve, which hurry it and undo none of it;
     a frame depending on its moment alone; rows further apart than the canvas; odd sizes; the ends of int's range (a
-    window `INT_MAX` pixels across, moments at `INT_MIN` and `INT_MAX`) without undefined behaviour.
+    window `INT_MAX` pixels across, moments at `INT_MIN` and `INT_MAX`) without undefined behaviour; and the desktop's
+    reading of a portal's motion settings (`asksForLessMotion`: each key's values that ask and that don't, KDE's 0
+    written five ways, one key asking beside two that don't), with `systemAsksForLessMotion()` saying no at once where
+    there's no session bus.
   - JVM: `IntroTest` (16 tests): `introPlays()`'s conditions; `IntroKeys` taking every key and skipping on each press,
     a repeat taken without skipping again, Back taken (where it reaches the window), a key pressed during the intro
     kept until let go of, a press after it the Library's, a repeat whose press it never had skipping and kept, touch
@@ -114,7 +121,8 @@ it off; never when a frontend launches a game directly, nor with the system's an
     setting on by default, and off kept across starts under the name `intro_animation`.
 - **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; Gradle 9.6.0, NDK 28.2.13676358):
   - The work began on master `f373b9e7e` and moved onto `7986aef5b` when #298 merged, which changes only the PSP
-    renderer, its tests and docs. What follows was run on the final tree unless it says `f373b9e7e`.
+    renderer, its tests and docs. What follows was run on the intro's commit (`5b960adf1`) unless it says `f373b9e7e`,
+    but for the last two bullets, the owner's two changes after it.
   - The desktop builds (`cmake --preset linux-x64`), and `intro-tests` passes: 84 checks, 0 failed. desktop.yml's new
     step, run here as written with `bash --noprofile --norc -eo pipefail` (what `shell: bash` runs), writes
     "- tests/intro: 84 checks, 0 failed"; with a stand-in test that fails, the step fails (exit 1), where GitHub's
@@ -160,6 +168,18 @@ it off; never when a frontend launches a game directly, nor with the system's an
     intro had dissolved before the change, the D-pad's repeats reaching it (two runs), and at its top with the change
     (two runs with each build); the D-pad held alone left it at its top with every build. No crash; the test app was
     uninstalled after.
+  - The desktop's check of the system's motion settings (the owner's choice of 2026-10-23), after all of the above:
+    `desktop/ReducedMotion.hpp` and `.cpp`, `setup()`'s condition, `intro-tests`' new test and `CMakeLists.txt`,
+    nothing Android builds. The desktop builds, and `intro-tests` passes: 103 checks, 0 failed. A probe built with it,
+    on private session buses that start nothing on demand, a stand-in portal answering as the real one does (each value
+    inside two variants): yes for `reduced-motion` 1, GNOME's animations off, KDE's factor 0, and KDE's "0,0" given
+    alone; no with no portal, with values asking for nothing, and with `reduced-motion` 2; and no after 302 ms from a
+    portal that never answers. The program on a virtual display, its portal a stand-in: asking, the Library showed at
+    1.5 s with no intro (the harness's focus call failed twice on a window not yet shown, and a third run took its
+    shots); asking for nothing, the intro played; on this machine's own session bus (KDE Plasma 6.8.1,
+    xdg-desktop-portal 1.22.1, whose portal gives all three keys, asking for none, in 3 to 13 ms), it played.
+    MinGW-w64's GCC 13 (Ubuntu 24.04's, in a container) builds the Windows code under `-Wall -Wextra -Werror` without a
+    warning, and a program built with it imports `SystemParametersInfoW` from `USER32.dll`.
 - **Limits**:
   - Android was checked on the RP6 alone, in landscape: not in portrait, on other screens or Android versions, with
     TalkBack, with a keyboard (`IntroTest` alone covers a typing key leaving touch mode), turned mid-intro, or from a
@@ -167,8 +187,10 @@ it off; never when a frontend launches a game directly, nor with the system's an
   - The desktop was checked on Linux alone, on a virtual display with SDL's software renderer, from the keyboard and
     mouse: not on Windows or macOS, with a GPU renderer, or with a real pad (whose buttons take the path in `update()`
     the arrow keys took), and nothing was dropped on its window during the intro (the message's path).
-  - The desktop doesn't follow the system's animation settings (above), though the owner's choice had the intro
-    skipped with them removed in every case; the owner is told, for a follow-up if wanted.
+  - The desktop's check of the system's motion settings ran on Linux alone, its asking cases with stand-in portals
+    (this machine's own setting wasn't changed). The Windows and macOS code wasn't run: CI builds both, and MinGW-w64
+    built the Windows code here. A desktop whose portal gives none of the three keys, or that has no portal, gets the
+    intro.
   - Android 12 and later show their own splash, the launcher icon, before the app's first frame; the intro follows it,
     from black.
   - Each start to the Library takes about 5.6 s more unless the intro is skipped or switched off.
@@ -179,12 +201,12 @@ it off; never when a frontend launches a game directly, nor with the system's an
     counts as the press that left touch mode, settling it as before the change (both derived, not seen; with the
     second key 60 ms after, as on the RP6, the change holds).
 - **Next**: the pull request's CI (passed: on `5b960adf1`, the new step's first run, and on the master merge
-  `92ff2fd9c`); the two changes the owner chose on 2026-10-23, the desktop skipping the intro when the system asks for
-  less motion, and a D-pad press Android keeps (above) settled by itself, not by another key's press (done: above).
-  #294 changes 9 of these 21 files and merges first, in the owner's order: a trial merge (`git merge-tree`) with its
-  `73097e579` conflicts in `MainActivity.kt` (3 hunks), `desktop/main.cpp` (6) and this file (1), both reworking the
-  same key paths, so this branch resolves them when master, with #294 in it, is merged in; desktop.yml and
-  `CMakeLists.txt` merge cleanly.
+  `92ff2fd9c`); the two changes the owner chose on 2026-10-23 (both done: above), the desktop skipping the intro when
+  the system asks for less motion, and a D-pad press Android keeps settled by itself, not by another key's press.
+  #294, which changes 9 of these 23 files, merged first in the owner's order (`ae9d73f6e`): a trial merge
+  (`git merge-tree`) of master with this branch conflicts in `MainActivity.kt` (3 hunks), `desktop/main.cpp` (6) and
+  this file (1), both reworking the same key paths, so this branch resolves them when master is merged in; desktop.yml
+  and `CMakeLists.txt` merge cleanly.
 
 ## Docs: private local paths out, README's Shaders line corrected — 2026-10-23
 

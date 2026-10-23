@@ -1,15 +1,19 @@
 // The intro's tests (android/app/src/main/cpp/PhobosIntro.cpp, which the Android app and the desktop program both draw
 // with): the canvas a window gets, the frames' choreography, the logo drawn as its art is, the dissolve into the
-// Library and a skip. They run on the host, no window or device needed: intro-tests, which desktop.yml's Linux job
-// builds and runs (CMakeLists.txt).
+// Library and a skip; and the desktop's reading of the system's motion settings (desktop/ReducedMotion.cpp). They run
+// on the host, no window or device needed: intro-tests, which desktop.yml's Linux job builds and runs (CMakeLists.txt).
 #include "PhobosIntro.hpp"
 #include "PhobosIntroArt.hpp"
+#include "ReducedMotion.hpp"
 
 #include <climits>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
+#include <string>
 #include <vector>
 
 using namespace phobos::intro;
@@ -364,6 +368,50 @@ void theEndsOfIntsRangeStayDefined() {
   CHECK(!Frame(32, 18, INT_MAX, 0).running);
 }
 
+void theDesktopSkipsItWhenTheSystemAsksForLessMotion() {
+  // The settings a Linux desktop's portal gives, each alone and together.
+  using phobos::desktop::asksForLessMotion;
+  using phobos::desktop::PortalMotionSettings;
+  auto reduced = [](std::uint32_t value) {
+    PortalMotionSettings settings;
+    settings.reducedMotion = value;
+    return settings;
+  };
+  auto animations = [](bool on) {
+    PortalMotionSettings settings;
+    settings.enableAnimations = on;
+    return settings;
+  };
+  auto factor = [](const char* text) {
+    PortalMotionSettings settings;
+    settings.animationDurationFactor = text;
+    return settings;
+  };
+  CHECK(!asksForLessMotion(PortalMotionSettings{}));
+  CHECK(asksForLessMotion(reduced(1)));
+  CHECK(!asksForLessMotion(reduced(0)));
+  CHECK(!asksForLessMotion(reduced(2)));  // the portal's other values mean no preference
+  CHECK(asksForLessMotion(animations(false)));
+  CHECK(!asksForLessMotion(animations(true)));
+  for (const char* zero : {"0", "0.0", "0,0", "00", "0."}) CHECK(asksForLessMotion(factor(zero)));
+  for (const char* some : {"0.25", "1", "1.0", "0.01", "", "x"}) CHECK(!asksForLessMotion(factor(some)));
+  auto oneAsking = reduced(0);
+  oneAsking.enableAnimations = false;
+  oneAsking.animationDurationFactor = "1";
+  CHECK(asksForLessMotion(oneAsking));
+#if defined(__linux__)
+  // With no session bus there's nobody to ask: no.
+  std::optional<std::string> address, runtime;
+  if (const char* value = std::getenv("DBUS_SESSION_BUS_ADDRESS")) address = value;
+  if (const char* value = std::getenv("XDG_RUNTIME_DIR")) runtime = value;
+  unsetenv("DBUS_SESSION_BUS_ADDRESS");
+  unsetenv("XDG_RUNTIME_DIR");
+  CHECK(!phobos::desktop::systemAsksForLessMotion());
+  if (address) setenv("DBUS_SESSION_BUS_ADDRESS", address->c_str(), 1);
+  if (runtime) setenv("XDG_RUNTIME_DIR", runtime->c_str(), 1);
+#endif
+}
+
 }
 
 int main() {
@@ -379,6 +427,7 @@ int main() {
   framesDependOnTheirMomentAloneAndKeepToTheirRows();
   oddSizesDrawWithoutTrouble();
   theEndsOfIntsRangeStayDefined();
+  theDesktopSkipsItWhenTheSystemAsksForLessMotion();
   std::printf("%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

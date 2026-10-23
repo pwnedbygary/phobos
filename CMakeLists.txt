@@ -402,10 +402,15 @@ else()
       desktop/Input.cpp
       desktop/Library.cpp
       desktop/PspDiscInfo.cpp
+      desktop/ReducedMotion.cpp
       desktop/Settings.cpp
   )
   find_package(Threads REQUIRED)
   target_link_libraries(phobos PRIVATE phobos_core SDL3::SDL3-static Threads::Threads ${CMAKE_DL_LIBS})
+  if(APPLE)
+    # desktop/ReducedMotion.cpp calls the Objective-C runtime from C++.
+    target_link_libraries(phobos PRIVATE objc)
+  endif()
   # The boot ROMs and game databases the Android app ships as assets, beside the program; it
   # copies them into its data folder at start, as the app's extractAssets() does.
   add_custom_command(TARGET phobos POST_BUILD
@@ -416,13 +421,19 @@ else()
   add_executable(rsp-recompiler EXCLUDE_FROM_ALL tests/rsp-recompiler/rsp-recompiler.cpp)
   target_link_libraries(rsp-recompiler PRIVATE phobos_core Threads::Threads ${CMAKE_DL_LIBS})
   set_property(SOURCE tests/rsp-recompiler/rsp-recompiler.cpp APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
-  # tests/intro: the intro's renderer, which the Android app and the program share (PhobosIntro.cpp), checked on the
-  # host with its own warnings as errors (the program builds with -w) and the sanitizers, undefined behaviour failing
-  # it too. Built on demand (desktop.yml's Linux job builds and runs it).
-  add_executable(intro-tests EXCLUDE_FROM_ALL tests/intro/intro.cpp android/app/src/main/cpp/PhobosIntro.cpp)
+  # tests/intro: the intro's renderer, which the Android app and the program share (PhobosIntro.cpp), and the program's
+  # reading of the system's motion settings (desktop/ReducedMotion.cpp), checked on the host with their own warnings as
+  # errors (the program builds with -w) and the sanitizers, undefined behaviour failing it too. Built on demand
+  # (desktop.yml's Linux job builds and runs it).
+  add_executable(intro-tests EXCLUDE_FROM_ALL tests/intro/intro.cpp android/app/src/main/cpp/PhobosIntro.cpp
+                 desktop/ReducedMotion.cpp)
   set_target_properties(intro-tests PROPERTIES
     COMPILE_OPTIONS "-Wall;-Wextra;-Werror"
-    INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp)
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp;${CMAKE_CURRENT_SOURCE_DIR}/desktop")
+  target_link_libraries(intro-tests PRIVATE ${CMAKE_DL_LIBS})
+  if(APPLE)
+    target_link_libraries(intro-tests PRIVATE objc)
+  endif()
   if(NOT WIN32)
     target_compile_options(intro-tests PRIVATE -fsanitize=address,undefined -fno-sanitize-recover=undefined
                            -fno-omit-frame-pointer)
