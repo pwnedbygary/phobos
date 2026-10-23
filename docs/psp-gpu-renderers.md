@@ -589,14 +589,16 @@ them. The host's `video()` then neither locks nor draws on the window.
   window being there, so the host never locks a window the GPU is about to present on. A GPU that stops answering
   (`lost`) gives presenting up too; since the follow-up of 2026-10-21 (the handoff) its window is let go of at the next
   frame as well (`GPU::letGo()`, called by `System::present()`), the surface, with its swapchain, dropped from it where
-  the GPU's runs all ended (after a wait that timed out it's left as it is), where before it stayed on the window and
-  the host's draws on it were refused. Dropping the surface disconnects it from the window (the swapchain alone
-  wouldn't), which puts the window's format and scaling back to their defaults (on the RP6, 16-bit buffers, dropped
-  unless the window's size), maybe between the host's request for its frames' size, format and scaling and its lock, on
-  another thread; so the host (`PhobosHostAndroid.cpp`'s `lockFrame`) asks again at the lock after the first that
-  succeeds on a window it may not have had, and posts a buffer in neither format it writes (`RGBA_8888`, `RGBX_8888`)
-  undrawn. After such a loss the window stays the CPU's, so a game loaded again on it can't make its surface: it gives
-  presenting up and reads its frames back until the window is made again (derived, not run).
+  the GPU's runs all ended, where before it stayed on the window and the host's draws on it were refused. After a wait
+  that timed out (a run that never ended, the GPU perhaps still using them) they were left as they were, the screen
+  frozen; since the follow-up of 2026-10-23 they're held, and dropped a frame or more later, once every run has ended,
+  its fence signalled or the device lost (`releaseHeld()`). Dropping the surface disconnects it from the window (the
+  swapchain alone wouldn't), which puts the window's format and scaling back to their defaults (on the RP6, 16-bit
+  buffers, dropped unless the window's size), maybe between the host's request for its frames' size, format and scaling
+  and its lock, on another thread; so the host (`PhobosHostAndroid.cpp`'s `lockFrame`) asks again at the lock after the
+  first that succeeds on a window it may not have had, and posts a buffer in neither format it writes (`RGBA_8888`,
+  `RGBX_8888`) undrawn. After such a loss the window stays the CPU's, so a game loaded again on it can't make its
+  surface: it gives presenting up and reads its frames back until the window is made again (derived, not run).
 - **The desktop** reads back (SDL owns its window, and its renderer isn't Vulkan's); MoltenVK on the M1 has no
   surface for it.
 

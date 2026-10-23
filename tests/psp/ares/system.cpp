@@ -943,12 +943,14 @@ auto presentedFrame() -> void {
 //host can draw the software renderer's frames on it; one that presents keeps the window, and so does one that has
 //given presenting up without being lost (Vulkan's lets go of its surface itself then). The same with the GE on its
 //thread (option "GE Thread"), whose frames' ends present there, each frame checked once the thread has drained. A
-//pretend GPU (no Vulkan needed) holds the window it was given last, as Vulkan's does.
+//pretend GPU (no Vulkan needed) holds the window it was given last, as Vulkan's does. A lost GPU's backend is given
+//no window again at each frame after, where Vulkan's lets go of what a run that never ended kept held (releaseHeld()).
 auto lostGpuLetsGoOfTheWindow() -> void {
   std::printf("a GPU lost while it presents: the host's window let go of\n");
   using ares::PlayStationPortable::GPU;
   struct Pretend : GPU::Backend {
     void* shown = nullptr;
+    int noWindow = 0;  //(the times it was given none)
     bool gaveUp = false;
     auto name() const -> std::string override { return "pretend"; }
     auto makeTarget(u32, u32) -> u32 override { return 1; }
@@ -959,7 +961,7 @@ auto lostGpuLetsGoOfTheWindow() -> void {
     auto finish(const GPU::Recorded&) -> bool override { return presented = true; }
     auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
     auto presents() const -> bool override { return !gaveUp; }
-    auto window(void* window) -> void override { shown = window; }
+    auto window(void* window) -> void override { shown = window, noWindow += !window; }
   };
   for(std::string thread : {"Off", "On"}) {
     std::string on = " (GE Thread " + thread + ")";
@@ -993,8 +995,10 @@ auto lostGpuLetsGoOfTheWindow() -> void {
     frame();
     CHECK(pretend.shown == nullptr, "lost: the window let go of at the next frame" + on);
     CHECK(!PlayStationPortable::presenting(), "and no frame presented" + on);
+    int asked = pretend.noWindow;
     frame();
     CHECK(pretend.shown == nullptr, "and not taken back" + on);
+    CHECK(pretend.noWindow > asked, "the backend given no window again at the next frame" + on);
     PlayStationPortable::window(nullptr);
     frame();
     root->unload();

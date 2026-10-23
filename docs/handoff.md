@@ -35,6 +35,98 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## A wait for the GPU that timed out no longer freezes the PSP's screen: the swapchain and the surface held till the GPU's runs end, then let go of — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `848eb204d` (the entry below). The lost GPU's entry of 2026-10-21 (the PSP's
+Vulkan renderer letting go of the window) left this as its first Limit: a loss found by a wait for a run that timed
+out (after five seconds), not by Vulkan saying the device was lost, still froze the screen. After such a wait
+`vulkan.cpp` destroys nothing a run may still use, so dropping the surface only forgot it, the window still connected
+to it, and every lock the host tried on the window was refused. The owner chose on 2026-10-22 to have it fixed among
+#294's follow-ups (verbatim: "PSP: a lost Vulkan device that only the 5-second timeout catches still freezes the
+game"). It's on this branch, not master, because the window's let-go it builds on (`GPU::letGo()`) is this branch's
+alone. Changed: `ares/psp/ge/gpu/vulkan.cpp`, `ares/psp/ge/gpu/gpu.hpp` (a comment), `tests/psp/ares/system.cpp` (a
+check), `docs/psp-gpu-renderers.md` (its "Falling back"), this file (that Limit marked, and the entry below's Next) and
+the plan row.
+- **The fix**: after a wait that timed out (`timedOut`), `dropSwapchain()` and `dropSurface()` hold the swapchain, its
+  images' views, framebuffers and semaphores, and the surface (`heldImages`, `heldSwapchains`, `heldSurfaces`) where
+  they forgot them before. `releaseHeld()`, called first in `window()`, destroys them once every run has ended: each
+  busy slot's fence signalled or the device lost (`vkGetFenceStatus`), which a lost device's fence comes to say if
+  polled again, and either way what its run used is no longer in use (Vulkan's specification, Vulkan-Docs
+  `a8b088a3f`: `vkGetFenceStatus`, and "Lost Device"). It waits for the device first (`vkDeviceWaitIdle`, for presents
+  too), and destroys the surfaces last, which disconnects the window so that the host can draw on it; any other
+  answer, from a fence or from that wait, leaves them held till the next frame. `GPU::letGo()` gives the backend no
+  window at every frame while the GPU is lost (`System::present()` calls it): the frame that lets go holds them, and
+  the release comes at the first frame after it by which the runs have all ended. `dropSwapchain()` also holds them
+  where its own wait for the runs times out (the lost GPU's entry's second case), and the backend's destructor, after
+  a timed-out wait, now drops the surface and releases what's held where the runs have ended (the rest still left as
+  it is). `vkGetFenceStatus` is loaded with presenting's functions (`PSP_VULKAN_SWAPCHAIN`), presenting given up
+  without any of them, so a backend that holds anything has it. A loss Vulkan reports (a wait failing with
+  `VK_ERROR_DEVICE_LOST`) drops them at once, as before, and the desktop, which never presents, holds nothing.
+- **Tests**: no host test can make the swapchain or the surface: presenting is Android's alone (`makeSurface()` makes
+  an Android surface, and nothing else), and no host check here has an Android window. The PSP core's system test
+  `lostGpuLetsGoOfTheWindow` (`tests/psp/ares/system.cpp`) now checks what the release relies on: a lost GPU's backend
+  given no window again at the next frame (its pretend backend counts the times), with the GE on its thread and off. A
+  mutant, `GPU::letGo()` letting go once only, fails that check alone, both times (2 of 417 checks failed).
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; lavapipe, `llvmpipe (LLVM 23.1.1, 256 bits)`, alone; JDK
+  17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The PSP suites as CI's jobs run them (`tests/psp/run-tests.sh` with CI's requirements, and
+    `-Wno-error=array-bounds` for GCC 16's false warning in `tests/psp/movies.cpp`, which #303 settles on master):
+    built as the app is, 659 groups, 658 pass and 1 is skipped as on CI (it needs `vulkan-unordered-reads`); the GE on
+    its thread, 76 groups, and the PSP's GE timing, 121, with no failure; sanitized, 659 groups, 658 pass and the same
+    1 is skipped, with no sanitizer report and no warning. The PSP core's system tests (`tests/psp/ares/run-tests.sh`,
+    `programs` required): 417 checks, 0 failed (415 before, and the new check under each GE Thread setting).
+  - The desktop: the program builds, and ctest passes (the host test, run on its own, prints 220 checks, 0 failed).
+    Android: both flavours' JVM tests pass (461 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,670,343 bytes, SHA-256 `01e564cfffcde32b0643adc16b2ecb8b6da220b7e7bede961b2fdc867ced5811`), its native
+    library rebuilt for the change.
+  - All the host checks above but the sanitized suite ran on the final code, as well as before the review's change to
+    `releaseHeld()`, with the same results; the sanitized suite and the mutant (Tests, above) ran before it only. The
+    lines that change touched come after the function's first, which returns at once unless something is held, and
+    only Android holds anything, so no host check reaches them: those two would give the same on the final code
+    (derived).
+  - On the RP6 (Android 13), with the owner's copy of Crash Tag Team Racing and the PSP's Vulkan renderer, as the lost
+    GPU's entry checked its loss: two debug builds under an application ID of their own (`com.phobos.emulator.vkt`,
+    2.4.0-367-g848eb204d-vkt), one after the other, beside the owner's apps, the game copied into the app's own folder;
+    afterwards the app was no longer installed, its copy of the game gone with it. Each had its 900th wait for a run
+    report a timeout at once, without waiting, the run's slot left busy and its fence unwaited for, as after a real
+    timeout, by a change to `vulkan.cpp` for these builds alone (kept outside the repository and taken out after each
+    build; it also logged `releaseHeld()`'s release where that was there). The timeout came about 16 s into the game,
+    at Radical's logo; the screen was captured 3 s and 5 s after it, then Start pressed (the built-in controls, by
+    their input node) and the screen captured 4 s later, and the captures compared where no on-screen control covers
+    the game's picture (519,400 pixels).
+    - A build of `848eb204d` (APK SHA-256 `741277d6996431622d7ddb5e262df839ffd4515286373ede04481c66549a2f25`): from the
+      timeout on, every lock the host tried refused ("connect: already connected", 661 times in the 11 s to the log's
+      end, 60 a second); the picture the same in all three captures, Radical's logo (no pixel differing). No crash.
+    - A build of this change as it was before its review (APK SHA-256
+      `3b99fd7e8052886aab574174b3ebd299cd2a7f2f3aec42d795c4da3bd0909d8b`; since then `releaseHeld()` takes only a
+      fence signalled or the device lost, and only a wait for the device that succeeded or found it lost, which is
+      what a GPU still answering, as here, gives: derived): one lock refused, at the timeout; the swapchain and the
+      surface released 12 ms after it ("1 swapchains, 1 surfaces destroyed"), no lock refused after, and no frame
+      dropped (no "rejecting buffer" in Android's log); the picture went on, the logo drawn on, then black, and after
+      Start the game's "Loading.." screen (154,767 and then 359,999 pixels differing). No crash.
+  - Not run: a timeout that wasn't injected; Windows and macOS, whose desktop program never presents; this change's
+    final code on a device, and a run that ends long after its wait timed out, the fences polled over many frames.
+    For those two a build of the final code with the same timeout, its first 240 polls also made to report the fence
+    unsignalled, about 4 s of frames (APK SHA-256 `07d2d2d506fff63539571cb40711bc28d2d8f8cc0e658eeed6b7f4ac451a83e1`),
+    was tried on the RP6, but the device's lock screen kept the game behind it, the display off 10 s after waking,
+    before the timeout came.
+- **Docs**: `docs/psp-gpu-renderers.md`'s "Falling back" says so now, and the lost GPU's entry's first Limit says this
+  entry changed it. The entry below's Next had the pull request's CI on the merge still to come; it passed on
+  `848eb204d` (Android Build run 39947295488, Desktop Build 39947295579, PSP Core Tests 39947295614). The plan row's
+  Open also notes that the Game Boy core's read of freed memory at exit has its fix in #304, a draft against master.
+- **Limits**:
+  - The timeout was injected, its run in fact ending, the GPU still answering, so the release came a frame after the
+    let-go. After a real timeout it waits for that run's fence: a GPU that recovers, or is said lost, comes to end it
+    (derived from Vulkan's specification), but one that hangs for good without being said lost still keeps the window,
+    as before. A real timeout wasn't seen.
+  - Until the release, each frame polls every busy slot's fence (`vkGetFenceStatus`, a call each).
+  - The release's `vkDeviceWaitIdle` has no time limit, as the drop's after a loss Vulkan reports has none; every run
+    has ended by then, so only presents are left to wait for (derived).
+- **Next**: the pull request's CI; the RP6 run of the final code with its fences polled over many frames, once the
+  device is unlocked (Not run, above); a frame-advance step showing its own frame with "PSP Graphics Overlap" On where
+  the app draws the picture (the plan row's Open; on this branch too, its paused step being this branch's); and the
+  entry below's Next, less the CI (passed: Docs above).
+
 ## Master merged into the hotkey branch a fourth time: #301's AppImage runtime pinned and checked, and #302's docs without private local paths — 2026-10-23
 
 Branch `improved-hotkeys`, on `2c77832c3` (the entry below), with master `ac0ad694c` merged into it as a merge commit:
@@ -81,7 +173,8 @@ side had: this file (this entry, and a blank line between the branch's entries a
 - **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull
   request's CI builds the desktop program and runs its host test); the AppImage was made here, on CachyOS, not on
   CI's Ubuntu runner, and wasn't run.
-- **Next**: the pull request's CI on the merge; and the entry below's Next, less the merge and its CI.
+- **Next**: the pull request's CI on the merge (passed: the entry above); and the entry below's Next, less the merge and
+  its CI.
 
 ## A PSP system dialog's hotkeys take a hat D-pad's directions: the dialog's window gives its hat to the hotkeys, and a direction one takes doesn't move the dialog — 2026-10-23
 
@@ -673,7 +766,10 @@ wordings of its first Limit that its last review left for this change) and the h
     the GPU's runs as the surface is dropped times out: `vulkan.cpp`'s `dropSwapchain()`, unchanged, checks for a
     timed-out wait before making its own, so the swapchain is destroyed then and the surface kept, the window still
     Vulkan's, the emulation thread having waited at least five seconds (that wait, then `vkDeviceWaitIdle`, which has no
-    limit; the first review's; unlikely, as Vulkan has a wait end after a loss).
+    limit; the first review's; unlikely, as Vulkan has a wait end after a loss). The timed-out wait's entry above
+    changed this: the swapchain and the surface are held then, and let go of a frame or more later, once every run has
+    ended (its fence signalled, or the device lost), `dropSwapchain()` holding them as well when its own wait times
+    out; a run that never ends, on a device never said lost, still keeps the window.
   - On the RP6 the loss was injected, the GPU in fact still answering, so the surface was dropped from a working device;
     after a real loss Vulkan allows the same, but a real one wasn't seen with this change.
   - `lockFrame`'s part has no host test (it's Android's window code): the RP6's builds are its check, the let-go landing

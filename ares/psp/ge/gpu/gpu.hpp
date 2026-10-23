@@ -553,7 +553,7 @@ struct GPU : GE::Renderer {
   auto presented() const -> bool { return ready() && backend->presented; }
   auto window(void* window) -> void { if(backend) backend->window(window); }
   //Presenting ended by the GPU no longer answering: the window let go of (no window for the backend, which drops its
-  //surface, with its swapchain, where the GPU's runs all ended: a disconnect), so that the host can draw on it again.
+  //surface, with its swapchain, once the GPU's runs all end: a disconnect), so that the host can draw on it again.
   auto letGo() -> void { if(backend && backend->lost) backend->window(nullptr); }
   auto show(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool;
   auto show(const std::vector<u32>& pixels, u32 width, u32 height) -> void;
