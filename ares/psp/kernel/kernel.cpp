@@ -920,6 +920,7 @@ auto Kernel::power() -> void {
   spin = {};
   spun = 0;
   spinChecks = {};
+  spinTickAdditions = 0;
   nextUID = 0x100;
   imports.clear();
   threads.clear();
