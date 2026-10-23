@@ -1,17 +1,26 @@
 package com.phobos.emulator
 
+import android.animation.ValueAnimator
 import android.hardware.input.InputManager
 import android.os.Bundle
+import android.os.SystemClock
 import android.net.Uri
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.ViewConfiguration
+import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -43,6 +52,9 @@ import com.phobos.emulator.input.isSystemBack
 import com.phobos.emulator.launch.launchRequestOf
 import com.phobos.emulator.ui.ConsoleArtFetcher
 import com.phobos.emulator.ui.ConsoleArtKeyer
+import com.phobos.emulator.ui.IntroKeys
+import com.phobos.emulator.ui.IntroSplash
+import com.phobos.emulator.ui.introPlays
 import com.phobos.emulator.ui.MainScaffold
 import com.phobos.emulator.ui.MainViewModel
 import com.phobos.emulator.ui.RomFile
@@ -111,6 +123,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // The intro over the Library as the app opens (IntroSplash): whether it's playing, whether a key or a touch has
+    // skipped it, and the keys it takes meanwhile.
+    private var introPlaying by mutableStateOf(false)
+    private var introSkipped by mutableStateOf(false)
+    private val introKeys = IntroKeys()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Edge to edge on every version, as Android 15 enforces: pages scroll under the floating dock
@@ -141,6 +159,14 @@ class MainActivity : ComponentActivity() {
                 hide(if (launch != null || debugLoad) WindowInsetsCompat.Type.systemBars() else WindowInsetsCompat.Type.statusBars())
             }
         }
+        introPlaying = introPlays(
+            freshStart = savedInstanceState == null,
+            gameRequested = launch != null || debugLoad,
+            // (settings not read in time may have it off)
+            settingOn = startupSettings?.introAnimation == true,
+            animationsOn = ValueAnimator.areAnimatorsEnabled(),
+            touchExploration = getSystemService(AccessibilityManager::class.java)?.isTouchExplorationEnabled == true,
+        )
         viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 return MainViewModel(applicationContext, settingsStore, startupSettings ?: EmulatorSettings()) as T
@@ -158,22 +184,31 @@ class MainActivity : ComponentActivity() {
                     .distinctUntilChanged()
             }.collectAsState(initial = startupSettings?.themeSelection())
 
-            theme?.let {
-                PhobosTheme(
-                    themeId = it.id,
-                    themeMode = it.mode,
-                    followSystem = it.followSystem,
-                    effects = it.effects,
-                    glassEffects = it.glass,
-                    pixelBackdrop = it.pixelBackdrop,
-                    mangaBackdrop = it.mangaBackdrop,
-                    rpgBackdrop = it.rpgBackdrop,
-                    retrowaveBackdrop = it.retrowaveBackdrop,
-                    crtBackdrop = it.crtBackdrop,
-                    glassBackdrop = it.glassBackdrop,
-                    xmbBackdrop = it.xmbBackdrop,
-                ) {
-                    MainScaffold(viewModel = viewModel)
+            Box(Modifier.fillMaxSize()) {
+                theme?.let {
+                    PhobosTheme(
+                        themeId = it.id,
+                        themeMode = it.mode,
+                        followSystem = it.followSystem,
+                        effects = it.effects,
+                        glassEffects = it.glass,
+                        pixelBackdrop = it.pixelBackdrop,
+                        mangaBackdrop = it.mangaBackdrop,
+                        rpgBackdrop = it.rpgBackdrop,
+                        retrowaveBackdrop = it.retrowaveBackdrop,
+                        crtBackdrop = it.crtBackdrop,
+                        glassBackdrop = it.glassBackdrop,
+                        xmbBackdrop = it.xmbBackdrop,
+                    ) {
+                        MainScaffold(viewModel = viewModel, introPlaying = { introPlaying })
+                    }
+                }
+                if (introPlaying) {
+                    IntroSplash(
+                        skipped = introSkipped,
+                        onSkip = { introSkipped = true },
+                        onDone = { introPlaying = false },
+                    )
                 }
             }
         }
@@ -203,6 +238,11 @@ class MainActivity : ComponentActivity() {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN && !fallback && !systemBack) {
                     event.device?.descriptor?.let(viewModel::noteBackPress)
                 }
+                // While the intro plays every key is its own and skips it (IntroKeys), the volume keys aside.
+                if (event.action != KeyEvent.ACTION_MULTIPLE &&
+                    introKeys.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount,
+                        event.eventTime, introPlaying) { introSkipped = true }
+                ) return true
                 // A press being captured for a binding goes nowhere else — including the screensaver.
                 if (event.action != KeyEvent.ACTION_MULTIPLE && !fallback &&
                     viewModel.controlCapture.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, systemBack)
@@ -225,6 +265,16 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // After a touch, Android keeps the first D-pad press to leave touch mode, so the window never has it: touch
+        // mode ending is that press (IntroKeys). Not as the window gains focus, when Android brings it into line with
+        // the rest of the screen (hasWindowFocus is true only after that).
+        window.decorView.viewTreeObserver.addOnTouchModeChangeListener { inTouchMode ->
+            if (!inTouchMode && window.decorView.hasWindowFocus()) {
+                introKeys.onUnseenPress(introPlaying, SystemClock.uptimeMillis(),
+                    ViewConfiguration.getKeyRepeatTimeout().toLong()) { introSkipped = true }
+            }
+        }
+
         // Quitting a game a frontend started (or a launch that can't go ahead) returns to the frontend.
         lifecycleScope.launch { viewModel.leaveToFrontend.collect { finishAndRemoveTask() } }
 
@@ -235,6 +285,8 @@ class MainActivity : ComponentActivity() {
     // MainActivity is singleTask, so a frontend's launch while Phobos runs arrives here.
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+        // A game asked for while the intro plays goes ahead without it.
+        if (launchRequestOf(intent) != null || isDebugLoad(intent)) introPlaying = false
         setIntent(intent)
         handleDebugLoadIntent(intent)
         launchRequestOf(intent)?.let(viewModel::launchExternal)

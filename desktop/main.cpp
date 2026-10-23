@@ -5,8 +5,10 @@
 #include "Library.hpp"
 #include "Platform.hpp"
 #include "PspDiscInfo.hpp"
+#include "ReducedMotion.hpp"
 #include "Settings.hpp"
 #include "PhobosHost.hpp"
+#include "PhobosIntro.hpp"
 #include "PhobosRunner.hpp"
 
 #include <SDL3/SDL.h>
@@ -199,6 +201,9 @@ private:
   auto drawMenu(float width, float height) -> void;
   auto drawHotkeys(float width, float height) -> void;
   auto drawBox(float width, float height, const std::vector<std::string>& lines, const std::string& hint) -> void;
+  auto skipIntro() -> void;
+  auto drawIntro(int outputWidth, int outputHeight) -> void;
+  auto endIntro() -> void;
   auto fill(float x, float y, float w, float h, Color color) -> void;
   auto print(float x, float y, const std::string& line, Color color, float maxWidth = 0) -> void;
   auto show(const std::string& line) -> void;
@@ -274,6 +279,18 @@ private:
   std::string message;
   Uint64 messageUntil = 0;
 
+  // The intro over the Library as Phobos opens (PhobosIntro.hpp): when it started, when a key, a button, a click or a
+  // touch skipped it (-1: not yet), and the texture its canvas is drawn into.
+  struct Intro {
+    Uint64 start = 0;
+    int skippedAt = -1;
+  };
+  std::optional<Intro> intro;
+  SDL_Texture* introTexture = nullptr;
+  std::vector<std::uint8_t> introPixels;
+  // The directions held as it ends (a pad's, its stick's, the arrow keys'): its own until they're let go of.
+  int introDirections = 0;
+
   std::mutex pickedMutex;
   Pick picking = Pick::Games;
   std::optional<std::string> pickedFolder;
@@ -321,6 +338,8 @@ auto Shell::run(int argc, char* argv[]) -> int {
       case SDL_EVENT_QUIT: quit = true; break;
       case SDL_EVENT_KEY_DOWN:
       case SDL_EVENT_KEY_UP: if (screen == before && quitAsked == askedBefore) handleKey(event.key); break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+      case SDL_EVENT_FINGER_DOWN: skipIntro(); break;
       case SDL_EVENT_DROP_FILE: if (event.drop.data) open(event.drop.data); break;
       case SDL_EVENT_WINDOW_FOCUS_LOST:
         // A binding still being captured (its keys still coming) takes none of the keys that switched windows (Alt for
@@ -355,6 +374,7 @@ auto Shell::run(int argc, char* argv[]) -> int {
   quitting = true;
   if (pspTitlesThread.joinable()) pspTitlesThread.join();
   input.close();
+  endIntro();
   if (frameTexture) SDL_DestroyTexture(frameTexture);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
@@ -422,6 +442,9 @@ auto Shell::setup(int argc, char* argv[]) -> bool {
     open(argument);
     launchedWithGame = game.has_value();
   }
+  // Opening to the Library, not given a game (one that couldn't start says why, unhidden), the intro plays first,
+  // unless settings.ini's intro is false (the menu's switch) or the system asks for less motion (ReducedMotion.hpp).
+  if (argument.empty() && settings.flag("intro", true) && !systemAsksForLessMotion()) intro = Intro{SDL_GetTicks()};
   return true;
 }
 
@@ -538,6 +561,8 @@ auto Shell::open(const std::string& path) -> void {
 }
 
 auto Shell::launch(const Game& entry) -> void {
+  // (a game dropped on the window while the intro plays: the game, or why it can't start, without the intro)
+  endIntro();
   if (entry.system == "Nintendo 64" && !vulkanAvailable) {
     return show("Nintendo 64 games need a Vulkan driver, and none was found");
   }
@@ -812,10 +837,11 @@ auto Shell::refreshHotkeys() -> void {
 auto Shell::hotkeysTakeKeys() const -> bool { return game && screen != Screen::Hotkeys && !quitAsked; }
 
 // An event's keys go to the hotkeys (and to a binding being captured): a press can complete a combo, a release a tap,
-// and the hold actions last while theirs are held. The Hotkeys page and the Quit question run none: their keys are
-// their own. Nothing runs while another window has the keyboard: a press comes then only as a click on the window (the
-// keys go to that window, and SDL holds back the pads' presses), releases still come (SDL's own as the window loses the
-// keyboard included), and a tap runs only on the screen its key was pressed on with the window having it.
+// and the hold actions last while theirs are held. The Hotkeys page, the Quit question and the intro run none: their
+// keys are their own. Nothing runs while another window has the keyboard: a press comes then only as a click on the
+// window (the keys go to that window, and SDL holds back the pads' presses), releases still come (SDL's own as the
+// window loses the keyboard included), and a tap runs only on the screen its key was pressed on with the window
+// having it.
 auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   auto changes = input.hotkeyChanges(event);
   if (changes.empty()) return;
@@ -824,8 +850,9 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   for (auto [token, down] : changes) {
     if (down) {
       hotkeyTracker.press(hotkeys, token);
-      // A key pressed with the Quit question up is the question's: let go of after it's answered, it taps nothing.
-      if (focused && !quitAsked) pressedOn[token] = screen;
+      // A key pressed with the Quit question up is the question's, and one pressed as the intro plays the intro's: let
+      // go of after, it taps nothing.
+      if (focused && !quitAsked && !intro) pressedOn[token] = screen;
       else pressedOn.erase(token);
     } else {
       hotkeyTracker.release(token);
@@ -844,7 +871,7 @@ auto Shell::hotkeyEvent(const SDL_Event& event) -> void {
   // A pad going away lets go of its buttons, which taps nothing.
   if (padGoingAway(event) || !tapHere) tapped.clear();
   if (!focused) completed.clear();
-  if (screen == Screen::Hotkeys || quitAsked) return;
+  if (screen == Screen::Hotkeys || quitAsked || intro) return;
   // Quit runs first, and once it has asked, the question has the keys: nothing else the event brought runs (an action
   // bound to the same keys, a collision the page shows: Load state, say, would throw progress away before it asked).
   auto quitFirst = [](std::vector<std::string>& actions) {
@@ -1135,6 +1162,9 @@ auto Shell::menuItems() -> std::vector<MenuItem> {
   bool pauseUnfocused = settings.flag("pauseWhenUnfocused", true);
   items.push_back({"Pause when unfocused: " + onOff(pauseUnfocused),
                    [this, pauseUnfocused](int) { settings.setFlag("pauseWhenUnfocused", !pauseUnfocused); }});
+  items.push_back({"Intro as Phobos opens: " + onOff(settings.flag("intro", true)), [this](int) {
+    settings.setFlag("intro", !settings.flag("intro", true));
+  }});
   items.push_back({"Fullscreen: " + onOff(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN), [this](int) { toggleFullscreen(); }});
   items.push_back({launchedWithGame ? "Quit" : "Quit to library", [this](int d) { if (d == 0) quitGame(); }});
   return items;
@@ -1194,6 +1224,11 @@ auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
 
 // The keys the hotkeys don't have: the library's, the menu's and the Hotkeys page's, and an emulated computer keyboard's.
 auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
+  // While the intro plays every key is its own, a press skipping it.
+  if (intro) {
+    if (key.down && !key.repeat) skipIntro();
+    return;
+  }
   // The Quit question has the keys: Enter quits, Escape or Backspace goes back to the game.
   if (quitAsked) {
     if (!key.down || key.repeat) return;
@@ -1267,12 +1302,21 @@ auto Shell::update() -> void {
   auto pressed = [&](int bit) { return (buttons & bit) && !(before & bit); };
   Uint64 now = SDL_GetTicks();
   bool menuNavigation = screen != Screen::Playing && !capture;
-  bool navUp = up.step(menuNavigation && ((buttons & PadUp) || pad.ly < -0.5f), now);
-  bool navDown = down.step(menuNavigation && ((buttons & PadDown) || pad.ly > 0.5f), now);
-  bool navLeft = left.step(menuNavigation && ((buttons & PadLeft) || pad.lx < -0.5f), now);
-  bool navRight = right.step(menuNavigation && ((buttons & PadRight) || pad.lx > 0.5f), now);
+  int directions = (buttons & (PadUp | PadDown | PadLeft | PadRight)) | (pad.ly < -0.5f ? PadUp : 0) |
+                   (pad.ly > 0.5f ? PadDown : 0) | (pad.lx < -0.5f ? PadLeft : 0) | (pad.lx > 0.5f ? PadRight : 0);
+  introDirections = intro ? directions : introDirections & directions;
+  int held = menuNavigation ? directions & ~introDirections : 0;
+  bool navUp = up.step((held & PadUp) != 0, now);
+  bool navDown = down.step((held & PadDown) != 0, now);
+  bool navLeft = left.step((held & PadLeft) != 0, now);
+  bool navRight = right.step((held & PadRight) != 0, now);
   bool confirm = pressed(PadA) || pressed(PadStart);
   previousButtons = pad.buttons;
+  if (intro) {
+    // A button pressed skips the intro; it does nothing in the Library, which sees presses alone.
+    if (buttons & ~before) skipIntro();
+    return;
+  }
 
   // Pause when unfocused: while another window has the keyboard the game waits, going on as this window gets it back
   // (the Quit question keeps it stopped either way).
@@ -1429,6 +1473,7 @@ auto Shell::render() -> void {
     fill(8, height - 44, w, 16, panelColor);
     print(16, height - 40, message, textColor, w - 16);
   }
+  if (intro) drawIntro(outputWidth, outputHeight);
   SDL_RenderPresent(renderer);
 }
 
@@ -1486,6 +1531,44 @@ auto Shell::drawMenu(float width, float height) -> void {
     print(x + 14, rowY, items[i].label, textColor, boxWidth - 28);
   }
   print(x + 12, y + boxHeight - 12, "A Select   B Back   Left/Right Change", dimColor, boxWidth - 24);
+}
+
+auto Shell::skipIntro() -> void {
+  if (intro && intro->skippedAt < 0) intro->skippedAt = (int)(SDL_GetTicks() - intro->start);
+}
+
+// The intro's frame over the Library: its canvas scaled up by a whole number, each pixel square, the Library showing
+// where it has dissolved.
+auto Shell::drawIntro(int outputWidth, int outputHeight) -> void {
+  auto canvas = phobos::intro::canvasFor(outputWidth, outputHeight);
+  if (!canvas.width || !canvas.height) return;
+  float textureWidth = 0, textureHeight = 0;
+  if (introTexture) SDL_GetTextureSize(introTexture, &textureWidth, &textureHeight);
+  if (!introTexture || (int)textureWidth != canvas.width || (int)textureHeight != canvas.height) {
+    if (introTexture) SDL_DestroyTexture(introTexture);
+    // The intro's pixels are RGBA bytes, as the runner's are.
+    introTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, canvas.width,
+                                     canvas.height);
+    if (!introTexture) return endIntro();
+    SDL_SetTextureScaleMode(introTexture, SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureBlendMode(introTexture, SDL_BLENDMODE_BLEND);
+  }
+  introPixels.resize(std::size_t(canvas.width) * canvas.height * 4);
+  int ms = (int)(SDL_GetTicks() - intro->start);
+  if (!phobos::intro::render(introPixels.data(), canvas.width, canvas.height, canvas.width * 4, ms, intro->skippedAt)) {
+    return endIntro();
+  }
+  SDL_UpdateTexture(introTexture, nullptr, introPixels.data(), canvas.width * 4);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+  SDL_FRect target{0, 0, (float)(canvas.width * canvas.scale), (float)(canvas.height * canvas.scale)};
+  SDL_RenderTexture(renderer, introTexture, nullptr, &target);
+}
+
+auto Shell::endIntro() -> void {
+  intro.reset();
+  if (introTexture) SDL_DestroyTexture(introTexture);
+  introTexture = nullptr;
+  introPixels = {};
 }
 
 auto Shell::drawHotkeys(float width, float height) -> void {
@@ -1670,6 +1753,8 @@ auto Shell::show(const std::string& line) -> void {
   message = line;
   messageUntil = SDL_GetTicks() + 4000;
   SDL_Log("%s", line.c_str());
+  // (one while the intro plays, for a dropped file no system loads: the intro makes way for it)
+  skipIntro();
 }
 
 // The shell while it runs, and the thread it runs on, for main's exit handler.

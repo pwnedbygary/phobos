@@ -3,6 +3,7 @@ package com.phobos.emulator.data
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -126,5 +129,19 @@ class AppearanceSettingsTest {
             withStore { store, _ -> store.setScreensaverBackdrop(backdrop) }
             withStore { store, _ -> assertEquals(backdrop, store.settings.first().screensaverBackdrop) }
         }
+    }
+
+    @Test
+    fun theIntroPlaysUntilItsTurnedOffAndStaysOffAcrossStarts() {
+        withStore { store, dataStore ->
+            assertTrue("on by default", store.settings.first().introAnimation)
+            store.setIntroAnimation(false)
+            assertFalse(store.settings.first().introAnimation)
+            // Under the name the settings file has kept it by since the switch came: a rename would lose it.
+            assertEquals(false, dataStore.data.first()[booleanPreferencesKey("intro_animation")])
+        }
+        withStore { store, _ -> assertFalse("off across a start", store.settings.first().introAnimation) }
+        withStore { store, _ -> store.setIntroAnimation(true) }
+        withStore { store, _ -> assertTrue(store.settings.first().introAnimation) }
     }
 }
