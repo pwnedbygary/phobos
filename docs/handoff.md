@@ -83,7 +83,7 @@ row.
 - **Docs**: the first merge's entry's Limit says this entry changed it, and that entry's Next and the entry below's
   mark this done; the plan row has a new part, and its Open no longer lists this.
 - **Limits**:
-  - Nothing ran on a device: the RP6 was locked (the entry below's Not run). On Android the setting is a stored value
+  - Nothing ran on a device: the RP6 was locked while this was checked. On Android the setting is a stored value
     alone.
   - A step now waits for the GE thread to finish its frame, and Android steps on its main thread (`EmulatorScreen`'s
     coroutines), holding the runner's lock. So a GE thread slow over that frame (a wait for the GPU, up to its five
@@ -152,8 +152,8 @@ the plan row.
     only Android holds anything, so no host check reaches them: those two would give the same on the final code
     (derived).
   - On the RP6 (Android 13), with the owner's copy of Crash Tag Team Racing and the PSP's Vulkan renderer, as the lost
-    GPU's entry checked its loss: two debug builds under an application ID of their own (`com.phobos.emulator.vkt`,
-    2.4.0-367-g848eb204d-vkt), one after the other, beside the owner's apps, the game copied into the app's own folder;
+    GPU's entry checked its loss: three debug builds under an application ID of their own (`com.phobos.emulator.vkt`,
+    2.4.0-367-g848eb204d-vkt), one after another, beside the owner's apps, the game copied into the app's own folder;
     afterwards the app was no longer installed, its copy of the game gone with it. Each had its 900th wait for a run
     report a timeout at once, without waiting, the run's slot left busy and its fence unwaited for, as after a real
     timeout, by a change to `vulkan.cpp` for these builds alone (kept outside the repository and taken out after each
@@ -171,28 +171,31 @@ the plan row.
       surface released 12 ms after it ("1 swapchains, 1 surfaces destroyed"), no lock refused after, and no frame
       dropped (no "rejecting buffer" in Android's log); the picture went on, the logo drawn on, then black, and after
       Start the game's "Loading.." screen (154,767 and then 359,999 pixels differing). No crash.
-  - Not run: a timeout that wasn't injected; Windows and macOS, whose desktop program never presents; this change's
-    final code on a device, and a run that ends long after its wait timed out, the fences polled over many frames.
-    For those two a build of the final code with the same timeout, its first 240 polls also made to report the fence
-    unsignalled, about 4 s of frames (APK SHA-256 `07d2d2d506fff63539571cb40711bc28d2d8f8cc0e658eeed6b7f4ac451a83e1`),
-    was tried on the RP6, but the device's lock screen kept the game behind it, the display off 10 s after waking,
-    before the timeout came.
+    - A build of this change's final code, its first 240 polls of the fence also made to report it unsignalled, about
+      4 s of frames, as for a run that ends long after its wait timed out (APK SHA-256
+      `07d2d2d506fff63539571cb40711bc28d2d8f8cc0e658eeed6b7f4ac451a83e1`; run once the owner had unlocked the RP6, its
+      lock screen having kept an earlier try behind it): every lock the host tried refused from the timeout on, 241
+      times, until the poll after those found the fence signalled (derived: the release followed, with no device-lost
+      line) and the swapchain and the surface were released, 4.02 s after the timeout; no lock refused after it, and no
+      frame dropped. The picture: Radical's logo held under the renderer's notice 3 s after the timeout, black 5 s after
+      it (every pixel differing), and after Start the game's "Loading.." screen (359,999 pixels differing). No crash.
+  - Not run: a timeout that wasn't injected; Windows and macOS, whose desktop program never presents.
 - **Docs**: `docs/psp-gpu-renderers.md`'s "Falling back" says so now, and the lost GPU's entry's first Limit says this
   entry changed it. The entry below's Next had the pull request's CI on the merge still to come; it passed on
   `848eb204d` (Android Build run 39947295488, Desktop Build 39947295579, PSP Core Tests 39947295614). The plan row's
   Open also notes that the Game Boy core's read of freed memory at exit has its fix in #304, a draft against master.
 - **Limits**:
   - The timeout was injected, its run in fact ending, the GPU still answering, so the release came a frame after the
-    let-go. After a real timeout it waits for that run's fence: a GPU that recovers, or is said lost, comes to end it
-    (derived from Vulkan's specification), but one that hangs for good without being said lost still keeps the window,
-    as before. A real timeout wasn't seen.
+    let-go, or the poll after those made to report the fence unsignalled. After a real timeout it waits for that run's
+    fence: a GPU that recovers, or is said lost, comes to end it (derived from Vulkan's specification), but one that
+    hangs for good without being said lost still keeps the window, as before. A real timeout wasn't seen.
   - Until the release, each frame polls every busy slot's fence (`vkGetFenceStatus`, a call each).
   - The release's `vkDeviceWaitIdle` has no time limit, as the drop's after a loss Vulkan reports has none; every run
     has ended by then, so only presents are left to wait for (derived).
-- **Next**: the pull request's CI; the RP6 run of the final code with its fences polled over many frames, once the
-  device is unlocked (Not run, above); a frame-advance step showing its own frame with "PSP Graphics Overlap" On where
-  the app draws the picture (the plan row's Open; on this branch too, its paused step being this branch's; done: the
-  entry above); and the entry below's Next, less the CI (passed: Docs above).
+- **Next**: the pull request's CI; the RP6 run of the final code with its fences polled over many frames (done:
+  Checks above); a frame-advance step showing its own frame with "PSP Graphics Overlap" On where the app draws the
+  picture (the plan row's Open; on this branch too, its paused step being this branch's; done: the entry above); and
+  the entry below's Next, less the CI (passed: Docs above).
 
 ## Master merged into the hotkey branch a fourth time: #301's AppImage runtime pinned and checked, and #302's docs without private local paths — 2026-10-23
 
