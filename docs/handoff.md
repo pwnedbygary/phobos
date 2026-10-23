@@ -35,6 +35,2324 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Master merged into the hotkey branch a fifth time: #304's scheduler emptied as a game unloads, and #303's GCC 16 warning settled in the code — 2026-10-23
+
+Branch `improved-hotkeys`, on `73097e579` (the RP6 run recorded in the entry two below, after the entry below's
+`7b8b8eba8`), with master merged into it as a merge commit: master as it is once #303 merges, since the owner's order
+merges #304, #303, #294 and #300, each pull request's head containing master first. The merge was made and checked
+ahead, on a stand-in for #303's branch (a commit with the tree and parents of `6cf5a5a4e`, that branch with master's
+`67e221a8f` merged in), whose tree master has once #303 merges, and made again on master then, its tree the one
+checked and reviewed. Master's commits since `ac0ad694c`, which the fourth merge (three entries below) brought in,
+come in whole: #304, the runner's `unloadSystem()` emptying the scheduler as a game unloads
+(`android/app/src/main/cpp/PhobosRunner.cpp`); and #303, `tests/psp/movies.cpp`'s sound frames made at their full
+size, which settles GCC 16's false `-Warray-bounds` there; each with its entry in this file and a line in
+`docs/implementation-plan.md`. Their two entries are below the branch's. Changed by the merge beyond what either side
+had: this file (this entry, and a blank line between the branch's entries and master's) and the hotkey row of
+`docs/implementation-plan.md`.
+- **The conflict**, one: `docs/handoff.md`, where both sides added entries at the top. The branch's 22 stay together
+  above master's, each side's in its own order and words, as the earlier merges kept them (the file less this entry,
+  the branch's 22 and the blank line after them is master's, byte for byte). Git merged on its own the other two files
+  both sides changed, `android/app/src/main/cpp/PhobosRunner.cpp` and `docs/implementation-plan.md` (whose hotkey row
+  this merge then edits); the file only master changed, `tests/psp/movies.cpp`, is master's, and each file only the
+  branch changed is the branch's, byte for byte.
+- **Where the two meet**: `unloadSystem()`, which both sides change, apart: the branch, near its start, clears the
+  paused frames still to draw and slow motion as a game unloads; #304, after the core's unload, empties the scheduler.
+  And the PSP suite's release build: with #303, GCC 16 no longer stops it at `movies.cpp`, so it ran here with GCC as
+  it is, where the earlier merges ran it with `-Wno-error=array-bounds`.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; Mesa's CPU Vulkan driver alone, `llvmpipe (LLVM 23.1.1, 256
+  bits)`; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358, the SDK's CMake 3.22.1 for the Android library), on the merge
+  made ahead:
+  - The PSP suite as CI's "PSP system tests, built as the app is" job runs it, every requirement CI names required:
+    658 groups pass and 1 is skipped as on CI ("gpu without rasterization order, barriers only where reading primitives
+    overlap", which needs a GPU reading out of order), with no warning; then with the GE on its thread, 76 groups, and
+    with the PSP's GE timing, 121, all passing. As CI's "PSP system tests" job builds it, for debugging with
+    AddressSanitizer and UndefinedBehaviorSanitizer: 658 groups pass and the same 1 is skipped, with no sanitizer report
+    and no warning. The PSP core's system tests (`tests/psp/ares/run-tests.sh`): 417 checks, 0 failed.
+  - The desktop: the program built again with the merged runner (Ninja recompiled `PhobosRunner.cpp` and relinked);
+    ctest passes, and the host test, run on its own, prints 220 checks, 0 failed. On a virtual X display (Xvfb, SDL's
+    software renderer and its dummy audio) the program ran a homebrew Game Boy music player (made with hUGETracker) at
+    59.8 FPS and quit on SIGTERM, so the merged `unloadSystem()` ran: the saves flushed, "System unloaded", status 0.
+  - Android: both flavours' JVM tests pass (461 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,669,991 bytes, SHA-256 `d8969f92bc10ab321b02743db9b1e25c2040df02079307bd592eff3de30a6f97`), its native
+    library compiled with the merged runner.
+- **CI before the merge**: on `73097e579`, the branch's last two changes passed every check that ran (Android Build
+  39972729348, Desktop Build 39972729232, PSP Core Tests 39972729271).
+- **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull request's
+  CI builds the desktop program and runs its host test). The checks ran on the merge made ahead; the merge made again
+  on master has its tree, so they hold for it (derived).
+- **Next**: the pull request's CI on the merge; and the entry below's Next, less its CI (passed: above), GCC 16's false
+  warning in `tests/psp/movies.cpp` (settled by #303) and the Game Boy core's read of freed memory at exit (fixed by
+  #304), both merged in here.
+
+## A PSP game's frame-advance step shows its own frame with the GE on its thread: the step asks for that frame's own picture — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `83345cfc9` (the entry below). The first master merge's entry (2026-10-21) left
+this as a Limit, derived from the code and not run: with "PSP Graphics Overlap" On (the core's "GE Thread"; Android's
+setting, off by default and not offered in the app's settings, so only a stored value turns it on) and the picture
+drawn by the app (the software renderer, or the Vulkan renderer where it doesn't present on the window itself), a
+frame-advance step showed the frame before it. Master's GE thread gives the screen the newest picture it has taken, a
+frame behind (`System::run()`), the app never asked for the frame's own (`exactFrame`), and while the game is paused no
+later frame brings the step's own in. The owner chose on 2026-10-22 to have it fixed among #294's follow-ups
+(verbatim: "PSP: with Graphics Overlap on (off by default, not offered on Android), a frame-advance step can show the
+frame before it"). It's on this branch, not master: a paused step that draws its frame (`pausedFramesToDraw`) is this
+branch's alone, master's step drawing nothing where the app draws the picture. The desktop program never turns the GE
+thread on. Changed: `android/app/src/main/cpp/PhobosRunner.cpp` (`frameAdvance()`), `ares/psp/system/system.hpp`
+(`exactFrame`'s comment), this file (that Limit marked, and the Next of that entry and of the entry below) and the plan
+row.
+- **Seen**: on this machine, through the app's runner as the desktop program links it (`phobos_core`), driven by a
+  harness kept outside the repository: the runner's own calls (`initialize()`, `setPspGraphicsOverlap()`, `setPause()`,
+  `loadState()`, `frameAdvance()`), and a stand-in for the host's window keeping each picture the runner draws on it.
+  pspsdk's cube sample (`tests/psp/programs/cube.elf`, a new picture every frame), the software renderer, a state saved
+  2 s in and loaded with the game paused, then 30 steps, with the GE on its thread three times and off once. On
+  `83345cfc9`, of each GE-thread run's 30 steps, 28 or 29 showed the picture the GE-off run showed a step earlier, the
+  first step a picture from before the state, and one step in one run its own (the thread had taken it in time).
+- **The fix**: `frameAdvance()` sets the PSP's `exactFrame` for the step's frame and clears it after, so `System::run()`
+  waits for the GE thread to take that frame's own picture (`waitFrames(0)`) before the screen is given it, as the
+  headless runner (`tools/psp-runner`) does for the frames it writes as PNGs. Where the Vulkan renderer presents on the
+  window, the step now waits for the GE thread to present it there; with the GE on the emulation thread nothing changes
+  (the flag isn't read there), nor for other systems.
+- **Tests**: no test in the repository builds the app's runner with a game. The PSP core's system tests build the core
+  alone, where `geThreadFrames` already checks that a frame asked for its own picture is the GE-off run's; a test of the
+  step itself needs a target linking the whole core (`phobos_core`) and a stand-in for the host, which the harness above
+  is. With the fix, all 30 steps showed the GE-off run's picture for the same step in each of the three GE-thread runs,
+  and the GE-off run's pictures were the same as before it.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; lavapipe, `llvmpipe (LLVM 23.1.1, 256 bits)`, alone; JDK
+  17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`, `programs` required): 417 checks, 0 failed,
+    `geThreadFrames` among them. The PSP suite (`tests/psp/run-tests.sh`) wasn't run: none of its sources includes
+    either changed file.
+  - The desktop: the program relinks with the changed runner, and ctest passes (the host test, run on its own, prints
+    220 checks, 0 failed). Android: both flavours' JVM tests pass (461 each), and the legacy debug APK builds
+    (32,670,443 bytes, SHA-256 `22b96f661bf57c7f60f6b1a340aeed902a0a65acef04230c814bf4146486d94b`), the runner and the
+    PSP core recompiled for its native library.
+  - The harness: its one source built with the desktop program's compile command for `desktop/main.cpp`, and linked as
+    the program is, with the core library before the change (SHA-256
+    `e2bd0b6775a421fa1ed5b9234f9dca0544f5e085fd1059dc1eb8158a48fe52b6`) and after it
+    (`7785028329ede2f65e0fb67f769f59dba1fc9d0087baba4b1840f1ebb6e618da`).
+- **Docs**: the first merge's entry's Limit says this entry changed it, and that entry's Next and the entry below's
+  mark this done; the plan row has a new part, and its Open no longer lists this.
+- **Limits**:
+  - Nothing ran on a device: the RP6 was locked while this was checked. On Android the setting is a stored value
+    alone.
+  - A step now waits for the GE thread to finish its frame, and Android steps on its main thread (`EmulatorScreen`'s
+    coroutines), holding the runner's lock. So a GE thread slow over that frame (a wait for the GPU, up to its five
+    seconds) holds the app (its main thread: menus and input) that long, and one that never comes back from it (a
+    driver call that never returns) holds it for good, where before the step returned and the hang came at the next
+    frame: at a second step, on the main thread too, or on the emulation thread if the game was resumed, which an
+    unload leaves behind after two seconds (`waitFrames()` has no time limit). Derived, not run.
+  - The first step after a pause can still leave the screen a frame behind the game, where the emulation loop had
+    begun its next frame as the pause came (it reads the pause before it takes the runner's lock): that frame then
+    runs after the step without asking for its own picture, and its picture is let through (the first step lets two
+    through, `pausedFramesToDraw`), so with the GE on its thread the screen may keep the step's picture with the game a
+    frame on. So it was before the change too. Derived, not run.
+  - Only the software renderer ran. The Vulkan renderer, where it doesn't present on the window, gives the screen the
+    GPU's picture of the frame through the same wait (derived); where it presents, the step's frame was its own
+    already.
+- **Next**: the pull request's CI; then the entry below's Next, less this. If wanted, the harness as a test target built
+  on demand (as `tests/rsp-recompiler` is), so that CI checks the step.
+
+## A wait for the GPU that timed out no longer freezes the PSP's screen: the swapchain and the surface held till the GPU's runs end, then let go of — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `848eb204d` (the entry below). The lost GPU's entry of 2026-10-21 (the PSP's
+Vulkan renderer letting go of the window) left this as its first Limit: a loss found by a wait for a run that timed
+out (after five seconds), not by Vulkan saying the device was lost, still froze the screen. After such a wait
+`vulkan.cpp` destroys nothing a run may still use, so dropping the surface only forgot it, the window still connected
+to it, and every lock the host tried on the window was refused. The owner chose on 2026-10-22 to have it fixed among
+#294's follow-ups (verbatim: "PSP: a lost Vulkan device that only the 5-second timeout catches still freezes the
+game"). It's on this branch, not master, because the window's let-go it builds on (`GPU::letGo()`) is this branch's
+alone. Changed: `ares/psp/ge/gpu/vulkan.cpp`, `ares/psp/ge/gpu/gpu.hpp` (a comment), `tests/psp/ares/system.cpp` (a
+check), `docs/psp-gpu-renderers.md` (its "Falling back"), this file (that Limit marked, and the entry below's Next) and
+the plan row.
+- **The fix**: after a wait that timed out (`timedOut`), `dropSwapchain()` and `dropSurface()` hold the swapchain, its
+  images' views, framebuffers and semaphores, and the surface (`heldImages`, `heldSwapchains`, `heldSurfaces`) where
+  they forgot them before. `releaseHeld()`, called first in `window()`, destroys them once every run has ended: each
+  busy slot's fence signalled or the device lost (`vkGetFenceStatus`), which a lost device's fence comes to say if
+  polled again, and either way what its run used is no longer in use (Vulkan's specification, Vulkan-Docs
+  `a8b088a3f`: `vkGetFenceStatus`, and "Lost Device"). It waits for the device first (`vkDeviceWaitIdle`, for presents
+  too), and destroys the surfaces last, which disconnects the window so that the host can draw on it; any other
+  answer, from a fence or from that wait, leaves them held till the next frame. `GPU::letGo()` gives the backend no
+  window at every frame while the GPU is lost (`System::present()` calls it): the frame that lets go holds them, and
+  the release comes at the first frame after it by which the runs have all ended. `dropSwapchain()` also holds them
+  where its own wait for the runs times out (the lost GPU's entry's second case), and the backend's destructor, after
+  a timed-out wait, now drops the surface and releases what's held where the runs have ended (the rest still left as
+  it is). `vkGetFenceStatus` is loaded with presenting's functions (`PSP_VULKAN_SWAPCHAIN`), presenting given up
+  without any of them, so a backend that holds anything has it. A loss Vulkan reports (a wait failing with
+  `VK_ERROR_DEVICE_LOST`) drops them at once, as before, and the desktop, which never presents, holds nothing.
+- **Tests**: no host test can make the swapchain or the surface: presenting is Android's alone (`makeSurface()` makes
+  an Android surface, and nothing else), and no host check here has an Android window. The PSP core's system test
+  `lostGpuLetsGoOfTheWindow` (`tests/psp/ares/system.cpp`) now checks what the release relies on: a lost GPU's backend
+  given no window again at the next frame (its pretend backend counts the times), with the GE on its thread and off. A
+  mutant, `GPU::letGo()` letting go once only, fails that check alone, both times (2 of 417 checks failed).
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; lavapipe, `llvmpipe (LLVM 23.1.1, 256 bits)`, alone; JDK
+  17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The PSP suites as CI's jobs run them (`tests/psp/run-tests.sh` with CI's requirements, and
+    `-Wno-error=array-bounds` for GCC 16's false warning in `tests/psp/movies.cpp`, which #303 settles on master):
+    built as the app is, 659 groups, 658 pass and 1 is skipped as on CI (it needs `vulkan-unordered-reads`); the GE on
+    its thread, 76 groups, and the PSP's GE timing, 121, with no failure; sanitized, 659 groups, 658 pass and the same
+    1 is skipped, with no sanitizer report and no warning. The PSP core's system tests (`tests/psp/ares/run-tests.sh`,
+    `programs` required): 417 checks, 0 failed (415 before, and the new check under each GE Thread setting).
+  - The desktop: the program builds, and ctest passes (the host test, run on its own, prints 220 checks, 0 failed).
+    Android: both flavours' JVM tests pass (461 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,670,343 bytes, SHA-256 `01e564cfffcde32b0643adc16b2ecb8b6da220b7e7bede961b2fdc867ced5811`), its native
+    library rebuilt for the change.
+  - All the host checks above but the sanitized suite ran on the final code, as well as before the review's change to
+    `releaseHeld()`, with the same results; the sanitized suite and the mutant (Tests, above) ran before it only. The
+    lines that change touched come after the function's first, which returns at once unless something is held, and
+    only Android holds anything, so no host check reaches them: those two would give the same on the final code
+    (derived).
+  - On the RP6 (Android 13), with the owner's copy of Crash Tag Team Racing and the PSP's Vulkan renderer, as the lost
+    GPU's entry checked its loss: three debug builds under an application ID of their own (`com.phobos.emulator.vkt`,
+    2.4.0-367-g848eb204d-vkt), one after another, beside the owner's apps, the game copied into the app's own folder;
+    afterwards the app was no longer installed, its copy of the game gone with it. Each had its 900th wait for a run
+    report a timeout at once, without waiting, the run's slot left busy and its fence unwaited for, as after a real
+    timeout, by a change to `vulkan.cpp` for these builds alone (kept outside the repository and taken out after each
+    build; it also logged `releaseHeld()`'s release where that was there). The timeout came about 16 s into the game,
+    at Radical's logo; the screen was captured 3 s and 5 s after it, then Start pressed (the built-in controls, by
+    their input node) and the screen captured 4 s later, and the captures compared where no on-screen control covers
+    the game's picture (519,400 pixels).
+    - A build of `848eb204d` (APK SHA-256 `741277d6996431622d7ddb5e262df839ffd4515286373ede04481c66549a2f25`): from the
+      timeout on, every lock the host tried refused ("connect: already connected", 661 times in the 11 s to the log's
+      end, 60 a second); the picture the same in all three captures, Radical's logo (no pixel differing). No crash.
+    - A build of this change as it was before its review (APK SHA-256
+      `3b99fd7e8052886aab574174b3ebd299cd2a7f2f3aec42d795c4da3bd0909d8b`; since then `releaseHeld()` takes only a
+      fence signalled or the device lost, and only a wait for the device that succeeded or found it lost, which is
+      what a GPU still answering, as here, gives: derived): one lock refused, at the timeout; the swapchain and the
+      surface released 12 ms after it ("1 swapchains, 1 surfaces destroyed"), no lock refused after, and no frame
+      dropped (no "rejecting buffer" in Android's log); the picture went on, the logo drawn on, then black, and after
+      Start the game's "Loading.." screen (154,767 and then 359,999 pixels differing). No crash.
+    - A build of this change's final code, its first 240 polls of the fence also made to report it unsignalled, about
+      4 s of frames, as for a run that ends long after its wait timed out (APK SHA-256
+      `07d2d2d506fff63539571cb40711bc28d2d8f8cc0e658eeed6b7f4ac451a83e1`; run once the owner had unlocked the RP6, its
+      lock screen having kept an earlier try behind it): every lock the host tried refused from the timeout on, 241
+      times, until the poll after those found the fence signalled (derived: the release followed, with no device-lost
+      line) and the swapchain and the surface were released, 4.02 s after the timeout; no lock refused after it, and no
+      frame dropped. The picture: Radical's logo held under the renderer's notice 3 s after the timeout, black 5 s after
+      it (every pixel differing), and after Start the game's "Loading.." screen (359,999 pixels differing). No crash.
+  - Not run: a timeout that wasn't injected; Windows and macOS, whose desktop program never presents.
+- **Docs**: `docs/psp-gpu-renderers.md`'s "Falling back" says so now, and the lost GPU's entry's first Limit says this
+  entry changed it. The entry below's Next had the pull request's CI on the merge still to come; it passed on
+  `848eb204d` (Android Build run 39947295488, Desktop Build 39947295579, PSP Core Tests 39947295614). The plan row's
+  Open also notes that the Game Boy core's read of freed memory at exit has its fix in #304, a draft against master.
+- **Limits**:
+  - The timeout was injected, its run in fact ending, the GPU still answering, so the release came a frame after the
+    let-go, or the poll after those made to report the fence unsignalled. After a real timeout it waits for that run's
+    fence: a GPU that recovers, or is said lost, comes to end it (derived from Vulkan's specification), but one that
+    hangs for good without being said lost still keeps the window, as before. A real timeout wasn't seen.
+  - Until the release, each frame polls every busy slot's fence (`vkGetFenceStatus`, a call each).
+  - The release's `vkDeviceWaitIdle` has no time limit, as the drop's after a loss Vulkan reports has none; every run
+    has ended by then, so only presents are left to wait for (derived).
+- **Next**: the pull request's CI; the RP6 run of the final code with its fences polled over many frames (done:
+  Checks above); a frame-advance step showing its own frame with "PSP Graphics Overlap" On where the app draws the
+  picture (the plan row's Open; on this branch too, its paused step being this branch's; done: the entry above); and
+  the entry below's Next, less the CI (passed: Docs above).
+
+## Master merged into the hotkey branch a fourth time: #301's AppImage runtime pinned and checked, and #302's docs without private local paths — 2026-10-23
+
+Branch `improved-hotkeys`, on `2c77832c3` (the entry below), with master `ac0ad694c` merged into it as a merge commit:
+the draft pull request (#294) has conflicted with master since #301 was merged (and #302 after it), in this file
+alone, and GitHub runs no `pull_request` workflow while a pull request has a merge conflict. Master's 6 commits since
+`7986aef5b`, which the third merge (two entries below) brought in, come in whole: #301, the AppImage's runtime pinned
+by its SHA-256 and checked in CI, libfuse's and type2-runtime's sources put beside each AppImage, and linuxdeploy and
+appimagetool pinned (`scripts/appimage-pins.sh`, `scripts/check-appimage-runtime.sh`,
+`scripts/package-linux-appimage.sh`, `.github/workflows/desktop.yml`, `LICENSE`); and #302, the private local paths
+taken out of the public docs and README's Shaders line corrected (`README.md`, this file, six more docs and
+`tools/psp-ge-profile/README.md`). Their two entries are below the branch's. Changed by the merge beyond what either
+side had: this file (this entry, and a blank line between the branch's entries and master's) and the hotkey row of
+`docs/implementation-plan.md`.
+- **The conflict**, one: `docs/handoff.md`, where both sides added entries at the top. The branch's 19 stay together
+  above master's, each side's in its own order and words, as the earlier merges kept them (the file less this entry,
+  the branch's 19 and the blank line after them is master's, byte for byte). Git merged on its own the other files
+  both sides changed (`.github/workflows/desktop.yml`, `README.md`, `docs/psp-gpu-renderers.md`); of the files only one
+  side changed, each is that side's, byte for byte (the 10 only master changed among them), but
+  `docs/implementation-plan.md`, whose hotkey row this merge edits.
+- **Where the two meet**: `.github/workflows/desktop.yml`, where the branch builds the desktop's host test and runs it
+  (ctest) in each job, and #301 checks the AppImage's runtime once it's packaged and uploads the runtime's sources
+  beside it; apart in the file, git merged them, the Linux job's host test before the packaging and the check after
+  it. The packaging, its tools now pinned, still packages the program alone from a build with the host test beside
+  it. In `README.md` and `docs/psp-gpu-renderers.md` each side changed other lines (#302's Shaders line and a path;
+  the branch's pause menu, and a PSP screenshot's settle and a lost GPU letting go of the window). No source the
+  programs are built from changed on master's side; `LICENSE`'s notice for the AppImage's runtime changed, and
+  `LICENSE` goes into every package the builds make, its test running with Android's JVM tests.
+- **Private local paths**: #302 took them out of master's docs; the branch's added doc lines have none by its measure
+  (home and work folders, temporary folders, the user's name, device serials, private addresses, the host's name but
+  as the OS's). Two give the Android SDK's folder in a toolchain list (`/opt/android-sdk`, a system folder, no
+  user's), kept as #302 kept the SDK's and the JDK's default locations.
+- **Checks** (CMake 4.4.4, Ninja 1.13.2; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The desktop: the program and the host test were up to date (Ninja found nothing to build but FFmpeg's step, which
+    always runs); ctest passes, and the host test, run on its own, prints 220 checks, 0 failed.
+  - The Linux job's packaging, as the merged workflow runs it: `scripts/package-linux-appimage.sh build/linux-x64`
+    made the AppImage, its .zsync and the runtime's three source files (linuxdeploy 1-alpha-20251107-1 and
+    appimagetool 1.9.1, as pinned), and `scripts/check-appimage-runtime.sh` on it printed "The runtime is the pinned
+    build, with libfuse 3.15.0 and squashfuse 0.5.2". The AppImage holds the program, not the host test.
+  - Android: both flavours' JVM tests pass (461 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,669,611 bytes, SHA-256 `86329e5c671c1c81490863fb86ced8cf651592c11984f53ac94f7f5c067c97c5`), its
+    `assets/licenses/LICENSE.txt` carrying #301's text.
+  - Not run again: the PSP suites and the PSP core's system tests (the third merge's entry has them), since no file
+    they build changed since.
+- **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull
+  request's CI builds the desktop program and runs its host test); the AppImage was made here, on CachyOS, not on
+  CI's Ubuntu runner, and wasn't run.
+- **Next**: the pull request's CI on the merge (passed: the entry above); and the entry below's Next, less the merge and
+  its CI.
+
+## A PSP system dialog's hotkeys take a hat D-pad's directions: the dialog's window gives its hat to the hotkeys, and a direction one takes doesn't move the dialog — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `0b8416097` (the entry below). The PSP dialogs' entry of 2026-10-21 left this as a
+Limit: in a PSP system dialog, a controller's motion goes to the dialog's window, not to the game's input state, so a
+binding with a direction of a D-pad that's a hat couldn't complete there, and on the RP6, whose built-in D-pad is a hat,
+Back + a direction (Next or Previous Slot by default) did in a dialog what the direction alone does (derived there, not
+seen). The owner chose on 2026-10-22 to have it fixed among #294's follow-ups. Changed: `input/GameInputState.kt`,
+`ui/PspSystemDialogs.kt`, `HotkeyRoutingTest.kt`, this file (that Limit marked, and the Next of the two entries below)
+and the plan row.
+- **The fix**: each PSP dialog (the message, keyboard, save and install dialogs) hooks its own window's callback while
+  it's up (`PspDialogHat`, which puts the callback back as the dialog goes). A joystick's motion there goes first to
+  `GameInputState.handleDialogMotionEvent`, which puts the hat's directions, as the D-pad's keycodes, among the hotkeys'
+  held keys alone and tells the hotkeys (`onHotkeyKeysChanged`), as the game's hat does; then to the window as before,
+  where Android makes D-pad keys of the hat that move the dialog's selection. Such a key, made up and so kept from the
+  hotkeys, now does nothing where a hotkey has taken its direction (`hatDirectionTaken`), as a D-pad key a hotkey takes
+  never reaches the dialog. The game gets nothing from the hat while a dialog is up. As the dialog goes, a direction its
+  hat still holds goes on as the game's hat's (`endDialogMotion`): letting go of it reaches the hotkeys, and the game
+  has it only once it's pressed again, as a key pressed in the dialog. A direction no hotkey takes, and the left stick,
+  no D-pad to the hotkeys, move the dialog as before. `InputLog` notes the dialog's hat as it changes.
+- **Tests** (`HotkeyRoutingTest`, through `onDialogJoystickMove`, the dialog's entry with its axes given):
+  `inAPspDialogBackAndTheHatsDirectionsChangeTheSlotAndTheDialogGetsNoneOfThoseDirections`, Back + the hat's right,
+  then left, running Next and Previous Slot once each, the right kept from the dialog while held, the game getting no
+  button; `inAPspDialogTheHatsDirectionNoHotkeyTakesAndTheLeftStickStayTheDialogs`, down alone and the left stick left
+  to the dialog, nothing run; `aHatDirectionHeldAsAPspDialogClosesIsTheGamesOnlyOncePressedAgain`; and
+  `aHatDirectionPressedInAPspDialogAndLetGoOfOverTheGameStillReachesTheHotkeys`, down a tap leading down + R1, pressed
+  in the dialog and let go of over the game, running the tap. Five mutants each fail one or two of them: the hotkeys
+  not told of the dialog's hat; a taken direction still moving the dialog; the game given a direction held as the
+  dialog closes; that direction's release unseen by the hotkeys; the left stick read as the hat.
+- **Checks** (Gradle 9.6.0, JDK 17.0.20.1, NDK 28.2.13676358): both flavours' JVM tests (461 each, 0 failures;
+  `HotkeyRoutingTest`'s 36 among them), and `assembleLegacyDebug` of this entry's sources as first reviewed
+  (32,669,367 bytes, SHA-256 `96fc6fce…`; since then, two comments were reworded line for line and a test assertion
+  added). On the RP6, over Wi-Fi: a test build of those sources beside the owner's apps (`com.phobos.emulator.hkd`,
+  2.4.0-359-g0b8416097-hkd, its APK's sha256 `cc4d73a3…`; the classes of the two changed files the same in it as in the
+  gate's APK, by `dexdump`, offsets and indices aside), Crash Tag Team Racing taken to its save list as the PSP dialogs'
+  entry did (New Game, a name, Done), the built-in controls driven through their own input node (`sendevent`; Android
+  reads them by `Generic.kl`, the hat as a hat), the default hotkeys:
+  - In the save list, Back + the hat's right changed the slot ("Selected Slot 1"); the hat's down alone moved the
+    selection (the list takes no left or right).
+  - In the save dialog's question before it overwrites a save ("Do you want to overwrite this data?", No selected),
+    Back + right gave "Selected Slot 2" and Back + left "Selected Slot 1", No still selected; left alone selected Yes,
+    and right alone No. Back + left is the step that shows a taken direction leaving the dialog alone (right from No
+    moves nothing).
+  - Over the game, after a save closed the dialog: Back + right and Back + left changed the slot, the game's menu
+    unmoved; right and left alone moved it.
+  - `InputLog` noted each of the dialog's hat changes, its direction as sent. No crash. The test app was uninstalled
+    afterwards, its copy of the game with it.
+- **Docs**: the entry below's Next and the plan row's Open had the pull request's CI on the merge still to come; it
+  passed on `0b8416097` (Android Build run 39915965128, Desktop Build 39915965107, PSP Core Tests 39915965065).
+- **Limits**:
+  - On the device, the save dialog alone (its list and its question): the message, keyboard and install dialogs have
+    the same hook, not pressed there. No other controller or device.
+  - A direction held as a dialog closes is checked by the routing tests alone, not on the device. One already held as
+    a dialog opens reaches the hotkeys only with the controller's next motion (unchecked).
+  - A trigger reported only as an axis, or a stick direction, still can't complete a binding in a dialog: the rest of
+    the PSP dialogs' Limit holds.
+  - The left stick wasn't moved on the device: that it still moves a dialog, as the hat alone does, is derived from
+    the code (the hook leaves the stick's motion to Android, which makes D-pad keys of it as before), not seen.
+  - While a hotkey holds one of the hat's directions, the left stick's same direction doesn't move the dialog either:
+    the D-pad keys Android makes of the two are alike (unchecked).
+- **Next**: master merged again (#301 and #302 since the third merge; this file conflicts at its top), then the pull
+  request's CI; and the entry below's Next, less the CI (passed: Docs above) and a PSP system dialog's hotkeys from a
+  hat D-pad (done here).
+
+## Master merged into the hotkey branch a third time: its 13 commits since the second merge, part 116's polling skip, #299's license notice and part 117's Burnout Legends at 4x — 2026-10-23
+
+Branch `improved-hotkeys`, on `54c7077c3` (the entry below), with master `7986aef5b` merged into it as a merge commit:
+the draft pull request (#294) has conflicted with master since #297, #299 and #298 were merged, in this file alone,
+and GitHub runs no `pull_request` workflow while a pull request has a merge conflict, so the owner's follow-ups, which
+go on #294 as reviewed commits, would have had no CI. Master's 13 commits since `062dd53e2`, which the second merge
+(two entries below) brought in, come in whole: #297, part 116, the PSP kernel's polling skip widened to the EA games'
+and Midnight Club's loops (`ares/psp/kernel/`, `tests/psp/spins.cpp`, `docs/psp-core.md`); #299, LLVM's other runtime
+libraries under libc++'s notice in `LICENSE` (and `LicenseNoticesTest.kt`), with #296's review nits; and #298, part
+117, Burnout Legends at 4x shown from the GPU after a finish and past a texture's move (`ares/psp/ge/gpu/gpu.cpp`,
+`tests/psp/gpu.cpp`, `docs/psp-gpu-renderers.md`, `docs/psp-core.md`); #297's and #298's entries below the branch's,
+#299's changes in #296's entry. Changed by the merge beyond what either side had: this file (this entry, and a blank
+line between the branch's entries and master's) and the hotkey row of `docs/implementation-plan.md`.
+- **The conflict**, one: `docs/handoff.md`, where both sides added entries at the top. The branch's 17 stay together
+  above master's, each side's in its own order and words, as the first two merges kept them (the file less the
+  branch's entries and the blank line after them is master's, byte for byte). Git merged on its own the other files
+  both sides changed (`ares/psp/ge/gpu/gpu.cpp`, `docs/implementation-plan.md`, `docs/psp-gpu-renderers.md`); the 11
+  only master changed are master's, byte for byte, and the merge changed none that only the branch changed.
+- **Where the two meet**: `ares/psp/ge/gpu/gpu.cpp`, where part 117 changes `GPU::holds` and `GPU::shownTarget` (and
+  the comment above it), and the branch had added `GPU::settle()` (a PSP screenshot's settle: the PSP follow-ups'
+  entry); apart in the file, git merged them. The whole PSP suite, master's new groups among them, ran as CI runs it.
+  Part 116 changes the PSP kernel, which the branch doesn't touch; `LICENSE` goes into every package the builds make,
+  and its test runs with Android's JVM tests. The desktop program and the Android library compile the PSP core, so
+  both were built again.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358 and the SDK's
+  CMake 3.22.1 for the Android library):
+  - The whole PSP suite (`tests/psp/run-tests.sh`), every requirement CI names required, on Mesa's CPU Vulkan driver
+    (lavapipe) alone, as on CI's runners (the loader limited to it with `VK_DRIVER_FILES`): as CI's "PSP system tests,
+    built as the app is" job runs it, 658 groups pass and 1 is skipped, as on CI ("gpu without rasterization order,
+    barriers only where reading primitives overlap", which needs a GPU reading out of order); then 76 pass with the GE
+    on its thread and 121 with the PSP's GE timing. As CI's "PSP system tests" job runs it, built for debugging with
+    AddressSanitizer and UndefinedBehaviorSanitizer: 658 pass and the same 1 is skipped, with no sanitizer report and
+    no warning.
+  - The release builds had GCC 16.2.1's false warning in `tests/psp/movies.cpp` (the second merge's entry) shown but
+    not an error (`CXX="c++ -Wno-error=array-bounds"`): it showed twice, both there, and no other warning did. A change
+    of its own settles it in the code (the owner's sixth follow-up).
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`): 415 checks, 0 failed.
+  - The desktop: the program and the host test built again; ctest passes, and the host test, run on its own, prints
+    220 checks, 0 failed.
+  - Android: both flavours' JVM tests pass (457 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,666,023 bytes, SHA-256 `0aac4fe6ba53bdd63e6f3e79143bb8f745540ee74ec51205abee7973fe39ab77`).
+- **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull
+  request's CI builds the desktop program and runs its host test); the PSP suite ran on lavapipe alone, not on this
+  machine's GPU as well, as the second merge's did.
+- **Next**: the pull request's CI on the merge (passed: the entry above); a PSP system dialog's hotkeys from a hat
+  D-pad (the owner's fifth follow-up; done: the entry above); and the entry below's Next, less the merge.
+
+## A controller going away on Android with a tap's key held no longer runs the tap: the tap waits 100 ms, and the keys forgotten as the controller goes drop it — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `833fe8cbe`. The desktop's fix for a pad unplugged with Guide held (`8d2f75a10`)
+left Android's case open; the owner chose on 2026-10-22 to check it on the RP6 with a virtual controller, and to fix it
+if so. Changed: `input/GameKeys.kt`, `ui/EmulatorScreen.kt`, a log line in `MainActivity.kt`, `HotkeyRoutingTest.kt`,
+this file (the entry below's Next too) and the plan row.
+- **Seen**: on the RP6, a test build of `833fe8cbe` beside the owner's apps (`com.phobos.emulator.hkc`) with Pause
+  bound to Back alone, so that Back is a tap, a Game Boy game running and a virtual pad (`uinput`): a tap paused the
+  game; Back held and the pad removed opened the pause menu in 3 runs of 5; the pad removed with nothing held did
+  nothing. Android lets go of a key held as its device goes, 3 to 8 ms after its InputReader removes the device: in a
+  cancelled release (`FLAG_CANCELED`; its dispatcher's, by AOSP's code, not seen) in four of the runs, and in a plain
+  one in the fifth. Derived, the build logging no removal: the release ran the tap when it reached the game's hotkeys
+  before the activity's `onInputDeviceRemoved` forgot the keys (on the fixed build the two come in either order).
+- **The fix**: a tap's actions now run 100 ms after its key is let go (`GameKeys.Screen.later`, in the game screen's
+  coroutine scope, so that a tap still waiting goes with the screen), unless the keys are forgotten first
+  (`forgetPressedKeys`, which `onInputDeviceRemoved` calls, as a pause and a PSP dialog do). Combos still run as their
+  last key goes down. `InputLog` notes each device removed: on the RP6 the activity hears of it from 1 ms before the
+  release to 3 ms after it. The defaults have no tap (Back alone runs nothing): only a player who binds a key
+  alone where it also leads a longer binding has one, and sees the wait.
+- **Tests** (`HotkeyRoutingTest`): `aTapWaitsAMomentAndItsControllerGoingAwayMeanwhileDropsIt`, a Mode tap's Pause
+  waiting its moment, then running, and Mode held, let go of and the keys forgotten as `onInputDeviceRemoved` forgets
+  them running no Pause; `aHatTapWaitsItsMomentTooAndItsControllerGoingAwayMeanwhileDropsIt`, the same through the hat
+  (`onHatChanged`), D-pad down a tap. With taps run at once the first fails, and with the hat's run at once the second.
+- **Checks** (Gradle 9.6.0, JDK 17.0.20.1, NDK 28.2.13676358): both flavors' JVM tests (457 each, 0 failures) and
+  `assembleLegacyDebug`; on the RP6, over Wi-Fi, test builds of this tree's code (2.4.0-344-g833fe8cbe-hkc: the last,
+  its APK's sha256 `24520ecc…`, of the code as it is, `TAP_WAIT_MS`'s comment corrected since on the same lines; the
+  first, `47376605…`, with that comment shorter):
+  the tap paused, 102 and 103 ms after its release; Back held as the pad went, 22 runs, none paused. In 16 a cancelled
+  release came before the activity heard of the removal, the case the fix is for (the build before it paused in two
+  runs with a cancelled release); in 6 the removal came first (one of them with a plain release), which the code
+  before it handled already. A plain release ahead of the removal, which paused the build before it once, didn't come
+  in the 22 runs: the routing tests stand in for it, the wait not looking at a release's flags. Nothing held, no pause
+  (2 runs). The test app was uninstalled afterwards, its copy of the game with it.
+- **Docs**: the entry below's Next and the plan row's Open had the pull request's CI on the merge still to come; it
+  passed on `833fe8cbe` (Desktop Build run 39745315669, macOS included; PSP Core Tests 39745315753, its Android runner
+  job run again after Google's server failed the NDK's download; Android Build 39745315819).
+- **Limits**:
+  - A virtual pad on the RP6 alone: no real controller unplugged or switched off.
+  - A tap runs 100 ms after its release, where it ran at once; a removal Android reports later than that (not seen)
+    would still let the tap through.
+  - The window's own tap, the Library hotkey from behind the Library (`WindowKeys`), still runs at once: a controller
+    going away with its key held there may bring the game back (unchecked).
+  - The hotkeys don't read `FLAG_CANCELED`: a cancelled release with no controller going away (a window taking the
+    keys while a tap's key is held, say) still taps, as before (unchecked).
+  - Whatever forgets the keys within the 100 ms drops a waiting tap: a pause, a PSP dialog opening, any controller
+    going away. So a second tap within 100 ms of a Pause tap no longer unpauses, and a combo pressed meanwhile runs
+    before the tap.
+- **Next**: master merged again (#297, #299 and #298 since the last merge; this file conflicts at its top; done: the
+  entry above), then the pull request's CI (passed: the hat D-pad entry, two above); a PSP system dialog's hotkeys
+  from a hat D-pad (the owner's fifth follow-up, a Limit of the PSP follow-ups' entry; done: the hat D-pad entry); and
+  the entry below's Next, less the CI and Android's check of a controller going away (done here).
+
+## Master merged into the hotkey branch again: its 22 commits since the first merge, #295's PSP spin tests and #296's license notices — 2026-10-22
+
+Branch `improved-hotkeys`, on `8d2f75a10` (the entry below), with master `062dd53e2` merged into it as a merge commit:
+the owner's choice on 2026-10-22 ("Fix the unplug tap, then merge master again: two reviewed changes, after which CI
+reruns, macOS included"), the draft pull request (#294) having conflicted with master since #296 and #295 were merged,
+and GitHub running no `pull_request` workflow while a pull request has a merge conflict. Master's 22 commits since
+`8d85eda9a`, which the first merge (two entries below) brought in, come in whole: #295, tests of the PSP's spin skip and
+of the GE thread's refetch charge (`tests/psp/spins.cpp`, `tests/psp/ge.cpp`, `docs/psp-core.md`; no emulation code),
+and #296, the notices of the third-party code the builds ship that `LICENSE` lacked (`LICENSE`, and three more names
+`LicenseNoticesTest.kt` requires), their two entries below the branch's. Changed by the merge beyond what either side
+had: this file (this entry, and a sentence in the entry below) and the hotkey row of `docs/implementation-plan.md`.
+- **The conflict**, one; git merged every other file on its own: `docs/handoff.md`, where both sides added entries at
+  the top. The branch's 15 stay together above master's 2, each side's in its own order and words, as the first merge
+  kept them (the file less the branch's entries is master's, byte for byte). Of the files only one side changed, each is
+  that side's, byte for byte, but `docs/implementation-plan.md`, whose hotkey row this change edits.
+- **Where the two meet**: master changed nothing the desktop program compiles or the hotkeys use, though its `LICENSE`
+  goes into every package the builds make (the AppImage, the Windows and macOS packages, and the APK's licenses, which
+  the APK built here carries). Its new PSP tests are built into one test program with the PSP GPU code the branch
+  changed (`ares/psp/ge/gpu/gpu.cpp`), so the whole PSP suite, which the first merge left to CI, ran here as CI runs it.
+  Android's `LicenseNoticesTest`, which master changed, runs with the Android JVM tests.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The whole PSP suite (`tests/psp/run-tests.sh`), every requirement CI names required, master's new groups among those
+    run each time:
+    - On Mesa's CPU Vulkan driver (lavapipe) alone, as on CI's runners, which have no GPU: the Vulkan loader limited to
+      it (`VK_DRIVER_FILES`), since the renderer takes the first Vulkan device and `PSP_GPU_ON_CPU` only lets it take a
+      CPU one. As CI's "PSP system tests, built as the app is" job runs it, 649 groups pass and 1 is skipped, as on CI
+      ("gpu without rasterization order, barriers only where reading primitives overlap", which needs a GPU reading out
+      of order: lavapipe reads in order, and CI doesn't require it); then 70 pass with the GE on its thread and 114 with
+      the PSP's GE timing. As CI's "PSP system tests" job runs it, built for debugging with AddressSanitizer and
+      UndefinedBehaviorSanitizer: 649 pass and the same 1 is skipped, with no sanitizer report and no warning.
+    - On this machine's GPU (an AMD Radeon RX 9070 XT, through RADV), which the renderer takes when the loader offers
+      it: the same four runs pass every group (650, 70, 114, and 650 built for debugging), with no sanitizer report.
+    - GCC 16.2.1 here (CI's is GCC 13) stops the release build at a false out-of-bounds warning in
+      `std::vector::resize`, inlined into `tests/psp/movies.cpp`'s `movie()` (`-Warray-bounds`, which `-Werror` makes an
+      error). Master alone, built the same way, stops there too, the file being the same on both sides; so each release
+      build here had that warning shown but not an error (`CXX="c++ -Wno-error=array-bounds"`: it showed twice, both
+      there, and no other warning did). The builds for debugging, at `-O1`, don't meet it, and used the plain compiler.
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`): 415 checks, 0 failed.
+  - The desktop: nothing recompiled, and the program and the host test are the entry below's, byte for byte, so its
+    checks stand for this tree (the virtual-display suite's 145, the pad suite's 38); ctest passes again, 220 checks, 0
+    failed.
+  - Android: both flavours' JVM tests pass (455 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,660,863 bytes, SHA-256 `fa1cde4729d667453fbf29e2135fb0af56dfcbaa7888167475d05fd784bf8985`).
+  - The plan row's links each resolve to one heading, and the hotkey reference's tables still match the code (35 of 35).
+- **Also**: the entry below's "the first review's version" reads "the version the first review saw" (its second review's
+  suggestion: the words could read as a version the reviewer wrote).
+- **Limits**: nothing ran on a device, on Windows or on macOS; the pull request's CI builds the desktop program for all
+  three, and runs master's other workflows.
+- **Review**: the first review found that the PSP suite had run on this machine's GPU, not on lavapipe as this entry
+  first said (the renderer takes the first Vulkan device it finds); the suite ran again on lavapipe alone, as above. It
+  also found the commit message's review lines lacking a diff hash. The full record is in the commit that carries this
+  entry.
+- **Next**: the pull request's CI on the merge, its macOS job included (passed: the entry above);
+  `tests/psp/movies.cpp`'s false warning under GCC 16 settled in the code, as GCC 13's four were (master's as much as
+  this branch's: CI's runners may meet it when their GCC moves on); and the entry below's Next, less the merge.
+
+## A pad unplugged with Guide held no longer taps Pause on the desktop: the releases SDL sends as it removes a pad count as the pad going away — 2026-10-22
+
+Branch `improved-hotkeys`, on `1c47f1a1d` (the entry below). Automated tests of the draft pull request's AppImage
+(#294's Linux build from CI, installed with Gear Lever on the owner's CachyOS machine, as the owner asked on 2026-10-22)
+found one fault, fixed here at the owner's choice: unplugging a pad while Guide is held opened the pause menu, where the
+desktop hotkeys' entry ("Desktop hotkeys: combos of keys, ...") says a pad going away lets go of its buttons, which taps
+nothing. Changed: `desktop/Input.cpp`, `desktop/Input.hpp`, a line of `desktop/main.cpp`, `tests/desktop/hotkeys.cpp`,
+this entry, that sentence of the desktop hotkeys' entry, and the hotkey row of `docs/implementation-plan.md`.
+- **The tests that found it**, on the AppImage (`Phobos-2.4.0-321-gff33f5a4-x86_64.AppImage`, built from GitHub's test
+  merge of `1c47f1a1d` into master `8d85eda9a`, whose tree is `1c47f1a1d`'s), each on a display of its own, not the
+  owner's: the virtual-display suite, 145 of 145; the toggle check, 9 of 9; the display check (exit status 1, the game
+  unloaded, no core dump); a new pad suite on a virtual X display, 36 of 36, through a uinput pad laid out as a wired
+  Xbox 360 pad (the defaults, Select+Start, exact matching, the Quit question, frame advance, a combo of a button, a
+  stick direction and a trigger captured on the Hotkeys page, the overwrite question, the pad unplugged and plugged in
+  again, the focus pause), its unplug with Guide held opening the menu; and a new Wayland suite on a private KWin (its
+  virtual backend, its own D-Bus session and folders), 19 of 19, where SDL puts Phobos's window on Wayland when both an
+  X display and a Wayland one are offered, and the compositor going away ends Phobos cleanly (exit status 0, the game
+  unloaded, no core dump). The two new suites aren't in the repository.
+- **Why**: SDL lets go of a removed pad's buttons and axes before it reports the pad gone, each in an event of its own:
+  `SDL_PrivateJoystickRemoved` (SDL 3.2.30's `SDL_joystick.c`) re-centres the pad, marks it detached, then sends
+  `SDL_EVENT_GAMEPAD_REMOVED`. Guide's release so came alone, in an `SDL_EVENT_GAMEPAD_BUTTON_UP`: a tap of Pause's
+  Guide binding. `hotkeyEvent()` dropped the taps only for `SDL_EVENT_GAMEPAD_REMOVED`, whose own releases
+  (`HotkeyHolders::remove`) were none by then. SDL's event log (`SDL_EVENT_LOGGING=1`) on the AppImage: the release, the
+  removal 12 µs later, then "Emulation paused"; with RB held, or nothing, no menu.
+- **The fix**: `padGoingAway()` (`desktop/Input.cpp`) is true for the removal, and for a pad's button release or axis
+  motion once SDL has the pad disconnected (`SDL_GamepadConnected`), as it has for every event the re-centring sends by
+  the time the app reads it. `hotkeyEvent()` drops the taps for all of those. The releases still let go of their keys,
+  so Fast forward (hold) and Slow motion (hold) end as they did.
+- **SDL's 250 ms**: SDL holds back a Guide release that comes within 250 ms of its press until that time is up
+  (`SDL_MINIMUM_GUIDE_BUTTON_DELAY_MS`, `SDL_gamepad.c`); a pad gone before then never sends it, and the removal lets go
+  of Guide, as before. The test covers both ways.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja):
+  - The desktop builds, and ctest passes: 220 checks, 0 failed (209 before). The new test,
+    `whatSDLLetsGoOfAsAPadGoesAwayIsThePadGoingAway`, runs on SDL's virtual gamepad, attached as SDL's own joystick
+    tests attach one, and takes that pad's events alone: Guide let go of while the pad stays taps Pause and isn't the
+    pad going away; Guide held 300 ms as the pad goes comes back in a button release that is the pad going away and
+    would tap Pause; Guide pressed and the pad gone at once comes back in the removal alone; a trigger held as the pad
+    goes comes back in an axis event that is the pad going away. With the old condition (the removal alone) in
+    `padGoingAway()`, two checks fail: Guide held, and the trigger; each of the first review's five other mutants fails
+    one or two. With a uinput pad pressing A every 20 ms as it runs, the test passes 3 runs of 3, where the version the
+    first review saw, which took every pad's events, failed 2 or 3 checks in each.
+  - On a virtual X display, the uinput pad unplugged with Guide held, SDL's event log on: the AppImage opens the menu
+    and this build doesn't; with RB held, or nothing, neither opens it. On this build the pad suite, its unplug now
+    checked to open no menu (Guide held, and Guide pressed and unplugged at once), passes 38 of 38, and the
+    virtual-display suite 145 of 145.
+  - `desktop/main.cpp` compiled with `-Wall -Wextra` (the program builds with `-w`) warns nowhere in it; `Input.cpp`,
+    `Input.hpp` and the test build under the host test's `-Wall -Wextra -Werror`, AddressSanitizer and
+    UndefinedBehaviorSanitizer, with no report.
+  - The plan row's links each resolve to one heading, and the hotkey reference's tables still match the code.
+- **Limits**:
+  - No real pad was unplugged. Every desktop backend of SDL 3.2.30 (Linux's, HIDAPI's, Windows', macOS's, the virtual
+    one) reports a pad gone through `SDL_PrivateJoystickRemoved`, so SDL lets go of a USB pad unplugged, or a Bluetooth
+    pad dropping, as it let go of the uinput pad. Derived from SDL's code, not run on hardware.
+  - `padGoingAway()` tells only the releases SDL sends once it has the pad disconnected: a release that reaches Phobos
+    while SDL still has the pad connected still taps, as before this fix. Two ways that could come, neither seen in the
+    tests: Linux lets go of a pad's held keys itself as the pad unregisters (`input_disconnect_device()`), microseconds
+    before the pad's device node stops giving events, and SDL reading them in that moment, then finding the pad gone
+    only on a later pass, would hand Phobos Guide's release with the pad still connected; and a pad may report Guide's
+    release itself as it is switched off with Guide held, as wireless Xbox and PlayStation pads are switched off
+    (whether any does is unknown). Hypothesis, unchecked.
+  - The test holds SDL to the order of 3.2.30 it relies on: a later SDL changing it fails the test. Its case of the pad
+    gone at once needs the removal inside SDL's 250 ms of Guide's press, so a stall that long on the machine running it
+    would fail it.
+  - Android: a controller going away there may bring key releases marked cancelled (`KeyEvent.FLAG_CANCELED`), which the
+    app doesn't look for, so a Mode held as a controller disconnects may tap Pause there too. Hypothesis, unchecked.
+- **Next**: master merged again (#294 conflicts with it in this file alone since #296 and #295 were merged), then the
+  pull request's CI, its macOS job included; a real pad unplugged with Guide held, and a wireless one switched off with
+  Guide held (Limits); Android's cancelled releases checked (Limits); and the entry below's Next, less what's done: the
+  RP6's test copy replaced with a build of `1c47f1a1d` and the draft pull request opened, both on 2026-10-21.
+
+## Master merged into the hotkey branch: its 126 commits since the branch left it, the PSP's lost GPU and screenshot settle carried onto the GE thread's frames, both sides' new workflow steps kept — 2026-10-21
+
+Branch `improved-hotkeys`, on `d700fe234` (the entry below), with master `8d85eda9a` merged into it as a merge commit:
+the owner's choice before the draft pull request, which would otherwise conflict (GitHub runs no `pull_request` workflow
+while a pull request has a merge conflict, by its documentation). The branch left master at `08801ab60`; master's 126
+commits since then come in whole (the PSP's GE timing to part 115 and its GE thread's second part, N64's rasterizer for
+Qualcomm's stock driver and its RSP recompiler checked against the interpreter, CI), their 15 entries below the branch's
+own, from "Docs and CI: the wording points #290's, #291's and #292's reviews left" to "PSP GE: the CPU beside the GE",
+above the entries both share. Changed by the merge beyond what either side had: `ares/psp/system/system.cpp`,
+`ares/psp/system/system.hpp`, `ares/psp/psp.hpp` (a comment), `tests/psp/ares/system.cpp`,
+`.github/workflows/desktop.yml`, this entry, a sentence in the entry below, a sentence in `docs/psp-gpu-renderers.md`,
+and the hotkey row of `docs/implementation-plan.md`.
+- **The conflicts**, five; git merged every other file on its own:
+  - `docs/handoff.md`: both sides added entries at the top. The branch's 13 stay together above master's 15, each side's
+    in its own order and words (the file less the branch's entries is master's, byte for byte).
+  - `.github/workflows/desktop.yml`: both added a step after the Linux job's build. Master's N64 RSP recompiler check
+    comes first (it runs "on the objects just built"), then the branch's host test (`ctest`); the file differs from
+    master's by the branch's lines alone.
+  - `ares/psp/system/system.hpp`: master's `present()` takes the frame shown (`Kernel::Shown`), the GE that drew it and
+    the picture's pixels, and the comment above it says the GPU's thread may be the GE thread at frames' ends; the
+    branch's `presentedFromTarget` (the PSP follow-ups' entry) stays beside it, the comment saying both.
+  - `ares/psp/system/system.cpp`: master's `present()`, with the lost GPU's let-go (the lost GPU entry) at its start as
+    before.
+  - `tests/psp/ares/system.cpp`: both added tests after `presentedFrame()`; both kept.
+- **Carried onto the GE thread** (what git couldn't see): with "GE Thread" On (Android's "PSP Graphics Overlap"
+  setting), master has the GE thread take each frame's picture at the frame's end and present it there, a frame behind
+  the emulation thread at most (`System::run()`, `frameEnded()`).
+  - The lost GPU's let-go runs wherever `present()` runs, so on the GE thread then, after `handWindow()` on the same
+    thread, as both ran on the emulation thread before: the thread whose the GPU is does both. Its test now runs with
+    the GE on its thread too, each frame checked once the thread has drained.
+  - The screenshot's `settle()` (the PSP follow-ups' entry: between frames, the host holding the core, the picture
+    presented last kept at once) relied on nothing else using the GPU then; with the GE on its thread, that thread may
+    still be presenting the last frame. `settle()` now drains the GE thread first, within two seconds as a state saved
+    or loaded does (`drainWithin()`), leaving the shot as it is past that, then reads what it reads. A new test,
+    `settleWaitsForTheGeThread`: the GE thread slowed to present one frame (200 ms), `settle()` called as soon as the
+    frame is handed over comes back only once that frame is presented.
+- **Also**: the entry below's third Limit now says a PSP game under its Vulkan renderer is unchecked at exit too (its
+  second review's suggestion); and `docs/psp-gpu-renderers.md`'s sentence on the screenshot's `settle()` says the GE
+  thread is drained first where it's on (this change's first review's suggestion).
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`) pass, 415 checks, 0 failed. From copies outside the
+    repository: `settle()` without its drain fails `settleWaitsForTheGeThread`'s check alone; `present()` without the
+    let-go fails the lost GPU test's two checks in each GE mode (four). Built with ThreadSanitizer (the script's
+    `SANITIZE`, as it says for the GE thread's frames): 415 checks, 0 failed, no ThreadSanitizer report.
+  - The desktop builds (`build/linux-x64`, CMake reconfigured for the merged `CMakeLists.txt`) and ctest passes (209
+    checks, 0 failed). `desktop.yml`'s N64 step, its run block taken from the merged workflow and run as CI runs it,
+    passes: the 38 N64 sources each with `-fwrapv` and `-fno-strict-aliasing`, none undone, the PSP's one with neither;
+    the RSP recompiler, 34,816 cases, 0 differ.
+  - The virtual-display suite (on a copy whose stand-in window is `xterm`, not `xmessage`: Xvfb's core fonts have been
+    gone since a package upgrade): 145 of 145 pass on the merged build.
+  - Android: both flavours' JVM tests pass (455 each: the base's 379, the branch's 75, master's 1), the native library
+    rebuilt for the merged core and runner, and the legacy debug APK builds (32,647,711 bytes, SHA-256
+    `14382f15f79a40e8c617515313ddfa897115e4c428a7f7e951ce66dd979411ef`).
+  - The plan row's links each resolve to one heading, and the hotkey reference's tables still match the code (35 of 35).
+- **Limits**:
+  - The whole PSP suite (`tests/psp/run-tests.sh`: CI's, sanitized, up to an hour) wasn't run here, only its system
+    tests, plain and with ThreadSanitizer; the pull request's run is its check, as it is for master's other workflows
+    (the N64 rasterizer's, the PSP shaders', the GE profile's, RSP NEON's, the Neo Geo CD's) and for the desktop
+    workflow's Windows and macOS jobs.
+  - With "PSP Graphics Overlap" On (Android's: off by default, and not offered in the app's settings yet, so only a
+    stored value turns it on) and the picture drawn by the app (the software renderer, the default, or the Vulkan
+    renderer where it doesn't present on the window itself), a frame-advance step shows the picture the GE thread took
+    last, the frame before the step: master's GE thread gives the screen the newest picture it has taken, a frame behind
+    (`System::run()`; the app never sets `exactFrame`, the frame's own, which the tests and the headless runner
+    `tools/psp-runner` do), and while the game is paused nothing takes the step's own picture in. Where the Vulkan
+    renderer presents on the window, the GE thread presents each step's own frame there (`frameEnded()`, `present()`).
+    Derived from the code, not run. Neither side had this case before: where the app draws the picture, master's frame
+    advance drew nothing, and the branch had no GE thread. The frame-advance entry of 2026-10-23 above changed this:
+    a step asks for its frame's own picture now.
+  - Nothing with the GE on its thread ran on the RP6: the drain and the let-go there rest on the host tests alone.
+- **Review**: the first review found two Minors in wording, both fixed: the frame-advance Limit above held only where
+  the app draws the picture (with the Vulkan renderer presenting, the GE thread presents each step's own frame), and it
+  said only the tests set `exactFrame` (the headless runner does too); and the commit message said every file only one
+  side changed is that side's, leaving out this change's own edit of the plan row. The full record is in the commit that
+  carries this entry.
+- **Next**: the RP6's test copy replaced with a build of the finished branch, and a draft pull request (the owner's
+  choices), whose run of the desktop workflow is the CI change's first; a frame-advance step showing its own frame with
+  "PSP Graphics Overlap" On where the app draws the picture (Limits; done: the frame-advance entry of 2026-10-23
+  above); the Game Boy core's read of freed memory at exit, if wanted; the hands-on checks (the RP6 pass, a pad, a
+  window manager, Wayland, Steam, Windows and macOS).
+
+## Desktop follow-ups: "Fullscreen and pause (toggle)" following fullscreen as ares 1810 asks, Screenshot with the pause menu open, no abort when the display goes away first, the host test in CI — 2026-10-21
+
+Branch `improved-hotkeys`, on `a8d36db7e` (the entry below). The last of the follow-ups the owner asked for on
+2026-10-21 (the plan row's Open), on the desktop: the "Pause menu, out of fullscreen" hotkey made the toggle ares 1810
+asks for, the owner choosing "Follow fullscreen: leaving fullscreen pauses (opens the menu), going back into fullscreen
+closes the menu and plays"; the Screenshot hotkey with the pause menu open; Phobos's abort when its display goes away
+before it quits; and the desktop's host test in CI; with them, the wordings the entry below's third review left.
+Changed: `desktop/Hotkeys.cpp` (the action's name), `desktop/main.cpp`, `.github/workflows/desktop.yml`,
+`android/app/src/main/cpp/PhobosHostAndroid.cpp` (a comment), four entries below (The entries below) and the hotkey row
+of `docs/implementation-plan.md`. Checked on a virtual display; the workflow runs on GitHub, with the pull request.
+- **Fullscreen and pause (toggle)** (ares 1810): the hotkey the desktop had as "Pause menu, out of fullscreen" left
+  fullscreen and opened the menu, one way only. Now named "Fullscreen and pause (toggle)", it follows fullscreen: in
+  fullscreen it leaves it and the game waits in the menu; in a window it goes fullscreen, and from the menu or frame
+  advance the game goes on. It's stored under its old name (`pause_window`), so a binding a player made keeps working,
+  and it's unbound by default as before; Fullscreen (F11), which leaves the game as it is, is unchanged. Whether the
+  window is fullscreen is read from SDL's window flags, which follow what the window manager grants.
+- **Screenshot with the pause menu open**: the Screenshot hotkey (Guide + R3, F8) takes a screenshot with the pause menu
+  open too, the game's picture without the menu over it, as the menu's own Screenshot row does. Before, like every
+  action but fullscreen and the menu's own, it waited for the game to be playing (the frame-advance entry, Screenshots
+  while paused); the others still do.
+- **The display going away first**: when the X display goes away under Phobos (Xvfb stopped first, as earlier checks
+  did, or an X server that ends), Xlib's I/O error handler ends the process with `exit()`, SDL 3.2.30 leaving Xlib's own
+  handler in place (it installs none, by its source). `exit()` then destroyed the runner's audio thread while it ran, a
+  `std::thread` still joinable, so the process ended in `std::terminate`: an abort and a core dump (seen in the
+  frame-advance entry's checks). Now an exit handler, run on the main thread alone, unloads a running game first, as
+  quitting unloads it (its saves written, the runner's threads stopped), with nothing that needs the display; the
+  process then ends as Xlib has it, with exit status 1.
+- **The host test in CI**: `.github/workflows/desktop.yml` configures each job's build with `-DPHOBOS_DESKTOP_TESTS=ON`
+  and runs `ctest --output-on-failure` after it, on Linux, Windows and macOS. The packaging that follows copies the
+  program, its data and the libraries it names (`scripts/package-*.sh`), so the test program isn't packaged.
+- **The entries below**: the reference's 1810 moves from In part to Done, its unbound list naming the action anew; the
+  frame-advance entry's Screenshots while paused, "Also seen" and Next say the Screenshot hotkey works with the menu
+  open and the abort is gone since this entry; the Next of the PSP's lost GPU entry (the entry below) and of the PSP
+  follow-ups' say the desktop's follow-ups are done. The lost GPU entry takes the three wordings its third review left:
+  The fix names the two formats the host writes before the window's default after a disconnect, and says which buffers
+  its rows would have overrun; its last Limit says what `lockFrame` would do with a swapchain's buffers, where it said
+  the frames "could be dropped" (the window wouldn't drop them); and the host's comment on that check
+  (`PhobosHostAndroid.cpp`) says "in neither format written" for "not 32-bit", two lines as before.
+- **Checks**:
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja, SDL 3.2.30); ctest 1/1, its 209 host checks;
+    `main.cpp`, `Hotkeys.cpp` and the Android host's file compiled with `-Wall -Wextra` by their builds' own commands
+    (the NDK's clang for arm64 for the last), no warning on any of the 41 lines this change made.
+  - The virtual-display suite of the entries below: 145 of 145, one check new: F8 in the menu takes a screenshot.
+  - A toggle check (`toggle.sh`, kept outside the repository with the review's evidence), on a 1600x900 virtual display
+    with a stand-in window manager that grants fullscreen (`stubwm.c`, kept with it; with no window manager SDL never
+    marks a window fullscreen), the toggle bound to F10 and Frame Advance to F7: the game starts in a window; F10 goes
+    fullscreen, the game playing on; F10 leaves it, the game waiting in the menu; F8 there takes a screenshot; F10 goes
+    back into fullscreen, the menu closing and the game going on; F10 again, out of it, the menu open; Escape closes the
+    menu, the window kept; F7 stops the game for frame advance; F10 goes fullscreen, frame advance ending and the game
+    going on. 9 of 9.
+  - A display check (`display-gone.sh`, kept with it): Xvfb stopped while a game runs. The build of the entry below:
+    "terminate called without an active exception", exit status 134, a core dump, the game never unloaded. This change:
+    "Saves: flush complete", "System unloaded" and exit status 1, no core dump.
+  - The display check again with AddressSanitizer on the exit path (`build-asan.sh`, kept with it: `main.cpp`, the
+    runner and the Game Boy core, the check's game, compiled with `-fsanitize=address` by the build's own commands, its
+    runtime taking over every allocation): the exit handler unloaded the game with no error; the one error came after
+    it, among the globals' destructors, and a normal quit shows it the same, so it's older than this change (Also seen).
+  - Five `main.cpp` mutants, each built outside the repository with the build's own commands, each failing its checks:
+    the toggle going one way only (five of the toggle check's nine); going fullscreen leaving the menu open (three);
+    going fullscreen leaving frame advance on (one); no screenshot with the menu open (one); nothing unloaded at exit
+    (the display check: exit status 134, a core dump, no unload).
+  - GCC 11.4 in an `ubuntu:22.04` container (the Linux job runs on `ubuntu-22.04`), the tree's tracked files copied
+    afresh: the host test's four sources compiled with the build's own commands (`-Wall -Wextra -Werror`, the
+    sanitizers), and the program's five sources the hotkey work changed (`main.cpp`, `Hotkeys.cpp`, `Input.cpp`,
+    `Settings.cpp`, `PhobosRunner.cpp`) checked for errors with the build's own commands and `-fsyntax-only` (no object
+    written): each passed.
+  - The Android host's comment: both flavors' JVM tests (54 files, 454 tests each, 0 failures) and
+    `:app:assembleLegacyDebug`. The native library came out byte-identical to the entry below's build (`8d0b8659…`,
+    stripped `90aefcb3…`), the comment changing no code; the APK (32,596,847 bytes, `74af99ec…`) differs from that
+    build's as git numbers it, its version code and name taken from the commit it's built on (`a8d36db7e`, where the
+    entry below's build was on `eed1043d3`).
+  - The reference's tables still pass `check-reference.py` (35 of 35; the toggle has no default binding, so no row
+    changed).
+  - After the first review, `runHotkey`'s header comment in `main.cpp` reworded (two lines for two): the build's
+    `main.cpp.o` and program came out byte-identical to those the checks above ran on (`424e5a97…`, `485d855d…`), so
+    they stand; ctest passed again (209 host checks).
+  - Not run: the workflow itself, which runs on GitHub with the pull request (Next); the Windows and macOS builds; a
+    real window manager; Wayland.
+- **Also seen**: after a Game Boy game, Phobos's exit reads memory already freed, in the Game Boy core's APU destructor
+  (AddressSanitizer: heap-use-after-free, the memory allocated by `ares::Thread::create` in `GameBoy::PPU::power()` and
+  freed by another global's destructor before it), on a normal quit as after the display went: the order of ares's
+  globals at exit, older than this change and not part of it (Next). Without AddressSanitizer nothing is seen to come of
+  it.
+- **Limits**:
+  - The toggle goes by SDL's fullscreen flag: where the window manager doesn't grant fullscreen (with none at all, say),
+    it only ever asks for fullscreen and never pauses; and on X11, where the flag changes only as the window manager
+    answers, two presses quicker than its answer ask for the same state twice, as F11 and the menu's Fullscreen row do
+    (derived from the code).
+  - The exit handler covers `exit()` on the main thread, where Xlib calls it from SDL's event poll; an `exit()`
+    elsewhere, or a signal, is as before (derived).
+  - The exit handler, registered as `main` begins, runs after the objects first made since then have been destroyed
+    (C++'s order at exit), and after what the libraries opened since then registered for exit. The unload goes by the
+    runner's and the cores' globals, made before `main`; but a Nintendo 64 game's unload, or a PSP game's with its
+    Vulkan renderer, also goes into the Vulkan loader, opened as Phobos starts (`phobos::host::loadVulkan`, from
+    `Shell::setup`), and into its driver, opened as the game makes its Vulkan instance: the C++ globals' destructors and
+    `atexit` handlers those two registered as they loaded have run by then (derived from the code; AddressSanitizer, run
+    with the Game Boy game, found nothing in the unload). The first review's display check with a Nintendo 64 game under
+    Vulkan, on RADV and on lavapipe, ended as the Game Boy game's does (its save written, "System unloaded", exit status
+    1, no core dump); other drivers, and a PSP game under its Vulkan renderer, are unchecked.
+  - The Windows and macOS jobs run a test so far run only on Linux, with their own compilers (MSYS2's GCC, without the
+    sanitizers, as `CMakeLists.txt` has it on Windows, and Apple's clang for both of the Mac's architectures, with
+    them): the pull request's run is its first check there.
+- **Review**: the first review found two Minors in wording, both fixed: `runHotkey`'s header comment in `main.cpp`, left
+  stale by the toggle and the screenshot, and the third Limit, which left out the Vulkan loader and driver a Nintendo 64
+  game's unload goes into. Of its suggestions, the GCC 11 wording (Checks) and the toggle's quick double press (the
+  first Limit) are taken. The whole record is in the commit that carries this entry.
+- **Next**: master merged into the branch, which conflicts with it (the owner's choice, made with the pull request in
+  mind: GitHub runs no `pull_request` workflow while a pull request has a merge conflict, by its documentation); then
+  the RP6's test copy replaced with a build of the finished branch, and a draft pull request (the owner's choices),
+  whose run of the desktop workflow is the CI change's first; the Game Boy core's read of freed memory at exit (Also
+  seen), if wanted; the hands-on checks (the RP6 pass, a pad, a window manager, Wayland, Steam, Windows and macOS).
+
+## The PSP's Vulkan renderer letting go of the window when the GPU stops answering, so that the software renderer's frames show where the screen froze — 2026-10-21
+
+Branch `improved-hotkeys`, on `eed1043d3` (the entry below). The owner, during the entry below's device check
+(verbatim): "Go ahead and use it. I did notice that when the game was running its "Accessing Memory Stick Duo" it gave
+the notification about Vulkan renderer dropping, and now it seems stuck. please look into that." Changed:
+`ares/psp/ge/gpu/gpu.hpp` (`GPU::letGo`), `ares/psp/system/system.cpp` (`System::present`),
+`android/app/src/main/cpp/PhobosHostAndroid.cpp` (`lockFrame`, `setWindow`), `android/app/src/main/cpp/PhobosHost.hpp`
+(a comment), `tests/psp/ares/system.cpp` (a new test), `docs/psp-gpu-renderers.md`, the entry below (its Next, and two
+wordings of its first Limit that its last review left for this change) and the hotkey row of
+`docs/implementation-plan.md`. Checked on the host and on the RP6 (Checks).
+- **What the owner saw**: in a build of `eb67f4ea7` with the PSP's Vulkan renderer (on Android, by choice), Crash Tag
+  Team Racing saving, the GPU stopped answering; the core said so ("The Vulkan renderer stopped: the GPU stopped
+  answering; the software renderer draws from now on") and the software renderer took over, the emulation going on at 60
+  FPS, but the screen stayed on the save's "Accessing Memory Stick Duo" (the entry below, Checks: Also seen).
+- **Why the screen froze**: two things, the second found by this entry's checks on the RP6.
+  - The Vulkan renderer presents on the host's window itself, its surface connected to the window (the swapchain made
+    on it). A GPU that stops answering turns presenting off (`presents()`), and the host then draws each frame on the
+    window itself, locking it for the CPU (`lockFrame`); but while the window stayed the same, only a surface that
+    couldn't be made (`giveUp()`) or one lost was dropped, so the window stayed connected to Vulkan and every lock was
+    refused (the device's log: "connect: already connected (cur=1 req=2)", 60 a second).
+  - With the surface dropped, the host's frames still didn't show: the window dropped every one (Android's log:
+    "rejecting buffer"). The host asks the window for its frames' size, format and scaling (to the window's size) when
+    their size changes, and remembers having asked. A lock while Vulkan still had the window (at the loss, in the frame
+    the GPU failed in) asked and was refused; then the surface's letting go put the window's format and scaling back to
+    their defaults, the scaling to "freeze", which drops a buffer that isn't the window's size, and the host,
+    remembering, never asked again. (Android 13's own code, `ANativeWindow_setBuffersGeometry`, `Surface::disconnect`
+    and `BLASTBufferQueue::rejectBuffer`, does each of these; in its Vulkan loader the surface connects to the window
+    and disconnects from it, and destroying the swapchain doesn't disconnect, though making one disconnects and
+    connects again.)
+- **The fix**: at the next frame after the GPU stops answering, `System::present()` (on the emulation thread, where the
+  window is handed to the GPU and frames are presented) has the GPU let go of the window (`GPU::letGo()`: the backend
+  given no window, as when the host's window goes), and Vulkan's backend drops its surface, with its swapchain, which
+  disconnects it from the window. The host draws on ares's screen thread, which nothing orders with the emulation
+  thread, so that disconnect can come between the host's request for its frames' size, format and scaling and its lock,
+  undoing the request (the first review's finding, seen on the RP6 below). So `lockFrame` now asks again at the next
+  lock after the first that succeeds once the window is set or has refused a lock (by then the window is the CPU's,
+  connected at that lock, and no other producer can connect to it), a refused lock having it forget what it asked for;
+  and a buffer in neither of the two formats it writes (`RGBA_8888`, `RGBX_8888`), as the window's default format after
+  a disconnect can be (16-bit `RGB_565` on the RP6), is posted undrawn, as one too small for the frame already was: the
+  host's 32-bit rows would have run past the end of a 16-bit buffer, or of one too small. From then the host's frames
+  show. The same covers a surface Vulkan gives up (`giveUp()`) after a refused lock, which left the host's request
+  undone in the same way (derived, the first review's; not run). A loss found by a wait that timed out (five seconds: a
+  run that never ended) still leaves the surface and its swapchain as they are, the GPU perhaps still using them, so the
+  screen still freezes there (Limits). The RP6's, by its log, was the other kind, a call that failed (derived: the
+  emulation thread's longest frame was 810 ms, never five seconds, and Adreno's driver logged its fault on that thread).
+- **Why the GPU stopped**: not known. Seen once, not in two more runs of the same steps; Adreno's driver wrote no
+  snapshot of it (its path not set).
+- **The entries below**: the entry below's Next says this is done, and its first Limit takes the two wordings its third
+  review left: `Generic.kl` maps the RP6's hat and none of its D-pad buttons (it does map a keyboard's arrows to the
+  D-pad's keys), and the D-pad keys Android makes up go to a dialog as D-pad keys do, which in the PSP keyboard is to
+  its text field (and in a save list left and right do nothing), so Back + a direction does there what the direction
+  alone does.
+- **Checks**:
+  - The PSP core's host tests, `TMPDIR=… bash tests/psp/ares/run-tests.sh` (GCC 16.2.1): 371 checks, 0 failed. The new
+    test, `lostGpuLetsGoOfTheWindow`, has a pretend GPU (no Vulkan needed) present on a window, give presenting up
+    without being lost, present again and then stop answering: the window the GPU's while it presents and while it has
+    given up, let go of at the next frame after the loss and not taken back, and the frames presented (`presenting()`)
+    until the loss and while it hasn't given up. Run from a copy of the tree with `gpu.hpp` and `system.cpp` as the
+    entry below has them, it fails its two checks of the window after the loss (371 checks, 2 failed); with
+    `GPU::letGo()` letting go of the window whether the GPU is lost or not, it fails its check of the window kept while
+    presenting is given up (371 checks, 1 failed).
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja), the PSP core compiled again; ctest 1/1, its 209 host
+    checks. The PSP core compiled with `-Wall -Wextra` by the desktop build's own command, and `PhobosHostAndroid.cpp`
+    by the Android build's (the NDK's clang, arm64), into a scratch folder: no warning on a line this change made (793
+    elsewhere in the core, none in the other).
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0's wrapper):
+    BUILD SUCCESSFUL, 454 tests in each flavour, 0 failures, 54 result files each; the APK 32,596,851 bytes, SHA-256
+    `fecfc5bca1c47095e111736ff0088f7c043d48aef1f3d6e7f2a596bc48eb9620`, its native library built with the change.
+  - On the RP6 (Android 13), with the owner's copy of Crash Tag Team Racing and the PSP's Vulkan renderer: six debug
+    builds under application IDs of their own, installed one after the other beside the owner's apps and removed
+    afterwards (the uninstalls' output kept, the owner's two apps unchanged), the game copied into each one's own folder
+    and gone with it. Each had the GPU's loss injected at its 900th wait for a run: that wait made to fail as
+    `VK_ERROR_DEVICE_LOST` makes it, by a change to `vulkan.cpp` for these builds alone, kept outside the repository and
+    taken out after each build. The loss came about 16 s into the game, in its intro (Radical's logo); the screen was
+    captured 3 s and 5 s after it, then Start pressed and the screen captured 4 s later, and the captures compared where
+    no on-screen control covers the game's picture (510,000 pixels).
+    - A build of `eed1043d3` (`com.phobos.emulator.f4base`, APK SHA-256
+      `d4fb583c149514b338b51978e34c6cc00b4811a7418da4a7a6936903c5182ba6`): every lock refused from the loss on, 60 a
+      second (689 in the run's last 12 s); the picture the same in all three captures, Radical's logo (no pixel
+      differing).
+    - A build with this change's core part alone, without `lockFrame`'s (`com.phobos.emulator.f4`, APK SHA-256
+      `1ac140bdde780d162d27d62f4fcffa1439659c3782fd2e2f4cb07f025e88f00a`): one lock refused, at the loss, then none; but
+      the window dropped every frame (749 times "rejecting buffer", the window 1712x970 and the frames 1920x1088, read
+      from the device's log after the run), and the picture was the same in all three captures (no pixel differing).
+    - A build of the tree the first review saw (`com.phobos.emulator.f4`, APK SHA-256
+      `5f23b32fac9cfea4b45c03aee3d24fe9c7cde4278946f4035277d92283ba71c1`): one lock refused, at the loss, and no frame
+      dropped; the picture went on, the logo giving way to black, and after Start the game's "Loading.." screen at the
+      window's size (about 28,000 and then 49,000 pixels differing).
+    - After that review, three more (`com.phobos.emulator.f4` each, the log kept with Android's crash lines too), two of
+      them with the first lock tried on the window made to wait 100 ms after asking for its frames' size, format and
+      scaling (by a change to `PhobosHostAndroid.cpp` for those builds alone, kept outside the repository and taken out
+      after each build), so that the GPU's letting go of the window came between the request and the lock:
+      - The tree the first review saw, with the wait (APK SHA-256
+        `16711548581e8779a2d197f0cfaa880b8e29ce7188feeecd3ba502551ae882b5`): no lock refused; the lock after the wait
+        had a 1920x1088 buffer in format 4, 16-bit (`RGB_565`), the request undone; the window dropped every frame from
+        then (680 times "rejecting buffer"), and the picture was the same in all three captures, though each frame's
+        32-bit rows were written into those buffers, past their end (no crash seen).
+      - This change, with the wait (APK SHA-256 `277feb30c7adf512f997d886d17ce3c4659f2ae86983b0bdb14396f22ac5e607`):
+        that lock's buffer, 16-bit again, posted undrawn (the one frame the window dropped), and the next lock, asking
+        again, had a 32-bit one (format 1), as did the three after it (the ones logged); the picture went on (about
+        27,000 and then 49,000 pixels differing).
+      - This change, without the wait (APK SHA-256 `cd1c0579be9b6bed866062a32be2ca71ccc07babfcb7a991c330c8707fbe9351`):
+        one lock refused, at the loss, no frame dropped, and the picture went on (about 27,000 and then 49,000).
+  - Not run: a loss that wasn't injected (Limits); the let-go landing between the host's request and its lock at its
+    own timing, a few microseconds wide (the wait forced it); the desktop's Vulkan renderer, which never presents.
+- **Limits**:
+  - A loss found by a wait that timed out still freezes the screen (above). So would a loss after which the wait for
+    the GPU's runs as the surface is dropped times out: `vulkan.cpp`'s `dropSwapchain()`, unchanged, checks for a
+    timed-out wait before making its own, so the swapchain is destroyed then and the surface kept, the window still
+    Vulkan's, the emulation thread having waited at least five seconds (that wait, then `vkDeviceWaitIdle`, which has no
+    limit; the first review's; unlikely, as Vulkan has a wait end after a loss). The timed-out wait's entry above
+    changed this: the swapchain and the surface are held then, and let go of a frame or more later, once every run has
+    ended (its fence signalled, or the device lost), `dropSwapchain()` holding them as well when its own wait times
+    out; a run that never ends, on a device never said lost, still keeps the window.
+  - On the RP6 the loss was injected, the GPU in fact still answering, so the surface was dropped from a working device;
+    after a real loss Vulkan allows the same, but a real one wasn't seen with this change.
+  - `lockFrame`'s part has no host test (it's Android's window code): the RP6's builds are its check, the let-go landing
+    between the host's request and its lock forced there by a wait.
+  - After such a loss the window stays the CPU's, so a PSP game loaded again on it (a Reload) can't make its Vulkan
+    surface: it gives presenting up and reads its frames back until the window is made again (derived, the first
+    review's; not run).
+  - As before this change, making a swapchain (as presenting starts, or again after the window changes size)
+    disconnects the window and connects it again, and a host lock landing between the two would take the window:
+    Vulkan's swapchain then sets its own size on it, and the host's later locks would get buffers of that size:
+    `lockFrame` would post each undrawn where it's smaller than the frame (every frame in the RP6's runs above, its
+    window 1712x970 and the frames 1920x1088), and elsewhere draw the frame into its top-left corner (derived from
+    Android's source, the second and third reviews'; not seen, and not on the lost path, where no swapchain is made).
+  - Why the GPU stopped in Crash Tag Team Racing is unknown (above).
+- **Review**: the independent review's record is in the commit that carries this entry.
+- **Next**: the desktop's follow-ups (1810's toggle, the Screenshot hotkey with the menu open, Phobos's abort when its
+  display goes away first, the test target in CI; done in the entry above); then the RP6's test copy replaced with a
+  build of the finished branch and a draft pull request (the owner's choices); and the hands-on checks.
+
+## PSP system dialogs running the hotkeys, the keys they take no longer the dialog's, and a PSP screenshot with the Vulkan renderer presenting having the picture on screen — 2026-10-21
+
+Branch `improved-hotkeys`, on `eb67f4ea7` (the entry below). Three more of the follow-ups the owner asked for on
+2026-10-21 (the plan row's Open): a PSP system dialog holding a hotkey's first key back and running the hotkeys, with
+the stale comment in `PspSystemDialogs.kt`, and a PSP screenshot with the Vulkan renderer presenting that has the
+picture on screen; for these the owner chose "Do both, and use one of my PSP games on the RP6 for the checks (copied
+into the test app's own folder, deleted with it)". Changed: `input/GameKeys.kt` (`onDialogKey`, `holdsKey`),
+`input/WindowKeys.kt`, `input/Hotkeys.kt` (`HotkeyTracker.holdsKey`), `input/FallbackKeys.kt` (`isSystemBack`),
+`MainActivity.kt`, `ui/PspSystemDialogs.kt`, `ui/EmulatorScreen.kt`, `HotkeyRoutingTest`, `FallbackKeysTest`, the PSP
+core's `psp.hpp`, `system/system.cpp` and `system.hpp` (`settle()`) and `ge/gpu/gpu.cpp` and `gpu.hpp`
+(`GPU::settle`), the runner's `captureScreenshot` (`PhobosRunner.cpp`), `docs/psp-gpu-renderers.md`, three entries
+below (The entries below) and the hotkey row of `docs/implementation-plan.md`. Checked on the host and on the RP6
+(Checks).
+- **Hotkeys in a PSP system dialog**: a PSP system dialog over the running game (a message, the keyboard, saving or
+  loading, or a game data install) is a window of its own, so its keys never reach the activity's window, where the
+  hotkeys run. It took its PSP buttons and the Pause hotkey alone, the latter with a tracker of its own, and passed
+  every other key on, a hotkey's first key included: Back let go of backed out of the dialog, Back + R1 saved nothing
+  and backed out, and Back + R3 could confirm (the entry led by Back, Limits). Now the dialog gives each of its keys to
+  the game's hotkeys first (`GameKeys.onDialogKey`, the game screen's own hotkey handling), but for the two keys
+  Android makes up, which the activity's window keeps from the hotkeys too: the navigation bar's or gesture's Back
+  (`isSystemBack`, the window's test and now the dialog's) and a fallback (`FallbackKeys`, the dialog keeping one of its
+  own, as the window never sees the key a fallback there follows). What a press completes or a release taps runs as it
+  does over the game, Back + R1 saving a state and Back + A opening the pause menu, which the dialog waits behind as
+  before; and the keys the hotkeys take (a binding's first key, and its other keys while that's held), with their
+  repeats and releases, aren't the dialog's. The rest are the dialog's as before, the two made-up keys with them, and
+  none reaches the game. So a controller's Back alone does nothing in a dialog, as over the game, while the navigation
+  bar's or gesture's Back does what it did before (backing out of a message, a save or the keyboard), and B, the D-pad
+  and the rest act there as the dialog takes them. A key held as a dialog opens is let go of for the hotkeys, as for the
+  game (as before), so a binding whose first key is down then starts from that key's next press. A key pressed in a
+  dialog and let go of once the dialog is gone is let go of at the activity's window, and there its release goes to the
+  game screen's keys while their hotkeys count it as held (`WindowKeys`, `GameKeys.holdsKey`), the game loaded or not,
+  as a key pressed at the window does: a Reload from a dialog (Back + X) closes the game, and the dialog with it, before
+  the two are let go of. The first review of this entry found both: in a dialog the made-up keys reached the hotkeys,
+  so with the defaults that Back no longer backed out of one; and after a Reload from a dialog the game came back with
+  Back and X held, every other key of a Back binding held back from it, and after one X, R1 alone saving a state.
+- **The stale comment**: the dialog's comment that a release ran "a pause tap (Mode alone, by default)", a default the
+  entry led by Back replaced, went with the code it described.
+- **The PSP's Vulkan screenshots**: where the PSP's Vulkan renderer presents (on Android, by choice; Software is the
+  default), a screenshot is the copy of the picture presented last that the PSP keeps, and for a picture the GPU drew
+  from a target that copy was kept only when the GPU's slot was next waited for, a frame or two later, so a screenshot,
+  paused or not, could be a frame or two behind the window (the frame-advance entry, Limits). Now the runner, holding
+  the core between frames (`runMutex`), has the PSP keep it at once (`PlayStationPortable::settle()`): the GPU's runs
+  waited for, each one's copy kept (`GPU::settle`, what `Backend::finish()` does with nothing new recorded), and the
+  picture presented last taken again. A picture from memory, kept at once already, is left alone, and where the renderer
+  doesn't present (the desktop always reads its frames back) nothing changes. `docs/psp-gpu-renderers.md` says so where
+  it told of the late copy.
+- **The entries below**: the reference's rule for a binding's keys says the hotkeys run in a PSP system dialog on
+  Android too, and its 1192 that a screenshot has the picture on screen where the PSP's Vulkan renderer presents too,
+  since this entry; the frame-advance entry's Limits and Next say that renderer's screenshots have the picture on screen
+  since this entry; and the entry led by Back's PSP system dialog limit says this entry changed it, what of it still
+  holds being under Limits here.
+- **Checks**:
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0's wrapper):
+    BUILD SUCCESSFUL, 454 tests in each flavour (451 before), 0 failures, 54 result files each; the APK 33,679,406
+    bytes (1,082,421 of them unused space between the archive's entries), SHA-256
+    `03e6b5c729b8205b85e23dc5a71826f06e515317e8d82a25584e21cb40fbfe61`, one build of these sources, its native library
+    (arm64, NDK 28.2) built with the change.
+  - New tests: `HotkeyRoutingTest.inAPspDialogTheHotkeysRunAndKeepTheirKeysTheRestBeingTheDialogsAndNoneTheGames`;
+    after the first review, `FallbackKeysTest.theNavigationBarsBackIsTheSystemsAndAControllersIsnt` and
+    `HotkeyRoutingTest.keysPressedInAPspDialogAndLetGoOfAfterAReloadClosedTheGameStillReachItsHotkeys`.
+  - Seven mutants, each compiled from copies outside the repository in place of its file, every output kept outside it,
+    and the whole legacy suite run (454 tests, all passing with the copies unchanged), all on these sources: the dialog
+    given the hotkeys' keys too, which failed the dialog's test and the Reload test (whose presses start in a dialog);
+    a hotkey's repeats given to the dialog, and the dialog's keys given to the game screen's handler, as over the game,
+    each failing the dialog's test and no other; after the first review, the window without its way to the game
+    screen's keys for a release, and `GameKeys.holdsKey` never true, each failing the Reload test and no other; and
+    `isSystemBack` taking every Back, or none, each failing `FallbackKeysTest`'s new test and no other.
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja), the runner and the PSP core compiled again with the
+    change; ctest 1/1, its 209 host checks; the two compiled with `-Wall -Wextra` into a scratch folder with the build's
+    own commands: no warning on a line this change made (1,429 and 793 elsewhere in them). After the first review,
+    which changed nothing the desktop builds, the build was current and ctest the same.
+  - On the RP6 (Android 13), with the owner's copy of Crash Tag Team Racing, against the commit below: two debug builds
+    under application IDs of their own, installed beside the owner's app one after the other and removed afterwards, the
+    game copied into each one's own folder and gone with it, each one's settings written before its first start (the
+    PSP's Vulkan renderer, accurate; Frame Advance on Back + Start), driven by the built-in controls' own events
+    (sendevent): one of `eb67f4ea7` (`com.phobos.emulator.f2base`, APK SHA-256
+    `0ba9c317703630872deb0bef815a1242509920d63950594a54e2169ca476ce18`) and one of this entry's sources as first
+    reviewed (`com.phobos.emulator.f2`, APK SHA-256 `51df49f8d4a11e6d73472204198e6b16ba06604f5824a1965f81a0d53fe736e0`,
+    its native library differing from the other's). The game's save dialog (New Game, the name, Done: the app's Save
+    list of New Data), Back + R1: before, no state saved and the dialog backed out of, the game asking "Continue without
+    saving?"; with this change, "Saved state to internal: …/Crash Tag Team Racing.chd.state0" logged, the dialog still
+    up; then Back + A opened the pause menu, the dialog hidden behind it and Slot 0 showing the state just saved, Back +
+    A again brought the dialog back, and Cross saved to New Data, the game going on. At the game's signpost menu, frame
+    advance on, then eight steps, at each the screen captured and a screenshot taken (Back + R3): each screenshot
+    compared with every step's screen, the game's picture cut out of the capture and shrunk to the PSP's size
+    (`compare-shots.py`, kept outside the repository with the device script). Before, 1 of 8 screenshots was nearest its
+    own step's screen, each of the other seven nearest the step before, a frame behind; with this change, 8 of 8. The
+    scene changed little a step (its siren light, a mean difference of 0.16 to 0.70 a step against about 9.5 from the
+    cut-out's scaling), and the steps still told apart. The dialog's keys don't pass the activity's window, so the input
+    log doesn't show them; the logged save and the screenshots do.
+  - On the RP6 again after the first review, the same game on the PSP's default renderer (Software): the build of this
+    entry as first reviewed (`51df49f8…` above) and one of these sources (`com.phobos.emulator.f2` too, APK SHA-256
+    `142185eb34edf51e47a8a579f084cc056d407f7042eef2d26b09c83cc2aae682`), installed one after the other and removed
+    afterwards, the uninstalls' output kept, the owner's two apps unchanged. In the save dialog, the navigation bar's
+    Back (`input keyevent`, from the virtual keyboard's device): before, the dialog stayed; with this change, it backed
+    out, the game asking "Continue without saving?". Then in the dialog, Back + X, X let go of 80 ms after its press
+    and Back 40 ms later: the game reloaded, the dialog gone, and both releases reached the activity's window before the
+    game was loaded again (the input log); then X and R1, each alone. Before, X reached no game button and R1 ran Back
+    + R1, "Saved state to internal: …state0" logged; with this change, each reached the game (the input log's button
+    changes) and nothing ran. In a first try in the earlier build, Back let go of 0.35 s after X's press came after the
+    game was loaded again, and only X stayed held: X reached no game button, R1 did.
+  - Also seen, in the build of `eb67f4ea7` and not this change's: in its first run, with the owner at the device
+    (presses of its own in the log: the pause menu opened, the performance overlay turned on, the save dialog answered),
+    the GPU stopped answering as the game saved, frames of up to 810 ms, then Adreno's driver noting a GPU snapshot
+    (none kept) and the core's notice "The Vulkan renderer stopped: the GPU stopped answering; the software renderer
+    draws from now on". The emulation went on at 60 FPS, but the screen stayed on the save's "Accessing Memory Stick
+    Duo": every frame the runner's draw on the window was refused ("BufferQueueProducer … connect: already connected
+    (cur=1 req=2)", 60 a second, 12,277 in 205 s), the Vulkan renderer never having let go of the window, as its code
+    reads: a GPU that stops answering turns presenting off, but the swapchain stays on the window, dropped only with its
+    surface (one lost or that couldn't be made, another window or none, the renderer's end), and after a fence wait that
+    timed out dropping it destroys nothing (the GPU may still be using it). Whether this loss was such a timeout is
+    unknown (frames of at most 810 ms against a 5 s wait suggest not). Not seen again in two more runs of the same
+    steps, one in each build, without the owner's presses.
+  - Not run: another device or controller; the desktop's Vulkan renderer, which never presents; a fallback in a dialog
+    (Android makes one of a key the dialog leaves unhandled, such as R3 or L3 alone, and no check pressed one there).
+- **Limits**:
+  - In a dialog, a controller's motion goes to the dialog's window, not to the game's input state: a binding with a
+    trigger reported only as an axis, or a stick direction, can't complete there, nor one with a direction of a D-pad
+    that's a hat. Android makes D-pad keys of an unhandled hat, and of the left stick, in that window (its synthetic
+    joystick events), but marks them as fallbacks (`FLAG_FALLBACK`), which the dialog keeps from the hotkeys as the
+    window does: they go to the dialog as D-pad keys do (in the PSP keyboard, to its text field) and run nothing. The
+    RP6's built-in controls give their D-pad as a hat (Android reads them by `Generic.kl`, which maps their hat and none
+    of their D-pad buttons), so there Back + a direction, Next or Previous Slot by default, does in a dialog what the
+    direction alone does. Letting those keys reach the hotkeys would let the left stick's in too, though over the game
+    the stick is no D-pad to them. Derived from Android's input handling, the code and the RP6's layout, not seen; the
+    second review found this limit still saying the hotkeys saw those keys. The hat D-pad entry above changed this for
+    the hat: the dialog's window gives the hat's directions to the hotkeys, and a direction one takes no longer moves
+    the dialog; for a trigger reported only as an axis, and for a stick direction, this limit still holds.
+  - Guide or PS, where it starts no hotkey, still goes Home from a dialog; R3 and L3 alone still confirm in a message or
+    a save dialog (their fallback); and the soft keyboard over the PSP keyboard still has Back first (the entry led by
+    Back, Limits).
+  - A hardware keyboard's keys reach the hotkeys before the PSP keyboard's fields: with the defaults Tab starts fast
+    forward there instead of moving to the next field (in a keyboard with several), and F5, F8, F9 and F12 run their
+    actions (derived from the code).
+  - `settle()` waits for the GPU on the screenshot's thread with the core held, so the game waits too, for the GPU's
+    queued work, a frame or two (derived from the code).
+- **Review**: the independent review's record is in the commit that carries this entry.
+- **Next**: the desktop's follow-ups (1810's toggle, the Screenshot hotkey with the menu open, Phobos's abort when its
+  display goes away first, the test target in CI; done in the desktop follow-ups' entry above); the PSP's Vulkan
+  renderer letting go of the window when the GPU stops answering, so that the software renderer's frames show (Checks,
+  Also seen), which the owner asked to have looked into (done in the entry above); then the RP6's test copy replaced
+  with a build of the finished branch and a draft pull request (the owner's choices); and the hands-on checks.
+
+## Android follow-ups: the Back warning ended by a Back from any device connected, a button any level gives the game asked about, the settings test's keys written out, taps beside longer bindings tested — 2026-10-21
+
+Branch `improved-hotkeys`, on `89d800605` (the entry below). Four of the follow-ups the reviews left (the plan row's
+Open), which the owner asked for on 2026-10-21: "Please address the follow ups as well as finishing anything remaining
+on this". Changed: `input/Hotkeys.kt` (`backSeen`), `input/ControlLevels.kt` (`Controls.gameTokensEverywhere`),
+`ui/ControllerPages.kt`, the tests `HotkeyComboTest`, `ControlLevelsTest`, `HotkeyRoutingTest` and
+`data/HotkeySettingsTest`, two entries below (The entries below) and the hotkey row of `docs/implementation-plan.md`.
+Checked on the host; not run on a device.
+- **The Back warning**: the Hotkeys page's warning that no controller has sent Back now goes once any device connected
+  has been seen sending Back, a gamepad or not, while a gamepad is connected (with none connected, no warning, as
+  before). Before, only gamepads counted, though a Back press was remembered from whichever device sent it (the
+  navigation bar's Back and a fallback's aside). Android can list one physical device as several, its `InputDevice`
+  documentation says ("a single human input device registers multiple InputDevice instances (HID collections) that
+  describe separate features of the device"), there giving them one descriptor. A controller whose Back came from one
+  that isn't a gamepad, under a descriptor of its own, would have kept the warning however often Back was pressed
+  (derived from the code; whether any controller comes so is unknown here, none such being at hand). The check is
+  `backSeen` (`input/Hotkeys.kt`), the page passing it the devices connected now (its `connectedPadSentBack`, renamed
+  `connectedDeviceSentBack`). The first review of the entry led by Back raised it.
+- **A button in Back's place, asked about at any level**: choosing a button for Back's place asks "Use Start in Back's
+  place? Start is also a game button: once it starts the hotkeys, the game no longer gets it." when any level's button
+  bindings give the game that button, all consoles' or a console's or game's own (`Controls.gameTokensEverywhere`), as
+  the button then takes Back's place at every level at once. Before, only the level shown counted, so a button that only
+  a console's or game's own bindings gave the game went in unasked from another level's page. The rows' notes that a
+  binding's first key is also a game button still go by the level shown, the rows being its. The same review raised it.
+- **Tests**: `HotkeySettingsTest` writes its keys out as the settings file holds them (`hotkey_combo_save`,
+  `scoped_hotkey|n64|load`), where two of its three hotkey-file tests built them from the store's own constants, and a
+  new test of it reads every action the Hotkeys page binds, the direct slots included, from the name it is stored under,
+  the 36 names written out; so a renamed prefix, scope or action, which would lose what players stored, fails there. The
+  first review of this entry found that claim held for six actions only (the three tests write out Save, Load, Mute,
+  Pause, Screenshot and Quit; Reset renamed passed every test), hence the new test. Two routing tests: another action's
+  key bound alone beside a hold's longer binding waits for its release, the hold still starting from the longer binding;
+  and an action's key bound alone beside its own longer binding runs it once, as a tap. Before, only the tap rule's unit
+  test failed with either condition of that rule taken out. The second review of the entry of up to three bindings
+  suggested both.
+- **The entries below**: the reference's Review now says three of its second review's suggestions were taken, the fourth
+  being for the report, and its unbound list quotes "Pause menu, out of fullscreen" (its third review's two notes). The
+  entry led by Back now says its warning goes once a device connected has sent Back, a gamepad or not, and that a button
+  any level's bindings give the game is asked about; its Review, that what it left for a later change is taken in this
+  entry.
+- **Checks**:
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0's wrapper):
+    BUILD SUCCESSFUL, 451 tests in each flavour (446 before), 0 failures, 54 result files each; the APK 32,595,539
+    bytes, SHA-256 `137de909b24dfc395073c76220f71e45c8febc583bd31fabea14678dc2be4db4`, one build of these sources.
+  - New tests: `HotkeyComboTest.backIsSeenFromAnyConnectedDeviceThatSentItAndAskedAboutOnlyWithAGamepadConnected`,
+    `ControlLevelsTest.theGameButtonsEverywhereAreAllConsolesAndEachConsolesAndGamesOwn`, and `HotkeyRoutingTest`'s
+    `anotherActionsKeyAloneBesideAHoldsLongerBindingWaitsForItsReleaseAndTheHoldStillStarts` and
+    `anActionsKeyAloneBesideItsOwnLongerBindingRunsItOnceAsATap`; after the first review,
+    `HotkeySettingsTest.everyActionTheHotkeysPageBindsIsReadFromTheNameItIsStoredUnder`.
+  - Six mutants, each made by hand in the worktree, the input package's tests and `HotkeySettingsTest` run (116 then),
+    then undone and each file's SHA-256 checked; each failed its test or tests: the warning counting gamepads alone, the
+    new warning test; the game buttons taken from all consoles' bindings alone, the new levels test; the tap rule's hold
+    condition widened to every hold's longer binding, its unit test and the first new routing test; that condition taken
+    out, its unit test and the second; Mute stored under another name, the defaults' test and two of
+    `HotkeySettingsTest`'s, where with that test as it was the defaults' test alone failed; and the global prefix
+    renamed, all three of `HotkeySettingsTest`'s hotkey-file tests, where with that test as it was only the one that
+    already wrote its keys out failed.
+  - After the first review, two more mutants, each compiled from copies outside the repository in place of its files,
+    every output kept outside it, and the whole legacy suite run (451 tests, all passing with the copies unchanged):
+    Reset stored under another name, and the direct slots' saves under another prefix. Each failed the new settings test
+    and no other; with that test as it was (450 tests), neither failed any.
+  - Not run: a device (the RP6's controls are one gamepad that sends Back, so they can't show the new case), or a
+    controller sending its Back from a device that isn't a gamepad.
+- **Limits**: only the functions are tested on the host; that the page passes `backSeen` every device connected now and
+  asks with `Controls.gameTokensEverywhere` is read from the code. Any device's Back counts, a keyboard's with a Back
+  key for one: with a controller without Back connected, such a press ends the warning, though Back + A then needs that
+  keyboard's Back held with the controller's A (derived). The warning's "Choose another button" goes with it, and the
+  devices seen sending Back are kept for good (through a reset of the hotkeys too), so one Back from a device that isn't
+  a gamepad ends both for as long as that device stays connected; a mouse's back button or a TV remote might, if Android
+  sends their Back as a key from a device it doesn't count as a gamepad (a hypothesis, not checked).
+- **Review**: the independent review's record is in the commit that carries this entry.
+- **Next**: the other follow-ups, which the owner asked for too: the PSP system dialogs running hotkeys (the stale
+  comment in `PspSystemDialogs.kt` going with them) and the PSP's Vulkan screenshots having the picture on screen,
+  checked on the RP6 with a PSP game of the owner's ("copied into the test app's own folder, deleted with it", the
+  owner's choice); on the desktop, 1810's toggle ("Follow fullscreen: leaving fullscreen pauses (opens the menu), going
+  back into fullscreen closes the menu and plays", the owner's choice), the Screenshot hotkey with the menu open,
+  Phobos's abort when its display goes away first, and the test target in CI; then the RP6's test copy replaced with a
+  build of the finished branch and a draft pull request (the owner's choices); and the hands-on checks (the RP6 pass, a
+  pad, a window manager, Wayland, Steam, Windows and macOS).
+
+## Hotkeys: a reference for Android and the desktop, and where each ares issue that shares their surface stands — 2026-10-20
+
+Branch `improved-hotkeys`, on `7817da840` (the entry below). The hotkey plan's closing docs: "Each PR updates the
+handoff. At the end, add a hotkey reference and the issue matrix". Read from the code at that commit, with the files
+each part comes from named. Changed: this entry, the corrections the reviews of the entries below left for it (The
+entries below), and the hotkey row of `docs/implementation-plan.md`. No code.
+- **A hotkey, on both apps** (Android's `input/Hotkeys.kt`, the desktop's `desktop/Hotkeys.cpp`, and the hotkey entries
+  below):
+  - Where: on Android, the Hotkeys row of the settings' Inputs & Hotkeys page and Hotkeys in the pause menu's Controller
+    section, each with its levels; on the desktop, the pause menu's Hotkeys row.
+  - A binding is one or more keys held together. It runs when exactly those keys are held, its first key pressed first:
+    another key held as well keeps it from running. Its first key starts it and is held back from the game, and its
+    other keys are held back while the first is down; pressed alone, they're the game's. On Android the hotkeys run in a
+    PSP system dialog over the game too, the keys they take not reaching it (the PSP follow-ups' entry above).
+  - A key bound alone that also starts a longer binding acts when tapped, let go of with nothing else pressed meanwhile,
+    so the longer bindings can be pressed past it: the desktop's Guide opens the menu when tapped and starts the
+    controller's other hotkeys. A hold's one-key binding isn't made a tap by that hold's own longer bindings: whichever
+    is held, the hold is the same, so its key starts it at once.
+  - Fast forward (hold), slow motion and frame advance last while their keys stay held. Slow motion runs at half speed,
+    its sound slowed with it; frame advance stops the game with its picture kept and runs a frame at each press and,
+    held, one every 100 ms after 300 ms, each frame drawn (the entry below).
+  - An action takes up to three bindings, any of which runs it.
+  - Capturing a binding takes every key pressed until 700 ms pass with no new one, a key let go of meanwhile included;
+    with no key for 5 s nothing changes. On the desktop, a capture still taking keys also ends, the binding unchanged,
+    if the window loses focus ("The window lost focus: the binding is unchanged").
+  - Binding keys another action already has asks first: "The selected hotkey combo is already bound to \<function\>,
+    would you like to overwrite?", or, where they only overlap (one binding holding all of the other's keys, or a key
+    that starts one among the other's later keys), "The selected hotkey combo overlaps \<function\>, would you like to
+    overwrite?"; where they're one action's exactly and overlap another's, the first question goes on "It also overlaps
+    \<function\>, which would lose that binding too." ("those bindings" where more than one would go). Overwriting
+    clears only the colliding bindings, each action keeping its others. A key bound alone and the longer bindings it
+    starts aren't asked about, the key acting when tapped, unless its action is a hold.
+  - Levels: all consoles, a console and a game, each storing only the actions it changes, whole, the rest inherited (on
+    Android since `bfff36383`, on the desktop since `f54ae457f`). The pause menu's Hotkeys page offers the running game,
+    its console and all consoles, on both apps; Android's settings page, all consoles or any console.
+  - What can be bound on Android: every key a controller or a keyboard sends the app, the triggers, the stick directions
+    (past half way) and the hat, as the D-pad; not the volume keys, left to the system, nor the navigation bar's or
+    gesture's Back, nor a key Android makes up from another (`FallbackKeys`). On the desktop: keyboard keys, pad
+    buttons, the triggers, stick directions and mouse buttons; Escape can't start a captured binding, as before any key
+    it cancels the capture.
+- **Android's defaults**, from `DEFAULT_HOTKEYS` (`input/Hotkeys.kt`), named as the Hotkeys page names them: the first
+  table below. Every controller hotkey is Back and one other button, the owner's set (the entry led by Back); a
+  keyboard's keys are second bindings. Unbound: Fast Forward (Toggle), Frame Advance, Reset System, and Save State and
+  Load State for each slot, 1 to 9 (rows the page's toggle shows). On a controller with no Back button, most of them,
+  the page warns and offers another button in Back's place, at every level at once.
+- **The desktop's defaults**, from `defaultHotkeys` (`desktop/Hotkeys.cpp`), a pad's buttons named by the Xbox layout,
+  as the page names them: the second table. Guide starts the controller's hotkeys, a Guide tap opening the menu, and a
+  keyboard keeps the desktop's own keys. Unbound: "Fullscreen and pause (toggle)"; Reset; Next disc; Save state and Load
+  state 1 to 9. Besides the hotkeys, Select and Start pressed together, and no other button, open the menu (a Steam
+  Deck's route, its Guide being Steam's), and in the menu B or Backspace closes it. On the ZX Spectrum and the MSX, a
+  default on Tab or on a key the computer's keyboard uses doesn't apply, stored or not (the owner's choice): Tab's on
+  both, and F5's and Escape's on the MSX.
+
+| Android action | Controller | Keyboard |
+|---|---|---|
+| Pause Emulation | Back + A | F12 |
+| Save State | Back + R1 | F5 |
+| Load State | Back + L1 | F9 |
+| Next Slot | Back + D-pad right | |
+| Previous Slot | Back + D-pad left | |
+| Reload Current Game | Back + X | |
+| Quit Emulator (asks first) | Back + B | |
+| Capture Screenshot | Back + R3 | F8 |
+| Mute Audio | Back + Select | |
+| Fast Forward (Hold) | Back + R2 | TAB |
+| Slow Motion (Hold) | Back + L2 | |
+| Cycle N64 Controller Pak | Back + D-pad down | |
+| Toggle PS1 Analog | Back + D-pad up | |
+| Toggle On-Screen Keyboard | Back + L3 | |
+| Swap to Library | Back + Y | |
+
+| Desktop action | Controller | Keyboard |
+|---|---|---|
+| Pause menu | Guide (tapped) | F12, Escape |
+| Save state | Guide + RB | F5 |
+| Load state | Guide + LB | F9 |
+| Next state slot | Guide + Right | |
+| Previous state slot | Guide + Left | |
+| Screenshot | Guide + R3 | F8 |
+| Fullscreen | | F11 |
+| Fast forward (hold) | | Tab |
+| Fast forward (toggle) | Guide + RT | |
+| Slow motion (hold) | Guide + LT | |
+| Frame advance | Guide + Start | |
+| N64 controller pak | Guide + Down | |
+| PS1 analog controller | Guide + Up | |
+| Mute | Guide + A | |
+| Reload game | Guide + X | |
+| Quit game (asks first) | Guide + B | |
+
+- **The ares issues** of the plan's bundle and its lists, by where they stand in Phobos (titles as GitHub had them on
+  2026-10-20, read with `gh api`, all still open upstream):
+  - **Done**: 2212, "Enhanced Hotkey Bindings (key / button combinations)": combos of any length, up to three bindings,
+    the question before overwriting, levels (Android `0e434cd80`, `a41f6644e`, `131351063`, its levels since
+    `bfff36383`; the desktop `f4e0b1b98`, `f54ae457f`). 1191, "Frame Advance doesn't advance multiple frames when held":
+    held, a frame every 100 ms (`0e434cd80`, `f4e0b1b98`), each frame drawn since `7817da840`. 1726, "[n64] Add hotkey
+    to switch between controller (memory) pak and rumble pak": None, Rumble Pak and Controller Pak in turn (`0e434cd80`,
+    `f4e0b1b98`). 1698, "[FEATURE REQUEST] Save State by Hotkeys": Save State and Load State for each slot, 1 to 9,
+    unbound until bound (`0e434cd80`, `f4e0b1b98`). 424, "[Request] Slow motion hotkey": held, at half speed
+    (`68e973d43`). 1018, "[BUG] Steam Overlay doesn't open": on the desktop Shift + Tab no longer fast-forwards
+    (`f4e0b1b98`), not checked with Steam. 2513, the pause on focus loss, reported on macOS: the desktop's Pause when
+    unfocused, on by default (`68f2a2799`), not checked on macOS. 2365, "Don't Register keystrokes when window is not
+    focused in fullscreen": on the desktop nothing that still comes while another window has the keyboard runs a hotkey,
+    SDL holding the pads' presses back, and the game waits by default (`68f2a2799`). 1577, "Computer goes to sleep while
+    playing game": Android keeps the screen on with a game on it (`0e434cd80`), and on the desktop SDL holds the
+    screensaver off from its start while Phobos runs, with no code of Phobos's (seen on KDE, recorded in `68f2a2799`).
+    1368, GNOME 44 blanking the screen when only a controller is used: SDL's hold, as for 1577, not checked on GNOME.
+    1810, a hotkey for "toggle fullscreen and pause" and mouse buttons bindable: on the desktop mouse buttons bind as
+    hotkey keys (`f4e0b1b98`), and "Fullscreen and pause (toggle)" follows fullscreen, the game waiting in the menu out
+    of it and going on back in it, the toggle the issue asks for (the desktop follow-ups' entry above; unbound by
+    default). Android's hotkeys take no mouse button and have no such action.
+  - **In part**: 2288, "[Feature Request] Per-game input profiles": Android has had controls for a console and for a
+    game, buttons and hotkeys, since `bfff36383`; the desktop has hotkeys for them (`f54ae457f`) but no button remapping
+    at all, per game or not, the owner agreeing to hotkeys alone there.
+  - **Already covered**: 2291, an on-screen word for a successful save: saving a state says so, "Saved state to
+    \<slot\>" on Android and "Saved state N" on the desktop. 2194, input settings lost when the controller changes:
+    bindings name keys and buttons, not controllers, on both apps, so a controller going away or another taking its
+    place leaves them as they are. 1495, "SDLGameControllerDB support when using SDL as input driver": the desktop opens
+    pads with SDL 3's gamepad API, which knows the pads in its own list (`SDL_gamepad_db.h`) and takes more mappings,
+    the community database's for one, from `SDL_GAMECONTROLLERCONFIG` or `SDL_GAMECONTROLLERCONFIG_FILE`. 1585, a
+    screenshot taken while paused saved only once the game goes on: saved at once, paused or not (the entry below).
+    1192, a screenshot taken while paused a frame late: it has the frame on screen (the entry below, checked on the
+    desktop), except where the PSP's Vulkan renderer presents (on Android, by choice): there a screenshot can be a frame
+    or two behind, paused or not, short of the current frame 1192 asks for (that entry's Limits); since the PSP
+    follow-ups' entry above it has the picture on screen there too (checked on the RP6). 2224, "Add option to disable
+    auto-setting of N64 Controller Paks": the runner attaches the one pak the player chose, None until one is, never one
+    a game asks for (its N64 Player 1 set-up in `PhobosRunner.cpp`).
+  - **Out of scope**: 2463 and 1126, two controllers as two players (every controller drives player 1, on both apps);
+    558, controller profiles; 1708, controllers on macOS; 986, an analog stick acting as the D-pad on systems without
+    one (neither app maps a stick to the D-pad); and the plan's "fullscreen cluster", the five fullscreen issues named
+    by the planning session the plan came from: 1462, 2287, 2511, 2564 and 1477.
+  - **Not done, unless asked**: 1184, the cursor hidden in fullscreen; 1293, a trigger threshold; 1549, turbo buttons;
+    and an N64 pak per game.
+  - ares's pull request 2462, "chord hotkeys, hotkeys for load/save state to slot 1-9" (open), changes ares's
+    `desktop-ui`, which Phobos doesn't have, and caps a chord at three keys (`ChordKeyLimit`): Phobos's hotkeys are its
+    own.
+- **The entries below**: what their reviews left for this one. The frame-advance entry's record of a probe says "after 7
+  of them" (its fourth review). The entry led by Back has its PSP system dialog limit split into points, with the step
+  Back's release takes after another key's (Back + R1 saving nothing and backing out of the dialog), the install dialog
+  taking the D-pad and doing nothing, and the soft keyboard's part named as assumed of Gboard, the RP6's by its settings
+  (its fifth review). The desktop per-game entry's Limits now say the same game unzipped has the console the library
+  gives it, not always its own, and that a zipped game keeps "Auto" as it runs, so the desktop's hotkeys and menu rows
+  that go by a game's system, and the emulated computers' rule, pass it by (derived); its Review says the scripts' place
+  was recorded, not moved; and the plan's row calls that entry's first review's Minors fixed or recorded (its second
+  review).
+- **Checks**: docs only. The two tables compared with the code by a script kept outside the repository
+  (`check-reference.py`: each action's name, as the page has it, and its default bindings, read from `input/Hotkeys.kt`,
+  `ui/ControllerPages.kt` and `desktop/Hotkeys.cpp`): 35 of 35 pass, the two tables found, a row for each action with a
+  default and no other, each row's bindings, and no direct slot bound by default. The issue titles and states read from
+  GitHub with `gh api` (kept as `ares-issues.tsv`), and 1810's request, 2513's label and comments and 2462's files and
+  chord limit read the same way. The RP6's soft keyboard read from its settings over adb, read-only. Widths (only the
+  headings over 120), the plan row's links, `git diff --check`. The entry rendered by GitHub's Markdown API (`gh api
+  markdown`, its gfm mode), the placeholders it quotes shown as written.
+- **Limits**: the matrix is Phobos's view of these issues, which stay open upstream; "done" means on this branch, not in
+  a release. What was checked by hand is said; the rest comes from the code and the checks of the entries below, and the
+  hands-on checks are still the owner's. The tables give each action's defaults; a player's own bindings, or a level's,
+  replace them.
+- **Review**: the first independent review (diff `c2728e56...`) found NEEDS CHANGES, two Minors: three placeholders this
+  entry quotes, `<function>` twice and `<slot>`, written bare, so that GitHub's rendering dropped them as tags (seen
+  with its Markdown API); and Tab called a key of the ZX Spectrum's keyboard, where it's an exception of its own. Both
+  fixed. Its suggestions are taken, each checked against the code: capture told as keeping every key pressed, those let
+  go of included; the question's third form; a hold's one-key binding not made a tap by that hold's own longer bindings;
+  the levels each page offers; 1810's action told as one way, and 1810 moved to In part for it, its request, read since,
+  being a toggle; the PlayStation's Analog controller row among what passes a zipped game by (the desktop per-game
+  entry's Limits); 1192's sentence; and 2212's credit for Android's levels. Where it couldn't tell where the five
+  fullscreen issues' numbers came from, they're now said to be those named by the planning session the plan came from.
+  The second (diff `fa440ec1...`) found NEEDS CHANGES, one Minor, in the commit's record of the first review: it gave 32
+  issues as read with gh api, where there are 31 besides the pull request, and said every earlier entry's edit was
+  word-diffed, where only the PSP dialog limit's was, the others checked against the code and the commits. Corrected in
+  the commit. Three of its suggestions are taken: the desktop's "Pause menu, out of fullscreen" in quotes where a verb
+  follows it, here and in the plan's row; the fullscreen issues' source worded as the planning session the plan came
+  from, whose text naming them it found; and a desktop capture ending as the window loses focus, told with the capture
+  rule. Its fourth, telling the owner that 1810 had left the plan's fixed bundle, was for the report. The whole record
+  is in the commit that carries this entry.
+- **Next**: the hands-on checks (the RP6 pass, frame advance there included, bound first; a pad, a window manager,
+  Wayland, Steam, Windows and macOS on the desktop); a pull request when the owner wants one; the code changes the
+  reviews left (the plan row's Open), and a comment in `PspSystemDialogs.kt` still naming Mode alone as the default
+  pause; and, if wanted, the desktop's "Pause menu, out of fullscreen" hotkey made the toggle 1810 asks for (In part).
+
+## Frame advance drawing each frame it runs, and a screenshot taken while paused saved at once with the frame on screen — 2026-10-20
+
+Branch `improved-hotkeys`, on `131351063` (the entry below). Found while checking, for the hotkey plan's closing issue
+matrix, ares issues 1585 (a screenshot taken while paused not saved until the game goes on) and 1192 (a screenshot taken
+while paused delayed by a frame). Changed: `android/app/src/main/cpp/PhobosRunner.cpp`, the runner both apps share.
+Checked on the desktop, on a virtual display; **not** on a device (see Limits).
+- **What was wrong**: frame advance runs a frame with the game paused (`frameAdvance()`), and the runner's `video()`
+  returned at once while paused (`isPausedAtomic`, in it since the first commit, `27e1d7574`), so none of the frames
+  frame advance ran was drawn through it: each press moved the game on unseen, the picture staying the one the game had
+  stopped on, on the desktop and, by the same code, on Android, and a screenshot then, a copy of what `video()` drew
+  last, had that picture too. Two cases differ (derived from the code, not run). An N64 game under Vulkan, as N64 games
+  start, has its picture presented by `video()` from the scanout each frame renders, but its screenshot read that
+  scanout itself (`vulkan.readScanout`), so it had the step's frame while the window kept the old one. A PSP game whose
+  Vulkan renderer presents its own pictures (a choice on both apps, Software being the default, presenting on Android
+  alone: the desktop reads its frames back) presents each frame within the run, the stepped ones included, so its steps
+  showed all along; but its screenshot is the copy that renderer keeps of what it presented, and the copy of a picture
+  the GPU drew is kept only a frame or two later, as the slot that showed it is next waited for
+  (`docs/psp-gpu-renderers.md`), so a screenshot taken after a step had an earlier frame, and still has. The hotkey
+  entries below took the frames for drawn: their checks asked for a frame at each press, not for its picture.
+- **The fix**: `video()` draws, though the game is paused, the frames frame advance asks for, counted
+  (`pausedFramesToDraw`): one a step, and two on the first step after a pause. ares's screen thread draws a frame after
+  the run that made it (`Screen::frame` hands it over without waiting), and the emulation thread may have started one
+  more frame as the game stopped, on its way still or run just after the step: of the two, the newer is drawn last. A
+  pause, a game unloading and the 64DD's reload empty the count, so nothing else is drawn while paused, as before. The
+  stepped frames stay silent, as before, and a PSP game its Vulkan renderer presents is as it was, its screenshots too
+  (`video()` leaves its frames to the renderer, as when it plays).
+- **Screenshots while paused** (ares 1585 and 1192): a screenshot copies the frame drawn last and writes its PNG at
+  once, paused or not (`captureScreenshot`, `writeScreenshot`); with frame advance's frames drawn, one taken after a
+  step has that step's frame. Not where the PSP's Vulkan renderer presents (on Android, by choice): there a screenshot
+  can be a frame or two behind the window, paused or not, short of the current frame ares 1192 asks for (What was wrong;
+  Limits). On the desktop the screenshot hotkey runs while a game plays, frame advance included; with the pause menu
+  open it does nothing, the menu's Screenshot row taking the shot instead (as the desktop hotkeys entry made it: the
+  actions but fullscreen and the menu wait for the game to be playing, the menu having them too). The desktop
+  follow-ups' entry above has it take one with the menu open too. On Android the hotkeys run with the pause menu open as
+  well, and the menu's Shot button takes one too (by the code; not run).
+- **Checks**:
+  - The desktop: the Linux build (GCC 16.2.1, CMake 4.4.4, Ninja, SDL 3.2.30); ctest 1/1, its 209 host checks;
+    `PhobosRunner.cpp` compiled with `-Wall -Wextra` into a scratch folder: no warning on a changed line (12 elsewhere
+    in the file).
+  - A new check on a virtual display (`shot-paused.sh`, kept outside the repository with the review's evidence): a Game
+    Boy ROM written for it (`make-cycle-rom.py`: video memory cleared, then the background palette one higher at each
+    vertical blank, so the whole screen changes shade every frame, four shades round), interframe blending off; Frame
+    Advance bound to F10, pressed six times, the window captured and F8 pressed after each; then the pause menu over the
+    sixth frame, F8 there, and the menu's Screenshot row. Its comparison passes 15 of 15: each screenshot one colour and
+    the window's shade just before it; four different shades over the first four steps, and the first two again at the
+    fifth and sixth (one frame a press, each drawn); and the menu's row taking the sixth frame again. Its log adds that
+    each screenshot was saved while paused ("Saved screenshot" logged and the file there within 0.3 s), and that F8 in
+    the menu took none. Before the fix, the same program but for `video()`'s old line (built outside the repository with
+    the build's own commands, the build's files untouched): 14 of 15, every step the same shade. Without the extra frame
+    on the first step: 15 of 15 in three runs here, though the first review's probe, stepping from a pause 40 times, saw
+    that variant show the game a frame behind 5 times, and this change in none of 80.
+  - The full keyboard-and-mouse suite of the entries below on a virtual display: 144 of 144; the slow-motion check: 8 of
+    8.
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0), on the
+    sources the first review saw: 446 tests per flavour, 0 failures, 54 result files each, and the legacy debug APK
+    builds, its native library built with the change. After the runner's comment changed (the only change since, and
+    nothing the unit tests build), `:app:assembleLegacyDebug` again, its native library rebuilt: SHA-256
+    `12e5b99ee953691c79bdfb1a4d9d58af34b30a839f3339536b8e07a3a2ffd419`, one build of these sources, 39,050,266 bytes.
+    That is the first build's 32,594,167 and one more record of the native library: the rebuilt library's record
+    (6,456,099 bytes) comes last, and the earlier one's place is 99 records with no name (6,456,101 bytes, after
+    `libmain_hook.so`'s), listed nowhere, so not among the APK's 998 entries (seen by a script kept outside the
+    repository; the debug build's packaging updates the APK in place, by that layout).
+  - Also seen: the checks' Phobos aborted as they stopped it, in `exit()` called by Xlib's I/O error handler with one of
+    Phobos's threads still joinable, wherever the virtual display was stopped before Phobos had quit (triggered by the
+    harnesses' order, though the abort is Phobos's own: a thread still joinable as `exit()` runs, left for a later
+    change, made in the desktop follow-ups' entry above; the new check lets Phobos quit first, and saw none).
+- **Limits**:
+  - Not run on a device: when this was checked, the RP6 had the test copy of the entry below on screen, perhaps in the
+    owner's hands-on check, and was left alone. Android's frame advance runs the frame on the main thread and draws it
+    through the same `video()`; Frame Advance has no default binding there (the entry below), so a check binds one
+    first.
+  - The first step after a pause can draw one frame more than its own: one the emulation thread started as the game
+    stopped, either still on its way (drawn first, the step's own following at once) or run just after the step (drawn
+    last: the game is then a frame further on than the press alone takes it, as before this change, which ran that frame
+    too but didn't draw it). The two at once, a race the first review noted, can leave the picture a frame behind the
+    game.
+  - One frame to draw can stay counted through a frame-stepping session (from that first step's two), so one frame run
+    while paused can be drawn without being asked for; frame advance's are the only ones run then.
+  - Frame advance with an N64 game under Vulkan, or with the PSP's Vulkan renderer, not checked (both under What was
+    wrong).
+  - Where the PSP's Vulkan renderer presents (on Android, by choice), a screenshot can be a frame or two behind the
+    window, paused or not, a step's included (What was wrong): short of the current frame ares 1192 asks for, as before
+    this change (derived from the code and `docs/psp-gpu-renderers.md`, not run). The PSP follow-ups' entry above has it
+    keep the picture on screen.
+- **Review**: the first independent review (diff `8589a4dc...`) found NEEDS CHANGES, one Minor: the frames were said
+  never drawn nor kept for a screenshot, where an N64 game under Vulkan, as N64 games start, took its screenshots from
+  the scanout, so with the step's frame, and a PSP game its Vulkan renderer presents showed its steps all along (both
+  found reading the code). Narrowed under What was wrong, in the plan's row and in the commit. Its suggestions are
+  taken: its probe's count for the first step's race (Checks), the check's own 15 told apart from what its log adds, the
+  abort called Phobos's own (under Next), and the runner's comment saying the newer frame comes last. The second (diff
+  `499ea321...`) found NEEDS CHANGES, one Minor in that answer: the PSP's Vulkan renderer was said to keep each frame it
+  presents for screenshots, where it keeps the copy of a picture the GPU drew only a frame or two later, so a screenshot
+  after a step has an earlier frame (found reading the code, as `docs/psp-gpu-renderers.md` says). Corrected under What
+  was wrong, Screenshots while paused and Limits, in the plan's row and in the commit. Its suggestions are taken: the
+  APK's size told as seen (Checks), the renderer said to present on Android alone, and, in the commit, the result of the
+  first review's probe of saves while stepping. The third (diff `e1c3f7d2...`) found NEEDS CHANGES, one Minor in the
+  commit's record of the first review: the trace of a save's missed palette step was credited to the second review,
+  where the first review's own second probe had made it (15 saves: the step after 7 of them brought no new shade, each
+  next step one frame on). Corrected in the commit. Its suggestions are taken: the plan's row says a screenshot taken
+  while paused is saved at once and, that renderer aside, with the frame on screen; and that renderer's screenshots are
+  called short of the current frame ares 1192 asks for, not its symptom. The whole record is in the commit that carries
+  this entry.
+- **Next**: the hotkey plan's closing docs (a hotkey reference and the issue matrix); frame advance on the RP6, by hand;
+  Phobos's abort when its display goes away before it quits (Checks; fixed in the desktop follow-ups' entry above); if
+  wanted, a PSP screenshot with the Vulkan renderer presenting that has the picture on screen (Limits; done in the PSP
+  follow-ups' entry above); the pad, window manager, Wayland, Steam, Windows and macOS checks.
+
+## Android hotkeys led by Back: the owner's set from the RP6 as the defaults, none needing C or Z, a warning while no controller has sent Back with a button chosen in its place at every level at once, a controller's Back coming as a key — 2026-10-20
+
+Branch `improved-hotkeys`, on the slow-motion commit `68e973d43` (the entry below). The seventh pull request of the
+hotkey plan, from the owner's choices once the RP6's Home was found never to reach an app (the entry below, The RP6,
+seen in passing). On the defaults: "The current global hotkeys I have set are the defaults i would like to make for
+everything. Please analyze the current settings and make sure they work for anyone (i am using the C and Z buttons on
+the retroid, so these should default to something sensible for those who do not have C or Z." On the draft's Replace
+Mode row: "The whole replace mode thing is a tad confusing, I think mode by default for Phobos should be set to "Back"
+so we can set it to that by default. If its unset, then we can display that message". Changed, on Android: the manifest,
+`MainActivity.kt`, `data/SettingsStore.kt`, `input/ControlCapture.kt`, `input/ControlLevels.kt`, `input/FallbackKeys.kt`
+(new), `input/Hotkeys.kt`, `input/WindowKeys.kt`, a comment in `input/GameInputState.kt`, `ui/ControllerPages.kt`,
+`ui/MainViewModel.kt` and six tests (`FallbackKeysTest` new); on the desktop `desktop/main.cpp`, for the entry below's
+leftovers. Checked on the RP6 with a test copy beside the owner's app; **not** with any other controller (see Limits).
+- **The defaults**: the owner's set, read from the test copy's settings file, with two buttons changed. Every controller
+  hotkey is Back held with one other button: Back + A pauses, + R1 saves, + L1 loads, + D-pad right or left steps the
+  slot, + X reloads, + B quits (asking first), + R2 holds fast forward, + L2 holds slow motion, + D-pad down cycles the
+  N64 pak, + D-pad up toggles the PS1 analog mode, + L3 shows the on-screen keyboard and + Y swaps to the Library. Where
+  the owner had Back + Z (a screenshot) and Back + C (mute), buttons most controllers lack, Back + R3 takes a screenshot
+  and Back + Select mutes (the owner's choice), C and Z left free. A keyboard's F5, F9, F8, F12 and Tab stay second
+  bindings (the owner's choice). Unbound, as in the owner's set: Reset, Frame Advance, the fast-forward toggle and the
+  direct slots. Select, only ever a second key, reaches the game alone. The desktop's defaults stay as they are (the
+  owner's choice): there a controller's Back is its Select, which games need, so Guide leads, its tap opening the menu.
+- **Most controllers have no Back button**: stock Android 13's key layouts, read from the RP6 (`/system/usr/keylayout`),
+  give the Xbox 360, One and Series pads, the DualShock 4, the DualSense, the Switch Pro Controller and 8BitDo's pad no
+  key sending Back (the DualShock 4's version-specific layouts and the DualSense's fallback included): their View,
+  Share, Create or Minus button is Select (so is the Xbox 360's, though labelled Back), and their Xbox, PS, Capture or
+  Home button is Mode (the Switch Pro's Home is Android's own Home). Of the layouts read, only Logitech's F310 sends a
+  button as Back; the RP6's Back button sends it too (Linux key 158).
+- **The warning, and a button in Back's place**: the Hotkeys page warns, at the level it shows, while Back starts a
+  hotkey there, a gamepad is connected and no device connected has been seen sending it, a gamepad or not (since the
+  Android follow-ups' entry; before, gamepads alone counted): "No controller here has sent Back yet, and Back starts
+  these hotkeys: press it once to show it works, or, with no Back button (most controllers have none), choose another
+  button to start every hotkey in its place, on every console and game." A controller is remembered (its InputDevice
+  descriptor, stored as `back_seen_pads` and kept through a reset) once a Back press of its reaches the window, a
+  fallback's or the navigation bar's not counting. **Choose another button** captures one key or axis direction, which
+  then starts, in Back's place, every binding Back starts: at all consoles (a default included, stored then as the
+  player's) and in each console and game storing hotkeys of its own, in one edit
+  (`Controls.replaceHotkeyLeadEverywhere`, `SettingsStore.setHotkeysEverywhere`). Nothing changes, and the actions in
+  the way are named with the level that sets them, when the button is already in a hotkey Back starts (it would lose a
+  key: Select is in Mute's Back + Select) or would collide anew with another binding at any level; a collision there
+  already doesn't count: "Select can't take Back's place: Mute Audio uses it already. Choose another button (on Xbox and
+  PlayStation pads, Guide or PS), or bind that again first." A button any level's bindings give the game is asked about
+  (since the Android follow-ups' entry; before, the level shown's): "Use Start in Back's place? Start is also a game
+  button: once it starts the hotkeys, the game no longer gets it." Back itself pressed there changes nothing, its press
+  having shown it works. Resetting all consoles' hotkeys to the defaults brings Back back there, though not in a
+  console's or game's own hotkeys (under Limits). This replaces the draft's Replace Mode row, which changed one level at
+  a time and which the owner found confusing.
+- **A controller's Back as a key**: the manifest now sets `android:enableOnBackInvokedCallback="false"`. With predictive
+  back on (set in the app's first configuration, `27e1d7574`), Android 13 and later hand Back to the back callback
+  rather than the window, so a controller's Back never reached the hotkeys; Compose's BackHandlers still get the Backs
+  the window leaves. Two Backs are kept from the hotkeys and from a capture: the navigation bar's or gesture's (from the
+  virtual keyboard; it cancels a capture) and a fallback, the key Android makes up for one the app left unhandled, B's
+  Back say. Android marks a fallback, but the RP6 sends it unmarked, with the device, scan code and down time of the B
+  it stands for, which `FallbackKeys` goes by. So B in the pause menu goes back as before, where the draft's first build
+  had it tap Pause (found on the RP6).
+- **Behind the Library**: a key starting a Library binding (Back, of Back + Y) is held back from the Library's screens,
+  where Back would go back as it's let go of, the way back to the game half done; every other key goes on to them.
+- **The entry below**: its third review's suggestions are taken. In `desktop/main.cpp` the iterator in quitFirst is
+  renamed (it shadowed `Shell::quit`), and the menu case is checked: with Pause and Quit on one key, that key in the
+  menu runs only Pause, which closes it, and nothing asks after; in play Quit asks (six checks added to the quit-first
+  session, now 14). Two loose ends in its evidence outside the repository are fixed: a note beside round 1's diff, and
+  the slow-motion check no longer clearing a fixed folder.
+- **Checks**:
+  - Android: `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+    :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue` (JDK 17.0.20.1, Gradle 9.6.0): 446 tests
+    per flavor (432 before), 0 failures, 54 result files each, last run after the first review; the legacy debug APK
+    builds (32,625,919 bytes, SHA-256 `f7dcc62a2e876badfc3834a7ad60efc674558536cafee91e8db3cfb654704ce9`, one build of
+    these sources).
+  - New or changed tests: the defaults (the owner's set whole, written out from its stored values with R3 and Select in
+    place of Z and C and the keyboard's keys beside it, nothing else bound; none needing C or Z; no collision); a key in
+    Back's place (every binding Back starts, the rest left); what's in the way (a key lost, a new collision, not one
+    there already); every level at once (what each level stores, a console's Quit in the way named where it's set, a
+    game's own Mute); the store writing all consoles and each level, and keeping the controllers seen; the routing of
+    the defaults (Back + A pausing, Back alone running nothing, Back + R2 holding fast forward, Select reaching the
+    game, the keyboard's keys); the Library from behind with Back; a capture of one key or axis direction; and the
+    fallbacks (`FallbackKeysTest`, five). The routing tests of taps, holds and double reports keep a Mode-led set of
+    their own, the defaults as they were.
+  - Ten mutants, each made by hand in the worktree, the input package's tests and `HotkeySettingsTest` run (112), then
+    undone and each file's SHA-256 checked; each failed its test or tests: a collision there already counted in the way;
+    only all consoles checked; an action in the way named at the level it was found at, not the one setting it; the
+    consoles' and games' own hotkeys left on Back; the store not writing them; a key starting a Library binding passed
+    to the Library's screens; a capture in Back's place taking no key; a trigger's key let through after it; a fallback
+    known only by its mark; the controllers seen not read back. They ran before the first review, and what has changed
+    since (a word of a comment in `SettingsStore.kt`, the defaults' test, Back's label, two other comments) is nothing
+    they test. After it, that review's mutant of the defaults (Next and Previous slot swapped, N64 pak and PS1 analog
+    swapped, Reload on Back + Start), which every test had passed, failed the defaults' test and no other.
+  - On the RP6 (Android 13): a debug build of the sources the first review saw but for two comment lines, in
+    `SettingsStore.kt` and `MainViewModel.kt` (shortened before that review), Back's label in it still "BACK" (changed
+    after the review), under its own application ID (`com.phobos.emulator.pr7`, APK SHA-256
+    `a156e1d67dabd40243da5a8cdf85bef2cda1eee680637460aac7f704751e961b`), installed beside the owner's app, its data
+    cleared, driven by the built-in controls' own events (sendevent) and checked by screenshots and the log: the warning
+    before any Back press; the rows ("BACK + R1 or F5", "BACK + R2 or TAB", the fast-forward toggle "Not bound"); Select
+    refused with the message above; Start asked about, and cancelled; Mode chosen, the rows then Mode-led with the
+    keyboard's kept ("Mode + R2 or TAB · from all consoles"; on the cleared copy all consoles was the only level with
+    hotkeys, every level at once being the host tests'), the warning gone, Mode + A resuming and Mode + R1 saving; the
+    reset bringing Back and the warning back; one Back press storing the controls' descriptor, the warning going and the
+    page staying; Back + A resuming, Back alone doing nothing, Back + R1 saving. Earlier, on the draft: the controls'
+    Back reaching the window as key 4, B going back on the Hotkeys page, the virtual keyboard's Back doing nothing in
+    play, and Back + Y swapping to the Library and, from behind it, back. The owner's app moved from 2.4.0-196 to
+    2.4.0-276 between the two sessions (updated at 17:40 by the owner; the sessions' scripts only install and remove the
+    test copy), and the second session left it as it found it. The test copy stays installed for the owner's hands-on
+    check.
+  - The desktop, for the entry below's leftovers: the Linux build, ctest 1/1 and its 209 host checks; the quit-first
+    session 14 of 14 on a virtual display, its two mutants failing four and one.
+  - Not run: another controller (the warning and the choice were driven only from the RP6's controls); Android 14 to 17
+    (the app targets 17, API 37).
+- **Limits**:
+  - A controller with no Back button starts with the warning and a button to choose; until then its hotkeys can't be
+    pressed (a keyboard's can, and the screen's menu button).
+  - On such a pad, Guide or PS pressed in the pause menu takes the player to the home screen until Guide or PS itself
+    takes Back's place; another button chosen there, Start say, leaves Mode starting no hotkey (derived, not seen: in
+    the pause menu a Mode press that starts no hotkey is taken neither by the hotkeys nor by the paused game, and
+    Android's `Generic.kcm`, which the RP6 holds and which none of the pads read has a map of its own to replace, makes
+    an unhandled Mode a Home press). In a running game the game's screen takes every key the hotkeys leave, Mode's too
+    (`EmulatorScreen.kt`'s `onKeyEvent`), though not in a dialog over it (the next limit); the Mode-led defaults of the
+    entries below took Mode in the pause menu as well.
+  - A PSP system dialog, a window of its own over the running game, takes only its PSP buttons and the Pause hotkey and
+    passes every other key on, a hotkey's first key included (derived from `PspSystemDialogs.kt` and Android's dialog,
+    fallback-key and soft-keyboard handling, not seen). No other hotkey runs there, and the keys of one act as they
+    would with no hotkeys: as the dialog takes them or, where nothing in its window does, as the fallback `Generic.kcm`
+    gives the key. The PSP follow-ups' entry above changed this: the hotkeys run in a dialog now, the keys they take no
+    longer the dialog's; what of the rest still holds is in its Limits.
+    - Guide or PS, let go of with the dialog still up, goes Home, pressed alone or with another button and even where it
+      starts the hotkeys; where Pause is bound to it alone, a press of it alone pauses instead.
+    - Back, let go of with the dialog still up, does what the dialog's back button does (from a question about a save
+      chosen in a list, back to the list; in the install dialog, nothing), as a controller's Back always has there.
+      After any Back hotkey but Pause it takes that step too, after the other key's: Back + R1 (Save state's) saves
+      nothing and backs out of the dialog, Back + a D-pad direction moves the highlight and then backs out, and Back +
+      R3 where confirming asks first (saving over a save, say) brings the question up and takes it back to the list.
+    - Among the defaults' other keys, by the default button mappings: B acts as the dialog's confirm or back button, as
+      its confirm button is set, and the D-pad moves, but for the install dialog, which takes both and does nothing; R3
+      and L3 (Screenshot's and the on-screen keyboard's), which `Generic.kcm` makes the D-pad's centre, confirm in a
+      message or a save dialog, so Back + R3 in a list of saves loads the one highlighted, or saves to new data, at once
+      (saving over a save or deleting one asks first, and a corrupted one shows its notice); and in the PSP keyboard X
+      and Y come as a backspace and a space. So Back + B can take two steps, B's and then, as Back is let go of, Back's.
+    - A Pause hotkey hides the dialog until the game goes on (Back + A, or Guide + A where Guide has Back's place), but
+      for Back + A in the PSP keyboard while Android's soft keyboard shows, which it does once the dialog opens: the
+      soft keyboard has Back first and hides as Back is let go of, so there Back + A acts as A alone, entering the text
+      or cancelling as the dialog's confirm button is set, and Back backs out of the dialog only once the soft keyboard
+      is down. That assumes the soft keyboard takes Back and passes a controller's other buttons on, as Gboard, the
+      RP6's (its settings name it), is taken to; another keyboard may differ.
+  - The Xbox 360 pad's button labelled Back sends Select, by its layout: pressing it doesn't end the warning, and
+    choosing it is refused (Select is in Mute's Back + Select), the refusal naming Guide.
+  - Back alone does nothing, in play or in the pause menu: it starts the hotkeys. B, through its fallback, goes back in
+    menus and, at the pause menu's top, asks whether to quit, as before.
+  - Google calls the opt-out temporary: apps targeting Android 16 get predictive back by default, the attribute set to
+    false opting out for now. A later Android may drop it, and a controller's Back would stop reaching the hotkeys.
+  - On a pad whose only Select-like button sends Back (Logitech's F310, by its layout), Mute's Back + Select can't be
+    pressed.
+  - The warning goes once any connected device has sent Back, a gamepad or not (since the Android follow-ups' entry);
+    each new controller is remembered by its own first Back press.
+  - The button in Back's place is the player's own then, at all consoles and in each console's or game's own hotkeys.
+    Choosing another needs Back's hotkeys back first, the warning showing only while Back starts one, and Reset hotkeys
+    to the defaults puts Back back at all consoles alone: a console or game with hotkeys of its own keeps the chosen
+    button in them until they're bound again or its own Reset button has it take what it inherits, its own changes gone
+    (a game takes its console's, which keep the chosen button in the actions the console sets itself until the console
+    is reset too). A choice made meanwhile reaches only the bindings Back starts, so the levels' hotkeys then start with
+    different keys.
+  - The RP6's Home still never reaches Phobos (the entry below).
+- **Review**: the first independent review (diff `66fb2a10...`) found NEEDS CHANGES, four Minors: the defaults' test
+  pinned ten of the fifteen controller defaults (a mutant moving the other five passed it); the way back from a chosen
+  button was given for all consoles alone; Guide or PS going Home on a pad without Back wasn't under Limits (by the code
+  it does in the pause menu, not on a running game's screen, which takes every key the hotkeys leave); and three claims
+  went beyond their evidence (every level stored on the device, where all consoles was the only one with hotkeys; a
+  stored value quoted from a read not kept; the Xbox 360's button labelled Back left out). Fixed: the defaults' test
+  checks the whole set, and the text is corrected under Checks and Limits. Of its suggestions, Back's label (now "Back",
+  as the page's text has it), the window callback's comment, Android 17 among the versions not run and the plan row's
+  wording are taken; asking about a game button by every level's button bindings rather than the level shown's, and the
+  warning counting a Back sent by a device that isn't a gamepad, are left for a later change. The second (diff
+  `c5a891a8...`) found NEEDS CHANGES, two Minors in that answer's text: the pause menu's Home presses were said to end
+  once any button took Back's place, where only Guide or PS taking it ends them (another, Start say, leaves Mode
+  starting no hotkey); and a game's own Reset button was said to give it all consoles' hotkeys, where it gives it its
+  console's, the chosen button still leading the actions the console sets itself. Both corrected under Limits. Its
+  suggestions are taken: the PSP system dialog, a window of its own, named under Limits, with what Back does there,
+  found reading it; the two comment lines the RP6's build differs by named under Checks; and, outside the repository,
+  the search for the pads' own key maps kept with its commands and widened to `/system_ext` and `/data/system/devices`
+  (none there either, and the pads' version-specific layouts it turned up read too), and the defaults mutant's diff
+  rebuilt and kept beside its log. The third (diff `7e2f7ca2...`) found NEEDS CHANGES, one Minor in the new PSP line:
+  Guide or PS was said to go Home there only when pressed alone, where by the same reading it does too after starting
+  any hotkey but Pause, which doesn't run. Corrected under Limits. Its suggestions are taken: the line's basis widened
+  to Android's dialog and fallback-key handling, what a hotkey's second key does there, a follow-up for these dialogs
+  under Next, and the mutant's diff called rebuilt. The fourth (diff `9065e204...`) found NEEDS CHANGES, one Minor in
+  that line: a hotkey's second key was said to act there as its PSP button, where R3 and L3, which `Generic.kcm` makes
+  the D-pad's centre, confirm in a message or a save dialog (Back + R3, Screenshot elsewhere, loading the save
+  highlighted in a list), and X and Y come as a backspace and a space in the PSP keyboard. Corrected under Limits, the
+  keys acting as they would with no hotkeys. Its suggestions are taken: Android's soft keyboard over the PSP keyboard
+  having Back first (which keeps Back + A from pausing there, found answering it), the install dialog's buttons doing
+  nothing, and Back + B taking two steps where B's leaves the dialog up. The whole record is in the commit that carries
+  this entry. The two suggestions left for a later change are taken in the Android follow-ups' entry.
+- **Next**: the plan's closing docs (a hotkey reference and the issue matrix); if the owner wants it, a PSP system
+  dialog holding a hotkey's first key back and running its hotkeys (Limits); the RP6 pass by hand; the pad, window
+  manager, Wayland, Steam, Windows and macOS checks.
+
+## Slow motion, held, at half speed on Android and the desktop, its sound slowed with the picture and measured clean on the RP6 and the desktop first; the defaults it moved, and the desktop's Quit asking first — 2026-10-20
+
+Branch `improved-hotkeys`, on the per-game desktop hotkeys commit `f54ae457f` (the entry below). The sixth pull request
+of the hotkey plan, for ares issue 424: "Measure 0.5x pacing and audio on the RP6 and on desktop first. Ship the hold
+action only if both are clean; otherwise report the measurements." Both were clean (Measurements), so the hold is in.
+Changed: the runner (`PhobosRunner.cpp` and `.hpp`, shared by both apps) and its JNI call; on Android `PhobosCore.kt`,
+`input/Hotkeys.kt`, `input/GameKeys.kt`, `ui/EmulatorScreen.kt`, `ui/ControllerPages.kt` and three tests; on the
+desktop `desktop/Hotkeys.cpp` and `.hpp`, `desktop/main.cpp` and `tests/desktop/hotkeys.cpp`. Measured on the RP6 and
+on a virtual display; **not** held by hand on a pad (see Limits).
+- **Slow Motion (hold)**: while one of its bindings is held, the game runs at half speed; letting go ends it, as do a
+  pause, the menu, the game ending and, on the desktop, the window losing the keyboard. Fast forward wins over it while
+  both are on; held, it wins over the load boost (a Neo Geo CD's disc, a ZX Spectrum's or MSX's tape). The speed is
+  the plan's 0.5, fixed.
+- **The runner**: `setSlowMotion(speed)` spaces the frames' deadlines 1/speed times as far apart and divides each audio
+  stream's resampler trim by the speed, so each emulated sample makes 1/speed output samples: the sound keeps coming,
+  slowed with the picture, an octave lower at half speed (the owner's choice over silence). It's off again (1) as a
+  game unloads.
+- **Measurements**, made before the hold was kept (scripts and logs outside the repository, with the review's
+  evidence):
+  - *Desktop*: Xvfb, SDL's disk audio driver recording the output (960-frame buffers: with 1024, its whole-millisecond
+    waits run the audio 1.6% fast, underrunning even at normal speed), a test ROM playing a constant 512 Hz tone, the
+    hold on for 10 s. As things stood (fast forward capped at 0.5, which halves the pace too): 29.8 FPS, but 46% of the
+    held sound silent, in 295 gaps of about 22 ms (33 a second), with 27 to 37 underruns a second; the same with the
+    trim divided: no gap. This change, as drafted: 29.9 FPS, frames 33.5 to 37.1 ms apart at the longest, no underrun
+    and no gap, the tone at about 256 Hz while held and 511 Hz after; and as built here, its defaults moved: 29.9 FPS,
+    frames 33.5 to 33.9 ms apart at the longest, no underrun, no gap, 256 Hz held and 511 Hz after (the same again on
+    the final tree, after the first review).
+  - *RP6* (Android 13): the legacy flavour's debug build, given its own application ID by a Gradle init script outside
+    the repository, installed beside the owner's Phobos (its settings and saves untouched) and removed afterwards; a
+    silent Game Boy ROM; Mode + L2 held for 10 s with `adb shell input gamepad keycombination`. Two runs: 29.9 FPS held
+    (one second across the switch 33.3), frames 34.2 to 34.5 ms apart at the longest, no underrun, the trim +100.1 to
+    +100.8%; 59.7 to 59.8 FPS before and after, no underrun. The underrun count is AAudio's
+    (`AAudioStream_getXRunCount`): Phobos writes with blocking `AAudioStream_write`, so each one would be AAudio
+    playing silence because the sound came late. The device's output wasn't recorded. The APK was built from this
+    change's Android sources (SHA-256 `c361e125...`, an incremental build).
+- **Defaults** (the owner's choices): Slow Motion is Mode + L2 on Android and Guide + L2 (the left trigger) on the
+  desktop; Android's on-screen keyboard toggle moves from Mode + L2 to Mode + L3; Frame Advance moves from Mode + L3
+  (Guide + L3) to Mode + Start (Guide + Start), "to match"; Quit, unbound until now, is Mode + B (Guide + B);
+  Screenshot stays Mode + R3. Start alone stays the game's: the desktop test's rule that no default holds Select or
+  Start became Select in none, Start only behind Guide.
+- **The desktop's Quit asks first** (the owner: "Guide+B quits on desktop too, after asking first as Android does"):
+  any binding of Quit stops the game under "Are you sure you want to stop emulating <title>?". Enter or the pad's A
+  quits; Escape, Backspace or B go back to the game; Start doesn't answer, since a player may press it meaning to go
+  on. While it's up the hotkeys run nothing and take no keys, and a key pressed then, the answer's included, taps
+  nothing when it's let go of after. Quit runs first of what a press completes or a release taps, so once it has asked
+  nothing else of that event runs: an action bound to the same keys (a collision the page shows), Load state say,
+  doesn't run with it, whichever name sorts first. The key whose hotkey asked doesn't answer it; a button held as it
+  opens or as it's answered stays out until it's let go of (a Quit binding with Start in it doesn't start the game again
+  from the library); and the window losing and getting back the keyboard leaves the game stopped. The pause menu's Quit
+  item still quits at once.
+- **The RP6, seen in passing** (one device, a few presses): its Home button sends Linux key 102 (`KEY_HOME`), which
+  the key layout these controls load (`/system/usr/keylayout/Generic.kl`, as `dumpsys input` shows: a USB device,
+  vendor `0x2022`, product `0x3002`) makes `MOVE_HOME`, a key the app in front normally gets. With
+  Retroid's "Prevent pressing Home accidentally" on (`prevent_press_home_accidentally=1`), a single press sent no input
+  event at all (getevent on every input device) and reached nothing in Phobos. With it off (the owner turned it off and
+  pressed Home twice, then Home with L2), each press came from the controls, Phobos's input log (switched on) showed no
+  key for it, L2 coming as its own button, and `system_server` started the launcher as Home was let go of: Retroid's
+  software takes the key before any app (where, untested). On this RP6, then, no button gives Mode, which leads every
+  controller default; and the Hotkeys page's Mode-missing hint wouldn't show (derived, not seen: it asks Android
+  whether a pad has the key, and these controls declare `BTN_MODE`, which their key layout makes Mode). Its Back button
+  sends `KEY_BACK`, which didn't reach Phobos's key handling either. Hypothesis: with predictive back
+  (`enableOnBackInvokedCallback`), Android hands Back to the back callback instead, so a controller's Back can't be part
+  of a hotkey on Android 13 and later.
+- **Tests**: on Android, `HotkeyComboTest`'s defaults test checks the four bindings above and that Slow Motion is a
+  hold; `HotkeyRoutingTest` holds Slow Motion with Mode + L2 (L2 taken, the hold ending as L2 is let go of, Mode's
+  release no tap, and the hold ended by a pause forgetting the keys), and its two frame-advance tests that used the
+  default press Mode + Start now; `HeldCrossReplayTest`'s screen has the new call. On the desktop: Slow motion a hold
+  with its label (37 actions), its own longer binding leaving its one-key binding no tap, and the defaults above.
+- **Checks**: Android (JDK 17.0.20.1, Gradle 9.6.0 wrapper, NDK 28.2.13676358): both flavours' unit tests, 432 each, 0
+  failures, 53 result files each, run again after the first review (a test's message changed); and, before it,
+  `:app:assembleLegacyDebug` (32,576,391 bytes, SHA-256 `e39dac9d...`, an incremental build; no file it builds has
+  changed since). Two Android mutants, each edited into the source and taken out again (hashes checked), fail the input
+  package's tests: Slow Motion not a hold fails the defaults test and the hold's routing test, and a pause leaving it on
+  fails the hold's routing test alone. The desktop (GCC 16.2.1, CMake 4.4.4, Ninja, SDL 3.2.30): the Linux build;
+  `ctest` 1/1 and `phobos-desktop-tests` 209 checks, 0 failed, built with `-Werror` and the sanitizers; `main.cpp`
+  compiled with the build's own command and `-Wall -Wextra`, to a scratch folder: 781 warnings, none in `desktop/` or
+  `tests/`, the build's object and program unchanged by it, no compile pending. On the virtual display, 138 of 138
+  checks pass: the entry below's 112, with the Hotkeys page's rows from Frame advance down one lower (Slow motion's row
+  is above them) and the quit section answering the question (three checks more), and the question's own 15, in a
+  session of their own: Backspace, bound to Quit and to Save state both, asks, the game stopping, doesn't answer the
+  question it asked and saves nothing; Z (the pad's B, there leading Reset's binding and bound alone to Save state, so a
+  tap and a key the game never gets) goes back to the game and saves nothing as it's let go of; F6 + X asks with X (the
+  pad's A) still held as F6 is let go of, and X's release doesn't answer; Backspace goes back to the game; another
+  window taking the keyboard and giving it back leaves the game stopped; Escape (a Pause menu tap there, Quit having
+  Escape + Q) goes back to the game and opens no menu as it's let go of; X pressed again quits, closing Phobos, which
+  started with the game. And Quit first, 8 in another session: Quit and Load state share Backspace, which completes as
+  it's pressed, and Escape, a tap of both (it leads Reset's Escape + A); with a state saved first, Backspace asks and
+  loads nothing, so does tapping Escape, and Escape pressed to answer no doesn't ask again as it's let go of. The
+  slow-motion check, 8 of 8: F6 bound to Slow motion asks the runner for half speed and gets 27 to 33 FPS, letting go
+  gives over 57; with fast forward toggled on, F6 held leaves it over 90; another window taking the keyboard ends the
+  hold. The build before slow motion fails its four slow-motion checks. Ten `main.cpp` mutants of the question, built
+  outside the repository with the build's own commands, each fail their checks, where the unchanged file built the same
+  way passes them all: the key that asked answering it; the hotkeys taking keys under it (Z then can't answer); a focus
+  switch starting the game again under it; Quit quitting at once; an answer holding no button back (Return then starts
+  the game again from the library); a key pressed under it tapping once it's gone (Z saving, Escape opening the menu);
+  the asking press's other completions running after it (Save state saving, Load state loading), and its other taps
+  (Load state loading); Quit not run first of a press's completions (Load state loading before the question), or of a
+  release's taps. After each review, every desktop check here ran again on the final tree.
+- **Limits**: no pad held the hold by hand: the RP6's came from injected key events and the desktop's from a keyboard
+  binding, so Guide + L2 on a real trigger is unchecked. The RP6's sound wasn't recorded, only AAudio's count, and it
+  ran the legacy flavour, not the modern one its CPU could run. The speed is fixed at half. On the desktop, the pause
+  menu's Quit item doesn't ask (the owner's question was about the hotkey). The scripts, logs and the measurements'
+  work folders are kept outside the repository, with the review's evidence. Mode on the RP6: above.
+- **Review**: the first independent review (diff `b41758c8...`) found NEEDS CHANGES, one Minor: on the desktop, a key
+  that answered no to the Quit question ran its own tap binding as it was let go of, the question gone (Escape opening
+  the menu where Escape + Q quits, Z saving where Z alone saves and Z + A resets). Fixed as under The desktop's Quit
+  asks first, with checks. Its suggestions are taken: those two cases checked; nothing else of the asking press run; the
+  routing test's message (L2, not B); the load boost named in full. The second (diff `53837441...`) found NEEDS CHANGES,
+  two Minors: these notes said nothing else of the asking press ran, where an action bound to the same keys whose name
+  sorts before Quit's (Load state) still ran first, so Quit runs first now (The desktop's Quit asks first), with checks;
+  and they took the RP6 controls' key layout for granted, since read from the device (The RP6, seen in passing). Its
+  suggestions are taken: each of the two early returns has a mutant of its own (the second's had survived), a Quit tap
+  shared with another action is checked, and Pause sharing Quit's key can no longer open the menu instead (derived: Load
+  state's path); a test line of 127 characters is left, as that file has sixteen more. The whole record is in the commit
+  that carries this entry.
+- **Next**: the owner's choices for the RP6, as a change of their own: the Hotkeys page warning until Phobos has seen
+  a Mode press, and Back tried as the hotkeys' first key, the app no longer opting into predictive back. Then the
+  plan's closing docs (a hotkey reference and the issue matrix); the RP6 pass for the Android changes; the pad, window
+  manager, Wayland, Steam, Windows and macOS checks.
+
+## Desktop hotkeys per console and per game: a level row on the Hotkeys page, each level storing only the actions it changes, whole, the rest inherited — 2026-10-20
+
+Branch `improved-hotkeys`, on the desktop-window commit `68f2a2799` (the entry below). The fifth pull request of the
+hotkey plan: "A scope picker (All / Console / Game) with inherited bindings. Full per-game button remapping stays out
+of scope." The Android app's hotkeys have had these levels since before the plan (`ControlLevels`); the desktop's are
+now stored the same way. Changed: `desktop/Hotkeys.cpp` and `.hpp` (the levels' rules), `desktop/main.cpp` (the page
+and the storage), `tests/desktop/hotkeys.cpp`, `CMakeLists.txt` (the test target builds `desktop/Settings.cpp` too)
+and `README.md`. Checked with the keyboard on a virtual display; **not** with a pad, Windows or macOS (see Checks).
+- **Levels**: the Hotkeys page's first row, just above the Pause menu where the page still opens, offers all consoles,
+  the running game's console (named by the system the library gives it: "Auto" for most zipped games, under Limits)
+  and the game ("This game"), the one shown bright; left, right or A on it change the level, and the page's title
+  names it (with the game's title for the game). The page opens on all consoles. A level stores each action it
+  changes with all of that action's bindings, which replace what it inherits whole (an empty value unbinding the
+  action there): the game's over its console's, over all consoles', over the defaults. A game plays with its level's
+  hotkeys; the library has all consoles'.
+- **Storage**: all consoles' bindings stay under `hotkey.<action>` in settings.ini; a console's go under
+  `hotkey[<system>].<action>` (`hotkey[Game Boy].save`) and a game's under `hotkey[<system>/<title>].<action>`, the
+  system and title its save states go by, with "%", "=" and line breaks in the scope written as `%25`, `%3D`, `%0D` and
+  `%0A`, since settings.ini ends a key at its first "=" and a line at its break (`hotkeySettingKey`). An older build
+  reads only `hotkey.<action>` and writes back every line it read, the levels' included.
+- **What a level keeps**: a binding captured, changed or cleared at a console or a game is stored only if the action's
+  bindings then differ from what that level inherits; bound back to exactly that, the action goes back to inheriting,
+  its line taken away (`levelHotkeyChanges`). A conflict is checked against the hotkeys of the level shown, and
+  overwriting a binding the level inherits stores the rest of that action's bindings as the level's own (F8 taken from
+  Screenshot for the Game Boy leaves it Guide + R3 there), all consoles' untouched: the plan's rule for the Android
+  app's levels, from its second pull request.
+- **Clearing**: Del or X on a binding row clears that binding at the level shown, kept as above. On an action row it
+  clears every binding for all consoles, as before; at a console or a game, an action the level sets goes back to what
+  it inherits ("Set for this game" in the note, "Del/X Use Game Boy's" in the hint), and one it inherits is unbound for
+  that level alone ("From all consoles", "Del/X Unbind for this game"). There the actions the level sets are bright,
+  those it inherits dim.
+- **Reset**: the last row resets the level shown, after asking: all consoles to the defaults, what a console or a game
+  sets for itself staying; a console or a game to inheriting, every line of its own taken away.
+- **The emulated computers' rule** (the owner's choice, in the desktop hotkeys entry of 2026-10-19) applies to the
+  hotkeys a game plays with, whichever level a binding comes from: on a ZX Spectrum or MSX, a binding equal to one of
+  its action's default combos with Tab or a key the computer's keyboard uses does nothing.
+- **The entry below**: the owner's choice recorded (on by default, going on by itself); and, as its second review
+  suggested, "Left Shift, Reset's tap binding" written as Left Shift bound to Reset, as in the checks (Reset has no
+  default binding), a Limits line for Frame Advance held on a pad through a switch, and in `desktop/main.cpp` the
+  comment on a capture the switch cancels narrowed as the text was (the fourth, the window probe, is under Checks).
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; SDL 3.2.30): the Linux build; `ctest` 1/1 and `phobos-desktop-tests` 201
+  checks, 0 failed, built with `-Werror` and the sanitizers. Its 22 new checks are in three tests: each level's key
+  (with "=", "%" and line breaks in a title written out, and one with "=" and a line feed written to a file through
+  `desktop/Settings.cpp` and read back); a game's bindings over its console's over all consoles' (a game's empty first
+  binding not letting its console's show through); and what a console or a game keeps. Nineteen engine mutants, built
+  outside the repository with the tests, each fail them, where the unchanged files pass: PR 3's thirteen, and six of the
+  levels' functions ("=", "%" or a line feed not written out; a narrower level replacing binding by binding; a level
+  storing every change; an action it inherits unbound stored unbound). `main.cpp` compiled with the build's own command
+  and `-Wall -Wextra`, to a scratch folder: 781 warnings, none in `desktop/` or `tests/`. On the virtual display (Xvfb
+  and xdotool), 112 of 112 checks pass: the entry below's 75, the Hotkeys page's rows still counted from where it opens,
+  and 37 of the levels, in sessions of their own: F6 bound for the Game Boy beside the F5 it inherits, all consoles'
+  untouched, saving in a Game Boy game; F6 for Mute, colliding only with the Game Boy's own F6, asked about and
+  cancelled; Save state's first binding cleared and Screenshot unbound for one game, F6 then saving nothing there, F5
+  still saving and F8 taking no screenshot; in another Game Boy game F6 saving and F8 taking a screenshot; on the MSX,
+  in its game of the same title, F6 saving nothing and F8 taking a screenshot; the game's own Save state taken back to
+  the Game Boy's with Del, and the game's reset; F8 overwritten into the Game Boy's Save state, Screenshot's Guide + R3
+  stored as the Game Boy's own; Fullscreen bound for the Game Boy, then bound back to all consoles' F11 and inheriting
+  again; the Game Boy's reset leaving none of its lines; a game whose title has "=" and "%" keeping its own line, read
+  back when started again; and, added after the first review found these paths untaken, Left on the level row reaching
+  this game, then the Game Boy, then all consoles, whose reset takes their own line away and keeps the Game Boy's and
+  the game's, F7 still saving in the game. Screenshots of the page at each level, its conflict question and two of its
+  reset questions were looked at. The window probe the entry below's second review suggested keeping passes its 5
+  checks: under a stand-in window manager (it sets only `_NET_SUPPORTING_WM_CHECK`, so SDL leaves the keyboard where it
+  is), a game started while another window has the keyboard waits and goes on as its window gets it; with no window
+  manager, SDL gives the game's window the keyboard and the game doesn't wait. PR 4's mutant without the pause fails
+  two. Ten `main.cpp` mutants, built outside the repository with the build's own commands, fail their checks there,
+  where the unchanged file built the same way passes them all (the unchanged file and the first review's two run again
+  once the levels section had its last session; the other eight before): the game's level ignored in play; a level
+  storing every change; Del on a level's own action unbinding it; a game known by its title alone (its hotkeys then
+  reaching the MSX's game of the same title); a level's reset taking away all consoles' lines; conflicts checked against
+  all consoles' hotkeys; the first review's two, which passed the levels section until its last session was added (Left
+  on the level row going right; all consoles' reset taking the running console's lines away too); and PR 3's two Hotkeys
+  page mutants (the page losing keys to hotkeys; nothing held back as the hotkeys stop taking keys), through its page
+  section with the page now opening below the level row. The Android build, which reads the same `CMakeLists.txt`
+  (`android/app/build.gradle.kts`), configures and builds (`:app:assembleLegacyDebug`; JDK 17.0.20.1, the Gradle
+  wrapper); the change is in the file's desktop branch, which Android's build skips. Not run: a pad, a real window
+  manager, the Windows and macOS builds, Wayland, Steam, a real game.
+- **Limits**: a binding set for all consoles or for a console is checked only against the hotkeys of the level shown,
+  so one colliding with a binding a narrower level sets isn't asked about; the collision shows on that level's page
+  ("These collide"). A level keeps its line for an action until it's changed back, cleared or reset, so a console's
+  binding that all consoles later come to match still shows as the console's own. A game's hotkeys go by its system
+  and title, as its states do: a renamed file loses them, and a disc of a set dropped on the window alone, its disc
+  number in its title, has its own rather than the set's. Only the running game's console and the game can be set (the
+  page is in the pause menu), and the page opens on all consoles each time. A zipped game has the library's system
+  "Auto" unless a folder it's in names Arcade, Neo Geo or Neo Geo CD (`desktop/Library.cpp`), as its states' folder
+  does: all such games, whatever their console, share one console level, named "Auto" on the page, where the same game
+  unzipped has the console the library gives it, its own where a folder names it and otherwise its extension's usual one
+  (outside such a folder a .bin is the Mega Drive's, and a .cue, .chd, .iso or .pbp the PlayStation's, the PSP's own
+  games told by what's in them). A zipped game keeps "Auto" while it runs, the runner naming its system for itself
+  (`mia`), so what the desktop does by a game's system passes it by: a zipped N64 or PlayStation game gets no N64
+  controller pak or PS1 analog hotkey (nor the N64's menu rows or the PlayStation's Analog controller row), and a zipped
+  ZX Spectrum or MSX game no emulated computers' rule, its keyboard driving the pad rather than typing (derived from the
+  code, not run). The level row, 45 characters with a console of the longest names (PlayStation Portable, Neo Geo Pocket
+  Color), is cut short in a window under 632 pixels wide (no minimum size is set), as long values on the other rows are.
+  The test target still isn't in CI, and the virtual-display checks, the window probe and the mutant runs are scripts
+  kept outside the repository, with each change's review evidence.
+- **Review**: the first independent review (diff `2e5e10d2...`) found NEEDS CHANGES, three Minors: two wrong references
+  here (the emulated computers' rule placed in the entry below; the owner's choice recorded there credited to that
+  entry's second review); the Android build skipped as building no changed file, where it reads `CMakeLists.txt` (now
+  built, under Checks); and zipped games sharing an "Auto" console level unrecorded (under Levels and Limits now). Its
+  suggestions are taken: Left on the level row and all consoles' reset keeping the narrower levels' lines checked, with
+  the two mutants those checks catch; the key test described as it is; Tab in the emulated computers' rule; "a line
+  feed" for the escape mutant; and the scripts' place recorded in Limits, the scripts staying outside the repository.
+  The whole record is in the commit that carries this entry.
+- **Next**: the slow-motion measurement (#424), its own reviewed pull request, then the plan's final docs (a hotkey
+  reference and the issue matrix); the pad, window manager, Wayland, Steam, Windows and macOS checks; the RP6 pass for
+  the Android changes.
+
+## Desktop window: the game waiting while another window has the keyboard (a menu switch, on by default), no hotkey run by the clicks and releases that still come then, a tap only on the screen its key went down on, the screensaver held off by SDL as before — 2026-10-20
+
+Branch `improved-hotkeys`, on the desktop-hotkeys commit `f4e0b1b98` (the entry below). The fourth pull request of the
+hotkey plan: the desktop window's behaviour (#2513, #2365, and the screensaver, #1577 and #1368). Per-game hotkeys and
+the slow-motion measurement come after it. The code change is in `desktop/main.cpp` alone. Checked with the keyboard
+and the mouse on a virtual display with no window manager; **not** with a pad, a window manager, Wayland, Windows or
+macOS (see Checks).
+- **Pause when unfocused** (#2513; the menu's new switch of that name, `pauseWhenUnfocused` in settings.ini, on unless
+  switched off): while a game plays and another window has the keyboard, the game waits with its picture showing
+  ("Paused while unfocused"). The holds end, the keys held are let go of, the controller's input goes to nothing and
+  rumble stops, not renewed while it waits. It goes on when the window has the keyboard back, the buttons held then
+  staying out until they're let go of, that frame's included, as when a game starts. In the menu and on the Hotkeys
+  page the game is paused already, and frame advance's stopped game stays as it is; a game started while another
+  window has the keyboard (a file dropped on the window from a file manager, say) waits as soon as it starts, and the
+  badge (like frame advance's) takes the place of the "Loading" line rather than covering it. With the switch off the
+  game goes on, as before this change. On by default, and going on by itself as the window gets the keyboard back: the
+  owner's choice, asked after the first review.
+- **What still comes while another window has the keyboard** (#2365): SDL sends such a window no keys (they go to the
+  window that has the keyboard) and no pad presses or axis moves away from the centre (`SDL_joystick.c`'s
+  `SDL_PrivateJoystickShouldIgnoreEvent`, unless `SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS`, which Phobos doesn't
+  set), and it lets go of the keys held as the window loses the keyboard. What still comes is a click on the window and
+  the releases, and now no hotkey runs on them: a press completes nothing while the window lacks the keyboard (Mouse 4
+  bound to Mute, clicked then, mutes nothing), and a tap runs only while the window has the keyboard, on the screen
+  its key went down on with the window having it then (`pressedOn`). So a key held as another window takes the
+  keyboard taps nothing as SDL lets it go (with Left Shift bound to Reset, as in the checks, Left Shift held across the
+  switch resets nothing), and where Escape is a tap binding, Escape leaving the Hotkeys page no longer also taps as it's
+  let go of in the menu it went back to, which closed the menu and let the game go on (seen by the fourth review of the
+  entry below).
+- **A binding still being captured** (its keys still coming: a capture settles 700 ms after its last new key) is
+  cancelled as the window loses the keyboard ("The window lost focus: the binding is unchanged"), so a switch made
+  within those 700 ms adds none of its keys (Alt for Alt+Tab) to the binding; a key held longer before the switch has
+  become the binding already (Limits).
+- **The screensaver** (#1577, #1368): nothing to change. SDL 3 disables the screensaver as its video starts unless
+  `SDL_HINT_VIDEO_ALLOW_SCREENSAVER` is set (`SDL_video.c:720-721` in SDL 3.2.30), and nothing in `desktop/` sets a
+  hint, so the desktop program held it off before this change too (derived), from start to quit, the library
+  included. Seen on this machine's KDE session, Phobos running on a virtual X display with the session's D-Bus: KDE's
+  power management lists an inhibition by "Phobos" for "Playing a game" (SDL's default reason, `SDL_dbus.c:439`) while
+  it runs (8 seconds in; KDE lists one some seconds after it's asked for) and none once it quits, and none with
+  `SDL_VIDEO_ALLOW_SCREENSAVER=1`; `dbus-monitor` saw its `Inhibit` call as it started and `UnInhibit` as it quit. On
+  Wayland SDL asks the same D-Bus service first and the compositor's idle inhibitor otherwise
+  (`SDL_waylandwindow.c:3028-3048`); not run there, nor on GNOME (#1368's desktop), Windows or macOS. The plan said to
+  call `SDL_DisableScreenSaver`; SDL's own call at start makes another one redundant, and it would override a player's
+  `SDL_VIDEO_ALLOW_SCREENSAVER=1`.
+- **The entry below**: two of its sentences narrowed, as its fourth review suggested: a key whose hotkey changes the
+  screen isn't acted on by the new screen's key handling (a stick direction it pushes still moves a cursor, as its
+  Limits say), and a button held since the game started, like one held since the menu closed, doesn't count against
+  Select and Start being alone.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; SDL 3.2.30, as for the entry below): the Linux build; `ctest` 1/1 and
+  `phobos-desktop-tests` 179 checks, 0 failed (the engine is unchanged); `main.cpp` compiled with the build's own
+  command and `-Wall -Wextra`, its object written to a scratch folder: 781 warnings, none in `desktop/` or `tests/`,
+  the build's object and program unchanged by it, and Ninja's dry run showing no compile pending. On the virtual
+  display (Xvfb and xdotool), 75 of 75 checks pass: the entry below's 62, and 13 with an `xmessage` window taking the
+  keyboard (`xdotool windowfocus`) and these bindings stored: Left Shift for Reset beside Left Shift + I for the next
+  disc (so Left Shift is a tap), Escape + Q for Quit (so Pause's Escape is a tap) and Mouse 4 for Mute. The 13: F5 in
+  the library rescanning it, Save's default F5 in force (the fourth review's suggestion); another window taking the
+  keyboard pausing the game (the badge seen in a screenshot) and the keyboard's return resuming it; Mouse 4 clicked
+  while the other window has the keyboard muting nothing, and with it back muting; Left Shift tapped resetting the
+  game, and held across the switch resetting nothing; Escape on the Hotkeys page going back to the menu, its release
+  tapping nothing there, and Escape tapped in the menu closing it; a capture still collecting keys as the other window
+  takes the keyboard cancelled, Alt held across the switch left out of the Pause menu's bindings; the switch turned
+  off in the menu kept in settings.ini; and with it off, the game going on unfocused. Six `main.cpp` mutants, each
+  built outside the repository with the build's own commands, failed their checks there, where the unchanged file
+  built the same way passed all 13: no pause while unfocused; presses completing hotkeys while unfocused; a capture
+  going on as the window loses the keyboard; the switch ignored; a tap running whether or not the window has the
+  keyboard; a tap running on any screen. A first mutant run, without the two Mouse 4 checks, found the presses mutant
+  passing every check, so those two were added. Two more copies, built the same way with one log line before the
+  Playing case's `setInput` (the first review's probe, adapted), check its Minor 1: Right Shift, the keyboard's Select,
+  pressed while the other window has the keyboard and still held as it comes back reaches the game in no frame, and
+  in one with the fix's line taken out; in both, Right Shift held with the keyboard here reaches it (the log works),
+  and held as the menu closes doesn't. The screensaver checks are above. Android isn't rebuilt: no file it builds
+  changed. Not run: a pad (SDL holding back its presses is from SDL's source), a window manager moving the keyboard,
+  a game started while another window has the keyboard (with no window manager, as on the virtual display, SDL's X11
+  driver gives a window it shows the keyboard, `SDL_x11window.c:1567-1570`, as a probe saw; with one, the window
+  manager decides, SDL leaving its activation hint unused, `:1550-1552`, so a game started from a frontend may start
+  paused) and so the badge in place of the "Loading" line, Wayland and macOS sessions, the Windows and macOS builds,
+  Steam, a real game.
+- **Limits**: unfocused means without the keyboard, so with only a pad, a click on another window (on a second screen,
+  say) pauses the game; with the switch off the game goes on then, but a pad still can't play it, SDL holding back its
+  presses while another window has the keyboard. The game goes on by itself as the window gets the keyboard back;
+  whether a click that gives it back also runs that button's hotkey depends on whether SDL has heard of the keyboard
+  by then (the window manager's order; not run). SDL's X11 and Wayland drivers press again the modifiers held as the
+  window gets the keyboard back (`SDL_x11events.c:441-456`, `SDL_waylandevents.c:1731-1748`), so a modifier pressed
+  while the other window has the keyboard and let go after it comes back counts as pressed here: with Left Shift bound
+  to Reset, as in the checks, it resets the game (seen by the first review; the same before this change). A pad holding
+  Frame Advance as another window takes the keyboard keeps stepping, a frame every 100 ms, until it's let go of, frame
+  advance's stopped game not being paused for the switch (inferred, not run; a key held is let go of by SDL then, which
+  ends the hold). A capture is cancelled only while its keys are still coming: Alt held 700 ms or more before the
+  switch is the binding already (the first review saw Alt held for a second bound), and SDL ignores a focus change a
+  keyboard grab makes (`SDL_x11events.c:1414-1417`), so an Alt+Tab switcher that grabs the keyboard counts only once
+  the switch is made, and an unhurried Alt+Tab during a capture binds Alt (inferred, not run); such a binding can be
+  cleared on the page, and a cancelled capture has to be started again. The screen doesn't sleep while Phobos is open,
+  in the library too (SDL's, as before; `SDL_VIDEO_ALLOW_SCREENSAVER=1` lets it); the test target still isn't in CI.
+- **Review**: the first independent review (diff `3b96765d...`) found NEEDS CHANGES, three Minors: the buttons held as
+  the game went on reached it for one frame (fixed, as under Pause when unfocused and Checks); the reason given for not
+  testing a game started unfocused was wrong (corrected under Checks); and the capture's cancel was claimed for any
+  switch (narrowed, the rest in Limits). Its suggestions are taken: the modifiers SDL presses again and what the switch
+  does for a pad, in Limits; the badge no longer drawn over the "Loading" line. The whole record is in the commit that
+  carries this entry.
+- **Next**: per-game desktop hotkeys (an All consoles, Console and Game picker; no button remapping) and the
+  slow-motion measurement (#424), each its own reviewed pull request; the pad, window manager, Wayland, Steam, Windows
+  and macOS checks; the RP6 pass for the Android changes.
+
+## Desktop hotkeys: combos of keys, pad buttons, triggers, stick directions and mouse buttons, up to three per action, Guide leading the controller's and the desktop's own keys the keyboard's, a capture page asking before it overwrites — 2026-10-19
+
+Branch `improved-hotkeys`, on the Android commit `a41f6644e` (the entry below). The third pull request of the hotkey
+plan: the desktop program's hotkeys, by the Android app's rules, in place of its fixed keys. Its window behaviour
+(#2513, #2365, the screensaver), per-game hotkeys and the slow-motion measurement come after it. Checked with the
+keyboard and the mouse on a virtual display; **not** with a pad, Steam, Windows or macOS (see Checks).
+- **The engine** (`desktop/Hotkeys.hpp`, `Hotkeys.cpp`; SDL's enums, none of its functions): a hotkey's token is a key
+  (its scancode), a pad button, a pad axis pushed one way or a mouse button, and the same button on any pad is one
+  token. The Android rules, ported (`HotkeyTracker`, `isTapCombo`, `hotkeyConflicts`): a combo is matched exactly, its
+  first key pressed first and held back from the game, its other keys held back while that one is down; a one-key
+  binding that leads longer combos runs when tapped, unless the longer ones are a hold's own; up to three bindings an
+  action, any of which runs it; the same conflict rules and question. A stick direction or a mouse button counts only
+  where a binding uses one, so a stick held for the game or a click on the window doesn't keep a combo from matching; a
+  trigger counts as the button it is to the game. `HotkeyHolders` counts the devices holding each token: a button held
+  on two pads goes up when both have let go, and a pad going away lets go of its buttons, which taps nothing for the
+  releases SDL sends as it removes the pad (until 2026-10-22's fix, Guide held as the pad went tapped Pause: SDL lets go
+  of a pad's buttons before it reports the pad gone). An axis presses past half and lets go below 40%, as the game's
+  buttons do.
+- **Storage** (`settings.ini`; `Settings::has` and `erase` are new): `hotkey.<action>` holds an action's bindings, each
+  token as `k<scancode>`, `b<button>`, `a<axis>+` or `a<axis>-`, or `m<button>`, a combo's joined by `,` and the
+  bindings by `;`, an empty slot kept (`b5,b10;;k62`: Guide + RB, then F5 in the third slot). A stored action replaces
+  its defaults whole; an empty value unbinds it, and no value at all leaves the defaults. A token it can't read is left
+  out.
+- **Game input** (`desktop/Input.cpp`): `Input::hotkeyChanges` turns SDL's events into token presses and releases (a
+  touch screen's or a pen's clicks left out). Each pad and mouse holds its own presses and the keyboards theirs as one:
+  SDL lets go of the keys held as the window loses focus as keyboard 0's, whichever keyboard pressed them (on Wayland
+  the seat's keyboard, on macOS keyboard 1), so a key held through Alt+Tab is let go of. The shell hands the changes to
+  the hotkeys before anything else sees the event, and a token they take is held back (`Input::taken`) from the
+  controller's bits and taps, the triggers and that half of a stick's axis, and from a ZX Spectrum or MSX keyboard
+  (`typedKeys`: a release lets go only of what its press typed). Only a game and its menu lose keys: the library's and
+  the Hotkeys page's are their own. When the hotkeys stop taking keys (the game unloads, the Hotkeys page opens), every
+  button still held stays out until it's let go of, those they took included, rather than reaching the screen as a new
+  press: a Quit binding with Start in it doesn't start the game again from the library.
+- **The shell** (`desktop/main.cpp`): the fixed F5, F9, F8, F11, F12, Escape, Tab and Guide handling is gone, and the
+  hotkeys run the actions: the menu, the menu out of fullscreen, save and load, the next and previous slot (now kept in
+  settings.ini, `stateSlot`), saving and loading slots 1 to 9 without changing it, a screenshot, fullscreen, fast
+  forward held and toggled, frame advance, mute, reset, reload, quit, the N64's controller pak, the next disc and the
+  PlayStation's analog controller. Fullscreen works on every screen but the Hotkeys page (whose keys are its own), the
+  two menu hotkeys with the menu open too, and the rest while a game plays (the menu has them). Select and Start pressed
+  with no other button open the menu, a Steam Deck's route (its Guide button being Steam's) that works for the first
+  time (below); with another button held they're the game's, so a soft reset such as A, B, Select and Start reaches it
+  when its other buttons go down first. B and Backspace close the menu, and Escape where no hotkey has it. A key whose
+  hotkey changes the screen is the hotkey's alone, the new screen's key handling not acting on its press (a stick
+  direction it pushes still moves a cursor: Limits): a Quit binding completed by F3 or F5 doesn't also open the
+  library's folder picker or rescan it. Frame advance stops the game with its picture showing ("Frame advance - pause
+  for the menu"), runs a frame at each press, then one every 100 ms after 300 ms held, the buttons held going into
+  each; the menu lets the game go on.
+- **Pad presses on the screens** (a fault since the desktop's first commit, `3c60b7d69`): the screens asked whether a
+  button was newly pressed after `previousButtons` had become the frame's own buttons, so no such press registered:
+  the Guide button or Select and Start opening the menu, B or Guide closing it, and the library's Y, X, L1 and R1 (and
+  in this change the Hotkeys page's B and X). They now compare with the frame before; A and Start's confirm, asked
+  before that, always worked. Guide's routes are the hotkeys' now. The keyboard's pad keys act on the screens as those
+  buttons do (Z is B, S is X, A is Y, Q and W are L1 and R1, Right Shift and Return are Select and Start): in the
+  library the A key now opens the folder picker, S rescans and Q and W page, and on the Hotkeys page S clears a binding.
+- **The Hotkeys page** (the menu's new Hotkeys item): a row per action lists its bindings joined by "or"; choosing one
+  opens its three binding rows, as on Android, and choosing a binding row captures the keys, buttons, axes and mouse
+  buttons pressed together, done 700 ms after the last new one. Escape pressed first cancels, and so do 5 seconds of
+  nothing, a pad's way out. A capture that collides asks the Android question ("The selected hotkey combo is already
+  bound to \<function\>, would you like to overwrite?"), and Overwrite clears only the colliding bindings. Delete or
+  Backspace (a pad's X) clears a binding, or on an action's row every binding; the direct slots' rows show when bound or
+  switched on; "Reset hotkeys to the defaults" asks first. The page names collisions already there and notes a binding
+  whose first key is also a game button. Its keys are its own, no hotkey taking them there, and a button held as it
+  opens (one the menu lost to a hotkey included) is left out until it's let go of.
+- **Defaults** (`defaultHotkeys`): Guide leads every controller hotkey, and tapped alone it opens the menu; with it, RB
+  saves, LB loads, R3 takes a screenshot, RT toggles fast forward, Right and Left step the slot, L3 is frame advance,
+  Down the N64 pak, Up the PS1 analog controller, A mutes and X reloads. The keyboard keeps the desktop's keys: F12 and
+  Escape the menu, F5 save, F9 load, F8 a screenshot, F11 fullscreen, Tab fast forward held. Reset, quitting, the menu
+  out of fullscreen, the next disc and the direct slots are unbound. On the ZX Spectrum and MSX, a default binding on a
+  key their keyboard uses, and Tab, stays the game's (`resolveHotkeys`), which keeps the fixed keys' MSX F5 and Escape
+  and computers' Tab exceptions; any other binding the player sets on such a key applies.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja; SDL 3.2.30 from the main checkout's FetchContent copy, by
+  `-DFETCHCONTENT_SOURCE_DIR_SDL3`; FFmpeg's host build `host-9.0.2-f4fa078896c2` copied from that checkout's cache,
+  the name this branch's script gives): `cmake --preset linux-x64 -DPHOBOS_DESKTOP_TESTS=ON && cmake --build
+  build/linux-x64`, then `ctest --test-dir build/linux-x64`: `phobos` and the new opt-in `phobos-desktop-tests` built,
+  1/1 test passed, 179 checks (`tests/desktop/hotkeys.cpp`, with `desktop/Hotkeys.cpp` and `desktop/Input.cpp` and
+  linked with SDL, built with `-Wall -Wextra -Werror` and the address and undefined-behaviour sanitizers; SDL's values
+  written out in it). The changed desktop sources compiled again with `-Wall -Wextra` (the program's build has `-w`):
+  no warning in them. Thirteen mutations of `Hotkeys.cpp` and `Input.cpp`, each compiled outside the repository with
+  the tests and SDL, each failed the test of its rule: the first key not held back; the first key not having to lead;
+  no exception for a hold's own longer binding; stick directions and mouse buttons always counting; the computers'
+  rule reaching the player's own bindings; a token let go on its first device's release; no hysteresis; an action's
+  own bindings checked; a tap despite another key pressed meanwhile; a release completing combos; empty slots not
+  kept; a code of any length read (`std::stoi` then throws); each keyboard holding its own keys. End to end, on a
+  virtual X display (Xvfb, keys and clicks by xdotool's XTEST, a throwaway data folder, two images made for it: a Game
+  Boy ROM with an empty header and an MSX cartridge whose start loops), 62 checks passed: F5, F9 and F8; Tab held and
+  let go; Shift+Tab not fast-forwarding (#1018); F12 and Escape opening and closing the menu, which runs no save; a
+  capture stored and run, its other binding kept; a conflict overwritten (Screenshot kept Guide + R3) and one cancelled;
+  a mouse button, a slot hotkey (the slot kept) and frame advance captured and run; Escape and silence cancelling a
+  capture; the reset; on the Hotkeys page, S (the keyboard's pad X) clearing a binding though it starts S + F6, S held
+  as the page opened clearing nothing, Delete clearing, and the game still saving after; the pad buttons the screens ask
+  about, by the keyboard's pad keys (Z for B, S for X, X for A, Right Shift and Return for Select and Start): B closing
+  the menu, Select and Start opening it but left to the game with A held, and on the Hotkeys page X clearing a binding
+  and B closing an action's binding rows, then the page; on the MSX, F5, Escape and Tab left to its keyboard while F9
+  and F12 work; and in a game started from the library, a Quit binding of F6 and Return (the keyboard's Start) quitting
+  to a library that stays, Return then starting the game again, and one of F6 and F5 (Save's F5 overwritten) quitting
+  without rescanning the library, a game added to the folder during play showing only once F5 is pressed there. Five
+  `main.cpp` mutants, each built outside the repository with the build's own commands, failed their checks there, where
+  the unchanged file built the same way passed them all: the page losing keys to the hotkeys; nothing held back as the
+  hotkeys stop taking keys; the frame compared with itself; Select and Start opening the menu with another button held;
+  the new screen acting on the key whose hotkey brought it up. `cd android && ./gradlew --max-workers=2 --console=plain
+  :app:assembleLegacyDebug`: BUILD SUCCESSFUL, its CMake configured again from the changed `CMakeLists.txt`, whose
+  Android branch is untouched (the documented `scripts/build-replit.sh` wants an SDK in `.local/android-sdk`, which this
+  checkout hasn't). **Not run**: a pad end to end (Guide's tap and combos, a button pressed just after a quick Guide
+  tap, the triggers and sticks, two pads holding one button), which this machine can't send without a virtual input
+  device on its own system; a Wayland or macOS session (the focus-loss test feeds events shaped as SDL sends them
+  there); the Steam overlay itself (if it kept a key's release from Phobos, the hotkeys would count that key held until
+  it's pressed again: a hypothesis); that Quit binding completed by F3 rather than F5 (the system's folder picker would
+  open on this machine's desktop; F3 takes F5's path); the Windows and macOS builds (CI builds them for pull requests,
+  and none is open); a real game.
+- **Limits**: matched exactly, a keyboard hotkey doesn't run while another key is held: moving with an arrow, F5
+  doesn't save, and holding Tab, F12 doesn't open the menu, where the fixed keys did (the Android app has the same rule
+  on a controller, and the Shift+Tab fix depends on it); a pad button or trigger held for the game (RT to accelerate,
+  say) likewise keeps Guide's tap and combos from running. SDL lets a Guide release through no sooner than 250 ms after
+  its press (`SDL_gamepad.c`), so a quick Guide tap opens the menu that late, and a button pressed meanwhile joins
+  Guide's combo instead (seen by the review with SDL's virtual pads: A about 100 ms after a quick tap muted, and the
+  menu didn't open). Escape can't start a binding the player captures, being the capture's cancel (the defaults have
+  it); on the ZX Spectrum and MSX a default binding on their keys stays off even stored, so binding exactly that combo
+  back to that action there does nothing (the owner's choice over the plan's "bindings you set yourself always apply":
+  changing one of an action's bindings stores its defaults with it, so a stored one equal to a default can't be told
+  from it); there's no "Unbind Pause?" question, Select and Start (alone), B and Backspace still reaching and leaving
+  the menu, but on the ZX Spectrum and MSX, whose keyboard isn't the pad while they run, a player with only a keyboard
+  and every Pause binding cleared can't reach it (closing the window still quits); the hints name the pad's buttons,
+  not the keyboard's pad keys, so on the Hotkeys page the X key opens a binding (it's the pad's A) where "Del/X Clear"
+  shows, and in the library the A key, not Y, opens the folder picker; fullscreen doesn't work on the Hotkeys page; as
+  the hotkeys stop taking keys, a stick direction one took (a pad's, or the keyboard's I, J, K or L) isn't held back as
+  the buttons are, so still pushed it moves the library's or the page's cursor; Select and Start count as alone when no
+  other button reaches the game, so a button held back from it (taken by a hotkey, or held since the menu closed or
+  the game started) doesn't count, while a trigger past half, Guide held with no binding of its own and, on the N64, a
+  stick past half do; the test target isn't in CI yet.
+- **Review**: the first independent review found NEEDS CHANGES. One Major: a key held as the window lost focus stayed
+  held on Wayland and macOS, where SDL lets it go as keyboard 0's rather than the keyboard that pressed it, so every
+  hotkey stayed dead until that key was pressed again; fixed as under Game input, with a test. Three Minors: SDL's
+  late Guide release (now under Limits); "fullscreen works on every screen" (corrected); and the Hotkeys page losing
+  keys to the hotkeys, a binding led by A or B taking them from it (fixed, as under The Hotkeys page). Answering it,
+  the pad presses the screens ask about were found never to have registered (above) and fixed. The second, of the
+  delta to the round-two snapshot (diff SHA-256 `90657f84...`): NEEDS CHANGES, two Minors. A Quit binding with A or
+  Start in it (since the pad-press fix, Y, X, L1 or R1 too) acted on the library as the game unloaded, Start or A
+  starting the game again, the hotkeys no longer holding back the buttons they had taken: fixed as under Game input,
+  one rule for every way they stop taking keys (its suggestion), with checks. And this entry said Select and Start
+  "still" opened the menu, where they never had: described as new, and narrowed by the owner to Select and Start
+  pressed alone. Its other suggestions are taken (the keyboard's pad keys noted), and the owner kept the ZX Spectrum and
+  MSX rule by value (Limits). The third, of the delta to the round-three snapshot (diff SHA-256 `3d47d106...`): NEEDS
+  CHANGES, one Minor: a Quit binding completed by F3 or F5 also opened the library's folder picker or rescanned it, the
+  library acting on the key that had just brought it up; fixed as under The shell, with checks. Its suggestions are
+  taken: the stick directions not held back and what counts as Select and Start alone are under Limits, and the warnings
+  were compiled to a scratch folder, Ninja's dry run then showing no compile pending. The whole record is in the commit
+  that carries this entry.
+- **Next**: the desktop window behaviour (pausing on focus loss, #2513; ignoring unfocused input, #2365; the
+  screensaver, #1577), per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull request;
+  the pad and Steam checks above; the RP6 pass for the Android changes.
+
+## Android hotkeys: up to three bindings per action, any of which runs it, a keyboard's F5, F9, F8, F12 and Tab beside the controller defaults, an overwrite clearing only the binding it collides with — 2026-10-19
+
+Branch `improved-hotkeys`, on the Android hotkeys commit `0e434cd80` (the entry below). The second pull request of the
+hotkey plan: each action takes up to three bindings, as ares allows (its `BindingLimit`). The desktop half, desktop
+per-game hotkeys and the slow-motion measurement come after it. Device checks are **not** done: no device is attached
+to this machine (see Checks).
+- **Bindings** (`input/Hotkeys.kt`): an action's hotkey is a list of up to three combos (`HotkeyBindings`), each in its
+  slot, and any of them runs the action under the rules of the entry below: matched exactly, the first key pressed
+  first and held back from the game, a tap for a one-key binding that leads longer combos. The tracker and the conflict
+  check read every binding; an action matched by two of its bindings at once runs once, as does one with a tap bound
+  twice, and a hold lasts while every key of any of its bindings stays held (`GameKeys`). A hold's own longer bindings
+  don't make its one-key binding a tap (`isTapCombo`): whichever is held, the hold is the same, so that key starts it at
+  once, where a tap, coming as its key is let go, could never start it (with Tab and Tab + X both holding fast forward,
+  Tab alone holds it). Clearing a binding leaves the others in their slots.
+- **Storage** (`data/SettingsStore.kt`): `hotkey_combo_<action>` and the console and game keys hold an action's combos
+  joined by `;`, each combo's keys by `,` as before; an empty slot is kept so the later ones keep their places (`;135`
+  is a second binding alone). A value stored before this change, a single combo, reads as the first binding, so every
+  binding a player made is kept. A console or game still overrides an action's bindings as a whole.
+- **Conflicts** (`hotkeyConflicts`, `Controls.bindHotkey`): a new binding is checked against each of the other actions'
+  bindings, by the same rules as before; an action's own bindings aren't checked against each other, since whichever
+  fires runs the same action (a hold's as above; two that overlap are under Limits). Each conflict names the colliding
+  binding's slot, and Overwrite clears only that binding, so the action it belonged to keeps its others. At a console
+  or game, overwriting a binding the level inherits leaves the level the rest of that action's bindings, in their
+  slots, as its own. The question is unchanged ("The selected hotkey combo is already bound to \<function\>, would you
+  like to overwrite?"); its note on the actions it only overlaps now says they "would lose that binding too" ("those
+  bindings", when more than one goes) instead of "would be unbound too".
+- **The Hotkeys page** (`ui/ControllerPages.kt`): a row lists its bindings joined by "or". Selecting it opens its three
+  binding rows beneath it, one action at a time: selecting one captures a combo for that slot, and its clear icon or a
+  long press clears it. The plan said a sheet; the rows open in the page because a dialog is a window of its own, which
+  neither the capture overlay drawn in the page nor the activity window's key routing reaches. The row's own clear icon
+  still unbinds every binding, and the "Unbind Pause?" question comes only when an unbinding would leave Pause none.
+  `ControlRow`'s `onCapture` is now `onSelect`.
+- **Defaults** (`DEFAULT_HOTKEYS`): a keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a screenshot,
+  F12 pauses, and Tab holds fast forward (its only default). Each is a one-key binding leading nothing, so it fires on
+  its press, and it is held back from the game like any first key. No default button binding uses those keys, and no
+  Android emulated keyboard reads a physical one (the ZX and MSX keyboards are on screen, `setKeyboardKey`), so the
+  plan's rule of skipping keys an emulated keyboard uses leaves nothing out here. An action a player has bound or
+  unbound keeps exactly what they stored, so the keyboard's binding shows only beside the defaults of actions never
+  changed.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0 wrapper and its daemon, SDK `/opt/android-sdk`, NDK 28.2.13676358):
+  `cd android && ./gradlew --max-workers=2 --console=plain :app:testLegacyDebugUnitTest --rerun
+  :app:testModernDebugUnitTest --rerun :app:assembleLegacyDebug --continue`: BUILD SUCCESSFUL. 431 tests per flavor (415
+  before), 0 failures, errors or skips, 53 result files each; `HotkeyComboTest` 26, `HotkeyRoutingTest` 23,
+  `ControlLevelsTest` 10, `HotkeySettingsTest` 2 (new). The 16 new tests: the storage format with a value from before,
+  and through the settings file (`data/HotkeySettingsTest`) a value from before, then bindings written and read back at
+  the next start; `HotkeyBindings.with`; any binding running its action once, and a tap bound twice running once; a
+  conflict naming its slot with the action's own bindings left out; a hold's own longer binding not making its key alone
+  a tap; a stick direction used only in a second binding; F5/F9/F8/F12 through the window; Tab holding fast forward; a
+  hold started from a second binding lasting while that one is held; Tab alone holding fast forward beside Tab + X, and
+  Frame Advance on Mode alone beside Mode + L3; a Library tap in a second binding; and overwriting at all consoles, a
+  console (an inherited binding) and a game. Two tests were extended: collisions already there named once however many
+  of two actions' bindings collide, and the defaults with the keyboard's. Nine mutations, each taken out after its run,
+  the files' SHA-256 checked afterwards. Before the first review, on the input package's 89 tests: a hold lasting only
+  while its first binding is held failed the second-binding hold test alone, and Overwrite clearing every binding of the
+  action it overlaps failed the overwrite test alone. After it, on the input package's 95 tests and
+  `HotkeySettingsTest`'s 2 (legacy flavor): the tap rule as the first review found it failed the tap-rule test and the
+  Tab and Frame Advance tests; exempting any action's own longer bindings, not only a hold's, and exempting every longer
+  binding of a hold, whether or not it has the key alone, each failed the tap-rule test alone; taps reported without
+  `distinct()` failed the tap-bound-twice test alone; stick directions looked for in first bindings only failed the
+  stick test alone; a Library tap looked for in the first binding only failed the Library test alone; and the store
+  reading a value as one combo failed the read-back test alone. APK, an incremental build: `app-legacy-debug.apk`,
+  32,728,558 bytes, SHA-256 `354d2e8bb85dbaf9da84d8de35206eaae883082b9d120f8e675b45322c0aa820`. **No device check**:
+  with the entry below's RP6 pass, still to do: a second binding firing, the binding rows opened and captured with a
+  controller, the keyboard's F-keys and Tab in a game, an overwrite keeping the other bindings.
+- **Limits**: the page's binding rows and its Pause question have no host test (Compose), so they wait for the device
+  pass; Tab, held back from the game as a first key, no longer moves focus in the pause menu (the D-pad and arrow keys
+  still do); a player who bound Tab or one of those F-keys to a game button loses it to the new defaults, which hold it
+  back from the game as a first key (the row notes that a binding's first key is also a game button); the "Unbind
+  Pause?" question counts F12, so on a device with no keyboard, clearing Pause's Mode binding leaves no Pause hotkey a
+  controller can press, without asking; a value with several bindings read by a build from before this change loses
+  the key on each side of each `;` (only a downgrade does that); two bindings of one action that overlap aren't asked
+  about, so with Mode + R1 and Mode + R1 + L1 both saving, pressing the longer saves twice; and when the action a new
+  combo is already bound to has another binding the combo overlaps, the question names that action once and Overwrite
+  clears both.
+- **Review**: the first independent review found NEEDS CHANGES, one Minor: a hold's one-key binding beside a longer
+  binding of that hold that its key leads was accepted and never fired, and these notes and `hotkeyConflicts`' comment
+  said an action's own bindings never collide. Fixed as under Bindings, with tests, and both texts corrected. The whole
+  record is in the commit that carries this entry.
+- **Next**: the desktop hotkey engine and capture page, then its window behaviour (#2513, #2365, the screensaver),
+  per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull request; the RP6 pass for both
+  Android changes.
+
+## Android hotkeys: a combo of as many keys as the player can hold, its first key held back from the game, Mode (Home or Guide) leading the defaults and pausing when tapped, every button and axis bindable, a conflict asked about before it overwrites — 2026-10-19
+
+Branch `improved-hotkeys`, from master `08801ab60`. The Android half of ares #2212 ("enhanced hotkey bindings") and the
+hotkey issues that share its surface (#1191 frame advance, #1726 N64 controller pak, #1577 keep the screen awake, #1698
+direct state slots). Not in this change: up to three bindings per action (the next pull request); the desktop half with
+its focus pause (#2513), unfocused-input guard (#2365) and Shift+Tab fix (#1018) (the ones after it); and slow motion
+(#424), which waits for its pacing/audio measurement. Device checks are **not** done: no device was attached to this
+machine (see Checks).
+- **What the old scheme was**: a combo was a set of Android keycodes that had to match the keys held exactly
+  (`matchingHotkeys`), and every key of it also reached the game. The defaults assumed a Z button (`KEYCODE_BUTTON_Z`,
+  101) and a C key (98), which many pads do not have, so on an RP6 the Save/Load/Pause defaults did nothing. A combo
+  could not contain an axis-only trigger (the capture took the hat D-pad and the key events, never the trigger axes),
+  and there was no conflict check at all: binding a combo another action already had simply ran both.
+- **The rules now** (`input/Hotkeys.kt`):
+  - A combo is any number of keys, in capture order, matched against the keys held **exactly**.
+  - The **first key captured leads the combo**. It is never sent to the game, and the combo's other keys are held back
+    from the game while it is down; pressed alone, they still reach the game. It must be pressed **before** the combo's
+    other keys, so a key already down when it arrives is the game's and does not complete a combo. This removes the old
+    prefix leak (Z reaching the game while Z + R1 was being pressed) without delaying ordinary game buttons.
+  - A one-key binding whose key leads longer combos is a **tap** (`isTapCombo`): it fires when its key is let go with
+    nothing else pressed meanwhile, so Mode alone pauses while Mode + R1 saves. Any other one-key binding fires on its
+    press. Only a press completes a combo (`HotkeyTracker.completions`) and a release only a tap: a combo still held
+    doesn't fire again when another key or direction is let go, and a button a pad reports both as a key and as a hat
+    or axis is pressed once.
+  - Every key the framework delivers can be bound, and so can the triggers, the sticks and the hat: a trigger reported
+    only as an axis joins as its L2/R2 key, a stick direction (X/Y, Z/RZ or RX/RY) as an axis token (a negative number,
+    `HotkeyTokens`), the hat D-pad as its D-pad keys. An axis token is pressed past half travel and let go under 0.4, as
+    the button axes are, so a trigger resting near halfway doesn't press it over and over. A stick direction counts only
+    when some binding uses it, so moving a stick doesn't stop combos from matching; one used as a first key holds back
+    the button, not the analog value.
+  - A binding that would collide is asked about first: the same set, a combo that contains or is contained by another,
+    or a key that leads one combo and is an action key of another. When one of them is the same combo, the question is
+    "The selected hotkey combo is already bound to \<function\>, would you like to overwrite?", with any that only
+    overlap named after it (`hotkeyConflictMessage`). A tap and the combos its key leads don't collide, unless the tap
+    is a hold action (fast-forward hold, frame advance), which can't wait for its key's release. Overwriting unbinds the
+    other actions at the same level (an inherited binding gets an empty override there), in one write.
+- **Defaults** (`DEFAULT_HOTKEYS`): Mode tapped pauses; Mode + R1 saves, + L1 loads, + D-pad right/left change slot,
+  + X reloads, + R3 takes a screenshot, + A mutes, + R2 toggles fast forward, + L3 is frame advance, + D-pad down cycles
+  the N64 pak, + D-pad up toggles PS1 analog, + L2 the on-screen keyboard, + Y the Library. Select and every other button
+  stay the game's. Reset, Quit, fast-forward hold and the direct slots are unbound. A pad that doesn't report Mode needs
+  its hotkeys bound again; the Hotkeys page says so when no connected controller reports one (`InputDevice.hasKeys`).
+- **Keys reach the game's hotkeys from the window** (`input/WindowKeys.kt`, `MainActivity.kt`): while a game is on
+  screen, the activity's window callback hands every key to the game screen's `GameKeys`, whichever view has focus;
+  behind the Library it watches for the Library hotkey and takes only the key that completes it (a Library bound as a
+  tap holds its key back until the release says whether it was one). The repeats and release of a key whose press
+  went to the game, or that the Library hotkey took, go the same way, so a game closed by a reload (Mode + X) or
+  swapped away with keys down still gets them let go of; without that, a reload left Mode and X held in the game's
+  hotkeys and the next X alone reloaded again (the review's critical finding, below). Before, the window ran its own
+  Library tracker ahead of the game and took that combo's first key, so with every default starting with the same key
+  no other combo could complete in a game (found reading the code; never seen on a device). The content view's key
+  fallback and the screen's `onPreviewKeyEvent` hook are gone, the window covering both. Game keys no longer go
+  through Compose's focus dispatch first, so a key event Compose drops during a focus invalidation (the held-Cross
+  entry below) can't be lost before the game gets it. `InputLog` no longer writes "game" or "fallback" lines.
+- **Holds** (`input/GameKeys.kt`): fast-forward hold and frame advance start when a press completes their combo and
+  last while all of its keys stay held, from buttons, the hat or axes alike; letting go of a key never starts one, and
+  neither does a tap. Before, a combo ending on an axis-only R2 started fast forward and never stopped it, and
+  fast-forward hold couldn't start from the hat at all.
+- **Frame advance** (`ui/EmulatorScreen.kt`, `MainViewModel.startFrameStep`): pressed in play or from the pause menu, it
+  stops the game without the menu, so the picture stays (a small badge says how to carry on); each press runs one
+  frame, holding runs one every 100 ms after 300 ms, and the buttons held go into those frames. The press's frame is
+  the action's, not the hold's (`GameKeys` runs the action as the combo completes, and the screen launches the frame
+  once the event is in), so a press let go of before the screen next draws, as quick taps can be while a frame runs,
+  still gets its frame. Focus moves to the game screen before the menu closes, so the menu leaving with focus in it
+  doesn't take the screen's focus and with it the combo held (`GameKeys.onFocusChanged`; derived from Compose clearing
+  focus with a removed node, not seen on a device). Pause opens the menu as usual and its Resume carries on; leaving
+  the app while frame stepping comes back paused, on the menu. Key repeats no longer drive it.
+- **A controller going away** (`MainActivity.kt`): an `InputManager.InputDeviceListener` forgets the keys held and lets
+  go of every button when a device is removed, so a first key held as the pad dropped doesn't keep holding the game's
+  buttons back.
+- **The Hotkeys page** (`ui/ControllerPages.kt`): the conflict dialog names hidden slot actions properly; slot rows show
+  whenever one is bound; collisions already there (after an upgrade, say) are listed; a row whose first key is also a
+  game button says so; the Mode warning is checked again as controllers connect and disconnect; All consoles has
+  "Reset hotkeys to the defaults" (`SettingsStore.clearHotkeys`).
+- **Also**: the N64 controller pak cycles (None, Rumble, Controller) with a toast; direct Save/Load Slot 1–9 actions sit
+  behind the page's toggle; the emulator screen keeps the screen awake (`FLAG_KEEP_SCREEN_ON`); the capture window is
+  700 ms of quiet; the PSP system dialogs' pause hotkey takes the Mode tap.
+- **Files**: `input/Hotkeys.kt` (the tracker, taps, the tokens, the defaults, the conflict rules and question),
+  `input/WindowKeys.kt` (new: the window's keys, each one's release following its press), `input/GameKeys.kt` (the
+  first-key rule, taps, the holds), `input/GameInputState.kt` (the axis tokens, the held-back D-pad and axis bits),
+  `input/ControlCapture.kt` (the axis capture and its hysteresis, the shorter window), `input/InputLog.kt` (its
+  description), `data/SettingsStore.kt` (the defaults, the batch writes, the reset), `ui/MainViewModel.kt` (the
+  overwrite write, the game's keys for the window, frame step and the app leaving during it, the reset),
+  `ui/ControllerPages.kt` (the dialog, the warnings, the slot rows, the labels), `ui/EmulatorScreen.kt` (the actions,
+  frame step, the keep-awake), `MainActivity.kt` (the window's keys, the device listener) and `ui/PspSystemDialogs.kt`
+  (the pause tap). Tests: `HotkeyComboTest` (new), `HotkeyRoutingTest` (new), `HeldCrossReplayTest`.
+- **Checks** (this machine, JDK 17.0.20.1, Gradle 9.6.0 from the wrapper, Android SDK at `/opt/android-sdk`, NDK
+  28.2.13676358): `./gradlew :app:testLegacyDebugUnitTest --rerun :app:testModernDebugUnitTest --rerun
+  :app:assembleLegacyDebug --continue` in `android/`, after the code fixes, ran 415 tests in each flavor with 0
+  failures (52 result files each; `HotkeyComboTest` 19, `HotkeyRoutingTest` 17, `HeldCrossReplayTest` 6). Each fix's
+  test fails without it, the file then restored and its SHA-256 checked: the first snapshot's `WindowKeys` back fails
+  the reload test (X taken from the game) and both Library tap tests; the tracker's checks for a key already held taken
+  out fail the three key-and-axis tests; holds started from what's held rather than a press fail the release test; no
+  hysteresis fails the trigger-near-halfway test; and `GameKeys` not running Frame Advance's action on the press fails
+  both frame advance tests (a comment in `GameKeys.kt` was rewrapped after that run). Earlier, with the old window
+  behaviour put back into `WindowKeys`, 3 of the then 8 routing tests failed, the routing one among them.
+  `:app:assembleLegacyDebug` repackaged `app-legacy-debug.apk` (33,947,184 bytes, SHA-256
+  `7e67524d429ea4b183db1c5a274df97452b8cc1f9a666c08976b646e6dae534e`), an incremental build: the third review found
+  2 of its 11 dex files changed from the dex files and libraries the second review kept from the round-two APK
+  (`classes4.dex`, with `EmulatorScreen`; `classes8.dex`, with `GameKeys` and `WindowKeys`) and its native libraries
+  not (`mergeLegacyDebugNativeLibs` up to date, CMake's build having nothing to do). The third review's forced
+  rebuild of the same sources then replaced it at the same path: 32,565,895 bytes, SHA-256
+  `eb1163147dfcbbcd9c050b57c5c0968076eff4b3899ed0f0a10219dc5feba317`. Of the two APKs' 11 dex files and 9 native
+  libraries only `classes4.dex` differs, and only in Compose's stability code: 22 methods, in the classes compiled
+  from `EmulatorScreen.kt`, `PspSystemDialogs.kt` and `ControllerPages.kt` and in four of
+  `AppUpdateState`'s seven subclasses (those holding an `AppUpdate`), where the incremental build has 20
+  more `Composer.changed()` call sites and 39 more `$stable` reads; probably a Compose incremental-compile
+  artefact. A hash names one build, not the sources, so the device pass records the hash of the APK it installs.
+  `scripts/build-replit.sh` was not used: this worktree has no `.local/android-sdk`. The
+  nested submodule `thirdparty/libadrenotools/lib/linkernsbypass` was missing and was checked out before the first
+  APK build. **No device check**: `adb devices` lists none, so the RP6 pass is still to do: Mode reaching the app,
+  Select reaching NES, SNES and PS1 games, combos firing in a game, a Mode tap pausing, an axis-only trigger hold, a
+  trigger or D-pad reported both ways firing once (and that trigger pressed again as a key while its axis is still
+  past 0.4), frame advance with the picture shown, held from the pause menu and tapped quickly (a frame a tap; a
+  second tap within one redraw may get a repeat sooner than the usual 300 ms after its frame), an app switch while
+  frame stepping, a reload (Mode + X) leaving no key held, the pak cycle, the screen staying awake, a controller
+  dropped mid-combo, and a pad with no key layout file (triggers on Z/RZ or RX/RY).
+- **Limits**: the desktop shell is untouched; the defaults changed for players who never bound a hotkey (explicit
+  bindings are kept, and a Z-based one keeps Z as its first key); a pad whose Home or Guide button the system keeps, or
+  that has none, needs a rebind; the conflict rules are cautious: a key leading one combo and ending another can't make
+  either misfire, with exact matching and the first key pressed first, but is still asked about; a tap has no time limit;
+  frame advance still runs the core on the main thread, as before; the analog value of a stick direction used as a
+  hotkey key isn't held back; Mode held on through the swap to the Library isn't known behind it, so it is pressed
+  again to come back; a hold action bound as a tap (only possible across levels, a game's one-key hold under longer
+  combos from all consoles) never fires, and the page lists it as a collision; a trigger reported both as a key and as
+  an axis, pressed again as a key while its axis is still past 0.4, doesn't complete its combo again (its token was
+  never let go); a pad with no key layout file that reports its triggers on Z/RZ or RX/RY rests them at -1, so a stick
+  direction token there could read as held (button capture assumes the same); the focus fix for frame advance from the
+  menu, frame stepping through an app switch and the screen launching each press's frame have no host test (Compose
+  focus, the ViewModel's lifecycle, the screen's coroutine; `GameKeys` running the action is tested), so they wait for
+  the device pass.
+- **Review**: an independent read-only review (a subagent) of the first snapshot (diff SHA-256
+  `8105cfb22107c3daf48dc503b80cd1d776df903071a02ab72e0d6d2bcea2c252`): NEEDS CHANGES, one Critical, two Majors and five
+  Minors, all taken. The Critical: a reload (Mode + X) closes the game before its keys are let go, and the window then
+  sent their releases elsewhere, so the game's hotkeys kept Mode and X held (X alone reloaded again, A muted, a Mode
+  tap didn't pause); each key's release now follows its press. The Majors: a button a pad reports both as a key and as
+  a hat or axis ran its combo twice (Mode + R2 toggled fast forward on and off at once); and frame advance from the
+  pause menu stopped after one frame, the menu taking focus with it as it closed. The Minors: a hold could start on a
+  release (now only on a press); frame stepping resumed the game after an app switch; axis tokens had no hysteresis
+  (a trigger near halfway toggled fast forward three times in one hold); the "already bound" question showed only when
+  there was a single conflict; and some claims here and in comments went further than the code (fixed above; the
+  unused `matchingHotkeys` is gone). Of its suggestions: stale comments fixed, the Mode warning made live, a Library
+  tap's press held back with its release, and button capture's stick axes put back as they were (RX/RY are the
+  hotkeys' only). The two left are the limits above (Mode through the swap; a hold bound as a tap). The second review,
+  of the fixed snapshot (diff SHA-256 `edfe6c01e60a0fdcc3aaae23aa23c74c969d9d988fbd6ebd7e1b24fe1d218a02`): NEEDS
+  CHANGES, one Minor: the implementation plan said each of the first round's findings had a test that fails without
+  its fix, but the menu focus fix and the app-switch fix have none; corrected. It re-ran both suites and the build,
+  confirmed every first-round fix, the first snapshot's `WindowKeys` failing the new reload test, with 16 tests of its
+  own run from outside the tree. Its suggestions taken: `WindowKeys` and this entry say which keys' releases follow
+  their press (those that went to the game or that the Library hotkey took); the plan says "unbinds the other
+  actions"; each Frame Advance press runs its frame however soon it is let go (a press and release within one frame
+  ran none, the screen never seeing the hold); and the two pad behaviours it saw are in the limits and the device pass.
+  The third review, of the delta to the round-three snapshot (diff SHA-256
+  `ccd8067ab68ae9b48f69eecd2713190eaa1d8780b2efac57c6b23bab33a5bd23`, delta SHA-256
+  `a2dff408257c2d779b174899a5e1a3fdd9bfd535cd32f04b1b2f2289d9388999`): NEEDS CHANGES, two Minors in the docs alone
+  and no code finding: the plan said a test fails without each press's frame, but the test covers only `GameKeys`
+  asking for it (the screen running the frame has none); and the checks said all 11 dex files of the APK changed,
+  where 2 did. Both corrected. It recomputed the snapshot and the delta, re-ran both suites and a forced rebuild (415
+  tests each, 0 failures) and ran 11 frame-advance tests of its own from outside the tree. Its suggestions taken:
+  "each code fix" in the plan; the trigger pressed again past 0.4 and a quick second tap in the device pass; the note
+  on the APK's hash above. Left, as the earlier snapshots had it: `startFrameStep` saying whether it started, so that
+  a press's frame launched after the game unloads skips the native call. The fourth review, of the delta to the
+  round-four snapshot (diff SHA-256 `0a519adee78cd4bc93b17ad4f9b9485972e75675fc040b9c5738621f08c06471`, delta SHA-256
+  `2a195b78ae13ce546c5261ac08cc532cc238d2817f7cea241bb90fc76a2d7695`): NEEDS CHANGES, one Minor in these notes alone:
+  they gave the forced rebuild's difference as an extra `Composer.changed()` call in `EmulatorScreen()`, where
+  Compose's stability code differs in 22 methods; corrected. It recomputed the snapshot and the delta, compared the
+  APKs' dex files and libraries and re-ran both suites (415 tests each, 0 failures). Its four suggestions, all on
+  wording, are taken. The fifth review, of the delta to the round-five snapshot (diff SHA-256
+  `eed3bbfe28d16931e23b6deec7ea44ca793885cc0cec6d574da6600b4d9e2f7a`, delta SHA-256
+  `89a239eca8cbeef04bf5838b1b7137952a48397fda73e5c55474bf8e71425849`): NEEDS CHANGES, one Minor in these notes alone:
+  they spoke of `AppUpdateState`'s four subclasses, where it has seven and the four that differ are those holding an
+  `AppUpdate`; corrected. It recomputed the snapshot and the delta and checked every claim the delta adds or rewords;
+  the delta being docs only, it ran no build. Its one suggestion, "call sites" for "calls", is taken.
+- **Next**: up to three bindings per action (with keyboard defaults beside the controller's), then the desktop hotkey
+  system and its window behaviour, per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull
+  request.
+
 ## PSP tests: GCC 16's false warning in movies.cpp settled in the code, the sound frames made at their full size — 2026-10-23
 
 Branch `psp-movies-gcc16`, from master `11983f8d4`, master's `ac0ad694c` (#302: docs alone) and `67e221a8f` (#304:

@@ -26,6 +26,7 @@ import com.phobos.emulator.input.ControlCapture
 import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.Controls
 import com.phobos.emulator.input.GameInputState
+import com.phobos.emulator.input.GameKeys
 import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.data.AspectRatioMode
@@ -331,7 +332,8 @@ class MainViewModel(
     override fun onPause(owner: LifecycleOwner) {
         InputLog.note { "activity paused" }
         if (_isLoaded.value && !_isPaused.value) {
-            wasEmulationRunningBeforePause = true
+            // A game stopped for frame advance comes back paused, on the menu, rather than running.
+            wasEmulationRunningBeforePause = !_frameStepping.value
             setPause(true)
         } else {
             wasEmulationRunningBeforePause = false
@@ -367,6 +369,15 @@ class MainViewModel(
 
     private val _userActivity = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val userActivity: SharedFlow<Unit> = _userActivity
+
+    // The controllers whose Back press is being stored, so another press before it's stored doesn't store it again.
+    private val backPadsNoted = mutableSetOf<String>()
+
+    /** Remembers that the controller [descriptor] names sends Back (MainActivity, at a controller's Back press). */
+    fun noteBackPress(descriptor: String) {
+        if (descriptor in settings.value.backSeenPads || !backPadsNoted.add(descriptor)) return
+        viewModelScope.launch { settingsStore.addBackSeenPad(descriptor) }
+    }
 
     /** True while the idle screensaver overlay is covering the menus. */
     private val _screensaverActive = MutableStateFlow(false)
@@ -663,7 +674,27 @@ class MainViewModel(
         }
     }
 
+    /** The keys of the game screen on show (EmulatorScreen), which the activity's window hands every key; main thread. */
+    var gameKeys: GameKeys? = null
+
+    private val _frameStepping = MutableStateFlow(false)
+    /** The game is stopped for frame advance: no pause menu, the picture stays, each Frame Advance runs a frame. */
+    val frameStepping: StateFlow<Boolean> = _frameStepping.asStateFlow()
+
+    /**
+     * Stops the game for frame advance, from play or the pause menu: the menu closes and the controls keep reaching
+     * the game, so the buttons held go into the frames advanced. Pause opens the menu as usual, and Resume carries on.
+     */
+    fun startFrameStep() {
+        if (!_isLoaded.value) return
+        _frameStepping.value = true
+        _isPaused.value = false
+        PhobosCore.setPause(true)
+        controlCapture.cancel()
+    }
+
     fun setPause(paused: Boolean) {
+        _frameStepping.value = false
         _isPaused.value = paused
         PhobosCore.setPause(paused)
         // Controller input goes to the menus while paused, so a button held now would stay down for the game.
@@ -801,6 +832,7 @@ class MainViewModel(
         // makes the new screen show "Initializing..." until the load lands.
         _isLoaded.value = false
         _isPaused.value = false
+        _frameStepping.value = false
         _loadedGame.value = null
         _pspStartSettings.value = null
         _loadedTitle.value = null
@@ -857,11 +889,32 @@ class MainViewModel(
         level.scope?.let { settingsStore.clearScopedMappings(it) }
     }
 
-    /** Sets hotkey [action] at [level]; an empty [combo] unbinds it there. */
-    fun bindHotkey(level: ControlLevel, action: String, combo: List<Int>) = editControls { s ->
+    /**
+     * Sets hotkey [action]'s binding [slot] at [level]; an empty [combo] clears it there. The [overwrite] bindings (action
+     * and slot) are cleared at the same level (Controls.bindHotkey).
+     */
+    fun bindHotkey(level: ControlLevel, action: String, slot: Int, combo: List<Int>, overwrite: List<Pair<String, Int>> = emptyList()) =
+        editControls { s -> writeHotkeys(level, s, Controls.bindHotkey(level, action, slot, combo, overwrite, s.hotkeys, s.controlOverrides)) }
+
+    /** Unbinds every binding of hotkey [action] at [level]. */
+    fun unbindHotkey(level: ControlLevel, action: String) = editControls { s -> writeHotkeys(level, s, mapOf(action to emptyList())) }
+
+    /**
+     * Every hotkey binding [from] starts, at every level and among the defaults, started by [to] instead; nothing
+     * changes with any action in the way (Controls.replaceHotkeyLeadEverywhere).
+     */
+    fun replaceHotkeyLeadEverywhere(from: Int, to: Int) = editControls { s ->
+        val swap = Controls.replaceHotkeyLeadEverywhere(from, to, s.hotkeys, s.controlOverrides)
+        if (swap.blockers.isEmpty()) settingsStore.setHotkeysEverywhere(swap.global, swap.scoped)
+    }
+
+    private suspend fun writeHotkeys(level: ControlLevel, s: EmulatorSettings, changes: Map<String, List<List<Int>>>) {
         val scope = level.scope
-        if (scope == null) settingsStore.setHotkey(action, combo)
-        else settingsStore.setScopedHotkey(scope, action, Controls.hotkeyChange(level, action, combo, s.hotkeys, s.controlOverrides))
+        if (scope == null) {
+            settingsStore.setHotkeys(changes)
+        } else {
+            settingsStore.setScopedHotkeys(scope, changes.mapValues { (a, b) -> Controls.hotkeyChange(level, a, b, s.hotkeys, s.controlOverrides) })
+        }
     }
 
     fun inheritHotkey(level: ControlLevel, action: String) = editControls {
@@ -871,6 +924,9 @@ class MainViewModel(
     fun inheritAllHotkeys(level: ControlLevel) = editControls {
         level.scope?.let { settingsStore.clearScopedHotkeys(it) }
     }
+
+    /** All consoles' hotkeys back to the defaults (DEFAULT_HOTKEYS); what consoles and games change stays. */
+    fun resetHotkeysToDefaults() = editControls { settingsStore.clearHotkeys() }
 
     /** The loaded game's button names by pad bit (N64 "Z" for L2); empty with no game loaded. */
     suspend fun consoleButtonNames(): Map<Int, String> = withContext(Dispatchers.IO) {
@@ -1185,7 +1241,7 @@ class MainViewModel(
                     }
                     PhobosCore.loadState(stateFile.absolutePath)
                 } finally {
-                    if (disc != null) PhobosCore.setPause(_isPaused.value)
+                    if (disc != null) PhobosCore.setPause(_isPaused.value || _frameStepping.value)
                 }
                 Log.d("Phobos", "loadState: Native Unserialize took ${System.currentTimeMillis() - startTime}ms")
                 if (nativeSuccess) {
@@ -1562,10 +1618,10 @@ class MainViewModel(
     private val _isLoaded = MutableStateFlow(false)
     val isLoaded: StateFlow<Boolean> = _isLoaded
 
-    // True while the EmulatorScreen composable is on screen. Lets the
-    // activity-level key fallback decide whether a "library" hotkey press
-    // means "swap to library" (emulator visible) or "swap back to the game"
-    // (library/settings visible, game loaded + paused).
+    // True while the EmulatorScreen composable is on screen. Lets the activity's
+    // window keys (WindowKeys) decide whether keys go to the game's hotkeys
+    // (emulator visible) or are watched for the Library hotkey that swaps back
+    // to the game (library/settings visible, game loaded + paused).
     private val _emulatorScreenVisible = MutableStateFlow(false)
     val emulatorScreenVisible: StateFlow<Boolean> = _emulatorScreenVisible
 
@@ -1603,7 +1659,7 @@ class MainViewModel(
     fun emulatorScreenReplaced(screen: Any): Boolean = emulatorScreen.let { it != null && it !== screen }
 
     // One-shot navigation requests from outside the NavHost (debug loader,
-    // activity key fallback). MainScaffold collects and navigates. A channel, so a
+    // the window's Library hotkey). MainScaffold collects and navigates. A channel, so a
     // request made before MainScaffold collects (it is composed once the stored
     // theme loads, and the debug loader can ask sooner) is delivered, not dropped.
     private val _navEvents = Channel<String>(Channel.BUFFERED)
@@ -2684,6 +2740,7 @@ class MainViewModel(
     }
 
     fun togglePause() {
+        _frameStepping.value = false
         _isPaused.value = !_isPaused.value
         PhobosCore.setPause(_isPaused.value)
         if (!_isPaused.value) controlCapture.cancel()
@@ -3080,6 +3137,7 @@ class MainViewModel(
             PhobosCore.setVulkanCachePath(cacheDir)
             Log.i("Phobos", "Vulkan cache path resolved: $cacheDir")
             _isPaused.value = false
+            _frameStepping.value = false
             _isLoaded.value = false
             _loadedGame.value = null
             _loadedTitle.value = null

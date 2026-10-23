@@ -24,16 +24,22 @@ sealed class ControlLevel {
             is Console -> AllConsoles
             is Game -> Console(system)
         }
+
+    companion object {
+        /** The level a stored [scope] names: a game's is its system, "/" and its ROM file name, which has no "/". */
+        fun of(scope: String): ControlLevel =
+            if ('/' in scope) Game(scope.substringBeforeLast('/'), scope.substringAfterLast('/')) else Console(scope)
+    }
 }
 
 /**
  * What console and game levels change, by [ControlLevel.scope]: button bindings ("k:<keycode>" or
- * "a:<axis>:<dir>", as the global ones) and hotkey combos. An empty binding or combo unbinds at that
- * level; a missing one inherits.
+ * "a:<axis>:<dir>", as the global ones) and hotkeys, each action's bindings ([HotkeyBindings]) as a
+ * whole. An empty binding, or an action with none, unbinds at that level; a missing one inherits.
  */
 data class ControlOverrides(
     val mappings: Map<String, Map<Int, String>> = emptyMap(),
-    val hotkeys: Map<String, Map<String, List<Int>>> = emptyMap(),
+    val hotkeys: Map<String, Map<String, List<List<Int>>>> = emptyMap(),
 ) {
     /** Whether a console or game [level] changes any button. */
     fun hasMappings(level: ControlLevel) = level.scope?.let { !mappings[it].isNullOrEmpty() } == true
@@ -45,9 +51,9 @@ data class ControlOverrides(
 }
 
 /** The button bindings and hotkeys in effect at a level. */
-data class ActiveControls(val mappings: Map<Int, String>, val hotkeys: Map<String, List<Int>>) {
+data class ActiveControls(val mappings: Map<Int, String>, val hotkeys: Map<String, List<List<Int>>>) {
     companion object {
-        fun at(level: ControlLevel, mappings: Map<Int, String>, hotkeys: Map<String, List<Int>>, overrides: ControlOverrides) =
+        fun at(level: ControlLevel, mappings: Map<Int, String>, hotkeys: Map<String, List<List<Int>>>, overrides: ControlOverrides) =
             ActiveControls(Controls.mappings(level, mappings, overrides), Controls.hotkeys(level, hotkeys, overrides))
     }
 }
@@ -68,8 +74,15 @@ object Controls {
     fun mappings(level: ControlLevel, global: Map<Int, String>, overrides: ControlOverrides): Map<Int, String> =
         resolve(level, global) { overrides.mappings[it] }.mapNotNull { (bit, binding) -> binding.takeIf { it.isNotEmpty() }?.let { bit to it } }.toMap()
 
-    fun hotkeys(level: ControlLevel, global: Map<String, List<Int>>, overrides: ControlOverrides): Map<String, List<Int>> =
-        resolve(level, global) { overrides.hotkeys[it] }.filterValues { it.isNotEmpty() }
+    fun hotkeys(level: ControlLevel, global: Map<String, List<List<Int>>>, overrides: ControlOverrides): Map<String, List<List<Int>>> =
+        resolve(level, global) { overrides.hotkeys[it] }.filterValues { bindings -> bindings.any { it.isNotEmpty() } }
+
+    /**
+     * The keys and axis directions ([bindingTokens]) every level's button bindings hold between them: all consoles' and
+     * each console's and game's own, a level's bindings being its own over those it inherits.
+     */
+    fun gameTokensEverywhere(global: Map<Int, String>, overrides: ControlOverrides): Set<Int> =
+        (global.values + overrides.mappings.values.flatMap { it.values }).flatMap(::bindingTokens).toSet()
 
     private fun <K, V> resolve(level: ControlLevel, global: Map<K, V>, changes: (String) -> Map<K, V>?): Map<K, V> {
         val result = global.toMutableMap()
@@ -82,7 +95,7 @@ object Controls {
         source(level, global.containsKey(bit)) { overrides.mappings[it]?.containsKey(bit) == true }
 
     /** The level that decides [action] at [level] (binds or unbinds it), or null when none does. */
-    fun hotkeySource(level: ControlLevel, action: String, global: Map<String, List<Int>>, overrides: ControlOverrides): ControlLevel? =
+    fun hotkeySource(level: ControlLevel, action: String, global: Map<String, List<List<Int>>>, overrides: ControlOverrides): ControlLevel? =
         source(level, global.containsKey(action)) { overrides.hotkeys[it]?.containsKey(action) == true }
 
     private fun source(level: ControlLevel, inGlobal: Boolean, decidesAt: (String) -> Boolean): ControlLevel? {
@@ -116,12 +129,64 @@ object Controls {
         return changes.mapValues { (bit, value) -> value.takeIf { it != (inherited[bit] ?: "") } }
     }
 
-    /** What setting [action] to [combo] (empty to unbind) at a console or game [level] writes there; null inherits. */
-    fun hotkeyChange(level: ControlLevel, action: String, combo: List<Int>, global: Map<String, List<Int>>, overrides: ControlOverrides): List<Int>? {
+    /** What setting [action]'s [bindings] (none to unbind) at a console or game [level] writes there; null inherits. */
+    fun hotkeyChange(
+        level: ControlLevel, action: String, bindings: List<List<Int>>, global: Map<String, List<List<Int>>>, overrides: ControlOverrides,
+    ): List<List<Int>>? {
         val inherited = level.parent?.let { hotkeys(it, global, overrides) }.orEmpty()
-        return combo.takeIf { it != (inherited[action] ?: emptyList<Int>()) }
+        return bindings.takeIf { it != inherited[action].orEmpty() }
+    }
+
+    /**
+     * The actions binding [action]'s [slot] to [combo] (empty: clearing it) at [level] changes, each with its bindings
+     * as the level then has them: [action]'s, and those of the [overwrite] bindings (action and slot), which are
+     * cleared. An action the level inherits comes whole, so overwriting an inherited binding leaves the level the
+     * action's others as its own.
+     */
+    fun bindHotkey(
+        level: ControlLevel, action: String, slot: Int, combo: List<Int>, overwrite: List<Pair<String, Int>>,
+        global: Map<String, List<List<Int>>>, overrides: ControlOverrides,
+    ): Map<String, List<List<Int>>> {
+        val current = hotkeys(level, global, overrides)
+        val changes = linkedMapOf<String, List<List<Int>>>()
+        fun bindings(of: String) = changes[of] ?: current[of].orEmpty()
+        changes[action] = HotkeyBindings.with(bindings(action), slot, combo)
+        for ((other, otherSlot) in overwrite) changes[other] = HotkeyBindings.with(bindings(other), otherSlot, emptyList())
+        return changes
+    }
+
+    /**
+     * [to] in [from]'s place as the first key of every hotkey binding [from] starts, at every level at once
+     * ([leadReplacement]): what all consoles store then (each changed action whole, a default included) and what each
+     * console and game storing hotkeys of its own does (each changed action of those it stores, whole), or, with
+     * anything in the way at all consoles or at a level having hotkeys of its own, those actions, each with the level
+     * that sets it, and nothing to store.
+     */
+    fun replaceHotkeyLeadEverywhere(
+        from: Int, to: Int, global: Map<String, List<List<Int>>>, overrides: ControlOverrides,
+    ): LeadSwap {
+        val scopes = overrides.hotkeys.filterValues { it.isNotEmpty() }
+        val levels = listOf(ControlLevel.AllConsoles) + scopes.keys.map(ControlLevel::of)
+        val blockers = levels.flatMap { level ->
+            leadReplacement(hotkeys(level, global, overrides), from, to).blockers.map { action ->
+                (hotkeySource(level, action, global, overrides) ?: level) to action
+            }
+        }.distinct()
+        if (blockers.isNotEmpty()) return LeadSwap(emptyMap(), emptyMap(), blockers)
+        val scoped = scopes.mapValues { (_, stored) -> leadReplacement(stored, from, to).changes }.filterValues { it.isNotEmpty() }
+        return LeadSwap(leadReplacement(global, from, to).changes, scoped, emptyList())
     }
 }
+
+/**
+ * What [Controls.replaceHotkeyLeadEverywhere] stores: all consoles' changed actions ([global]) and, by scope, each
+ * console's and game's ([scoped]); or, when [blockers] (each action in the way, at its level) isn't empty, nothing.
+ */
+data class LeadSwap(
+    val global: Map<String, List<List<Int>>>,
+    val scoped: Map<String, Map<String, List<List<Int>>>>,
+    val blockers: List<Pair<ControlLevel, String>>,
+)
 
 /** How console and game settings are named in storage: "<prefix><scope>|<bit or action>". */
 object ScopedKeys {

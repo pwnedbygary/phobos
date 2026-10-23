@@ -7,8 +7,8 @@ import android.view.KeyEvent
 /**
  * An opt-in log of the controller input a game gets, to see on a device where a held button is let go of or a press
  * lost: `adb shell setprop log.tag.PhobosInput DEBUG`, then start the game (`adb logcat -s PhobosInput`). It logs each
- * key event the window is given ("window"), the game screen's key handler is given ("game") and the activity's
- * fallback takes ("fallback"); each change of the buttons sent to the core; a let-go of every button, with its caller,
+ * key event the window is given ("window"), which hands a running game's keys straight to its key handler (WindowKeys);
+ * each change of the buttons sent to the core; a let-go of every button, with its caller,
  * and a reset; and the window's, the activity's and the game screen's focus. Times are uptime milliseconds, the clock
  * `adb shell getevent -lt` stamps the kernel's events with (in seconds).
  */

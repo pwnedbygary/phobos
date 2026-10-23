@@ -52,6 +52,7 @@ namespace ares {
   auto runFrame() -> void;
   auto setFastForward(bool enabled) -> void;
   auto setFastForwardSpeed(f32 speed) -> void;
+  auto setSlowMotion(f32 speed) -> void;
   auto setNgcdLoadSpeed(s32 speed) -> void;
   auto setZxLoadSpeed(s32 speed) -> void;
   auto setMsxLoadSpeed(s32 speed) -> void;

@@ -18,6 +18,8 @@ auto Settings::load(const std::string& path) -> void {
   }
 }
 
+auto Settings::has(const std::string& key) const -> bool { return values.count(key) > 0; }
+
 auto Settings::text(const std::string& key, const std::string& fallback) const -> std::string {
   auto it = values.find(key);
   return it == values.end() ? fallback : it->second;
@@ -47,6 +49,11 @@ auto Settings::setText(const std::string& key, const std::string& value) -> void
 auto Settings::setFlag(const std::string& key, bool value) -> void { setText(key, value ? "1" : "0"); }
 
 auto Settings::setNumber(const std::string& key, int value) -> void { setText(key, std::to_string(value)); }
+
+auto Settings::erase(const std::vector<std::string>& keys) -> void {
+  for (auto& key : keys) values.erase(key);
+  save();
+}
 
 auto Settings::save() const -> void {
   if (file.empty()) return;

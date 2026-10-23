@@ -100,6 +100,28 @@ namespace ares {
   std::atomic<bool> emulationRunning{false};
   std::atomic<bool> fastForwardAtomic{false};
   std::atomic<f32>  ffSpeedLimitAtomic{2.0f};
+  // Slow motion's speed, below 1 (1 is off): the frames come further apart, and each audio stream makes 1/speed output
+  // samples of each emulated one, so the sound keeps coming, slowed with the picture.
+  std::atomic<f32>  slowMotionAtomic{1.0f};
+  // The speed slow motion runs at now: 1 while it's off, or while fast forward (which wins over it) is on.
+  static auto slowMotionSpeed() -> f64 {
+    f32 speed = slowMotionAtomic.load(std::memory_order_relaxed);
+    return speed > 0.0f && speed < 1.0f && !fastForwardAtomic.load(std::memory_order_relaxed) ? speed : 1.0;
+  }
+  // The frames video() draws though the game is paused: those frame advance runs, paused. ares's screen thread draws
+  // a frame after the run that made it, so they're counted rather than flagged, and the first step after a pause counts
+  // one more, for a frame the emulation thread started as the game stopped (on its way still, or run just after the
+  // step): of the two, the newer comes last.
+  std::atomic<int> pausedFramesToDraw{0};
+  std::atomic<bool> steppedSincePause{false};
+  // Takes one of pausedFramesToDraw for the frame video() is drawing; false when none is left.
+  static auto takePausedFrame() -> bool {
+    int left = pausedFramesToDraw.load();
+    while (left > 0) {
+      if (pausedFramesToDraw.compare_exchange_weak(left, left - 1)) return true;
+    }
+    return false;
+  }
   // Per-core refresh rate reported by ares via Screen::refreshRateHint().
   // Most cores are 60 Hz but WonderSwan/NGP run at ~75 Hz and PAL cores at
   // 50 Hz — the old hardcoded 60 FPS cap throttled those cores and caused
@@ -817,14 +839,16 @@ namespace ares {
   // Dynamic rate control. Emulated audio and the DAC run on different clocks that frame pacing
   // can't match exactly, so the ring would slowly fill (then drop samples) or run dry (then
   // underrun). Once per frame, every stream's resampling rate is trimmed by up to ±0.5%, too
-  // little to hear, toward a quarter-full ring, which also leaves a cushion for late frames.
+  // little to hear, toward a quarter-full ring, which also leaves a cushion for late frames. In slow
+  // motion the trim is also divided by its speed: the frames come 1/speed times as far apart, so
+  // each emulated sample makes 1/speed output samples (half speed sounds an octave lower).
   static constexpr f64 audioRateControlRange = 0.005;
   static constexpr f64 audioRingTargetFill = 0.25;
   static auto updateAudioRateControl(AudioThreadState& state) -> void {
     f64 fill = (f64)audioRingFill.load(std::memory_order_relaxed) / (f64)audioRingCapacity;
     state.smoothedFill += (fill - state.smoothedFill) * 0.05;
     f64 error = std::clamp((audioRingTargetFill - state.smoothedFill) / audioRingTargetFill, -1.0, 1.0);
-    f64 trim = 1.0 + audioRateControlRange * error;
+    f64 trim = (1.0 + audioRateControlRange * error) / slowMotionSpeed();
     if (std::abs(trim - state.appliedTrim) < 0.0001 && state.trimmedVersion == state.streamsVersion) return;
     for (auto& stream : state.streams) stream->setResamplerTrim(trim);
     state.appliedTrim = trim;
@@ -1463,8 +1487,9 @@ namespace ares {
         bool spinWait = busyWaitPacing.load(std::memory_order_relaxed) && localRoot
           && localRoot->name() == "Nintendo 64";
 
-        // A load boost paces like fast forward, capped at the chosen speed.
-        bool loadBoost = loadBoostFrames && !fastForwardAtomic;
+        // A load boost paces like fast forward, capped at the chosen speed; slow motion, held, wins over it.
+        f64 slowSpeed = slowMotionSpeed();
+        bool loadBoost = loadBoostFrames && !fastForwardAtomic && slowSpeed == 1.0;
         if (fastForwardAtomic || loadBoost) {
             f64 speed = loadBoost ? (f64)loadBoostSpeed : (f64)ffSpeedLimitAtomic;
             if (speed > 0.0) {
@@ -1491,9 +1516,10 @@ namespace ares {
         // stream fills the ring faster than the DAC drains it → 34fps) and
         // under-throttled light-audio cores (Atari 2600 ran 119fps because
         // the ring was always below target → no wait). The absolute video
-        // deadline is the correct universal pace for every core.
+        // deadline is the correct universal pace for every core. Slow motion
+        // spaces the deadlines 1/speed times as far apart.
         if (!fastForwardAtomic && !loadBoost) {
-          double frameTarget = 1000000.0 / refreshRate;
+          double frameTarget = 1000000.0 / refreshRate / slowSpeed;
           auto period = std::chrono::microseconds((s64)frameTarget);
           frameDeadline += period;
           waitUntil(frameDeadline, spinWait);
@@ -1949,7 +1975,7 @@ namespace ares {
     }
 
     auto video(Node::Video::Screen screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
-      if (width == 0 || height == 0 || isPausedAtomic) return;
+      if (width == 0 || height == 0 || (isPausedAtomic && !takePausedFrame())) return;
       // NOTE: no currentEmuThread gate here — ares Video::Threaded=true means
       // this runs on the ares Screen thread, NOT the emulation thread. Gating
       // on currentEmuThread would reject every frame (black screen regression
@@ -2709,7 +2735,9 @@ namespace ares {
   // (rdram/cartridge.rom/dd.disk) -> SIGSEGV (the 64DD quit->reload crash).
   systemUnloading.store(true);
     isPausedAtomic = true;
+    pausedFramesToDraw = 0;
     fastForwardAtomic = false;
+    slowMotionAtomic = 1.0f;
     // Keys held on the on-screen keyboard must not carry into the next game.
     clearOnScreenKeys();
     // The next game reports its own geometry with its first frame.
@@ -4035,6 +4063,8 @@ else if (port->type() == "Keyboard") {
 
   auto setPause(bool paused) -> void {
     isPausedAtomic = paused;
+    pausedFramesToDraw = 0;
+    steppedSincePause = false;
     // Flush saves when PAUSING (leaving gameplay): the user may back out or
     // swipe the app away, which skips the clean-unload export. The emulation
     // thread is idle at this point (pause gate), so this is race-free.
@@ -4049,6 +4079,11 @@ else if (port->type() == "Keyboard") {
   }
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
+  auto setSlowMotion(f32 speed) -> void {
+    slowMotionAtomic = speed;
+    if (speed > 0.0f && speed < 1.0f) LOGI("Slow motion at %.2fx", (f64)speed);
+    else LOGI("Slow motion off");
+  }
   auto setNgcdLoadSpeed(s32 speed) -> void { ngcdLoadSpeed = std::max(1, speed); LOGI("Neo Geo CD loading speed set to %dx", std::max(1, speed)); }
   auto setZxLoadSpeed(s32 speed) -> void { zxLoadSpeed = std::max(1, speed); LOGI("ZX Spectrum tape loading speed set to %dx", std::max(1, speed)); }
   auto setMsxLoadSpeed(s32 speed) -> void { msxLoadSpeed = std::max(1, speed); LOGI("MSX tape loading speed set to %dx", std::max(1, speed)); }
@@ -4092,7 +4127,18 @@ else if (port->type() == "Keyboard") {
     #endif
     LOGI("System reset requested");
   }
-  auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(*runMutex); if (root) root->run(); }
+  // One frame run with the game paused, and drawn (pausedFramesToDraw), so a screenshot then has it too. A PSP game's
+  // step asks for that frame's own picture (exactFrame): with the GE on its thread the screen gets the newest picture
+  // the thread has taken, the frame before, and while the game is paused no later frame brings the step's in.
+  auto frameAdvance() -> void {
+    lock_guard<recursive_mutex> lock(*runMutex);
+    if (!root) return;
+    pausedFramesToDraw += steppedSincePause.exchange(true) ? 1 : 2;
+    bool psp = root->name() == "PlayStation Portable";
+    if (psp) ::ares::PlayStationPortable::system.exactFrame = true;
+    root->run();
+    if (psp) ::ares::PlayStationPortable::system.exactFrame = false;
+  }
   auto dumpNgGfx(const char* dir) -> void {
     lock_guard<recursive_mutex> lock(*runMutex);
     ::ares::NeoGeo::system.dumpNgGfx(dir);
@@ -4867,7 +4913,9 @@ else if (port->type() == "Keyboard") {
         // emulationRunning back on until the old thread has confirmed exit,
         // or it resumes with its stale localRoot.
         isPausedAtomic = true;
+        pausedFramesToDraw = 0;
         fastForwardAtomic = false;
+        slowMotionAtomic = 1.0f;
         setEmulationRunning(false);
         bool joined = false;
         if (emuThread && emuThreadRunning) {
@@ -5124,8 +5172,12 @@ else if (port->type() == "Keyboard") {
     }
     #endif
     // A PSP game presented by its Vulkan renderer: the picture it presented last (red in the low byte, as the
-    // window's are)
+    // window's are), kept at once between frames (runMutex), rather than a frame or two after it's on the window.
     if (root && root->name() == "PlayStation Portable" && ::ares::PlayStationPortable::presenting()) {
+      {
+        lock_guard<recursive_mutex> frame(*runMutex);
+        ::ares::PlayStationPortable::settle();
+      }
       if (!::ares::PlayStationPortable::shot(picture.pixels, picture.width, picture.height)) return false;
       for (auto& p : picture.pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
       return true;
