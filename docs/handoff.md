@@ -35,6 +35,209 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## An intro as Phobos opens: pixel-art Mars and its moon, coming into focus as the logo, on Android and the desktop — 2026-10-23
+
+Branch `intro-splash`, from master `7986aef5b` (#298), master merged in since: `ac0ad694c` (#301's AppImage pins, whose
+`desktop.yml` changes stand apart from the intro's step there, and #302's docs), then `ae9d73f6e` (#304, #303 and
+#294's hotkeys, whose reworked key paths the intro's hooks now sit in: below). The owner asked on 2026-10-22 for
+"a sick intro splash screen for phobos when its opened ... done in pixel art, space themed. Maybe Mars rotating in the
+background with the Phobos moon w/ d-pad orbiting it in the distance, and it comes into focus, then the logo loads
+with the PHOBOS text below it before going into the library screen", and chose: both apps, drawn by one shared renderer
+so they look the same; every time Phobos opens to the Library; any button, key or tap skips it; a Settings switch turns
+it off; never when a frontend launches a game directly, nor with the system's animations removed. New:
+`android/app/src/main/cpp/PhobosIntro.hpp` and `.cpp` (the renderer), `PhobosIntroArt.hpp` (its art, made by the new
+`tools/logo/build_intro.py` from `docs/images/phobos-logo.png`), `PhobosIntroJNI.cpp`, `ui/Intro.kt`,
+`ui/IntroSplash.kt`, `desktop/ReducedMotion.hpp` and `.cpp`, `tests/intro/intro.cpp` and `ui/IntroTest.kt`. Changed:
+`CMakeLists.txt`, `.github/workflows/desktop.yml`, `MainActivity.kt`, `PhobosCore.kt`, `SettingsStore.kt`,
+`AppearanceSettingsScreen.kt`, `MainScaffold.kt`, `MainViewModel.kt`, `AppearanceSettingsTest.kt`, `desktop/main.cpp`,
+this file and a row of `docs/implementation-plan.md`.
+- **What it shows**, in about 5.6 s: the stars and Mars come out of black (0.7 s); Mars turns, its surface a map made
+  once from noise on the sphere (craters, a canyon, a volcano, ice caps) in the colours of the launcher icon's Mars,
+  while the logo's moon, with its D-pad, orbits it, from behind it and across its face, small and out of focus; from
+  2.1 s to 3.5 s the camera moves in, the moon growing to its art's own size and coming into focus as Mars sinks, blurs
+  and dims; "phobos" is wiped in below it along its italic's lean (to 4.1 s), a glint and two sparkles cross the logo,
+  and from 5 s the Library shows through an ordered dissolve (0.6 s; after a skip, 0.3 s). The canvas's shorter side is
+  about 180 pixels, scaled up by a whole number (6 on the RP6 and a 1080p screen), so each pixel stays square; the moon
+  and the word are the README banner's art, one pixel per art pixel.
+- **One renderer**: `phobos::intro` (`canvasFor`, `sceneAt`, `render`) is in `phobos_core`, which both builds compile.
+  Android draws each frame into an ARGB_8888 bitmap through JNI (`AndroidBitmap_lockPixels`, `libjnigraphics`), the
+  desktop into an SDL streaming texture; a pixel the dissolve lets the Library through is 0 in all four bytes, so a
+  premultiplied bitmap takes it as it is. A frame takes about 0.5 ms on this machine (the first 10 ms more: Mars's map).
+- **When it plays, Android**: `introPlays()` (`ui/Intro.kt`): a fresh start (not the activity made again after a
+  rotation or the process's death), no game asked for (a frontend's launch, adb's debug load), Settings → Appearance →
+  Effects → Intro on (`intro_animation`, on by default; settings not read within the start's 500 ms count as off), the
+  system's animations on (`ValueAnimator.areAnimatorsEnabled()`), and TalkBack not exploring by touch. A frontend's
+  launch arriving while it plays (`onNewIntent`) ends it. `IntroSplash` draws it over the Library, which is composed
+  under it all along. While it plays, MainActivity's window callback gives every key to `IntroKeys` before anything
+  acts on it (only #294's notes come first: which keys are fallbacks, and that a controller sent Back): each press
+  skips it, a key pressed meanwhile stays its own until let go of (so the Library gets neither its repeats nor its
+  release), and the volume keys are left to the system; a touch skips it and reaches nothing under it. Back is one of
+  those keys, the system's and a controller's alike, since #294 opted the app out of predictive back; `IntroSplash`
+  keeps a `BackHandler` that skips it should a later Android drop that opt-out (with predictive back, Back went to the
+  back callbacks before the window, and without the handler it left the app). After a touch, Android may keep the press
+  that leaves touch mode (a D-pad's, not a typing key's): touch mode ending while the intro plays counts as a press
+  (`onUnseenPress`, given the moment), settled by its own first repeat or its release, which are the intro's (the first
+  repeat or release of a key not pressed since), or by a press from before that moment, the one the window had after
+  all; another key's press from after it settles nothing, and with neither a repeat nor a release within the system's
+  key-repeat delay (400 ms by default: through Android 14 the Touch & hold delay, from Android 15 a key-repeat setting
+  of its own) and 600 ms more (`KEPT_PRESS_MARGIN_MS`) there was no kept press. A repeat whose press didn't come counts
+  as the press too. The launch toasts (a newer Phobos, a newer driver) wait for its end, since a toast shows over the
+  app's window and the intro with it.
+- **When it plays, desktop**: `setup()` starts it when Phobos opens to the Library given no game (a game given on the
+  command line, even one that can't start, goes without it, so that game's message isn't hidden), unless settings.ini's
+  `intro` is false, which the pause menu's "Intro as Phobos opens" switches (the desktop's settings are in that menu, as
+  Fullscreen is), or the system asks for less motion (`desktop/ReducedMotion.cpp`, since SDL has no call for it):
+  Windows with its animation effects off (`SystemParametersInfoW`'s `SPI_GETCLIENTAREAANIMATION`), macOS with Reduce
+  motion on (`NSWorkspace`'s `accessibilityDisplayShouldReduceMotion`, asked through the Objective-C runtime), or a
+  Linux desktop whose portal (`org.freedesktop.portal.Settings`) gives freedesktop's `reduced-motion` as 1, GNOME's
+  `enable-animations` as false or KDE's `AnimationDurationFactor` as 0. libdbus is loaded for that, not linked, as SDL
+  does; each read waits 300 ms at most, so a portal that hangs costs 300 ms and a slow one up to about 0.9 s, and with
+  no session bus or no portal the intro plays. A key press, a pad button, a click or a touch skips it; while it plays,
+  keys and buttons reach nothing else, the hotkeys included (#294's `hotkeyEvent` sees their presses but runs nothing,
+  and a key pressed meanwhile taps nothing when let go of: F11 skips the intro rather than going fullscreen); a
+  direction held as it ends stays its own until let go of (`introDirections`); a game dropped on the window ends it, and
+  a message (for a dropped file no system loads) hurries it away.
+- **Tests**:
+  - `tests/intro` (CMake's `intro-tests`, built on demand under its own `-Wall -Wextra -Werror`, AddressSanitizer and
+    UndefinedBehaviorSanitizer, undefined behaviour fatal; a new step in desktop.yml's Linux job runs it after the
+    build, with a summary line as the RSP test's): 13 tests, 103 checks. The canvas for windows of several shapes
+    (worked out by hand), and its covering any window with a column or a row at most to spare; every pixel opaque or 0
+    in all four bytes; the opening from black, brightening; the moon's and the word's art each found drawn exactly once,
+    centred, the word under the moon, on four window shapes, and neither while the camera still moves; the moon behind
+    Mars at the start, crossing in front small and blurred with Mars sharp, ending at its art's size and sharp with
+    Mars blurred, growing all the way; Mars turning; the word drawn in from the left; the dissolve's timing, never
+    undone, half at its middle; skips at the start, midway and during the dissolve, which hurry it and undo none of it;
+    a frame depending on its moment alone; rows further apart than the canvas; odd sizes; the ends of int's range (a
+    window `INT_MAX` pixels across, moments at `INT_MIN` and `INT_MAX`) without undefined behaviour; and the desktop's
+    reading of a portal's motion settings (`asksForLessMotion`: each key's values that ask and that don't, KDE's 0
+    written five ways, one key asking beside two that don't), with `systemAsksForLessMotion()` saying no at once where
+    there's no session bus.
+  - JVM: `IntroTest` (16 tests): `introPlays()`'s conditions; `IntroKeys` taking every key and skipping on each press, a
+    repeat taken without skipping again, Back taken, a key pressed during the intro kept until let go of, a press after
+    it the Library's, a repeat whose press it never had skipping and kept, touch mode's unseen press skipping with its
+    repeats and release taken (a brief one's release alone), a press that leaves touch mode and still comes (a typing
+    key's, its press from before touch mode ended) leaving the Library's next keys whole, a second key pressed at once
+    leaving the kept press's repeats and release the intro's (the RP6's case below), a key pressed and let go of after
+    the intro while the kept press waits staying the Library's, the kept press lapsing with neither a repeat nor a
+    release in time, waiting as long as the system's key-repeat delay (1.5 s, the longest Touch & hold delay) and a
+    margin more for a first repeat coming late, a press timed at the moment touch mode ended taken for the one that
+    ended it, touch mode ending again forgetting the keys pressed since it ended before, touch mode ending after the
+    intro left alone, the volume keys untouched. `AppearanceSettingsTest`: the setting on by default, and off kept
+    across starts under the name `intro_animation`.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; Gradle 9.6.0, NDK 28.2.13676358):
+  - The work began on master `f373b9e7e` and moved onto `7986aef5b` when #298 merged, which changes only the PSP
+    renderer, its tests and docs. What follows was run on the intro's commit (`5b960adf1`) unless it says `f373b9e7e`,
+    but for the last three bullets: the owner's two changes after it, and master's `ae9d73f6e` merged in.
+  - The desktop builds (`cmake --preset linux-x64`), and `intro-tests` passes: 84 checks, 0 failed. desktop.yml's new
+    step, run here as written with `bash --noprofile --norc -eo pipefail` (what `shell: bash` runs), writes
+    "- tests/intro: 84 checks, 0 failed"; with a stand-in test that fails, the step fails (exit 1), where GitHub's
+    default `bash -e` would have passed it (on `f373b9e7e`). With `-fno-sanitize-recover=undefined`, a test program's
+    signed overflow exits 1, where it exited 0 without.
+  - Ubuntu 22.04's GCC 11.4.0, the compiler of desktop.yml's Linux runner, in a container: `intro-tests` builds with
+    the target's flags (`-O3 -std=gnu++20 -Wall -Wextra -Werror`, both sanitizers, undefined behaviour fatal) without a
+    warning, and passes: 84 checks, 0 failed.
+  - Android: both flavours' unit tests (390 each, 0 failures) and `assembleLegacyDebug`.
+  - The review's fixes were each shown needed: with the old arithmetic the sanitizers stop `intro-tests` at a signed
+    overflow (`2147483647 + 11930465`, in `canvasFor`), and with the old `IntroKeys` the new `IntroTest` fails (the
+    Library's Enter release taken).
+  - On the RP6, over Wi-Fi, test builds beside the owner's apps (`com.phobos.emulator.intro`), recorded from cold
+    starts. On `f373b9e7e` (2.4.0-338-gf373b9e7e-intro, its APK's sha256 `578cc41d…`): the intro plays, and in a
+    screenshot 3.65 s in its moon is the art exactly, every art pixel a 6×6 block at (738, 132) (the RP6's screenshots
+    are in Display P3, so the art's sRGB colours were compared converted); a controller button and a tap 2 s in skip
+    it; a virtual pad's D-pad pressed after a touch skips it; that D-pad held across the intro's end leaves the
+    Library's focus where it was, and pressed again moves it once; a game asked for 1.5 s in ends it; adb's debug
+    launch, Remove animations (animator duration scale 0) and the switch turned off each start without it, and the
+    switch stays off; the update toast comes after it. On the final tree (2.4.0-341-g7986aef5b-intro, `7f885e23…`):
+    Back 2 s in, the system's (`input keyevent KEYCODE_BACK`) or a virtual pad's, dissolves it into the Library, where
+    the build before the fix sent Phobos to the background, the launcher in front; Home 1.5 s in, and the app brought
+    back 3 s later, finds it where its clock is (the logo) and it dissolves; the button, the tap, the D-pad after a
+    touch and the D-pad held across the end do as before. No crash in any log; the test app was uninstalled after.
+  - On a virtual X display (Xvfb, 1280×720, SDL's software renderer): the intro plays, its moon exact (every art pixel
+    a 4×4 block at (492, 88)); Space 2 s in skips it; given the games folder, it plays; given a game that can't start
+    (a stand-in `.gb`), it doesn't, and the game's "Couldn't start" shows. On `f373b9e7e`: a click 2 s in skips it;
+    Down held across its end leaves the Library's cursor where it was, and pressed again moves it once (with
+    `introDirections`' lines taken out, the cursor moved on its own as the intro ended); `intro=false` in settings.ini,
+    and a file no system loads given, each start without it.
+  - The kept press settled by itself (the owner's choice of 2026-10-23), after all of the above: it changes
+    `ui/Intro.kt`, `IntroTest` and `MainActivity.kt`'s two calls into `IntroKeys`, nothing the desktop or the native
+    code builds. Both flavours' unit tests (397 each, 0 failures) and `assembleLegacyDebug`; eight mutants, each
+    taking one of the new rules out (a second key's press settling the kept press again, a press from before touch mode
+    ended settling nothing, a key pressed since counting as the kept press, no lapse, a press timed at the moment
+    counted as another key's, the keys pressed since an earlier end of touch mode kept, a fixed second for the window,
+    no margin past the delay), each fail one or two of `IntroTest`'s tests, the first (the rule as it was) the RP6's
+    case among them. On the RP6, the intro's last test build before the change (`7f885e23…`), one with the change as
+    first made (2.4.0-349-g92ff2fd9c-intro, `1ee66463…`, its window a fixed second, as the final code's is at the
+    default delay) and one with the final code (2.4.0-350-g1356fb4dd-intro, `1fd35046…`, the RP6's Touch & hold delay
+    at its default 400 ms), from cold starts after a tap had left touch mode on: a virtual pad's D-pad down pressed
+    about 1.6 s in and held 1.6 s, its A pressed 60 ms after it, left the Library scrolled to its bottom row once the
+    intro had dissolved before the change, the D-pad's repeats reaching it (two runs), and at its top with the change
+    (two runs with each build); the D-pad held alone left it at its top with every build. No crash; the test app was
+    uninstalled after.
+  - The desktop's check of the system's motion settings (the owner's choice of 2026-10-23), after all of the above:
+    `desktop/ReducedMotion.hpp` and `.cpp`, `setup()`'s condition, `intro-tests`' new test and `CMakeLists.txt`,
+    nothing Android builds. The desktop builds, and `intro-tests` passes: 103 checks, 0 failed. A probe built with it,
+    on private session buses that start nothing on demand, a stand-in portal answering as the real one does (each value
+    inside two variants): yes for `reduced-motion` 1, GNOME's animations off, KDE's factor 0, and KDE's "0,0" given
+    alone; no with no portal, with values asking for nothing, and with `reduced-motion` 2; and no after 302 ms from a
+    portal that never answers. The program on a virtual display, its portal a stand-in: asking, the Library showed at
+    1.5 s with no intro (the harness's focus call failed twice on a window not yet shown, and a third run took its
+    shots); asking for nothing, the intro played; on this machine's own session bus (KDE Plasma 6.8.1,
+    xdg-desktop-portal 1.22.1, whose portal gives all three keys, asking for none, in a few milliseconds), it played.
+    MinGW-w64's GCC 13 (Ubuntu 24.04's, in a container) builds the Windows code under `-Wall -Wextra -Werror` without a
+    warning, and a program built with it imports `SystemParametersInfoW` from `USER32.dll`. The review built
+    `intro-tests` with Ubuntu 22.04's GCC 11.4.0 too (desktop.yml's Linux compiler, in a container): 103 checks, 0
+    failed.
+  - Master's `ae9d73f6e` merged in (#304, #303, and #294's hotkeys, whose key paths the intro's hooks are re-placed in):
+    `MainActivity.kt`, `desktop/main.cpp` and this file conflicted, as the trial merges said. The window callback gives
+    keys to `IntroKeys` right after #294's two notes (which keys are fallbacks, and a controller's Back remembered),
+    before the capture and #294's `WindowKeys`; the desktop's `handleKey()` and `update()` give the intro their keys
+    first, and #294's `hotkeyEvent()` runs nothing while it plays and lets a key pressed meanwhile tap nothing. On the
+    merged tree: the desktop builds and `intro-tests` passes (103 checks, 0 failed; desktop.yml's step, run as written,
+    writes its line); configured as desktop.yml's Linux job is (`-DPHOBOS_DESKTOP_TESTS=ON`), ctest passes, #294's host
+    test giving 220 checks, 0 failed; both flavours' unit tests (478 each: master's 461 and the intro's 17; 0 failures)
+    and `assembleLegacyDebug`, its native library built from the merged code. On the virtual display: the intro plays,
+    its moon exact at the same spot; Space, a click and F11 2 s in each skip it, F11 without going fullscreen
+    (settings.ini kept no `fullscreen`), and F11 after it went fullscreen; Down held across its end left the cursor
+    where it was, and pressed again moved it once; `intro=false` started without it. On the RP6, a build of the merged
+    tree (2.4.0-352-g81d8982a9-intro, `734179d4…`): the intro plays and dissolves into the Library; adb's `BUTTON_A` key
+    event, a tap and Back 2 s in, the system's or a virtual pad's, each skip it, the app staying in front (its log has
+    the opted-out app's back callback alone, priority 0, where the build before the merge had the opted-in one's, -1,
+    too); in touch mode, left on by an earlier run's tap, the virtual pad's D-pad with its A 60 ms after, and the D-pad
+    alone, left the Library at its top; the D-pad held across the end left its focus where it was, and pressed again
+    moved it once; a game asked for 1.5 s in ended it, and the game ran. No crash; the test app was uninstalled after.
+- **Limits**:
+  - Android was checked on the RP6 alone, in landscape: not in portrait, on other screens or Android versions, with
+    TalkBack, with a keyboard (`IntroTest` alone covers a typing key leaving touch mode), turned mid-intro, or from a
+    real frontend (adb's intents stood in for one).
+  - The intro's hooks in #294's key paths were checked by reading the code and by the runs above, as nothing tests the
+    window callback or the desktop's event handling: no run pressed L1 or R1 (which step through the Library, Console
+    and Settings tabs) or one of #294's combos of two keys or more during the intro, none used a pad on the desktop, and
+    the Back runs don't show whether `IntroKeys` or the `BackHandler` took Back (derived: `IntroKeys`, which has the key
+    first).
+  - The desktop was checked on Linux alone, on a virtual display with SDL's software renderer, from the keyboard and
+    mouse: not on Windows or macOS, with a GPU renderer, or with a real pad (whose buttons take the path in `update()`
+    the arrow keys took), and nothing was dropped on its window during the intro (the message's path).
+  - The desktop's check of the system's motion settings ran on Linux alone, its asking cases with stand-in portals
+    (this machine's own setting wasn't changed). The Windows and macOS code wasn't run: CI builds both, and MinGW-w64
+    built the Windows code here. A desktop whose portal gives none of the three keys, or that has no portal, gets the
+    intro, and so might one whose portal isn't running yet and takes over 300 ms to start on demand (not measured).
+  - Android 12 and later show their own splash, the launcher icon, before the app's first frame; the intro follows it,
+    from black.
+  - Each start to the Library takes about 5.6 s more unless the intro is skipped or switched off.
+  - A kept press is told from other keys by what `IntroKeys` saw: until its window has passed, the first repeat or
+    release of a key it hasn't seen pressed since counts as the kept press's, so a key held as the app started and let
+    go of then would be taken instead; and a second key pressed after the kept press but before the app took that one
+    up (its input's delay: a few milliseconds while the app is idle, longer while it's busy, as early in the intro)
+    counts as the press that left touch mode, settling it as before the change (both derived, not seen; with the
+    second key 60 ms after, as on the RP6, the change holds).
+- **Next**: the pull request's CI (passed: on `5b960adf1`, the new step's first run, and on the master merge
+  `92ff2fd9c`); the two changes the owner chose on 2026-10-23 (both done: above), the desktop skipping the intro when
+  the system asks for less motion, and a D-pad press Android keeps settled by itself, not by another key's press;
+  master's `ae9d73f6e` merged in (done: above), and the pull request's CI on that merge, the first to build the
+  desktop's motion check on Windows and macOS (while the branch conflicted with master, only the Android jobs ran). The
+  coordinator's #305 and #306 (PSP changes) merge before or after this branch, whichever is ready first; if before,
+  master with them is merged in again (only this file should conflict) and the CI runs again.
+
 ## Master merged into the hotkey branch a fifth time: #304's scheduler emptied as a game unloads, and #303's GCC 16 warning settled in the code — 2026-10-23
 
 Branch `improved-hotkeys`, on `73097e579` (the RP6 run recorded in the entry two below, after the entry below's

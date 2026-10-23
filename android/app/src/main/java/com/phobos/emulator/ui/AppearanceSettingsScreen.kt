@@ -72,6 +72,12 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         label = { it.label },
                         onSelect = { viewModel.setPlatformIconPack(it) },
                     )
+                    SettingsSwitchItem(
+                        title = "Intro",
+                        description = "Mars and its moon as Phobos opens. Any button or a tap skips it.",
+                        checked = settings.introAnimation,
+                        onCheckedChange = { viewModel.setIntroAnimation(it) },
+                    )
                     SettingsDropdownItem(
                         title = "Screensaver",
                         description = settings.screensaverDelay.description,

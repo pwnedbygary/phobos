@@ -614,6 +614,7 @@ class MainViewModel(
         PhobosCore.setZxTapeAuto(enabled)
     }
     fun setFullScreenMode(enabled: Boolean) = viewModelScope.launch { settingsStore.setFullScreenMode(enabled) }
+    fun setIntroAnimation(enabled: Boolean) = viewModelScope.launch { settingsStore.setIntroAnimation(enabled) }
     fun setShowTouchControls(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowTouchControls(enabled) }
     fun updateTouchPrefs(transform: (TouchPrefs) -> TouchPrefs) = viewModelScope.launch {
         settingsStore.updateTouchPrefs(transform)
