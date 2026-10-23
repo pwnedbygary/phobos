@@ -38,8 +38,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## An intro as Phobos opens: pixel-art Mars and its moon, coming into focus as the logo, on Android and the desktop — 2026-10-23
 
 Branch `intro-splash`, from master `7986aef5b` (#298), master's `ac0ad694c` merged in since (#301's AppImage pins, whose
-`desktop.yml` changes sit beside the intro's step there, and #302's docs). The owner asked on 2026-10-22 for "a sick
-intro splash screen for phobos when its opened ... done in pixel art, space themed. Maybe Mars rotating in the
+`desktop.yml` changes stand apart from the intro's step there, and #302's docs). The owner asked on 2026-10-22 for
+"a sick intro splash screen for phobos when its opened ... done in pixel art, space themed. Maybe Mars rotating in the
 background with the Phobos moon w/ d-pad orbiting it in the distance, and it comes into focus, then the logo loads
 with the PHOBOS text below it before going into the library screen", and chose: both apps, drawn by one shared renderer
 so they look the same; every time Phobos opens to the Library; any button, key or tap skips it; a Settings switch turns
@@ -149,10 +149,13 @@ it off; never when a frontend launches a game directly, nor with the system's an
   - Android 12 and later show their own splash, the launcher icon, before the app's first frame; the intro follows it,
     from black.
   - Each start to the Library takes about 5.6 s more unless the intro is skipped or switched off.
-- **Next**: a draft pull request against master and its CI (the new step's first run). #294 changes 9 of these 21
-  files: a trial merge (`git merge-tree`) with its `833fe8cbe` conflicts in `MainActivity.kt` (3 hunks),
-  `desktop/main.cpp` (6) and this file (1), both reworking the same key paths, so whichever merges second resolves
-  them; desktop.yml and `CMakeLists.txt` merge cleanly.
+- **Next**: the pull request's CI (passed: on `5b960adf1`, the new step's first run, and on the master merge
+  `92ff2fd9c`); the two changes the owner chose on 2026-10-23, the desktop skipping the intro when the system asks for
+  less motion, and a D-pad press Android keeps (above) settled by itself, not by another key's press. #294 changes 9
+  of these 21 files and merges first, in the owner's order: a trial merge (`git merge-tree`) with its `73097e579`
+  conflicts in `MainActivity.kt` (3 hunks), `desktop/main.cpp` (6) and this file (1), both reworking the same key
+  paths, so this branch resolves them when master, with #294 in it, is merged in; desktop.yml and `CMakeLists.txt`
+  merge cleanly.
 
 ## Docs: private local paths out, README's Shaders line corrected — 2026-10-23
 
