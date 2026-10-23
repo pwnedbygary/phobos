@@ -35,6 +35,55 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Master merged into the hotkey branch a fifth time: #304's scheduler emptied as a game unloads, and #303's GCC 16 warning settled in the code — 2026-10-23
+
+Branch `improved-hotkeys`, on `73097e579` (the RP6 run recorded in the entry two below, after the entry below's
+`7b8b8eba8`), with master merged into it as a merge commit: master as it is once #303 merges, since the owner's order
+merges #304, #303, #294 and #300, each pull request's head containing master first. The merge was made and checked
+ahead, on a stand-in for #303's branch (a commit with the tree and parents of `6cf5a5a4e`, that branch with master's
+`67e221a8f` merged in), whose tree master has once #303 merges, and made again on master then, its tree the one
+checked and reviewed. Master's commits since `ac0ad694c`, which the fourth merge (three entries below) brought in,
+come in whole: #304, the runner's `unloadSystem()` emptying the scheduler as a game unloads
+(`android/app/src/main/cpp/PhobosRunner.cpp`); and #303, `tests/psp/movies.cpp`'s sound frames made at their full
+size, which settles GCC 16's false `-Warray-bounds` there; each with its entry in this file and a line in
+`docs/implementation-plan.md`. Their two entries are below the branch's. Changed by the merge beyond what either side
+had: this file (this entry, and a blank line between the branch's entries and master's) and the hotkey row of
+`docs/implementation-plan.md`.
+- **The conflict**, one: `docs/handoff.md`, where both sides added entries at the top. The branch's 22 stay together
+  above master's, each side's in its own order and words, as the earlier merges kept them (the file less this entry,
+  the branch's 22 and the blank line after them is master's, byte for byte). Git merged on its own the other two files
+  both sides changed, `android/app/src/main/cpp/PhobosRunner.cpp` and `docs/implementation-plan.md` (whose hotkey row
+  this merge then edits); the file only master changed, `tests/psp/movies.cpp`, is master's, and each file only the
+  branch changed is the branch's, byte for byte.
+- **Where the two meet**: `unloadSystem()`, which both sides change, apart: the branch, near its start, clears the
+  paused frames still to draw and slow motion as a game unloads; #304, after the core's unload, empties the scheduler.
+  And the PSP suite's release build: with #303, GCC 16 no longer stops it at `movies.cpp`, so it ran here with GCC as
+  it is, where the earlier merges ran it with `-Wno-error=array-bounds`.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; Mesa's CPU Vulkan driver alone, `llvmpipe (LLVM 23.1.1, 256
+  bits)`; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358, the SDK's CMake 3.22.1 for the Android library), on the merge
+  made ahead:
+  - The PSP suite as CI's "PSP system tests, built as the app is" job runs it, every requirement CI names required:
+    658 groups pass and 1 is skipped as on CI ("gpu without rasterization order, barriers only where reading primitives
+    overlap", which needs a GPU reading out of order), with no warning; then with the GE on its thread, 76 groups, and
+    with the PSP's GE timing, 121, all passing. As CI's "PSP system tests" job builds it, for debugging with
+    AddressSanitizer and UndefinedBehaviorSanitizer: 658 groups pass and the same 1 is skipped, with no sanitizer report
+    and no warning. The PSP core's system tests (`tests/psp/ares/run-tests.sh`): 417 checks, 0 failed.
+  - The desktop: the program built again with the merged runner (Ninja recompiled `PhobosRunner.cpp` and relinked);
+    ctest passes, and the host test, run on its own, prints 220 checks, 0 failed. On a virtual X display (Xvfb, SDL's
+    software renderer and its dummy audio) the program ran a homebrew Game Boy music player (made with hUGETracker) at
+    59.8 FPS and quit on SIGTERM, so the merged `unloadSystem()` ran: the saves flushed, "System unloaded", status 0.
+  - Android: both flavours' JVM tests pass (461 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,669,991 bytes, SHA-256 `d8969f92bc10ab321b02743db9b1e25c2040df02079307bd592eff3de30a6f97`), its native
+    library compiled with the merged runner.
+- **CI before the merge**: on `73097e579`, the branch's last two changes passed every check that ran (Android Build
+  39972729348, Desktop Build 39972729232, PSP Core Tests 39972729271).
+- **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull request's
+  CI builds the desktop program and runs its host test). The checks ran on the merge made ahead; the merge made again
+  on master has its tree, so they hold for it (derived).
+- **Next**: the pull request's CI on the merge; and the entry below's Next, less its CI (passed: above), GCC 16's false
+  warning in `tests/psp/movies.cpp` (settled by #303) and the Game Boy core's read of freed memory at exit (fixed by
+  #304), both merged in here.
+
 ## A PSP game's frame-advance step shows its own frame with the GE on its thread: the step asks for that frame's own picture — 2026-10-23
 
 Branch `improved-hotkeys` (#294), on `83345cfc9` (the entry below). The first master merge's entry (2026-10-21) left
@@ -2303,6 +2352,111 @@ machine (see Checks).
 - **Next**: up to three bindings per action (with keyboard defaults beside the controller's), then the desktop hotkey
   system and its window behaviour, per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull
   request.
+
+## PSP tests: GCC 16's false warning in movies.cpp settled in the code, the sound frames made at their full size — 2026-10-23
+
+Branch `psp-movies-gcc16`, from master `11983f8d4`, master's `ac0ad694c` (#302: docs alone) and `67e221a8f` (#304:
+the runner's unload path, which the PSP tests don't build) merged in since. Checked on `7986aef5b`, as #301, between
+that and `11983f8d4`, touches the AppImage's scripts, `desktop.yml`, `LICENSE` and this file alone. A release build
+of the PSP tests (`PHOBOS_TESTS_MODE=release
+tests/psp/run-tests.sh`, `-Wall -Wextra -Werror` at `-O3`) stopped under GCC 16 (16.2.1 here) at a false
+`-Warray-bounds` in `tests/psp/movies.cpp`'s `movie()`, twice: each sound frame there was its 12-byte header grown to
+388 bytes with `resize()`, and with `resize()` inlined, into `movie()` at line 52 and through it into
+`mpegSoundPastItsEnd()` at line 367, GCC 16 takes the fill of the grown part for a `memset` at offset 12 of the
+12-byte buffer, past its end. That write is in libstdc++'s branch for a vector with room to spare (`_M_fill_append`
+in `vector.tcc`), which a vector made from the 12-byte header hasn't; the branch that runs allocates the bigger buffer
+first and fills that. CI's GCC 13 gives no such warning, so CI never failed, but local release builds on GCC 16 have
+needed it shown and not made an error (`-Wno-error=array-bounds`: the entries of 2026-10-20 and 2026-10-22 below).
+As GCC's earlier false warnings were, `pools.cpp`'s `-Warray-bounds` in a vector's insert among them (the CI entry of
+2026-10-13), it's settled in the code, not with a switch; the owner asked for it on 2026-10-22.
+- **The change**, in `tests/psp/movies.cpp` alone: each frame is made at its full size, 388 bytes of its fill
+  (`0x40 + n`), and its header is copied over the first 12 (`std::copy`), with a comment saying why it isn't grown.
+  The frames' bytes are what they were (below), so the tests' movies are unchanged. The plan's row 06 (release paths)
+  notes it.
+- **Checks** (GCC 16.2.1; GCC 13.3.0, Ubuntu 24.04's as on CI's runners, in Docker):
+  - `movies.cpp` alone, with the release build's flags (`-std=c++20 -O3 -ftree-vectorize -funroll-loops
+    -fno-math-errno -fno-trapping-math -g -Wall -Wextra -Werror`, its defines and include paths): under GCC 16
+    master's file stops at the false warning twice (`movies.cpp:52` and `:367`, `__builtin_memset`'s "offset 12 is
+    out of the bounds [0, 12]"), and the changed one builds with no warning; under GCC 13.3 both build with none.
+  - A frame built both ways, master's and this one's, for 1,024 values of `n`: the same 388 bytes each time.
+  - The whole PSP suite as CI's "PSP system tests, built as the app is" job first runs it, every requirement CI names
+    required, on Mesa's CPU Vulkan driver (lavapipe) alone, built with GCC 16 as it is (no `-Wno-error`): 658 groups
+    pass and 1 is skipped, as on CI ("gpu without rasterization order, barriers only where reading primitives
+    overlap", which needs a GPU reading out of order), with no warning. The 34 groups whose names hold `mpeg`
+    (`PHOBOS_TESTS_ONLY=mpeg`), `movies.cpp`'s 15 among them, built for debugging with AddressSanitizer and
+    UndefinedBehaviorSanitizer as CI's "PSP system tests" job builds them: all pass, with no sanitizer report and no
+    warning.
+- **Limits**: the suite ran on lavapipe alone, not on this machine's GPU, and only as that job's first run has it (not
+  its later two, with the GE thread on and with the PSP's GE timing). The change was built with GCC 16.2.1 and 13.3,
+  on x86-64 alone: CI builds the PSP tests on x86-64 too (`psp-core.yml`'s ARM64 lanes build the CPU's tests and the
+  runner's measurements), so nothing has built it on ARM64. A later GCC may find another false warning elsewhere.
+- **Next**: the pull request's CI.
+
+## Quitting after a Game Boy game no longer reads freed memory: the scheduler emptied as a game unloads — 2026-10-23
+
+Branch `gb-apu-exit`, from master `ac0ad694c`. Seen under AddressSanitizer while #294's desktop follow-ups were checked
+(that pull request's handoff, its entry of 2026-10-21, "Also seen"), and older than them: after a Game Boy game,
+Phobos's exit read memory already freed, in the Game Boy core's APU destructor. The owner asked for it fixed on
+2026-10-22.
+- **Why**: a core's components are global objects, `ares::Thread`s (the Game Boy's CPU, PPU and APU among them), and a
+  `Thread`'s destructor takes it out of the scheduler's list (`Thread::destroy()`, `Scheduler::remove()`, in
+  `ares/ares/scheduler/`). The scheduler is a global in another file (`ares/ares/android_globals.cpp`), and across files
+  C++ leaves the order of globals open: made in one order, destroyed in the reverse. The runner unloads the game on a
+  quit (`unloadSystem()`) but left its threads in the list until the next load emptied it (the `scheduler.reset()` in
+  `ares::initialize()`, and in most cores' `System::load()`). Where the scheduler is destroyed first and its list is
+  libstdc++'s `std::vector`, whose destructor frees the list's memory without emptying it, the threads' destructors then
+  read that memory: AddressSanitizer's heap-use-after-free in `Scheduler::remove()` (`scheduler.cpp:59`), from
+  `GameBoy::APU`'s destructor at exit, the memory allocated as the PPU's thread joined the list (`Thread::create()` in
+  `GameBoy::PPU::power()`) and freed by the scheduler's destructor. libc++'s `std::vector` empties the list as it frees
+  it, so with libc++ the removal reads no freed memory.
+- **Which builds have that order** (each one's `.init_array`, read with `readelf`): the desktop program as built makes
+  the scheduler first (`android_globals.cpp`'s entry 8 of 63, the Game Boy core's 14), so it's destroyed last and
+  nothing reads freed memory there. #294's check compiled the runner, `desktop/main.cpp` and the Game Boy core again
+  with AddressSanitizer (its script is gone, so how it linked them is inferred); linked ahead of the core's library, as
+  the copy below has them, those make the Game Boy core's globals first and give the same error. The Android library has
+  that order too (the Game Boy core's entry 276 of 302, the scheduler's 295), but it's built with libc++: its
+  scheduler's destructor sets the list's end to its start before freeing it (read in the built library), so even an exit
+  would read no freed memory there; and nothing in the app exits its process (no `System.exit()` or the like): Android
+  ends it with a signal, which runs no destructors (derived, not checked on a device). The Windows program is built with
+  MSYS2's GCC, so with libstdc++, its order not read; the macOS program with Apple's clang and libc++, as the Android
+  library (derived from libc++'s code).
+- **The fix**, in `android/app/src/main/cpp/PhobosRunner.cpp`'s `unloadSystem()` alone: `scheduler.reset()` right
+  after the core is unloaded and let go of (`root->unload()`, `root.reset()`), with a comment saying why.
+  `Scheduler::reset()` empties the list (`clear()`), so at exit the threads' removal reads no freed memory, whichever is
+  destroyed first; the next load empties it again, as before. The runner is shared: every core goes through it, on the
+  desktop and on Android.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358, the SDK's CMake
+  3.22.1 for the Android library). The desktop program (the `linux-x64` preset's Release build) under Xvfb, with SDL's
+  software renderer and its dummy audio; the game a homebrew Game Boy music player made with hUGETracker, so the
+  sound chip runs; started from the command line and quit 6 s later with SIGTERM, which the program takes as a quit
+  (the saves' flush, "System unloaded", then the exit):
+  - As built: master's ran the game at 59.6 to 59.9 FPS and quit with status 0; the fixed one at 59.8 FPS, quitting
+    the same way.
+  - With AddressSanitizer on `desktop/main.cpp`, the runner and the Game Boy core (compiled by the build's own
+    commands, `ninja -t commands`, adding `-fsanitize=address -fno-omit-frame-pointer -g`) and linked ahead of
+    `libphobos_core.a`, so that the Game Boy core's globals are made first (entry 9 of 66, the scheduler's 31):
+    master's runner reported the heap-use-after-free above and exited 1; the fixed runner reported nothing and exited
+    0.
+  - The same with `android_globals.cpp` compiled again too and linked between the runner and the Game Boy core, the
+    scheduler made first as in the program as built (entry 10 of 67, the Game Boy core's 11): master's runner reported
+    nothing and exited 0. The order decides.
+  - A game loaded twice in one run (the Library, the game, the menu's "Quit to library", the game again, then the
+    quit), for the load after the new reset: with the fix the game started both times and the quit gave status 0, as
+    built and with AddressSanitizer in the fault's order; master's runner, in that order, reported the fault at the
+    exit (status 1).
+  - Android: the JVM tests of both flavours, 380 each, 0 failures, and the legacy debug APK (2.4.0-347-gac0ad694c,
+    SHA-256 `bfc224a32d1237700add80c4abb98d3d47e69716ed56468e6820f0f5441c6903`), its native library compiled after the
+    change.
+- **Limits**: only the Game Boy ran. Every ares core's components but the PSP's are `Thread`s that leave the list the
+  same way (the PSP core keeps no scheduler threads, nor does the Saturn's stub), and every core unloads through the
+  runner (derived from the code). Nothing ran on a device, on Windows or on macOS, and those builds' order of these
+  globals wasn't read. An exit with a game still loaded, past the unload, still depends on the order, and so does a quit
+  after a frame stuck past 2 s made `unloadSystem()` abandon the system (it returns before the reset, its thread still
+  stuck in the core); the desktop program unloaded before each quit here. Where the scheduler is destroyed first, the
+  threads' destructors still call into it after its own destructor: with its list empty that call reads no freed memory
+  (no AddressSanitizer report), but only ordering ares's globals, or keeping the scheduler to the very end, would end
+  the call itself, a change to ares's code not made here.
+- **Next**: the pull request's CI.
 
 ## Docs: private local paths out, README's Shaders line corrected — 2026-10-23
 
