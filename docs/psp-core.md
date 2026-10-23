@@ -2062,8 +2062,7 @@ why (what games accept).
   dropped on loading (gone from the host, or no disc) tells a thread waiting on its request it's a bad file. The
   layout is version 5: a state of version 1 to 4 is refused by its header.
 
-What the games do now, on the host (frames from the scratch runner, kept outside the repository, under
-`/tmp/hle2-runner/out`):
+What the games do now, on the host (frames from the scratch runner, kept outside the repository):
 
 - **Lumines**: through its title to its gameplay demo ("Use directional buttons to move left or right"), sound
   initialized (its voices silent); nothing missing in 2400 frames.
@@ -2406,8 +2405,8 @@ behavior; no other emulator's code was read.
   CPU's alone since (the kernel keeps no copy, and loading wants it 0 or 1): version 6, a state of version 1 to 5
   refused; version 7 since part 21 merged (this part's end).
 
-What the games do now, on the host (frames under `/tmp/hle3-runner/final`, outside the repository; the runner's
-saved states under `/tmp/hle3-runner/states` take each back to where it got):
+What the games do now, on the host (frames kept outside the repository; the runner's
+saved states beside them take each back to where it got):
 
 - **GTA Liberty City Stories**: past its loading bar into the city; its opening plays (Toni with his suitcase, the
   phone call, the taxi, Salvatore's office) for 9000 frames without a press.
@@ -2629,7 +2628,7 @@ The rest of Phobos:
   (the system's from the folder, a file of the game's whole, a font in memory from the game's memory) and refuses the
   state if one is missing or differs, as it does every handle, count and call that doesn't add up.
 
-What the games do now, on the host with the owner's fonts (frames under `/tmp/fonts-runner/final`, outside the
+What the games do now, on the host with the owner's fonts (frames kept outside the
 repository):
 - **Gunhound EX**: its save notice (nine lines of Japanese in jpn0: the game saves, needs 160 KB, saves by itself,
   and loads only as it starts), which was a black screen, then NOW LOADING and its logos as before.
@@ -2916,7 +2915,7 @@ times upright; with the aspect setting "Integer Scaled", exactly the view's size
 slight: each line is 3 even rows and a blended one, sharp, all down the screen ("sharp bilinear"; util/PspVideo.kt's
 `pictureMultiple()`, and PhobosRunner's `video()` for PSP frames alone). "Integer Scaled" (the pause menu's aspect
 setting) gives even lines too, 3 times as big (1440x816) and smaller on the screen. Screenshots before and after,
-outside the repository: `/tmp/gefix-device/pw-before.png`, `pw-after-25s.png` (the same moment of the title) and
+outside the repository: `pw-before.png`, `pw-after-25s.png` (the same moment of the title) and
 their crops in `crops/`.
 
 **On the RP6** (installed over the app, data kept; each game launched from its CHD, a screenshot of the performance
@@ -3012,8 +3011,8 @@ calls filtered by name, and builds with one function taken out, to show what its
   refused); loading checks such a call: a thread that's there, a run of 1 to what's left, no more than a ring's 4096
   packets, a ringbuffer in memory.
 
-What the games do now, on the host (frames under `/tmp/games4-runner/out`, outside the repository; the runner's
-states under `/tmp/games4-runner/states`):
+What the games do now, on the host (frames kept outside the repository; the runner's
+states beside them):
 
 - **Burnout Dominator**: from boot through its profile and main menu to its first race, racing it (`dom-c`, frames
   6300 to 15000, the timer running down from 122 seconds to 47, 82 to 139 mph).
@@ -3221,7 +3220,7 @@ the same frames as the run that went on from frame 1260 (black until the movie's
 the run that went on shows the title fading in) and the same sound, second by second; Burnout Legends' menu movie
 the same from frame 1440.
 
-What the games do now (the host, the scratch runner from boot, frames and WAVs under `/tmp/codecs-runner/out`; RMS
+What the games do now (the host, the scratch runner from boot, frames and WAVs kept outside the repository; RMS
 and peak per channel over the capture; pitch checked by comparing the strongest frequencies of the game's output
 with those of the decoded stream, which match in every game below):
 - **Burnout Legends**: the EA logo movie, the opening FMV, the title and profile menus over its FEMain movie (frames
@@ -3414,8 +3413,8 @@ Any other cross build stops at configure, saying so.
   expects it and checks both texts are there.
 
 **Checked on the host Mac** (Apple silicon, macOS; the desktop program built Release; games run with the user's data
-folder redirected to a scratch one by `CFFIXED_USER_HOME`; keys sent through System Events; pictures by F8, under
-`/tmp/psp-desktop-out/shots`):
+folder redirected to a scratch one by `CFFIXED_USER_HOME`; keys sent through System Events; pictures by F8, kept
+outside the repository):
 - **Burnout Legends**: the title over its menu movie (FFmpeg's), the soundtrack's song shown ("Emanuel, The Hey
   Man!"), a profile made with the D-pad, Cross, Triangle and Square (the name screen's pages), saved to the shared
   memory stick (`PSP/SAVEDATA/ULUS10025SAVE000`), the main menu, a single event: racing, Cross held to 67 mph, at 60
@@ -3843,7 +3842,7 @@ sanitizers; `tests/psp/ares`: 290 checks; none failed):
   the free list, a paused list broken off ("ge break").
 
 **The games** (the host Mac; `origin/local/psp-runner`'s runner built from scratch copies of this tree and of part
-28's, FFmpeg on in both, the same presses, PNGs at the same frames; pictures in `/tmp/gef-pictures`, outside the
+28's, FFmpeg on in both, the same presses, PNGs at the same frames; pictures kept outside the
 repository). In the first minute (the compatibility run's presses, Start at frame 120 and cross at 1800), and longer
 for the GTAs (to 9000 frames, cross every 300): Burnout Dominator meets its first line at frame 98, Sindacco
 Chronicles at 781, Space Invaders Extreme at 1113, Liberty City Stories at 7616 (in the city); SOCOM's first bounding
@@ -3895,7 +3894,7 @@ about 7 frames a second on the host in part 25's -O2 runner, its profile menu 25
 GE's pixel loops"; on the RP6 the menu drew at 22 and the race at 18. Original code: no PPSSPP or JPCSP source was
 read.
 
-**The scenes.** Six, each from a state of its own (a scratch runner, states and scripts in `/tmp/ge2-bench`, never
+**The scenes.** Six, each from a state of its own (a scratch runner, states and scripts outside the repository, never
 committed; the games are the owner's): Midnight Club 3's night race (a Quick Race downtown, timed with Cross held) and
 its profile menu ("Load Profile / Create Profile / Delete Save Data" over the city); GTA Liberty City Stories' opening
 in the city (part 29's state) and Toni by the car in the woods (play, the HUD up); Peace Walker's title; Lumines'
@@ -4033,7 +4032,7 @@ from the log; then force-stopped):
   7.1).
 
 In Midnight Club 3 the emulation's thread keeps the fast core 92-99% busy in both builds: as on the host, the GE's own
-thread is the limit there now. Screenshots and the stats in `/tmp/ge2-device`, outside the repository.
+thread is the limit there now. Screenshots and the stats: kept outside the repository.
 
 **What's left for more speed:**
 - The GE's own thread, now the longest path in Midnight Club 3 and GTA at several threads: the CPU's emulation (its
@@ -4232,7 +4231,7 @@ no hold for the sound, the first sound frame heard, the EP entry by its exact ti
 the picture already due).
 
 **The games** (the host Mac; part 26's scratch runner built from this tree and from part 29's, FFmpeg in both; the
-pictures and sound outside the repository, in `/tmp/psmf-scratch`). Of the fourteen games here, only Peace Walker
+pictures and sound outside the repository). Of the fourteen games here, only Peace Walker
 touches these libraries: it ships `psmf.prx` and `libpsmfplayer.prx` and imports four scePsmf functions (SetPsmf,
 GetNumberOfSpecificStreams, GetPresentationStartTime and EndTime), playing its movies through sceMpeg; none of the
 fourteen imports scePsmfPlayer (the eight games of the report that call scePsmfPlayerCreate aren't on this Mac).
@@ -4719,7 +4718,7 @@ own tessellation stands between the control points and the pixels (`tools/psp-me
   one count past 64 to a test, with the GE's waits timed: part 48, "Round 4 again".)
 Built in pspdev's Docker image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`, part 29's), and `tests/psp/programs/
 pspmeasure.elf` replaced as that folder's README asks (its SHA-256 there). The EBOOT.PBP for the PSP is outside the
-repository: `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256
+repository: `PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256
 `bc6e90b4a7b566b734c828eff845069b81b84daaf03beda133f55146e69343f2`), to be copied to the memory stick's
 `PSP/GAME/PSPMEASURE`. `tests/psp/measure.cpp` runs round 4 to its end and checks its 34 files; the comparison lists
 them once a PSP's `manifest4.txt` is in the results.
@@ -5592,7 +5591,7 @@ helping) are about to draw that batch, not while the list is being read.
 
 **How it's known to be exact:** `tests/allegrex/run-tests.sh` (58 groups) and `tests/psp/run-tests.sh` (328 groups,
 including `geThreads`'s render-to-texture and the hardware renderer's). The six cpu-speed scenes remade at
-StateVersion 17 under `~/phobos-work/scratch/cpu-speed/scenes` (from the parent tip): 300 frames with every
+StateVersion 17, kept outside the repository (from the parent tip): 300 frames with every
 frame's picture and VRAM hashed (`HASHES=1`), plus the end state, at 1 and 7 GE threads — identical to the
 parent (`origin/cursor/psp-cpu-speed2-2b67` / `eeba5028e`) for all six. On the RP6 the race and menu end states
 match the parent without settling drawing each frame.
@@ -5616,7 +5615,7 @@ On branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b6
 43 and 46: the Software renderer faster at 1 and 7 GE threads, nothing changed in any result. Original code: no PPSSPP
 or JPCSP source was read.
 
-**The scenes** are part 46's six at StateVersion 17 (`~/phobos-work/scratch/cpu-speed/scenes`). Each commit was checked
+**The scenes** are part 46's six at StateVersion 17 (kept outside the repository). Each commit was checked
 against 72443bc4d in all six, 300 frames at 1 and 7 GE threads: every frame's picture and all of VRAM (drawing settled
 each frame), then RAM and the machine's whole serialized state at the end. On the RP6 the end states were also
 compared without settling each frame.
@@ -5944,7 +5943,7 @@ pspdev image as before (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`), which rebui
 for byte from its own source; the other programs are as they were. Round 4 hasn't been run on the PSP yet either: its
 line is the second.
 
-The owner's copy: `.local/psp-round5/` beside the repository (not committed) holds the EBOOT.PBP, its SHA-256 and a
+The owner's copy, beside the repository (not committed), holds the EBOOT.PBP, its SHA-256 and a
 HOW-TO.md (where it goes on the memory stick, which line to run, how long, and which folder to bring back).
 
 ### Review
@@ -5995,7 +5994,7 @@ had expected a stall past pspsdk's 64); nothing showed whether the CPU was still
   its stall address is what pspautotests' gpu/ge/break recorded; a GE stuck inside a patch is unmeasured, and the next
   run will show whether the reset frees it.
 
-`pspmeasure.elf` is rebuilt in the same image; the owner's copy is `.local/psp-round5b/` (EBOOT.PBP, its SHA-256,
+`pspmeasure.elf` is rebuilt in the same image; the owner's copy is kept outside the repository (EBOOT.PBP, its SHA-256,
 HOW-TO.md).
 
 ## Part 49: the Vulkan renderer in play on the RP6, and its blending without rasterization order
@@ -6120,10 +6119,10 @@ disassembled with a scratch runner. No PPSSPP or JPCSP source was read.
 **The report.** On the owner's RP6, Ridge Racer 2's new game showed "Welcome to the world of Ridge Racer! Please
 create your driver profile." with an OK button, then went back to the menu instead of making a profile.
 
-**Reproduced** in the runner, Software, from boot with presses (`~/phobos-work/scratch/rr2/race.script`): Select past
+**Reproduced** in the runner, Software, from boot with presses (`race.script`, kept outside the repository): Select past
 the Rally-X loading game (frame 650), Start past the intro (900), Start at the title (1200), Cross on NEW GAME (1300),
 the notice, Cross on its OK (1450). A scratch build logged every sceUtility call: its parameters' size, the savedata
-mode and names, the keyboard's fields, the answer and every status asked for (`scratch/rr2/trace.patch`):
+mode and names, the keyboard's fields, the answer and every status asked for (`trace.patch`, not committed):
 - At boot: savedata's sizes mode (8, 0x600 bytes) answered 0; its autoload (mode 0, UCES00422 / 000 / DATA.BIN, into
   0x6900 bytes) no data (0x80110307), as there's no profile yet.
 - At OK (frame 1486): sceUtilityOskInitStart, 0x40 bytes, one field: "Driver Name (7 CHAR MAX.)", holding "DAMACY"
@@ -6162,11 +6161,11 @@ with, an empty field the console's nickname "PSP", as far as its room and limit 
 field CHANGED, Ridge Racer 2's field among them (DAMACY, room 8, limit 7); the old answer fails 6 of its
 checks. No kernel state is added: the save states' version stays 17.
 
-**After the fix**, from boot (Software: `scratch/rr2/sw-race`; the PNGs in `scratch/rr2/evidence`): the name taken,
+**After the fix**, from boot (Software, outside the repository: `sw-race`; the PNGs in `evidence/`): the name taken,
 "DRIVER NAME DAMACY. Would you like to proceed?", YES; the profile saved (savedata mode 3, 0x600 bytes:
 `PSP/SAVEDATA/UCES00422000/DATA.BIN`, 26,628 bytes, DAMACY among them); "Would you like to turn Autosave ON?", YES;
 the main menu; Arcade, Seaside Route 765, class 1, the Shootaway Fiera, automatic, OK, NOW LOADING, and the race: GO!
-at frame 4200, 158 km/h in the tunnel at 4800, Cross held. Vulkan (MoltenVK, the M1, `scratch/rr2/vk-race`): the same
+at frame 4200, 158 km/h in the tunnel at 4800, Cross held. Vulkan (MoltenVK, the M1, `vk-race`): the same
 screens at the same frames. Booted again with that memory stick, the autoload finds the profile (0), the title offers
 CONTINUE, which leads to the main menu, and Options' NAME CHANGE opens the keyboard holding DAMACY.
 
@@ -7363,7 +7362,7 @@ Part 59 found God of War at 7.7 frames a second through its logos, 63% of the em
 TRANSFER_START: the GE drew everything waiting before each copy. The game streams its textures and palettes from RAM
 into one place in VRAM that nothing draws (0x18a000 on), with copies 128 pixels wide and 1 to 105 rows high: about
 2,250 a frame in its menu, 1,750 in its first battle. Only 1.2% of them touch anything the batch being filled draws.
-Two bench scenes were made for it (`~/phobos-work/scratch/speed5/scenes`, version 22): the menu (frame 1600 from boot,
+Two bench scenes were made for it (kept outside the repository, version 22): the menu (frame 1600 from boot,
 Start at 120) and the battle on the Shores of Attica (New Game, Hero, the intro; Kratos on the walls, a Persian
 soldier attacking, nothing pressed).
 
@@ -7503,7 +7502,7 @@ in every round. Unpinned at 1 thread: 21.6 → 22.6, 26.9 → 28.2, 34.8 → 36.
   time (not looked into: timing the GE would change what games do).
 - MC3's race at 7 threads is the emulation thread's own work: part 60's setup stays (4% of that thread).
 - The RP6's little cores still take bands at 7 threads; bands of 4 rows were chosen on these scenes.
-- Scratch: `~/phobos-work/scratch/speed5` (gow-scene.sh made the scenes; rp6-run5.sh and rp6-run6.sh, rp6-run4.sh with
+- Scratch: kept outside the repository (gow-scene.sh made the scenes; rp6-run5.sh and rp6-run6.sh, rp6-run4.sh with
   God of War, then pinned; transfer-dump-patch.py, wait-patch.py, why-patch.py and four-count-patch.py the logging;
   check-corners.cpp the corners' check; mutate.sh the broken versions; quick-tests.sh; snap.sh; hotlines.py).
 
@@ -7844,7 +7843,7 @@ are the same from both runners.
   can't be loaded"; not looked into, and no scene of it measured here). The rest of the list from parts 53 and 54
   stands: the bones in a block of their own for its small skinned PRIMs, pipelines made on another thread in a
   first session, textures decoded on the GPU (0.4 ms a frame), Qualcomm's driver's GPU time in fast mode.
-- Scratch: `~/phobos-work/scratch/vkspeed6` (build.sh, speed.sh, rounds.sh, summarize.py, tables.py; perf.sh,
+- Scratch: kept outside the repository (build.sh, speed.sh, rounds.sh, summarize.py, tables.py; perf.sh,
   syms.py, dsos.py, kernelcallers.py; the logging patches copylog-, xferlog-, whylog-, ptrlog-patch.py; late4x-patch.py
   the runner's 4x; acc.sh and cmp.py the accuracy; mutate.sh the broken versions; soft-hashes.sh). Nothing of it is
   left on the RP6.
@@ -7863,7 +7862,7 @@ source was read.
 ### Why the menu drew 28 million fours
 
 A scratch runner logging the GE driver's events, each list's PRIMs, pixels and frame buffers, and every system call,
-over part 61's two scenes (`~/phobos-work/scratch/speed5/scenes`):
+over part 61's two scenes (kept outside the repository):
 - **How many times a frame.** In one vblank the menu ran 66,402 PRIMs, and every count of a kind was a multiple of
   27: 2,268 block transfers (27 x 84), 756 PRIMs into the bloom's buffer at 0x162000 (27 x 28), 297 at 0x162400, 81 at
   0x162600, 2,349 into a 5650 buffer at 0x161800 (27 x 87), 405 read from memory as they drew (27 x 15); in the next
@@ -8117,7 +8116,7 @@ change no frame: above), compared frame by frame and judged by eye where they di
   PSP), the order breakwait's two waiters wake in, the state buffer's layout (context, break), sceGeGetStack, a
   SIGNAL call's shared stack, edram's swizzled patterns, and the "[r]" marks of a reschedule probe started from a
   callback (the kernel's).
-- Scratch: `~/phobos-work/scratch/gow-sw` (trace-patch.py the scratch runner's logging: PSP_GETRACE, PSP_TRACE,
+- Scratch: kept outside the repository (trace-patch.py the scratch runner's logging: PSP_GETRACE, PSP_TRACE,
   PSP_OWNTRACE, PSP_AUTOTEST; sync-dbg.sh builds it; at/ the pspautotests runs; state-ram.py and callers.py, the game's
   code; hashes.sh, rp6-gow.sh, rp6-perf.sh, cleanup-rp6.sh; mutate.py and mutate-fixes.sh; gcc11.sh and gcc11c.sh;
   lib.sh, compare.py and rerun.sh the library runs, lib/base, lib/final and lib/fix). Nothing of it is left on the
@@ -8335,7 +8334,7 @@ base's too.
   back, so the game gets memory's either way; the finish is for the color it reads there.
 - **Killzone's menu at 4x** (part 63's) and a target's one rectangle of changes stand. Dead and beside ranges are 16 a
   target; more of them finish, or fill the target afresh.
-- Scratch: `~/phobos-work/scratch/gowvk` (build.sh, run-host.sh; why-patch.py, the finishes' causes; speed.sh,
+- Scratch: kept outside the repository (build.sh, run-host.sh; why-patch.py, the finishes' causes; speed.sh,
   session.sh, sess.py; acc.sh and cmp.py; measure.sh, soft-all.sh; gcc11.sh; ci-lavapipe.sh, lavapipe in a container;
   gpu-tests, the GPU tests for Android). Nothing of it is left on the RP6 but the fonts folder beside the harness,
   which Peace Walker's scenes need.
@@ -8504,7 +8503,7 @@ core's model's (commands nothing, a 256x256 fill 147.6 microseconds at 111 MHz, 
 
 `pspmeasure.elf` is rebuilt in the pinned image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`), which rebuilds the
 previous one byte for byte from its own source, and two builds of the new source are identical. The owner's copy:
-`.local/psp-round6/` (EBOOT.PBP, SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`, and
+outside the repository (EBOOT.PBP, SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`, and
 HOW-TO.md: where it goes, which line, about two minutes, the four deliberate stalls, and `results/ge` back to the
 RP6's `Download/PSPMEASURE/results`). The RP6 wasn't attached in this session, so it isn't there yet.
 
@@ -8529,7 +8528,7 @@ strip's corner; error codes in hex; line widths) are taken too, without changing
 - The program builds without a warning (`-O2 -Wall`), its `SMOKE` version too; `tests/psp/measure.cpp` with `-Wall
   -Wextra -Werror` and the sanitizers. The comparison was run against a made-up reference (the core's own files, with
   times tripled and an error code among the statuses) and prints as it should.
-- Scratch: `~/phobos-work/scratch/measure6` (build.sh, the pinned image's build; quick.sh, the measure group alone;
+- Scratch: kept outside the repository (build.sh, the pinned image's build; quick.sh, the measure group alone;
   times.py and topng.py read the files; recip_model.py, part 60's chords and `recip-vertex`'s readings under them,
   within 6 of the wrap; share*.py, round 5's light-share taken again; push-rp6.sh, the owner's copy to the RP6).
 
@@ -8781,7 +8780,7 @@ of two rounds taking turns, God of War's battle 150 frames and its menu 60), Vul
   5551 or 4444 target leaves the GPU's stencil with all eight bits of the value, where the PSP keeps one or four, so a
   later stencil test there can differ. The groups' stencil-tested sprites are drawn where neither shows.
 - **MC3's menu at 4x** differs from part 65's (item 2, "Accuracy").
-- Scratch: `~/phobos-work/scratch/speed7` (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
+- Scratch: kept outside the repository (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
   and the count patches; acc-host.sh, soft-all.sh, cmp4.py; tables67.py; mutate.sh, quick-tests.sh; logicbench.cpp;
   gcc.sh). Nothing of it is left on the RP6.
 
@@ -9019,7 +9018,7 @@ base's:
 - **WipEout's depth loads** read memory's bytes (0 in the bench scene), not the depth the GPU drew, as the GPU's depth
   isn't read back: the software renderer's loads see the 3D pass's depth, which a lens flare or the like would use.
   Reading the GPU's depth back would mean waiting for it, as before.
-- Scratch: `~/phobos-work/scratch/speed8` (build-vk.sh, rp6.sh, rp6-perf.sh, rp6-final.sh and push/, the RP6's
+- Scratch: kept outside the repository (build-vk.sh, rp6.sh, rp6-perf.sh, rp6-final.sh and push/, the RP6's
   sessions and profiles; patches/: why-, hletrace- and depthread-patch.py, the finishes' causes and the depth loads;
   hotlines.py, callers.py, tables8.py; bench/divbench.cpp, the divider, and dotcheck.cpp, `vfpuDot()`'s random
   cases; mutants.sh, quick-tests.sh, gcc.sh, measure.sh, soft-all.sh, acc-host.sh, cmp4.py). Nothing of it is left on
@@ -9028,7 +9027,7 @@ base's:
 ## Part 69: the RP6's two stuck games — a save dialog closed from a worse thread, and a loading behind a copy
 
 On branch `cursor/psp-hangs-2b67`, on master (`3cae0f907`, v2.0.0). The owner's run of v2.0.0 on the RP6
-(`~/phobos-work/scratch/rp6play/findings.md`) left two games looking stuck: Crash Tag Team Racing at "Checking Memory
+(`findings.md`, kept outside the repository) left two games looking stuck: Crash Tag Team Racing at "Checking Memory
 Stick Duo..." and Dragon Ball Z: Tenkaichi Tag Team at "Now Loading". Sources: pspautotests' recordings
 (utility/savedata/shutdownstatus and initstatus, utility/dialog/priority), PPSSPP's dialog code read as a description
 of the PSP's dialog threads (nothing copied), the RP6's logs and screenshots, and the games' own calls traced with a
@@ -9136,7 +9135,7 @@ reports.
   card read through a memory map a 2 KiB hunk at a time on the emulation thread, gave frames of up to 20 s while the
   card was being written (the loading's single reads are of up to 1.3 MB); reading it through its descriptor, or ahead
   in larger pieces, might help a busy card, but nothing here measured that.
-- Scratch: `~/phobos-work/scratch/hangs` (run.sh, sheet.py, the trace patch `trace-only.patch`, quick-test.sh and
+- Scratch: kept outside the repository (run.sh, sheet.py, the trace patch `trace-only.patch`, quick-test.sh and
   quick-main.cpp for the utility tests alone, `lib-final/` the library run, `cmp-final.tsv`).
 
 ## Part 70: savedata's files mode, PARAM.SFO beside every save, and the second boot that called its save corrupted
@@ -9265,7 +9264,7 @@ a Mac's file system takes them, a PSP's memory stick doesn't, and the device's s
 
 **The library** (the report's run: 3600 frames, Start at 120 and Cross at 1800, three at a time, the software
 renderer at 7 threads, a fresh stick for each game), this branch's runner beside the final run (`be543afba`,
-`~/phobos-work/scratch/final/lib-top`): every game shows the scene it showed there at each capture, in the same
+`lib-top`, kept outside the repository): every game shows the scene it showed there at each capture, in the same
 category (menu or gameplay 194, movie 71, black 1, stuck loading 0), and none misses a function. God of War: Ghost of
 Sparta and Killzone reached the 900-second limit with other work on the machine (the base's runner, run again then,
 reached it with Killzone too); run again on a quiet machine they finish (366 and 560 s), every capture the final run's.
@@ -9310,7 +9309,7 @@ secure files 16 bytes longer twice. Loads don't fill the icons' buffers from the
 names). DELETEDATA (21) with no save still answers the delete group's NO_DATA (PPSSPP's notes give the read/write
 group's): outside this change. A v2.0.0 save of a game that checks its files' kinds is called corrupted once (above).
 Crash Tag Team Racing's wait at "Checking Memory Stick Duo" is another agent's.
-- Scratch: `~/phobos-work/scratch/savename` (two-boots.sh, boots-chain.sh, long-boots.sh, mhp3-save.sh; lib-list.sh,
+- Scratch: kept outside the repository (two-boots.sh, boots-chain.sh, long-boots.sh, mhp3-save.sh; lib-list.sh,
   lib.sh's run for a list of games; runner-trace and runner-new-trace2, the base's and this branch's runners with a
   [save] trace of every savedata call; review1-5, the review snapshots; lib-new, lib-final, lib-basecheck, lib-final2,
   lib-final-slow and rep-*, the library runs; cmp-*.png, the second boots; the suites' logs).
@@ -9371,7 +9370,7 @@ after the title movie", to 7200 at least), its title, PRESS ANY BUTTON, from 210
 movie from about 3900. Pressed on, it gives the collection's menu, Final Fantasy IV's own title (New Game, Load Game,
 Bestiary) and, with New Game, its opening over the world map.
 
-**The library** (the report's run, `~/phobos-work/scratch/final/lib.sh`'s way: 3600 frames, Start at 120, Cross at
+**The library** (the report's run, `lib.sh`'s way: 3600 frames, Start at 120, Cross at
 1800, three at a time, the software renderer at 7 threads; compared with the final run, `be543afba`, whose core is
 `master`'s). All 266 finish their 3600 frames, none at a missing function (Killzone: Liberation, at 5 frames a second,
 was killed at the 900-second limit with the Mac at a load of about 220 from other jobs, its first three frames the
@@ -9421,7 +9420,7 @@ module_start returning 1 (SCE_KERNEL_NO_RESIDENT) or an error has a PSP unload t
 0 or the error, where here the module stays, started, its caller getting the ID; a stop asked for while module_stop
 runs is ALREADY_STOPPING (0x8002013f) by uOFW, NOT_STARTED here; and unloadfill's stop took 1-5 ms on the PSP, a
 stand-in's none here. The savedata list load with nothing to list (above) is the savedata utility's.
-- Scratch: `~/phobos-work/scratch/kenka` (`ktrace.patch`, the temporary tracing; `t1` to `t5`, `ff4t-*`, `gtat-*`
+- Scratch: kept outside the repository (`ktrace.patch`, the temporary tracing; `t1` to `t5`, `ff4t-*`, `gtat-*`
   and `mga-*`, the traces and memory dumps; `skip-fix`, `newgame-fix`, `natural-base`, `natural-fix`, `ff4-*` and
   their sheets; `lib.sh` and `lib-list.sh`, the library script with its temporary files kept here; `lib-fix`, the
   library run, and `cmp-lib.tsv`; `lib-stopnote`, the runs noting each stop; `pairs` and `binchk`, the runs again;
@@ -9541,7 +9540,7 @@ differ too.
 
 - Not checked on a PSP (none here). The game shows a PSP keeping rt's prefix through two vnops; that rs's and rd's stay
   too is taken from the same rule (and PPSSPP's), not seen.
-- Scratch: `~/phobos-work/scratch/mga2` (tools/: the script, display list and texture decoders and the contact
+- Scratch: kept outside the repository (tools/: the script, display list and texture decoders and the contact
   sheets; trace-patch/: the scratch runner's tracing and the vnop counter; after1 and after2, the runs above; lib-fix
   and count, the library runs).
 
@@ -9675,7 +9674,7 @@ keyboard, its first field taking text, else the dialog itself), and the keyboard
 dialog window's controller then. Touch works throughout.
 
 **The games** without a front end (the runner, the tests, the desktop and libretro hosts): unchanged. Nine runs with
-the base's runner and this branch's (`~/phobos-work/scratch/dialogs/runs.sh`: Kenka Bancho, Gundam vs. Gundam NEXT
+the base's runner and this branch's (`runs.sh`, kept outside the repository: Kenka Bancho, Gundam vs. Gundam NEXT
 PLUS, Valkyria Chronicles II, Ridge Racer 2 and Dissidia the report's way; Kenka's LOAD GAME; Valkyria Chronicles II
 booted twice on one stick; Ridge Racer 2 with Cross every 2 s to its profile, name and first save), each runner built
 with the same scratch patch (`cmp.patch`: the clock started at a fixed time, and every sceUtility dialog call logged
@@ -9776,10 +9775,10 @@ commit, whose message has the verdict.
   delete deletes the save it showed, but a load or save answered then follows the rewritten parameters (its mode, its
   game's name), as `savedata()` reads them.
 - Not run on a device (the RP6 was in use); the owner's checklist is in the handoff. The dialogs were drawn on the
-  Mac with Robolectric in a scratch copy (`~/phobos-work/scratch/dialogs/shots`), not in the repository, and the
+  Mac with Robolectric in a scratch copy (`shots/`), not in the repository, and the
   controller's keys tested there too (`shot-tree/android/app/src/test/.../PspDialogFocus.kt`): the app's unit tests
   have no Robolectric, and adding it to the build is the owner's call.
-- Scratch: `~/phobos-work/scratch/dialogs` (`ref/`, the PPSSPP files read; `kenka/`, the trace, dump and disassembly
+- Scratch: kept outside the repository (`ref/`, the PPSSPP files read; `kenka/`, the trace, dump and disassembly
   and the result sheets; `runs.sh`, `runs-cmp.sh`, `compare.sh`, `cmp.patch` and `before*`, `after1`, `basecmp*`,
   `newcmp*`, the runs without a front end; `frontrunner/` and `e2e/`, the runs with one; `quick/`, the utility, dialog
   and state tests alone; `ndk-check.sh`, the arm64 build of the touched files).
@@ -10030,7 +10029,7 @@ Every change is the host's alone; nothing a game can see moves.
 
 To compare: the base (`5b2a564fa`, #220's branch, the code of 2.0.0-test-1, 205182) and this branch, the Software
 renderer at 7 threads, each scene's frames a second over several seconds, base, branch, base again. The scenes are the
-headless runner's states, `~/phobos-work/scratch/speed9/scenes/NAME` (`state`; the game's name in `game`; the memory
+headless runner's states, kept outside the repository as `scenes/NAME` (`state`; the game's name in `game`; the memory
 stick it was made with in `stick`). The app's save states are the same bytes (`root->serialize(true)`), so a scene's
 `state` can stand in for a slot's file: save a state of the game in a slot, put the scene's `state` in that file's
 place, and load the slot. Or reach the scene from boot:
@@ -10082,7 +10081,7 @@ Expected: the scenes the branch speeds up on the Mac (Killzone, the Backbone gam
 Speeds, the movie intros) faster on the RP6 too, by less where the RP6's base is bound elsewhere; the GE-bound ones
 (both God of Wars, Army of Two, Super Monkey Ball Adventures, Hot Wheels, Fat Princess) as they were.
 
-Scratch: `~/phobos-work/scratch/speed9` (scenes/, the states; build.sh, measure.sh and medians.py, the bench runners
+Scratch: kept outside the repository (scenes/, the states; build.sh, measure.sh and medians.py, the bench runners
 and their measurements; hashcmp.sh and libhash.sh, the hash comparisons; lib/, the library runs; mutate.py, the broken
 versions; patches/, the scratch runner's patches, clock-patch.py among them).
 
@@ -10314,7 +10313,7 @@ What a measurement can't settle from round 6's pictures, and the owner's PSP cou
 
 ### Scratch
 
-`~/phobos-work/scratch/round6`: `quick.sh` and `quick2.sh` (unsanitized builds of the measure group alone, and of the
+Scratch, outside the repository: `quick.sh` and `quick2.sh` (unsanitized builds of the measure group alone, and of the
 GE, draw, 3D, curves, states and measure groups), `py/` (the analyses: `countv*.py` along v, `patchcull*.py`,
 `texrange.py`, `rpix*.py`, `rproj*.py`, `fitchords.py` and `minimax.py` the chords, `lprod*.py`, `sweep*.py` and
 `lsum.py` lighting), `ours-base` and `ours-a` (the core's run of every round before and after), `lib-a` (the library
@@ -10552,7 +10551,7 @@ contracts differently may move a list's end by a cycle. A layout 28 state from t
 
 ### Scratch
 
-`~/phobos-work/scratch/round6`: `py/terms.py`, `model.py` and `fit5.py` (the fit), `errstats.py`, `pertest.py` and
+Scratch, outside the repository: `py/terms.py`, `model.py` and `fit5.py` (the fit), `errstats.py`, `pertest.py` and
 `percase.py` (its errors), `instr/` (the instrumented core), `acff-*` and `cube-*` (Armored Core's movie and Cube),
 `lib-r6d` and `lib-b` (the library runs), `cmp-b-*.tsv` (their comparisons).
 
@@ -10835,7 +10834,7 @@ assignment.
 `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. Colin McRae
 again with the merged runner, fresh.txt then reload.txt: the same six files at the same sizes as before the merge,
 "AUTO-LOAD." at 2100 and the main menu at 3000. The scratch (the scratch runner, the scripts, the runs and their
-captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, not in the repository.
+captures) is on the Mac it was made on, not in the repository.
 
 ## Part 78: anti-aliased lines — the coverage for the alpha, measured; Dead or Alive Paradise's wireframe gone
 
@@ -10903,7 +10902,7 @@ there to the committed file byte for byte). Not run on a PSP yet.
 
 ### The game now
 
-The play-tester's states, 300 frames, PNGs at 30 to 300, software and Vulkan (`~/phobos-work/scratch/aalines/sbs`:
+The play-tester's states, 300 frames, PNGs at 30 to 300, software and Vulkan (`sbs/`, kept outside the repository:
 `bsw.png`, `bvk.png`, `sw.png`, `vk.png`, `zoom-270.png`, the play-tester's frames on the left), and the pool scene
 from `island.bin` with `pool.txt` at `q-pool.png`'s frames (`pool.png`): the girls' skin is smooth, no lines, at the
 beach, the pool and in the volleyball match, with both renderers. Software and Vulkan now differ by a mean of 0.09 to
@@ -10953,7 +10952,7 @@ Super Stardust Portable, Syphon Filter: Dark Mirror, The Sims 2: Pets, 1.75 to 5
 
 - Round 7 on a PSP: whether the coverage replaces the alpha or scales it, every octant's rule, blending's and the alpha
   test's use of it, which texels a textured line takes, 3D, clear mode.
-- Scratch: `~/phobos-work/scratch/aalines` (fit2.py, the fit; sbs/, the pictures; lib/, the library run;
+- Scratch: kept outside the repository (fit2.py, the fit; sbs/, the pictures; lib/, the library run;
   lib-compare.tsv).
 
 ## Part 79: where the slow games' emulation thread goes, and making it faster — the GPU's palette pictures decoded where taken, memory's changes only where there's code, calm system calls, more of the CPU compiled
@@ -10974,7 +10973,7 @@ master, measured again with #224 in, and found most of the remaining time outsid
 
 On the Mac (an M1), with the headless runner built as Android builds it (O3, thin LTO) and patched in scratch only to
 report the emulation thread's CPU time and its retired host instructions and cycles (the thread's counters), from
-save states in each game (`~/phobos-work/scratch/cpu-speed2/scenes`, listed in "On the RP6"), in Vulkan-fast through
+save states in each game (kept outside the repository, listed in "On the RP6"), in Vulkan-fast through
 MoltenVK and in the software renderer. A counting build (scratch) gave each scene's work a frame: guest instructions,
 blocks entered, instructions the interpreter ran from compiled code by kind, loads and stores off the fast path by
 reason, system calls by function, thread switches, the GE's commands, PRIMs and vertices by path, the renderer's
@@ -11238,7 +11237,7 @@ Every change is the host's alone; nothing a game can see moves.
 
 To compare: master (`6ab2c5583`, #224) and this branch, Vulkan fast at 1x as the owner ran them, each scene's frames a
 second over several seconds, base, branch, base again. The scenes are the headless runner's states in
-`~/phobos-work/scratch/cpu-speed2/scenes/NAME` (`state`; the game in `game`; the memory stick it was made with in
+`scenes/NAME`, outside the repository (`state`; the game in `game`; the memory stick it was made with in
 `stick`); an app save state is the same bytes, so a scene's `state` can stand in for a slot's file (save a state in a
 slot, put the scene's `state` in its place, load the slot).
 
@@ -11295,7 +11294,7 @@ and a box whose margin passes 3 texels, which the tests' small boxes can't tell 
 
 ### Scratch
 
-`~/phobos-work/scratch/cpu-speed2`: `build.sh` (the bench runners from a revision or the worktree, at most four
+Scratch, outside the repository: `build.sh` (the bench runners from a revision or the worktree, at most four
 compiles at once; `patches/`: counters, clock, states, the counting build's `stats-patch2.py`, `r2t-patch.py` and
 `why-patch.py` for the finishes' causes), `run.sh`, `bench2.sh` and `benchsum2.py`, `part79table.py` (the rounds:
 `bench2/final1.tsv`, `final3.tsv`, `iso.tsv`), `hashcmp.sh` (`hash/`), `sample.sh`, `prof2.sh` and `sampletop.py`
@@ -11461,7 +11460,7 @@ the game reads the clock.
 
 **Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder, and
 pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
-`~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.
+on the Mac it was made on, not in the repository.
 
 ## Part 81: input — a right stick for patched games, the keyboard's input types, 7th Dragon 2020-II past its certificate
 
@@ -11550,7 +11549,7 @@ kana lost its letters in a field of kana, and kanji conversion stopped.) Phobos'
 would do; no recording shows a PSP's answer to a field's types.
 
 7th Dragon 2020's name screen shows "PSP" and the voice screen after it too (`v-7d1-name/frame-000200.png`,
-`frame-000800.png`).
+`frame-000800.png`, kept outside the repository).
 
 ### 7th Dragon 2020-II past its certificate: a negative ATRAC size
 
@@ -11565,8 +11564,8 @@ shows them). It's done in the setting functions they share, `atracSet()` and
 `atracSetAndGetID()` (read size and buffer size the same), the setters' own lines as they were, so that this branch and
 the sound branch's (#229, which takes the context writes out of those lines) merge without a conflict. A buffer with
 no memory behind it is refused as before (0x80630006). The card then passes and the story goes on
-(`v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first conversation). The name wasn't what
-stopped it.
+(kept outside the repository: `v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first
+conversation). The name wasn't what stopped it.
 
 ### Tests
 
@@ -11636,7 +11635,7 @@ type (Ridge Racer 2's capitals in a field of small letters) has the whole text c
 Checks on the final tree: `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
 groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed; Android `:app:compileModernReleaseKotlin
 :app:testModernDebugUnitTest` (two workers) 304 tests, 0 failures. With the branch's runner
-(`~/phobos-work/scratch/review-b00`; its core as committed, the later changes being the app's, the tests', comments and
+(the review's; its core as committed, the later changes being the app's, the tests', comments and
 documents): Formula Front International's True Analogs camera as before (`c1-right`: level behind the AC at rest after
 "GO!!!", turned and pitched by the right stick; the frames within a mean of 0.7/255 of the previous agent's run); 7th
 Dragon 2020-II's certificate passed into the Diet chamber (frame 1560) and the first conversation (3600); Ridge Racer
@@ -11797,13 +11796,13 @@ the channel, that channel released and reserved again by Output2, a "wrong" sceV
 then succeeds (0) show the release freeing the SRC channel whoever holds it, where this branch's lets go of its hold
 alone (the first review's choice). Neither was among the review's points, and the second would undo an earlier
 review's decision; left for the owner. Battle vs. Chess, the one game known to use sceVaudio, is touched by neither: it
-reserves stereo (the first agent's trace, `~/phobos-work/scratch/hle-b00/runs/Battle vs. Chess [Europe Proto]/full1`:
+reserves stereo (the first agent's trace of it, kept outside the repository:
 `sceVaudioChReserve(0x480, 0xac44, 2)`), and its outputs' volume, fading in from 0, peaks at 0x35C1, within the new
 limit too.
 
 Checks on the final tree: `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
 groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed. With the branch's runner
-(`~/phobos-work/scratch/review-b00`; its core as committed, the later changes being the tests' and the documents'):
+(the review's; its core as committed, the later changes being the tests' and the documents'):
 Angus Hates Aliens past NEW GAME from the tester's title state (the loading screen at frame 500, the first level and
 Angus's line at 1000) and from boot (`s1.txt`: the first level at 2400, as before); Battle vs. Chess as before (the
 tester's script, 7200 frames: every frame checked identical to the previous run's, and its sound, ten-second loudness by
@@ -12171,7 +12170,7 @@ pointer too, the folder "<>" leaves out tested, a comment's wording, and a test'
 
 **Scratch** (the runs, their stick copies, traces and captures, the sheets, the scratch runner's patch and Disgaea
 Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` and `final3.sh` are the runs above):
-`~/phobos-work/scratch/savedata3/` on the Mac it was made on, not in the repository.
+on the Mac it was made on, not in the repository.
 
 ## Part 85: the GE's front end faster — vertices read a part at a time, fast mode's corners four at a time in vectors, each corner placed once
 
@@ -12384,7 +12383,7 @@ are unchanged by this branch (master's layout, 27 since part 87): nothing new is
 
 As part 79: the headless runner built as Android builds it (O3, thin LTO), patched in scratch to report the emulation
 thread's CPU time, retired host instructions and cycles, run from the scenes' save states
-(`~/phobos-work/scratch/cpu-speed2/scenes`), base and branch in turn. New here, a block-level profile: a scratch patch
+(kept outside the repository), base and branch in turn. New here, a block-level profile: a scratch patch
 (`jitmap-patch.py`, `jitmap3-patch.py`) has the recompiler log every block it compiles (its guest words, its host
 code, and where in the host code each guest instruction's code, each block ending and each cold path begins), and
 `jitcat.py` sorts xctrace's samples in compiled code by what each host instruction was compiled for. (The first try
@@ -12611,7 +12610,7 @@ Every change is the host's alone; nothing a game can see moves.
 The NEON is ARM64's own, so the Mac's gains in the VFPU carry over; the compiled code's (fewer host instructions a
 block ending, a load or a store) carry over too, and count for more on cores with smaller caches (the RP6's
 Cortex-X3 and A715 have a 64 KiB instruction cache, the M1's performance cores 192 KiB). To compare: master and this
-branch, Vulkan fast at 1x, the scenes in `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table). Expect Super
+branch, Vulkan fast at 1x, the scenes kept outside the repository (part 79's table). Expect Super
 Monkey Ball's story and Disaster Report 3's play most (a fifth to a quarter fewer instructions on the emulation thread,
 as on the Mac), Colin McRae, the Armored Cores and the Need for Speeds 8 to 11% (Silent Line's play 19%), the GE-bound
 scenes 2 to 5%.
@@ -12639,7 +12638,7 @@ exits, the mirrors, reset, jitprotect's nesting, the instruction cache, the jump
 
 ### Scratch
 
-`~/phobos-work/scratch/cpu-round2`: `build.sh`, `run.sh`, `bench2.sh` and `benchsum2.py` (the rounds: `bench2/*.tsv`),
+Scratch, outside the repository: `build.sh`, `run.sh`, `bench2.sh` and `benchsum2.py` (the rounds: `bench2/*.tsv`),
 `hashcmp.sh` (`hash/`), `xprof2.sh` and `jmprof2.sh`/`jmcat.sh` (xctrace with time limits), `patches/jitmap-patch.py`
 and `jitmap3-patch.py`, `jitprof.py`, `jitcat.py` and `calltree.py` (`prof/`), `stress/dots.cpp` (the NEON adder
 against vfpuDot), `mutate2.py` (`mut/`), `NOTES.md`.
@@ -12799,7 +12798,7 @@ the font's glyph and answers without one); a narrow clip for the _Clip read and 
 through; and the comments' and part 87's omissions.
 
 **Scratch** (the runs and their PNGs, the traces, the comparison sheets, the scratch tracer's patch and the RAM dumps'
-disassembly helpers): `~/phobos-work/scratch/font-b03/` on the Mac it was made on, not in the repository. The before and
+disassembly helpers): on the Mac it was made on, not in the repository. The before and
 after pictures: `runs/Jeanne d'Arc/sheet-mine-x.png` (and master's hang, the play-tester's `sheet-x.png`),
 `runs/Hammerin Hero/cmp-mine-t1.png` (master left, the branch right), `runs/Final Fantasy III/sheet-mine-f1.png`, and
 each regression game's `runs/<game>/cmp-<run>.png` (master, the branch, their difference times four).
@@ -12961,7 +12960,7 @@ Auto: Liberty City Stories, Kenka Bancho). Ten give the same pictures at every c
 by 0.15 of 255 on average and 7th Dragon 2020's save question at 3600 by 0.18, each the same scene an animation step
 apart (its glow, the pulsing NO); Kenka Bancho's intro movie is a few frames apart at 60, 1200 and 3600, as two runs of
 the base's runner are from each other (8.55 at 1200, against 4.84 from the branch's). No function missing in any run,
-and each game's two logs the same. And the library run of part 80's time (`~/phobos-work/scratch/hle-b00/lib-base3`, all
+and each game's two logs the same. And the library run of part 80's time (`lib-base3`, outside the repository, all
 266 games, 3600 frames each): no game but God Eater 2 was noted for variable imports left out, and none refused for
 packed relocations, so those two changes reach no other game there.
 
@@ -13010,7 +13009,7 @@ into this part (part 97 took it up).
 - PBOOT.PBP isn't booted (above).
 - God Eater 2's appearance screen takes only presses held for more than 6 frames, where its other screens take 6 (the
   deep-play scripts' length); not looked into.
-- Scratch: `~/phobos-work/scratch/npdrm-modules` (`trace.patch`, the temporary tracing; `rel2.py`, `imports.py`,
+- Scratch: kept outside the repository (`trace.patch`, the temporary tracing; `rel2.py`, `imports.py`,
   `iso.py` and `chdcat.c`, the files' readers; `runs/trace*`, `runs/explore*`, the exploration; `runs/final1`,
   `runs/final2`, `runs/final3a`, `runs/drive1`, `runs/final4a`, the final runs, and their states in `states/`;
   `regress.sh` and `regress/`, the other games; `tests.sh`, the tests built a file at a time for iterating). Nothing was
@@ -13089,7 +13088,7 @@ weights, which the CPU transforms in accurate mode), so their pixels were failin
    drawn (`Target::depthKept`): Cars' later strips find memory has it. A depth that couldn't be read back isn't kept,
    for the next texture to take again. The targets' pixels and pages stay the GPU's.
 
-**The other scenes.** The kit's 21 scenes (`~/phobos-work/scratch/ge-headroom`'s, copied), the final code (1c44ceab7)
+**The other scenes.** The kit's 21 scenes (ge-headroom's, copied), the final code (1c44ceab7)
 against master as merged in (3228b825d), 100 frames from each state, every frame's picture and VRAM hashed (drawing
 settled), then the end's RAM and machine: Software the same in all 21 and in the three games' scenes (24 of 24);
 Vulkan accurate and fast each the same in 19 of the 21 (as before the review's points, against master at 542da5a28,
@@ -13182,7 +13181,7 @@ fail's, memory's changes around a taken and a put depth, a 3D mesh in fast mode,
 shared and tested over all 65,536 depths; and the docs' wording (depth buffers, not frame buffers, of other row
 widths; Twisted Metal's fast mode; what still reads memory's depth).
 
-Scratch: `~/phobos-work/scratch/vk-models` (`patches/dbg-patch.py` and `dbg2-patch.py`, the PRIM log and the changes'
+Scratch: kept outside the repository (`patches/dbg-patch.py` and `dbg2-patch.py`, the PRIM log and the changes'
 switches; `kit/`, the hash and picture runs; `png/`, the sheets; `tests1.sh`, `suites.sh`).
 
 ## Part 91: polling loops — the polled calls in fewer steps, and a loop that comes back as it was skipped to the go's end, each skip proved by a turn run on a CPU of its own
@@ -13199,7 +13198,7 @@ result as running the loop would give. Clean room: PPSSPP not read at all, JPCSP
 ### How it was measured
 
 The headless runner built as Android builds it (O3, thin LTO), patched in scratch for the emulation thread's CPU time
-and retired host instructions (as parts 79 and 86), from the scenes' states (`~/phobos-work/scratch/cpu-speed2/scenes`).
+and retired host instructions (as parts 79 and 86), from the scenes' states (kept outside the repository).
 New here, a syscall trace (`trace-patch.py`, scratch): each call's function, arguments, result, return address and
 cycles since the last, whether it was quiet or calm, and all of RAM at the trace's end, whose loops were then read
 with Homebrew's llvm-objdump (MIPS32, little-endian). Profiles with xctrace and macOS's `sample`. The Mac was shared
@@ -13428,7 +13427,7 @@ second, held by the emulation thread (PPSSPP 60), and that thread's host instruc
 expect them at 60 unless the GPU's side holds them (not measured here: no device). The intro movies' thread falls by as
 much (their decoding is on it too, and stays); Super Monkey Ball, Colin McRae, Disaster Report 3 and Twisted Metal
 playing as they were (no polling). To compare: master against this branch, Vulkan fast at 1x, the scenes in
-`~/phobos-work/scratch/cpu-speed2/scenes` (nfsmw-race, nfsmw-profile, nfsur-title, tm-logo, dr3-intro, acff-intro,
+a folder outside the repository (nfsmw-race, nfsmw-profile, nfsur-title, tm-logo, dr3-intro, acff-intro,
 acsl-intro), as part 79 describes.
 
 ### Review
@@ -13463,7 +13462,7 @@ cover them; a whole-state comparison at a step's end sees only a range's errors)
 
 ### Scratch
 
-`~/phobos-work/scratch/polling`: `build.sh`, `run.sh`, `bench2.sh`, `hashcmp.sh` (`hash/`), `queue1.sh` (the final
+Scratch, outside the repository: `build.sh`, `run.sh`, `bench2.sh`, `hashcmp.sh` (`hash/`), `queue1.sh` (the final
 hashes and rounds: `logs/hash-final-*.log`, `bench/final-*.tsv`), `queue2.sh` and `queue3.sh` (the same hashes after the
 review's fixes: `logs/hash-final2-*.log`, `logs/hash-final3-*.log`), `patches/trace-patch.py` (the syscall trace) and
 `trace/` (each scene's trace and RAM), `dis.sh` (a RAM dump's words disassembled), `patches/spindebug-patch.py` (each
@@ -13482,7 +13481,7 @@ machine state as before (checked below). Save states unchanged (layout 31).
 Twisted Metal 43.1/27.6, Death Jr. II 50.6/27.4, Sonic Rivals 56.3/30.2, Activision Hits Remixed 56.5/29.9. Part 86's
 profile had 59-69% of the emulation thread under system calls in the slowest (the GE's front end and the renderer).
 
-**How it was measured.** The Mac (M1, MoltenVK), part 85's kit copied to `~/phobos-work/scratch/ge-round3`: the bench
+**How it was measured.** The Mac (M1, MoltenVK), part 85's kit copied to a folder outside the repository: the bench
 runner at -O3 with thin LTO and the emulation thread's counters (its CPU time, retired instructions and cycles), from
 the 21 scenes' states; `sample` profiles of a -g build; and a counting build (`patches/gestats-patch.py`): the GE's
 commands, PRIMs and vertices by path, the GPU draws begun and joined, for each draw that couldn't join the one before
@@ -13924,7 +13923,7 @@ on the PSP: part 90); the GPU's blending by a partial alpha rounding its own way
 before); within one PRIM, a primitive blending by the alpha over pixels an earlier one left behind; and part 90's
 list otherwise.
 
-Scratch: `~/phobos-work/scratch/vk-mx` (`NOTES.md`; `patches/`: the PRIM log, the VRAM dumps (`dbg4-patch.py`,
+Scratch: kept outside the repository (`NOTES.md`; `patches/`: the PRIM log, the VRAM dumps (`dbg4-patch.py`,
 `dbg5-patch.py`), the stale-target experiment (`exp2-patch.py`) and the corners' depths (`corner-depth.patch`); `kit/`,
 the hash, picture and speed runs; `tests1.sh`, `suites.sh`).
 
@@ -13941,7 +13940,7 @@ half on GCC's builds: change 6). Clean room: PPSSPP not read at all, JPCSP not r
 On the Mac (an M1), the headless runner built as Android builds it (O3, thin LTO), patched in scratch to report the
 emulation thread's CPU time, retired host instructions and cycles (parts 79 and 86), from the scenes' save states:
 part 79's 21, and Hot Wheels' race and Chains of Olympus' difficulty menu (part 74's), the owner's Killzone gameplay
-and the Killzone menu v2.2.0 made (`scratch/scenes-owner`), and MX vs. ATV Untamed riding. Profiles with xctrace and
+and the Killzone menu v2.2.0 made (outside the repository), and MX vs. ATV Untamed riding. Profiles with xctrace and
 round 2's block map (each compiled block's guest words, host code and marks), sorted by a new script (`cats.py`) into the
 whole thread's parts: compiled code by what each host instruction was compiled for, the VFPU's helpers, the
 interpreter called from compiled code, system calls (the GE's display lists run inside them apart), the GE run from the
@@ -14275,7 +14274,7 @@ identical. The Mac: the same gains, less the direct loads' 0.4 to 0.6% of the in
 
 ### Scratch
 
-`~/phobos-work/scratch/cpu-round3`: `build.sh`, `run.sh`, `bench2.sh`, `med.py` (medians: `bench/*.tsv`), `hashcmp3.sh`
+Scratch, outside the repository: `build.sh`, `run.sh`, `bench2.sh`, `med.py` (medians: `bench/*.tsv`), `hashcmp3.sh`
 and `queue-hash.sh` (`hash/`, `logs/hash-*.log`), `queue-final.sh`, `cats.py` (the thread by part), `regs.py` and
 `ends.py` (the block map's registers and endings), `dis.py` (a block's guest and host code), `patches/probe-patch.py`
 and `probe2-patch.py` (the interpreter's calls, FCSR), `jmcat.sh` and round 2's block map patches (`prof/`), `mutate3.py`
@@ -14463,7 +14462,7 @@ the game read them, dumped by a scratch build), each MiB written with the hash i
 failed" message. The game goes on through its loading screen, the warning, its title animation and the intro movie
 (Circle skips it) to its first level: Sackboy in the entrance tube, then on the opening stage, walking with the stick
 over the rainbow hill to the PlayStation symbols. One boot from a fresh stick does all of it
-(`deepplay/LittleBigPlanet/`: `fixed-path.txt`, batch 04's presses to frame 3300, then Circle and the stick;
+(kept outside the repository: `fixed-path.txt`, batch 04's presses to frame 3300, then Circle and the stick;
 `run-fx4/`, `sheet-fx4.png`; `z-fixed-install-to-level.png`). The second round's runner does the same, GUI.ARC the
 same bytes (`run-r2a/`, `sheet-r2a.png`).
 
@@ -14967,7 +14966,7 @@ And the rest:
 - A 16-bit frame buffer's depth layout measured on a PSP: round 3's depth-layout case drawn with 5650, 5551 and 4444
   frame buffers (tools/psp-measure would show it in one run). Until then 5650's and 4444's go with 5551's by size.
 
-Scratch: `~/phobos-work/scratch/kurohyou` (`NOTES.md`; `kit/patches/k96dbg-patch.py`, the command and PRIM log, the VRAM
+Scratch: kept outside the repository (`NOTES.md`; `kit/patches/k96dbg-patch.py`, the command and PRIM log, the VRAM
 dumps; `k96census-patch.py`, `census.sh`, `census-sum.py` and `census-summary.txt`, the census; `viewprims.sh`, the
 depth views' sprites; `kit/`, the hash runs, `depthperm.sh` the depth rearranged; `png/`, the sheets:
 `pr-k1-30-full.png`, `pr-k1-30-centre.png`, `pr-k1-150-centre.png`, `pr-k2-90-full.png`, `pr-k2-90-centre.png`, before
@@ -14997,7 +14996,7 @@ scenes' hashes `kit/logs/r5hash-*.log`), `mut6/` (the mutations), `kit/r5dqueue.
 On branch `cursor/psp-pgd-edata-2b67` (draft PR #259), on master `14b181707` (part 95, #257, after part 94, #256);
 part 96 is #258's, still open. The owner's area then (io.cpp's PGD and sceNpDrm code, which parts 88 and 95 reported
 to him and left alone; open to agents since 15 Oct 2026, part 101): this is his proposal of 13 Oct (an investigation
-and a patch, `~/phobos-work/scratch/pgd-offset/`:
+and a patch, kept outside the repository:
 `REPORT.md`, `proposed-fix.patch`), rebased at his request (14 Oct) onto part 95's model of a memory stick file's
 length, to merge once CI is green and an independent review finds nothing. Clean room: the PSP's behaviour from
 "tpu"'s decompilation of the firmware's PGD layer (kirk_engine's `npdrm/dnas_ida.c`) and his `npdrm/edata.c` and
@@ -15106,7 +15105,7 @@ fails, 22 checks, each file's 11 (5000, then 4000, a read of nothing and so not 
 100 bytes, 3500, the asynchronous 5000 and 4000, and a read of nothing), and the other 547 pass. The branch: 548
 groups, 0 failures.
 
-**Games** (`~/phobos-work/scratch/pgd-edata`: master's runner and the branch's, each with the file I/O trace, part
+**Games** (kept outside the repository: master's runner and the branch's, each with the file I/O trace, part
 95's `--trace-io`, made to trace scePspNpDrm_user's calls too in a scratch build; the clock pinned with
 `--start-time`; a fresh stick in a scratch folder for each run; the presses and frames the investigation's).
 - **The DLC games**, with the investigation's synthetic EDATA at their paths (the test helper's PGD, 0x4000 bytes of
@@ -15186,7 +15185,7 @@ machine's state): all 102 hashes the same in all 21, the state too (no layout ch
     no game sends it.
   - SEEK_END before the key gives the whole file's size, where the PGD layer refuses a seek before the PGD is opened
     (0x80510206): master's behaviour, unchanged.
-- Scratch: `~/phobos-work/scratch/pgd-edata` (`NOTES.md`; `trace-patch.py`, the runners' NPDRM lines; `games.sh`,
+- Scratch: kept outside the repository (`NOTES.md`; `trace-patch.py`, the runners' NPDRM lines; `games.sh`,
   `check-edata.py`, `compare-umd.sh`, `repeat.sh` and `runs/`, the game checks; `tests.sh` and `logs/`, the suites,
   `src-before/` and `io-3way.cpp` the trees before the fix and before the reconciliation; `hashkit/`, the scenes).
   Nothing was run on the RP6.
@@ -15220,7 +15219,7 @@ its detail's second line came out as a stray byte (`"0% Complete.\n\x04"`, whate
   buffer the test then printed, the zone 256 (the buffer's size). The PSP's text ran on past the date into that
   buffer, so each call's tick was the previous text's bytes 16 to 23 (the first's, zeros), and what was printed is
   each text from its 17th byte: ` 04:16:00 +0416`, ` 14:48:07 +0416`, `:15.71+04:16` and `:07.29+04:16`. Rebuilt so
-  (the review's reconstruction, `~/phobos-work/scratch/review-260/py/garbage.py`), the ticks give those texts
+  (the review's reconstruction, `garbage.py`, kept outside the repository), the ticks give those texts
   exactly: the time moved by the zone, written as hours and minutes (`+0416`, and `+04:16` in RFC 3339,
   whose UTC is `Z`); the seconds' hundredths cut, not rounded (the last tick's 299,386 microseconds print `.29`);
   and 16 characters before the 17th: tick 0's `Mon, 01 Jan 0001` (the day in two digits, the year in four), and the
@@ -15262,7 +15261,7 @@ functions are "not implemented". On the first round's head it fails 5: the old c
 the largest tick's two, each with its year in five characters.
 
 **Games** (master's runner and the branch's, the batch's runs on fresh copies of the batch's sticks, one runner at a
-time; `~/phobos-work/scratch/small-fixes/savecheck.sh`):
+time; `savecheck.sh`, kept outside the repository):
 - MediEvil Resurrection (from `st-t2.bin` with `sv.txt`, 600 frames, a copy of `stick-t2`): master writes
   SAVEDATA_DETAIL `""` and notes the missing function; the branch writes `Wed, 14 Oct 2026 05:46:56 -0400` (the
   state's clock, in the Mac's zone), with no note, DATA.BIN and ICON0.PNG byte for byte master's, the savedata trace
@@ -15343,7 +15342,7 @@ sleep passes, sanitized.
 
 ### The review
 
-An independent review of `2a45e6531` (with its own runner and probes, `~/phobos-work/scratch/review-260/`) asked
+An independent review of `2a45e6531` (with its own runner and probes, kept outside the repository) asked
 for changes over one data-safety blocker. The first round sent every unlisted plain name to the list's first name,
 even where that save was on the stick, so a list save could go over a save the game still had:
 - Case A, an upgraded player: the first save after the upgrade made GAME01 beside the old GAME. Which of the two a
@@ -15364,7 +15363,7 @@ now, and the test pins only what's recorded. Its nits, taken: the hundredths cut
 recorded (the first round called them choices), the four old lines are quoted, Vita3K is named, and
 sceUtilityGetSystemParamInt takes `localZone()` rather than repeating it.
 
-**Walked again** with the game (`~/phobos-work/scratch/small-fixes/walks.sh`, `logs/walks.log`: master's runner, the
+**Walked again** with the game (`walks.sh`, `logs/walks.log`, kept outside the repository: master's runner, the
 first round's and this round's, on scratch copies, never the owner's sticks, the clock pinned):
 - The reviewer's upgrade sequence (a copy of batch 04's `stick-t1`, an older Phobos's GAME; three boots of `t1.txt`,
   each on a copy of the last one's stick, GAME's PARAM.SFO touched before the third): master and this round load
@@ -15389,7 +15388,7 @@ redirect never lands on a slot that's on the stick: the request's own name is ke
 change). The test has every slot there (focus 7 and 8) and the list's first there with no GAME (focus 0), each save's
 bytes its own: the save goes to GAME, no slot touched.
 
-**Walked again** for this round (`~/phobos-work/scratch/small-fixes/walks3.sh`, `logs/walks3.log`, scratch copies, the
+**Walked again** for this round (`walks3.sh`, `logs/walks3.log`, kept outside the repository; scratch copies, the
 clock pinned). The reviewer's all-slot case (GAME01 to GAME03 each with its PARAM.SFO cut to 64 bytes and its own mark
 after its data; `script.txt` from boot): all three runners load DATA_BROKEN; master writes the new profile to a new
 GAME, the second round over GAME01 (its mark gone), this round to a new GAME, its trace and the stick byte for byte
@@ -15434,7 +15433,7 @@ savedata traces line for line. CI: the draft PR's checks.
 - The automatic answer still takes a list's first name whatever the focus for a save naming none (a choice of
   Phobos's, as before: a focus-7 save of a game naming none, as Killzone's or Kurohyou 1's, goes over the list's first
   save each time, where a PSP's player would see the first new slot focused); a front end's player chooses.
-- Scratch: `~/phobos-work/scratch/small-fixes` (`NOTES.md`; `refs/`, the sources read; `savecheck.sh`,
+- Scratch: kept outside the repository (`NOTES.md`; `refs/`, the sources read; `savecheck.sh`,
   `rebootcheck.sh`, `games.sh` and `logs/games.log`, the game checks; `before-src/`, master with the new tests;
   `delay-patch.py`, the test's sleep; `hashkit/`, the scenes). Nothing was run on the RP6.
 
@@ -15557,7 +15556,7 @@ running while it copies, finished, shutting down.
 - **The trailing '.' and ' ' check is the install's alone.** The savedata utility's names go through the same check of
   plain names (`utility.cpp`'s `plainName()`, used by its save, load, size and list modes and its dialogs), and
   refusing such names there could keep a game from loading or writing a save it already has, so they're left as they
-  were. Deep play's savedata traces (`~/phobos-work/deepplay`, 1,296 savedata calls) name no game, save or file
+  were. Deep play's savedata traces (kept outside the repository, 1,296 savedata calls) name no game, save or file
   ending so, but they don't cover the library.
 - **sceIoChstat** (`io.cpp`, new): as io/stat/readonly recorded, the mode's write bits and the attributes' 0x01 are one
   read-only flag on a PSP's memory stick file (made 0444 a file reads mode 0x216d and attributes 0x21, made 0777 again
@@ -15643,7 +15642,7 @@ running while it copies, finished, shutting down.
   the disc refused.
 - Android (`PspDialogsTest.readsTheCoresInstallProgress`): the core's install request read back, its progress clamped.
 
-On master with these tests (`~/phobos-work/scratch/gamedata-install/beforesrc`, unsanitized): the seven install groups
+On master with these tests (`beforesrc`, a scratch copy outside the repository, unsanitized): the seven install groups
 and the sceIoChstat group fail (master copies nothing and answers 1; sceIoChstat answers 0x8002013a; the attributes
 0x27 and 0x17), and part 37's own group passes there as here (a disc with nothing to install is still cancelled).
 
@@ -15668,8 +15667,8 @@ away by the cleanup through the link. On the fourth round's head with the fifth 
 other leftover in it, and the other 557 pass (the link put in its place was already taken away alone there; the race
 the round closes isn't a stable test).
 
-**The games** (runners built from master and from this branch; every memory stick a fresh folder under
-`~/phobos-work/scratch/gamedata-install`).
+**The games** (runners built from master and from this branch; every memory stick a fresh folder
+outside the repository).
 - **Kingdom Hearts Birth by Sleep Final Mix**, batch 04's presses from its title state (`st-title.bin`, `inst.txt`):
   the dialog installs at frame 1828 (2 files, 91,859 bytes, one Update); the game's own screen counts "DATA INSTALL
   5%" to "96%" while its thread copies BBS1.DAT, then "INSTALLATION COMPLETE" (frame 14,500). ULJM05775DATA holds
@@ -15788,7 +15787,7 @@ sticks, the clock pinned): the same files byte for byte and the same savedata re
   written through the link, onto a file of the same name behind it if there is one. The checks narrow it to that
   window. Closing it fully needs openat-style I/O (each name opened in a folder already held open, never looked up
   again), which `std::filesystem` and the streams don't give.
-- Scratch: `~/phobos-work/scratch/gamedata-install` (`NOTES.md`; `disclist/`, a scratch lister of a disc image's
+- Scratch: kept outside the repository (`NOTES.md`; `disclist/`, a scratch lister of a disc image's
   folders; `insdir-survey.txt`; `imports-survey.sh` and `survey/`; `kh/` with the dump, `code.dis` and the runs;
   `gunhound/`; `7d/`; `beforesrc/` and `tests-before-*.log`, the tests on master; `beforesrc2/` and
   `r2-tests-before.log`, the second round's tests on `1fbabdf43`; `diskfull/`, the disk filling during a copy;
@@ -15803,7 +15802,8 @@ each triangle, the same draws in the same order, so Vulkan (fast), Vulkan (accur
 same frames, VRAM, RAM and machine state as master (checked below). Save states unchanged (no field added).
 
 **The problem.** The coordinator's bisect on the RP6 (14 Oct, the headless runner built for Android (#255), the
-emulation thread, Vulkan fast, 600 frames, medians of three rounds taking turns; `runner-android/runs/sb-*`): #253 (part
+emulation thread, Vulkan fast, 600 frames, medians of three rounds taking turns; the `sb-*` runs, kept outside the
+repository): #253 (part
 92) took 1.4% of the instructions out of Super Monkey Ball's story scene (50,000 PRIMs a frame) but added 3.3% cycles
 and 2.5% CPU time; Chains of Olympus's difficulty menu −1.3% instructions, +1.9% cycles, +4.5% CPU time; #254 (part 93)
 0.6% more cycles in Monkey Ball. On the Mac's M1 #253 was a clear win. The X3's counters (each beside the pinned
@@ -15861,7 +15861,8 @@ ms (−2.5%); Chains of Olympus 106.1 → 103.6 (−2.4%), 9.89 → 9.81 ms; Arm
 
 The RP6 (the coordinator's session of 15 Oct, `ge4a-rp6.sh`: the owner's usual profile, performance mode 2, the X3
 held at 3.19 GHz, the GPU at 615 MHz, as every table before 14 Oct's restart; 600 frames, Vulkan fast, three rounds
-taking turns, Monkey Ball four; medians; `runner-android/runs/ge4a-*`, `counters.py`), the emulation thread a frame,
+taking turns, Monkey Ball four; medians; the `ge4a-*` runs and `counters.py`, kept outside the repository), the
+emulation thread a frame,
 master `cc0638372` → `88cbac19e`:
 
 | scene | CPU ms | M instructions | M cycles |
@@ -15924,7 +15925,7 @@ again on each commit's Android build (`syms.py`, `llvm-objdump`): `begin()` call
 differs; the screen triangle's calls (`recordMeshState()`, `newMeshDraw()`, `Pile::grow()`) only on their slow paths.
 CI: the draft PR's checks.
 
-**Kit.** `~/phobos-work/scratch/ge-round4/part-a` (`NOTES.md`): the bench and hash kit (round 3's, the scenes linked),
+**Kit.** Kept outside the repository (`NOTES.md`): the bench and hash kit (round 3's, the scenes linked),
 `paths-patch.py` (the paths counted), `syms.py` (the X3's function sizes), the RP6's `ge4a-rp6.sh`, `counters.py` (the
 runs' stall shares, refills, faults and switches beside the runner's table), `rp6-profile.sh` (simpleperf on the RP6
 for a run made already: its command line again with the build's unstripped binary, counted, then sampled; its report
@@ -16103,7 +16104,7 @@ and one grown).
   no refusal for a writer: 3; a readied EDATA's key answered 0 unchecked: 4. The branch (`aadc5140a`): 570 groups,
   0 failures.
 
-**Games** (`~/phobos-work/scratch/pgd-stick`: master's runner and the branch's, built from `bd4b4c058`'s code before two
+**Games** (kept outside the repository: master's runner and the branch's, built from `bd4b4c058`'s code before two
 comments changed; the runner's file I/O trace, the clock pinned, deep play's boot scripts; the sticks APFS
 copies of #261's installed ones).
 - Gunhound EX (6000 frames, the boot script to Mission 01): master's key for the first installed file answers
@@ -16199,7 +16200,7 @@ dialog (the branch's runner and master's, built from `1d62fed2d` and `1c75c5600`
 - Black Wolves Saga's install isn't run here (it opens it as Gunhound EX does).
 - Part 97's: SetupKey ignoring the 0x40000000 flag, its error returns, the ECDSA and licence checks, drm types other
   than 1, and real DLC.
-- Scratch: `~/phobos-work/scratch/pgd-stick` (`NOTES.md`; `refs/`, the decompilation and PPSSPP's file read;
+- Scratch: kept outside the repository (`NOTES.md`; `refs/`, the decompilation and PPSSPP's file read;
   `run-game.sh`, `gunhound/` and `7d/`, the installed games' runs; `compare-reads.py`, the reads paired;
   `gunhound/disc-insdir`, `cases.txt` and `harness-disc-vs-stick.txt`, the disc's copies read (through a scratch test
   group, not committed: `disc-with-harness.cpp`); `umd.sh`, `compare-umd.sh` and `runs/`, the UMD games;
@@ -16222,8 +16223,7 @@ Ball Adventure 35.6 → 26.3, Army of Two: The 40th Day 42.5 → 25.6, Colin McR
 shots had the GPU 93-98% busy at 615-680 MHz and the CPU at 7-19%.
 
 **What grows with the resolution** (the M1, MoltenVK, Vulkan fast, late frames as the app presents them, 120 frames;
-a scratch build with a timestamp query before each pass of draws and each other command, `~/phobos-work/scratch/
-psp-hires/patches/gputime-patch.py`):
+a scratch build with a timestamp query before each pass of draws and each other command, `gputime-patch.py`):
 - Nothing on the CPU: no finish or read back a frame, the CPU's conversions under 0.1 ms a frame, the emulation
   thread's instructions flat from 1x to 5x (Chains of Olympus 100 → 107 million); the CPU waits for the GPU.
 - The GPU's milliseconds a frame, 1x → 5x, are the passes of draws: Chains of Olympus 18.5 → 138.6 (passes 10.0 →
@@ -16490,7 +16490,7 @@ timed around sceGeDrawSync) and geTime() from them: GE timing, not the renderer'
   time the same), so not made.
 - A 2D corner's depth past 0-65535 is clamped per pixel on the GPU (the software renderer holds each corner's), as
   before.
-- Scratch: `~/phobos-work/scratch/psp-hires` (`NOTES.md`; `patches/`, the measurement builds' patches and the fix
+- Scratch: kept outside the repository (`NOTES.md`; `patches/`, the measurement builds' patches and the fix
   round's mutations, `mutations-patch.py`; `rp6/`, the RP6 builds, `hires-rp6.sh` and its table, `hires-pr-rp6.sh`,
   this branch against master, and its table and states, `hires-takes-rp6.sh`, the targeted image-copy check, from the
   library scan `scan-takes.sh` and `gen-takes-list.py`; `rp6b/`, the fix round's build and its scripts; `logs/`, the
@@ -16641,8 +16641,8 @@ the rounds' own spread.
 
 ### Phobos's tables
 
-The six scenes the owner is capturing, from their states (`~/phobos-work/scratch/cpu-round3/scenes`, ahr-legal
-`psp-hires/scenes`), the branch's runner, the software renderer, 900 frames with the profile from frame 301 (10 s;
+The six scenes the owner is capturing, from their states (kept outside the repository),
+the branch's runner, the software renderer, 900 frames with the profile from frame 301 (10 s;
 ahr-legal, from frame 240 of a boot, 360 frames from its first, the copyright screen its first 2.7 s), each table
 `geprof.py` (`--counts --lists`). A loop is what the game does for each frame it draws; the frames, its flips
 (Killzone sets one frame buffer each time, applied at the next vblank: its calls, of which it shows one each vblank,
@@ -16671,7 +16671,7 @@ CPU in sceGeListSync 838 ms a second); so a PSP's 28 ms a loop had to be its GE'
 times the model's 6.27 ms over the same list (4.16 M pixels): about 0.9 pixels a bus clock, not four. Part 64's "Left"
 guessed it; the psp-hires agent's estimate (a pixel a clock, 0.65 scenes a vblank) came close.
 
-**The owner's captures** (capture mode, plugin 0.2.0, `~/phobos-work/scratch/psp-ge-profile/captures`): Chains of
+**The owner's captures** (capture mode, plugin 0.2.0, kept outside the repository): Chains of
 Olympus's difficulty menu (UCUS98653-5: coo-diff itself); Ghost of Sparta's main menu (UCUS98737-1) and two later,
 busier scenes (-2, -3); Super Monkey Ball's Story Mode (ULES00364-1, a system dialog at its end); Killzone's gameplay
 (UCUS98646-1, -2); Activision Hits' whole copyright screen from the boot (ULUS10186-boot2), a first boot capture cut
@@ -16750,7 +16750,7 @@ screen, which never sync, a loop's whole time):
   (mode 0) or don't sync.
 - The plugin's lines in PLUGINS.TXT: ARK-4's r205 source matches several IDs on a line, but the owner's PSP loaded it
   only from a line of one; one a line is what the README asks.
-- Scratch: `~/phobos-work/scratch/psp-ge-profile` (`NOTES.md`; `stick/`, the owner's files; `stick-diag/`, the load
+- Scratch: kept outside the repository (`NOTES.md`; `stick/`, the owner's files; `stick-diag/`, the load
   test's; `ref/`, the references read; `phase2/`: `profile.sh` and `run_all.sh`, the scenes' profiles, `out/`, their
   captures, tables and JSON, `summary.py`; `psp/`, the owner's captures as they came, their tables and JSON;
   `compare.py`, the two side by side; `offcost/`, the Off cost's builds and runs; `phase5/`, everything decoded again
@@ -16841,13 +16841,13 @@ a bus over 167).
 
 ### Scratch
 
-In `~/phobos-work/scratch/psp-ge-profile/`: `power/` (`ahr-boot.sh`, the traced boots; `ahr-boot.log`, the last);
+Outside the repository: `power/` (`ahr-boot.sh`, the traced boots; `ahr-boot.log`, the last);
 `ref/uofw-power` (uOFW's power branch at `f7ed03aa7`), `ref/uofw/src/kd/init/init.c`, `ref/ark4-r205/README.md` and
 `contrib/SETTINGS.TXT`, `ref/ark4-src` (ARK-4's sources at `7c03c37`) and `ref/ark4-r205-clock` (r205's clock files,
 the same); the boot captures `captures/ULUS10186-boot1-cut.bin`, `-boot2.bin`, `-menu.bin`; `phase3/ahrstart.sh` (the
 game from boot in #269's runner, its GE profiled and its files traced). The review's library trace (every power call
 the 266 games make in their first 1200 frames, replayed through master's and this branch's rules: no answer changed)
-is in `~/phobos-work/scratch/review-267/trace/`. Nothing was run on the RP6.
+is kept outside the repository. Nothing was run on the RP6.
 
 ## Part 105: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins
 
@@ -16932,8 +16932,8 @@ library's presses):
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/sync/` (this part's draft) and `tests.sh` (the suites as the load rules let
-them run); the review's runs, mutations and experiments in `~/phobos-work/scratch/review-268/`. Nothing was run on
+Outside the repository: `sync/` (this part's draft) and `tests.sh` (the suites as the load rules let
+them run); the review's runs, mutations and experiments beside them. Nothing was run on
 the RP6.
 
 ## Part 106: the GE's time as the owner's PSP took it — its two ends and the queue between them, fitted to rounds 6, 8, 9 and 10, the option "GE Timing"'s default ("Fast" the opt-in); the gate against the owner's captures, each scene by its whole frame; a SIGNAL's interrupt at its time
@@ -17435,13 +17435,13 @@ thread's second pull request to weigh; nothing here is built):
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/refit/`: `FINDINGS-1.md` (round 8 against the first model), `terms.sh` and
+Outside the repository, `refit/`: `FINDINGS-1.md` (round 8 against the first model), `terms.sh` and
 `terms/` (the runners' terms and results: `terms2-*` gave the fit, `fit-terms2.txt` its output), `psp-results/`
 (rounds 6 and 8 unpacked from the repository), `valid.sh` and `scenes/`, `gate-gate1.txt` (the table), `bench/` and
 `final/` (the cost against master, the exact check, the suites' summaries), `final.sh`; the master merge's
 `merge.sh` and `merge/` (the suites, the ares tests, the exact checks with the GE thread off and on, `pspthread/`),
 `gate-gate2.txt` (the merged head's table) and `sceneterms/` with `sceneterms.py` (the failing scenes' terms); the
-first model's in `../phase3/`. The review's in `~/phobos-work/scratch/review-269/`. Round 9's refit: `terms9.sh`
+first model's in `../phase3/`. The review's is kept beside them. Round 9's refit: `terms9.sh`
 (a runner built with `ge-terms.py`, then rounds 9, 8 and 6 from round 9's EBOOT), `terms/terms3-*` to `terms8-*`
 (`terms8` the final constants' runner, its fit `fit-terms8.txt`, the fit's fixed point), `diag9.py`, `fitstats9.py`
 and `ours9.py` (the fit's and the core's misses by case and round), `gate-refit9.txt` and `scenes/refit9-*` (the
@@ -17685,7 +17685,7 @@ program and that model, and comes once both are in.
   104) merged in, 579 groups, 0 failures; with master `230c0a731` (part 105), 582 groups, 0 failures; with round 8's
   results and `time-lists`' fix (`pspmeasure.elf` rebuilt), 582 groups, 0 failures. The program builds without a
   warning (`-Wall`). Master `fe3deab82` (parts 108 and 109) merged in at this pull request's turn to land: only the
-  docs met. The review (`~/phobos-work/scratch/review-270/REVIEW.md`: approve with should-fixes) found this part's
+  docs met. The review (`REVIEW.md`, kept outside the repository: approve with should-fixes) found this part's
   account wrong in places: the record count, the stall's story, the jump's range, the bus clock, the texture
   statements' conditions, TEX_MODE, the pixel rate, and the request that the owner run `time-lists` again: put
   right above; `pspmeasure.elf` is unchanged (comments only in `ge.c`, `cpu.c` and `measure.h`).
@@ -17696,11 +17696,11 @@ program and that model, and comes once both are in.
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/phase3/` (`terms.hpp` and `terms.patch`, the scratch counts, applied to
+Outside the repository, `phase3/` (`terms.hpp` and `terms.patch`, the scratch counts, applied to
 #269's runner only for its build; `out/terms-*.log`, the tables above); `round8/` (the test's logs, `ours/` the core's
 round 8 files, `r8dump.py` to read them, `EBOOT.PBP` as built); `results-1018/` (the owner's run as he sent it),
 `refit/` (`r8.py`, `repeat6.py` and `FINDINGS-1.md`: the results above), `r8fix/` (the program rebuilt with
-`time-lists`' fix, and its `EBOOT.PBP` for the PSP); the review in `~/phobos-work/scratch/review-270/`. Nothing was
+`time-lists`' fix, and its `EBOOT.PBP` for the PSP); the review beside them. Nothing was
 run on the RP6.
 
 ## Part 108: the display's frame buffer for the next vertical sync — sceDisplaySetFrameBuf's sync 1 shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second)
@@ -17758,9 +17758,9 @@ lands second renumbers its layout to 34).
 
 ### What it does
 
-- Every scene of both libraries (34, `cpu-round3/scenes` and `psp-hires/scenes`), the bench runners against master,
-  100 frames from each state, in Software, Vulkan and Vulkan-fast: 31 the same as master in every frame's picture
-  and VRAM and the RAM after, in all three. Three change, the same way in all three renderers:
+- Every scene of both libraries (34, CPU round 3's and the hi-res work's, kept outside the repository), the bench
+  runners against master, 100 frames from each state, in Software, Vulkan and Vulkan-fast: 31 the same as master in
+  every frame's picture and VRAM and the RAM after, in all three. Three change, the same way in all three renderers:
   - Army of Two's gameplay and menu: every frame, and the RAM: its pacing (below).
   - Death Jr. II's character screen: every frame's picture the same; the VRAM in alternate frames (50 of 100) and
     the RAM: its vertical blank handler flips for the sync as the blank starts and reads which is shown, once on
@@ -17876,7 +17876,7 @@ lands second renumbers its layout to 34).
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/latch/`: `latchcheck.sh` (the blank's start taken as the moment) and
+Outside the repository, `latch/`: `latchcheck.sh` (the blank's start taken as the moment) and
 `latchcheck2.sh` (the sync) and `latchcheck3.sh` (the sync for a frame buffer set in the blank, the blank's start
 for one set before it), their `summary.txt` (its "VRAM" and "picture" swapped: each hash line is the frame, the
 picture, the VRAM), `hashes/` and `pacing/` (each scene's display calls, traced with `phase3/calltrace-patch.py`) in
@@ -18164,7 +18164,7 @@ palettes loaded with no sprite between nothing but their list, and `time-lists2`
 ### For the owner's GE profiler plugin (not this program)
 
 The gate judges a scene only where Phobos has a state of the moment captured. Two captures at moments Phobos has states
-of (`~/phobos-work/scratch/cpu-round3/scenes`), each 10 seconds or more, the plugin in capture mode:
+of (kept outside the repository), each 10 seconds or more, the plugin in capture mode:
 
 - **Activision Hits Remixed's 3D main menu** as `ahr-menu` has it: the menu idle, Atlantis's box on the left and its
   game on the television, the cursor on Play, nothing pressed, once the camera has settled. The first capture
@@ -18337,7 +18337,7 @@ No model changes here: the refit is #269's. Against the gate's rows that fail:
 
 ### The fix round (#270's review)
 
-#270's review (`~/phobos-work/scratch/review-270/REVIEW.md`, approve with should-fixes) left one change to the
+#270's review (`REVIEW.md`, kept outside the repository, approve with should-fixes) left one change to the
 program for this pull request, which carries `cpu.c` to the owner's PSP next (its should-fix 10), and two small
 ones with it; #270's own fixes (part 107's account, comments) and master `fe3deab82` (parts 108 and 109) came in
 with #270's head `502bd680a`.
@@ -18376,7 +18376,7 @@ with #270's head `502bd680a`.
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/round9/` (`build/` the program as built, `EBOOT.PBP` and `EBOOT.PBP.sha256` the
+Outside the repository, `round9/` (`build/` the program as built, `EBOOT.PBP` and `EBOOT.PBP.sha256` the
 copy for the PSP, `measure-r9*.log` the test's runs, `ours*/` the core's round 9 files, `estimate.py` the time on the
 PSP from round 8's medians, `scenes/` the two states' frames for the plugin's captures, `r9results.py` the results
 above, `build-fix/` the fix round's program, `EBOOT-run-2026-10-18.PBP` the one the owner ran); `results-r9/` (the
@@ -18930,7 +18930,7 @@ finished; the contention thread's turns and their time wherever it ran, and noth
 ### What the PSP showed (the owner's run, 2026-10-18 evening)
 
 The owner ran round 10 (EBOOT `31364afe…`) and then, to be thorough, every earlier round again in the same session; the
-coordinator pulled the folder from the RP6 (`~/phobos-work/scratch/psp-ge-profile/results-r10`: 227 files, each one's
+coordinator pulled the folder from the RP6 (kept outside the repository: 227 files, each one's
 sha256 the device's). Round 10's nine files hold the records the tables give (time-anchors2 42, time-lights 230,
 time-clut32 88, time-widetri 72, time-perspective 192, time-mipmaps 88, time-vram8 240, time-contention 754,
 time-contention2 104), every run finished, no `.stalled` of round 10's (the five there are rounds 4 and 5's known
@@ -19082,7 +19082,7 @@ For #269's agent (1fd9133c) to fit; no model change here.
 ### Round 10b: polling, before and beside, and placement
 
 A top-up the owner runs the same night, as #269's agent specified it for the refit
-(`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-10b-1fd9133c.md`): the two CPU patterns that came after round 10
+(`SPECS-10b-1fd9133c.md`, kept outside the repository): the two CPU patterns that came after round 10
 was built, and placement as a case of its own. Its own menu line (the first: "Round 10b: the CPU polling, before and
 beside; placement"), its own files and `manifest10b.txt` (nothing of round 10's touched), round 10's framework and
 safety. From this build on the arrays the GE reads (`big`, `bytes8`, `palette`, `timed`, `texture`, `texture16`,
@@ -19113,7 +19113,7 @@ safety. From this build on the arrays the GE reads (`big`, `bytes8`, `palette`, 
 ### Round 10b's results (the owner's run, 2026-10-18 night)
 
 The owner ran round 10b (EBOOT `6fa4ca80…`, `2578e331a`'s program) the same night; the coordinator pulled it at 20:23
-(`~/phobos-work/scratch/psp-ge-profile/results-r10b`: `time-contention3.bin`, `time-placement.bin`, `manifest10b.txt`,
+(kept outside the repository: `time-contention3.bin`, `time-placement.bin`, `manifest10b.txt`,
 each one's sha256 the device's), nothing stalled, every run finished, 180 and 56 records as the tables give. Decoded
 here (`r10.py`); #278's review decoded it too and agrees with every figure below.
 
@@ -19177,7 +19177,7 @@ here (`r10.py`); #278's review decoded it too and agrees with every figure below
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/round10/`: `SPECS-1fd9133c.md` (the cases as #269's agent specified them),
+Outside the repository, `round10/`: `SPECS-1fd9133c.md` (the cases as #269's agent specified them),
 `build/` (the program as tested), `EBOOT.PBP` and its sha256, `measure-r10.log` (the local test), `r10.py` (the decoder
 the results above came from); `results-r10/` and `results-r10b/` (the owner's runs as the coordinator pulled them, with
 the device's sums). Nothing was run on the RP6.
@@ -19479,7 +19479,7 @@ put in.
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/refit/`: `contention11-a.txt` (the fit), `core/` (the core's rounds 10 and 10b),
+Outside the repository, `refit/`: `contention11-a.txt` (the fit), `core/` (the core's rounds 10 and 10b),
 `gate-final3.txt`, `scenes/final3-*` (the gate's profiles), `bench/runs/` (the cost runs), `dcbuild.sh`,
 `termbuilds.sh`, `builds4.sh`, `contend-core.sh`, `bench/polls.sh`, `bench/final-checks.sh`; NOTES.md's entry of
 2026-10-19 01:37.
@@ -19505,7 +19505,7 @@ room as part 107: our own code; pspsdk's headers and uOFW's reading of the drive
 - **Activision Hits' menu's second list, +48.5% by #269's refit**: round 10's tiles (time-clut32 0, 3.23 ms of the
   PSP's 3.48 for the whole list) and then 60 sprites shrinking an 8888 512x512 VRAM picture 2:1, bilinear, into an 8888
   buffer: the refit charges the sprites 1.64 ms, where the PSP's list leaves them 0.22 to 0.25 (1fd9133c's
-  `SPECS-10c-1fd9133c.md`, in `~/phobos-work/scratch/psp-ge-profile/round10/`, its A).
+  `SPECS-10c-1fd9133c.md`, kept outside the repository, its A).
 - **Its third list, +26.7%**: 63 3D strips of 4 vertices magnifying an 8888 256x512 RAM texture (swizzled) about 1.9
   times, bilinear, blended, the alpha test on, into 5650. The refit reads a triangle's narrow rows wide into 16-bit
   (from round 10's copyright pass), where part 112 reads that pass's miss as bilinear on wide reads; the nearest and
@@ -19578,7 +19578,7 @@ further down). No test reads round 10c's PSP files yet.
 ### What the PSP showed (the owner's run, 2026-10-19 evening)
 
 The owner ran round 10c (EBOOT `243aa27d…`) on the evening of 2026-10-19; the coordinator pulled `results/ge` from the
-RP6 at 20:18 (`~/phobos-work/scratch/psp-ge-profile/results-r10c`: the five files and `manifest10c.txt`, each one's
+RP6 at 20:18 (kept outside the repository: the five files and `manifest10c.txt`, each one's
 sha256 the device's). They hold the records the tables give (time-contention4 118, time-shrink 36, time-magnify 56,
 time-gamestrips 24, time-anchors3 28), every run finished, nothing stalled. Their dates on the RP6 read 2026-10-18
 18:57, before the EBOOT was built (2026-10-19 13:06): the PSP's clock is most likely a day behind (not checked).
@@ -19758,7 +19758,7 @@ No timing changes here: these are for Super Monkey Ball's refit (its own pull re
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/round10c/`: `EBOOT.PBP` and its sha256, `build/` (the program as tested),
+Outside the repository, `round10c/`: `EBOOT.PBP` and its sha256, `build/` (the program as tested),
 `verify-9bcaff348/` (the rebuild from the commit), `measure-r10c.log` (the local test), `ours/` (the core's files from
 it, the GE timing "Fast"), `pr-body.md`, `r10c.py` (the decoder), `compare-r10c.py` (the PSP's files beside the core's)
 and its output `compare-r10c.txt`, `core-merged/` and `core-pre279/` (the core's runs above: the runner's files, its
@@ -19781,7 +19781,7 @@ part 113: our own code; no PPSSPP or JPCSP. Save states: layout 35, unchanged.
 - **Super Monkey Ball's frame was −20.6% with #279** (part 113). The owner accepted it as an exception for now, wanting
   it fixed ("I definitely would like to fix its behavior to fall in line with the other games weve focused on", 18 Oct,
   22:00), and #279 merged with the exception limited at −21% (his decisions of 19 Oct, about 11:08;
-  `~/phobos-work/handoff/notes/owner-decisions.txt`).
+  the coordinator's notes, kept outside the repository).
 - **Round 10c** (part 114) showed where the rest lay: list H, the game's small trilinear strips, slows beside the CPU
   only through its vertices' reads from RAM (untextured it slows the same; with its vertices in VRAM, by 2% at most),
   and the PSP's CPU slows beside such lists too, which #279's model, timing the CPU's work as if alone, didn't count.
@@ -19834,22 +19834,23 @@ part 113: our own code; no PPSSPP or JPCSP. Save states: layout 35, unchanged.
   window at or past the cap among the PSP's pairs, the simulated rounds and the scenes' 2,147 windows. H5: the hybrid
   holds; the rule puts the menu at +11.8% (its idle capture +11.4%), past the owner's +10%, so it isn't built, nor
   kept as a fallback.
-- **The record**: the command and its output are in `~/phobos-work/scratch/psp-ge-profile/smba-refit/step1/`,
+- **The record**: the command and its output are kept outside the repository, in `step1/`,
   `REAL-RUNS.md` ("The final fit") and `fit-real2/c12-real-final.txt` (sha256
   `0dab9bd2f3ac13aa9f31f884974b28c2bb44bdbe12d576ce473572cb0480309c`). Run again from this tree, the tool gives the
   same output but for its header's hash of `ge.hpp`.
-- **The design**: `~/phobos-work/scratch/psp-ge-profile/smba-refit/DESIGN-smba-refit.md` (revision 3, sha256
+- **The design**: `DESIGN-smba-refit.md`, kept outside the repository (revision 3, sha256
   `902c418679aaa8ce2d433e8fdf40bd1f6fd9532d52fbb4ffff05fe4ec683705e`), reviewed in three rounds
-  (`scratch/review-smba-design/`: NEEDS CHANGES, NEEDS CHANGES (light), then PASS in `REVIEW-r3.md`).
+  (kept outside the repository: NEEDS CHANGES, NEEDS CHANGES (light), then PASS in `REVIEW-r3.md`).
 
 ### The inputs
 
-- **The probe**: a scratch build, never committed (`wt/smba-probe` at `126223a89`, three commits on master
+- **The probe**: a scratch build, never committed (a worktree at `126223a89`, three commits on master
   `9f2d0633d`, their patches in `smba-refit/step1/`), implementing step 1's interface in `tools/psp-measure/README.md`
   ("What step 1 gives"): each busy window's sums and each list's clocks by kind and memory, from which the tool
-  predicts each judged frame. Reviewed in `scratch/review-smba-probe/`: PASS for `89ab1ef7a`, `d9138aee5` and
+  predicts each judged frame. Reviewed (notes outside the repository): PASS for `89ab1ef7a`, `d9138aee5` and
   `126223a89`, and for the real run (`REVIEW-real.md`).
-- **The gate's seven states** (`handoff/SCENES.md`; the run in `step1/REAL-RUNS.md`): Chains of Olympus draws 96% of
+- **The gate's seven states** (notes outside the repository: `SCENES.md`; the run in `step1/REAL-RUNS.md`): Chains of
+  Olympus draws 96% of
   its vertices' clocks and 90% of its list words from VRAM; Killzone 99% of its vertices from VRAM and its words from
   RAM; Ghost of Sparta 55% of its vertices from RAM and 95% of its words from VRAM; Super Monkey Ball, the 3D menu, the
   copyright screen and Army of Two read everything from RAM. Killzone is judged on its 3D list: a fixed place in the
@@ -19860,7 +19861,8 @@ part 113: our own code; no PPSSPP or JPCSP. Save states: layout 35, unchanged.
   `03446dee449b0f804d4661c4e8e1e393760899be69c4e99c6cdd48bee51daeca`, `step2/r3/COMMANDS-r3.txt`
   `2716e18f471909b3237da7609693657246ac6ee1a5dbcd64e8586b5630553791`, `step2/r4/COMMANDS-r4.txt`
   `f75ae3b5e3d87420f1406094b64a617d909723be480d69f8bb55db1253c7a887`. The fit's round 10 terms file
-  (`refit/terms/terms10h-r10.txt`) came from round 10's own program, its first menu line, `--ge-threads 2`. The tools
+  (`refit/terms/terms10h-r10.txt`, kept outside the repository) came from round 10's own program, its first menu
+  line, `--ge-threads 2`. The tools
   README's recipe, with this branch's terms-patched runner and the committed program (round 10c's, its third line),
   gives the same file but for the list addresses of its 12,737 Q lines, and the fit the same output but for the
   inputs' names and hashes.
@@ -19895,7 +19897,7 @@ are the same byte for byte, and `gate.txt` with them.
   window, is below the frame's 0.934, so a cut for each list would lower the fit's push for list 1, not raise it.
   What's left is an open hypothesis: the core charging each window the most it has owed so far (its push never falls
   back), and this branch's longer windows; neither is measured (the code review's round two,
-  `~/phobos-work/scratch/review-smba-code/REVIEW-r2.md`).
+  `REVIEW-r2.md`, kept outside the repository).
 - **The control**: master's runner, built here, gave part 113's column again but for Ghost of Sparta by a microsecond
   (28.954 against 28.96 ms): the same source built on the Mac and on this machine.
 
@@ -19929,7 +19931,7 @@ are the same byte for byte, and `gate.txt` with them.
 
 Part 113's eight polling games from boot (3600 frames, the library check's presses, Vulkan fast with late frames, the
 PSP's timing), master's runner against this branch's, both built the same way here: `tools/psp-runner/build.sh` with
-`android/measure.hpp` put in as `build-android.sh` puts it (the runners in `~/phobos-work/bin` print no measure lines),
+`android/measure.hpp` put in as `build-android.sh` puts it (the coordinator's own runners print no measure lines),
 master's from `9f2d0633d` (its emulation is `0f7c17d8a`'s). A warm-up run each (the pipelines compile on the
 emulation thread), then two rounds taking turns; the emulation thread's user-mode instructions a frame (its perf
 counters), each runner within 0.005% of itself between rounds:
@@ -19982,13 +19984,13 @@ counters), each runner within 0.005% of itself between rounds:
   round 10c against the PSP's files, within its bounds; CI requires `ge-round10c` in the release job's two lanes.
 - `gate.py`'s tests: the exception's mechanism, with a made-up entry; Super Monkey Ball's frame has none.
 
-The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `step4/r4/r2l1/`, `step6/mut/`.
+The mutations' logs: `step3/mut*.log`, `step4/*-mutation-fail.log`, `step4/r4/r2l1/`, `step6/mut/`.
 
 ### Tools
 
 - `tools/psp-measure/contention12.py` and its README: the fit, the choice, `--core` (a runner's run of the three
   rounds against measured8's bounds) and `--counters` (the counter line), from the tool's reviewed head `a2b5af99a`
-  (`scratch/review-smba-step2/`, its last round PASS in `REVIEW-real-r2.md`) with the reviews' last wording points.
+  (kept outside the repository, its last round PASS in `REVIEW-real-r2.md`) with the reviews' last wording points.
 - `tools/psp-measure/ge-terms.py` at the refit's places: two of its 21 moved (the vertices' terms beside
   `oweVertices()`'s charge by memory, the words' term before `pipeStop()`). It applies to this tree and stops on a
   broken copy, and round 10's terms file from its runner is the same as from master's script and runner.
@@ -20008,11 +20010,11 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
   review's mutations, each applied to a copy of that tree, fail that group: A with `ramClocks[0]` short by
   `Cost::Prim` (147.66 against 204.96 by hand), C with `ramClocks[1]` over by `Cost::Jump` (49.09 against 6.69) with
   the GE thread off and with it on, where CI's GE thread step's 66 groups give that one failure (the group runs the GE
-  itself, off its thread, either way; `smba-refit/step6/`).
-- The code reviewed by reading (`~/phobos-work/scratch/review-smba-code/`): NEEDS CHANGES for `94efa7d33`
+  itself, off its thread, either way; `step6/`).
+- The code reviewed by reading (kept outside the repository): NEEDS CHANGES for `94efa7d33`
   (`REVIEW.md`), its findings fixed; PASS for `ee0e44309` (`REVIEW-r2.md`), its one low finding (R2-L1, the count of
   a refused skip's turns) fixed in `bb09cefc0`; PASS for `b14ef87a0` (`REVIEW-r3.md`, 20 Oct, 19:03).
-- The independent review, with its own runs (`~/phobos-work/scratch/review-291/REVIEW.md`): PASS for `b753b3b46`,
+- The independent review, with its own runs (`REVIEW.md`, kept outside the repository): PASS for `b753b3b46`,
   four low findings, all taken in: no test caught a BEZIER's own start counted in the wrong memory (L1) or a refetch
   counted by where its command was (L2), which "the list's clocks by where they read" now does (Tests, above); the
   pull request's status lines (L3); the Hypothesis on RAM texel reads missing from Left (L4). With its suggestions 2
@@ -20036,7 +20038,7 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
   where the menu's 0.75-point gap to the fit comes from (the gate, above: an open hypothesis now), while the menu is
   0.05 points from its limit.
 - A test of the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), a follow-up from the independent review's
-  second round (`~/phobos-work/scratch/review-291/REVIEW-r2.md`, its low finding): no test catches a slip there. Its
+  second round (`REVIEW-r2.md`, kept outside the repository, its low finding): no test catches a slip there. Its
   mutation D, which charges a refetch by the memory of the word the thread has just taken (`render.segmentRam`) rather
   than by the mark's kind, passes CI's GE thread step (66 groups), the release suite with the thread On (646 groups) and
   the gate (the seven profiles unchanged). Today's code is right by reading: `front()` (list.cpp:61-71) decides once,
@@ -20048,12 +20050,12 @@ The mutations' logs: `smba-refit/step3/mut*.log`, `step4/*-mutation-fail.log`, `
 
 ### Scratch
 
-`~/phobos-work/scratch/psp-ge-profile/smba-refit/`: `DESIGN-smba-refit.md`; `step1/` (the probe's patches and runs,
+Outside the repository: `DESIGN-smba-refit.md`; `step1/` (the probe's patches and runs,
 `REAL-RUNS.md`, `fit-real2/`); `step2/` (the tool's rounds); `step3/` and `step4/` (the code's rounds: the gate's
 profiles in `gate-*/`, the suites in `final/` and `r4/`, the mutations' logs, "Fast" in `b7/`, On = Off in `r4/4d/`,
 the host cost in `r4/4g/`, the README's recipe in `r4/p6/`); `step5/` (this part's notes); `step6/` (the independent
 review's fixes: the two tests' mutations in `mut/`, the suites). The reviews:
-`scratch/review-smba-design/`, `review-smba-probe/`, `review-smba-step2/`, `review-smba-code/`, `review-291/` (the
+`review-smba-design/`, `review-smba-probe/`, `review-smba-step2/`, `review-smba-code/`, `review-291/` (the
 independent review, with its runs).
 
 ## Part 116: the polling skip widened — a semaphore taken at once and a callback check with none due, made calm

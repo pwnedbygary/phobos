@@ -366,7 +366,7 @@ shoulder, Z = small pills on both sides in landscape. The right Z starts hidden 
 portrait (four shoulder buttons don't fit one 360 dp row; the layout editor can show it).
 Host unit tests: 41 pass (`:app:testModernDebugUnitTest`, including layout overlap).
 
-**Measure (Mario vs Boo save state, 30 s, Async RDP on, RP6 `49016109`):** final
+**Measure (Mario vs Boo save state, 30 s, Async RDP on, RP6):** final
 snapshot, two runs: mean FPS 55.6 and 58.3 (emulation thread 129% and 112% of one core;
 steady stretches ~59–60). An earlier snapshot of this branch measured 58.2 / 110%. The
 same build varies this much run to run on the RP6, so no FPS change is claimed for the
