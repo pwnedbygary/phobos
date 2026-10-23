@@ -35,6 +35,43 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP tests: GCC 16's false warning in movies.cpp settled in the code, the sound frames made at their full size — 2026-10-23
+
+Branch `psp-movies-gcc16`, from master `11983f8d4`; checked on `7986aef5b`, as #301 between them touches the AppImage's
+scripts, `desktop.yml`, `LICENSE` and this file alone. A release build of the PSP tests (`PHOBOS_TESTS_MODE=release
+tests/psp/run-tests.sh`, `-Wall -Wextra -Werror` at `-O3`) stopped under GCC 16 (16.2.1 here) at a false
+`-Warray-bounds` in `tests/psp/movies.cpp`'s `movie()`, twice: each sound frame there was its 12-byte header grown to
+388 bytes with `resize()`, and with `resize()` inlined, into `movie()` at line 52 and through it into
+`mpegSoundPastItsEnd()` at line 367, GCC 16 takes the fill of the grown part for a `memset` at offset 12 of the
+12-byte buffer, past its end. That write is in libstdc++'s branch for a vector with room to spare (`_M_fill_append`
+in `vector.tcc`), which a vector made from the 12-byte header hasn't; the branch that runs allocates the bigger buffer
+first and fills that. CI's GCC 13 gives no such warning, so CI never failed, but local release builds on GCC 16 have
+needed it shown and not made an error (`-Wno-error=array-bounds`: the entries of 2026-10-20 and 2026-10-22 below).
+As GCC's earlier false warnings were, `pools.cpp`'s `-Warray-bounds` in a vector's insert among them (the CI entry of
+2026-10-13), it's settled in the code, not with a switch; the owner asked for it on 2026-10-22.
+- **The change**, in `tests/psp/movies.cpp` alone: each frame is made at its full size, 388 bytes of its fill
+  (`0x40 + n`), and its header is copied over the first 12 (`std::copy`), with a comment saying why it isn't grown.
+  The frames' bytes are what they were (below), so the tests' movies are unchanged. The plan's row 06 (release paths)
+  notes it.
+- **Checks** (GCC 16.2.1; GCC 13.3.0, Ubuntu 24.04's as on CI's runners, in Docker):
+  - `movies.cpp` alone, with the release build's flags (`-std=c++20 -O3 -ftree-vectorize -funroll-loops
+    -fno-math-errno -fno-trapping-math -g -Wall -Wextra -Werror`, its defines and include paths): under GCC 16
+    master's file stops at the false warning twice (`movies.cpp:52` and `:367`, `__builtin_memset`'s "offset 12 is
+    out of the bounds [0, 12]"), and the changed one builds with no warning; under GCC 13.3 both build with none.
+  - A frame built both ways, master's and this one's, for 1,024 values of `n`: the same 388 bytes each time.
+  - The whole PSP suite as CI's "PSP system tests, built as the app is" job first runs it, every requirement CI names
+    required, on Mesa's CPU Vulkan driver (lavapipe) alone, built with GCC 16 as it is (no `-Wno-error`): 658 groups
+    pass and 1 is skipped, as on CI ("gpu without rasterization order, barriers only where reading primitives
+    overlap", which needs a GPU reading out of order), with no warning. The 34 groups whose names hold `mpeg`
+    (`PHOBOS_TESTS_ONLY=mpeg`), `movies.cpp`'s 15 among them, built for debugging with AddressSanitizer and
+    UndefinedBehaviorSanitizer as CI's "PSP system tests" job builds them: all pass, with no sanitizer report and no
+    warning.
+- **Limits**: the suite ran on lavapipe alone, not on this machine's GPU, and only as that job's first run has it (not
+  its later two, with the GE thread on and with the PSP's GE timing). The change was built with GCC 16.2.1 and 13.3,
+  on x86-64 alone: CI builds the PSP tests on x86-64 too (`psp-core.yml`'s ARM64 lanes build the CPU's tests and the
+  runner's measurements), so nothing has built it on ARM64. A later GCC may find another false warning elsewhere.
+- **Next**: the pull request's CI.
+
 ## AppImage: the runtime pinned and checked, libfuse's source beside each build, the tools pinned — 2026-10-23
 
 From master `7986aef5b` (#298). scripts/appimage-pins.sh and scripts/check-appimage-runtime.sh (new),
