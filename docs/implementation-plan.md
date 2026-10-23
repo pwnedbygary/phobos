@@ -303,7 +303,7 @@ alone.
 | 03 | Make host test builds trustworthy | P0 | Do now | stacked on 05 | [#245](https://github.com/pwnedbygary/phobos/pull/245) |
 | 04 | Make skipped coverage explicit | P0 | Do now | stacked on 03 | [#246](https://github.com/pwnedbygary/phobos/pull/246) |
 | 05 | Run the missing host suites in CI | P0 | Do now | — | [#241](https://github.com/pwnedbygary/phobos/pull/241) |
-| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | [#247](https://github.com/pwnedbygary/phobos/pull/247); its system lane, built as the app is, in draft [#249](https://github.com/pwnedbygary/phobos/pull/249) (red: GCC 13 at -O3 -Werror rejects four of master's files) |
+| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | [#247](https://github.com/pwnedbygary/phobos/pull/247); its system lane, built as the app is, in draft [#249](https://github.com/pwnedbygary/phobos/pull/249) (red: GCC 13 at -O3 -Werror rejects four of master's files); GCC 16's false `-Warray-bounds` in `tests/psp/movies.cpp` settled in the code 2026-10-23 ([handoff](handoff.md#psp-tests-gcc-16s-false-warning-in-moviescpp-settled-in-the-code-the-sound-frames-made-at-their-full-size--2026-10-23)) |
 | 07 | Verify compiled shader artifacts | P0 | Do now | — | [#239](https://github.com/pwnedbygary/phobos/pull/239) |
 | 08 | Make PSP runs reproducible | P0 | Do now (pulled forward; adapted: the runner only) | stacked on 03 | [#250](https://github.com/pwnedbygary/phobos/pull/250) |
 | 09 | Automate PSP throughput comparisons | P0 | Later | 08 | — |
