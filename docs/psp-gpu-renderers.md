@@ -837,7 +837,7 @@ layout 15 to 17. Peace Walker's title wouldn't load (its program hash no longer 
 | Liberty City Stories, park edge | 77.4% | 397,544 | 3,145 | 1,588 |
 | Liberty City Stories, woods | 82.2% | 333,806 | 5,163 | 2,207 |
 
-After part 49: the six scenes remade at StateVersion 17 (`~/phobos-work/scratch/cpu-speed/scenes`; the race and the
+After part 49: the six scenes remade at StateVersion 17 (kept outside the repository; the race and the
 city with the accelerator held, the city in place of the park's edge; Peace Walker's title loads again), 10 frames
 each. On the RP6 from adb's shell, the runner gets the system's driver (Qualcomm's), not the app's: the app hands the
 core the Driver Manager's driver through libadrenotools. Qualcomm's driver has no rasterization order and reads

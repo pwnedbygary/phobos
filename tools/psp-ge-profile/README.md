@@ -201,8 +201,8 @@ lines, it never overwrites).
 
 ## The scenes to capture
 
-The six scenes Phobos measures from save states (`~/phobos-work/scratch/cpu-round3/scenes` and
-`~/phobos-work/scratch/psp-hires/scenes`), and two more where part 76's model of the GE's time changed what Phobos
+The six scenes Phobos measures from save states (kept in the coordinator's scratch folders, outside the
+repository), and two more where part 76's model of the GE's time changed what Phobos
 draws (step 6 above). Each is captured with nothing pressed unless it says otherwise, as Phobos runs them.
 
 | Scene | Game (the copy Phobos used) | How to get there | During the capture |
@@ -441,12 +441,12 @@ every change to `decoder/`: all but the plugin's capture, as `make hosttest` nee
 ## Building
 
 `make` in `plugin/`, with pspdev's toolchain on the PATH (`psp-config`), gives `phobosprof.prx`. On the
-coordinator's Mac, pspdev's macOS release is in `~/phobos-work/tools/pspdev`; it links Homebrew's gmp, mpfr, mpc and
-zstd, which were built into `~/phobos-work/tools/deps` instead (`~/phobos-work/tools/deps-src/build-deps.sh`, then
+coordinator's Mac, pspdev's macOS release sits outside the repository; it links Homebrew's gmp, mpfr, mpc and
+zstd, which were built into a folder beside it instead (with its `build-deps.sh`, then
 `relink.sh` to point the toolchain's binaries at them), so nothing is installed globally:
 
 ```
-export PSPDEV=~/phobos-work/tools/pspdev PATH=~/phobos-work/tools/pspdev/bin:$PATH
+export PSPDEV=/path/to/pspdev PATH=/path/to/pspdev/bin:$PATH
 make -C tools/psp-ge-profile/plugin
 ```
 
