@@ -395,7 +395,7 @@ the -fs ones). The core's results already match:
 
 ### Fits from round 2's data (2026-10-08)
 
-Fitted against the round-2 files in `.local/psp-measure-2026-10-04-round3/results/vfpu` (and the round-1 / round-3
+Fitted against the round-2 files, kept outside the repository (and the round-1 / round-3
 files beside them). `compare.sh` after the fit:
 
 | test | results | exact | worst (ulps) |

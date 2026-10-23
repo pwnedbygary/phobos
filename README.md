@@ -184,7 +184,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 ### 8. The app
 
 - **Themes:** 37 of them, from Material You wallpaper colors and Phobos's gold on deep space to One Dark, Dracula, Nord, Catppuccin, Gruvbox, Rosé Pine and Synthwave '84, each with Light / Dark / Auto where it has both; style effects (glass, retrowave neon, an XMB-style backdrop), and backdrops (pixel-art scenes, manga ink, 16-bit RPG, retrowave) for the app and its screensaver.
-- **Shaders:** RetroArch Slang presets (`.slangp`) through librashader, plus color emulation, interframe blending and overscan in Settings → Video.
+- **Video:** color emulation, interframe blending and overscan in Settings → Video; its Shaders screen saves a `.slangp` preset, not yet applied.
 - **Performance Monitor:** an in-game HUD with FPS, frame times and system stats, in presets or metric by metric; press and hold it in a game to move or resize it.
 - **Library:** console illustrations drawn in the theme's colors, Platform Visibility to hide systems you don't use, and games started from frontends (below).
 

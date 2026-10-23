@@ -35,6 +35,54 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Master merged into the hotkey branch a fourth time: #301's AppImage runtime pinned and checked, and #302's docs without private local paths — 2026-10-23
+
+Branch `improved-hotkeys`, on `2c77832c3` (the entry below), with master `ac0ad694c` merged into it as a merge commit:
+the draft pull request (#294) has conflicted with master since #301 was merged (and #302 after it), in this file
+alone, and GitHub runs no `pull_request` workflow while a pull request has a merge conflict. Master's 6 commits since
+`7986aef5b`, which the third merge (two entries below) brought in, come in whole: #301, the AppImage's runtime pinned
+by its SHA-256 and checked in CI, libfuse's and type2-runtime's sources put beside each AppImage, and linuxdeploy and
+appimagetool pinned (`scripts/appimage-pins.sh`, `scripts/check-appimage-runtime.sh`,
+`scripts/package-linux-appimage.sh`, `.github/workflows/desktop.yml`, `LICENSE`); and #302, the private local paths
+taken out of the public docs and README's Shaders line corrected (`README.md`, this file, six more docs and
+`tools/psp-ge-profile/README.md`). Their two entries are below the branch's. Changed by the merge beyond what either
+side had: this file (this entry, and a blank line between the branch's entries and master's) and the hotkey row of
+`docs/implementation-plan.md`.
+- **The conflict**, one: `docs/handoff.md`, where both sides added entries at the top. The branch's 19 stay together
+  above master's, each side's in its own order and words, as the earlier merges kept them (the file less this entry,
+  the branch's 19 and the blank line after them is master's, byte for byte). Git merged on its own the other files
+  both sides changed (`.github/workflows/desktop.yml`, `README.md`, `docs/psp-gpu-renderers.md`); of the files only one
+  side changed, each is that side's, byte for byte (the 10 only master changed among them), but
+  `docs/implementation-plan.md`, whose hotkey row this merge edits.
+- **Where the two meet**: `.github/workflows/desktop.yml`, where the branch builds the desktop's host test and runs it
+  (ctest) in each job, and #301 checks the AppImage's runtime once it's packaged and uploads the runtime's sources
+  beside it; apart in the file, git merged them, the Linux job's host test before the packaging and the check after
+  it. The packaging, its tools now pinned, still packages the program alone from a build with the host test beside
+  it. In `README.md` and `docs/psp-gpu-renderers.md` each side changed other lines (#302's Shaders line and a path;
+  the branch's pause menu, and a PSP screenshot's settle and a lost GPU letting go of the window). No source the
+  programs are built from changed on master's side; `LICENSE`'s notice for the AppImage's runtime changed, and
+  `LICENSE` goes into every package the builds make, its test running with Android's JVM tests.
+- **Private local paths**: #302 took them out of master's docs; the branch's added doc lines have none by its measure
+  (home and work folders, temporary folders, the user's name, device serials, private addresses, the host's name but
+  as the OS's). Two give the Android SDK's folder in a toolchain list (`/opt/android-sdk`, a system folder, no
+  user's), kept as #302 kept the SDK's and the JDK's default locations.
+- **Checks** (CMake 4.4.4, Ninja 1.13.2; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The desktop: the program and the host test were up to date (Ninja found nothing to build but FFmpeg's step, which
+    always runs); ctest passes, and the host test, run on its own, prints 220 checks, 0 failed.
+  - The Linux job's packaging, as the merged workflow runs it: `scripts/package-linux-appimage.sh build/linux-x64`
+    made the AppImage, its .zsync and the runtime's three source files (linuxdeploy 1-alpha-20251107-1 and
+    appimagetool 1.9.1, as pinned), and `scripts/check-appimage-runtime.sh` on it printed "The runtime is the pinned
+    build, with libfuse 3.15.0 and squashfuse 0.5.2". The AppImage holds the program, not the host test.
+  - Android: both flavours' JVM tests pass (461 each, `LicenseNoticesTest`'s 6 among them), and the legacy debug APK
+    builds (32,669,611 bytes, SHA-256 `86329e5c671c1c81490863fb86ced8cf651592c11984f53ac94f7f5c067c97c5`), its
+    `assets/licenses/LICENSE.txt` carrying #301's text.
+  - Not run again: the PSP suites and the PSP core's system tests (the third merge's entry has them), since no file
+    they build changed since.
+- **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull
+  request's CI builds the desktop program and runs its host test); the AppImage was made here, on CachyOS, not on
+  CI's Ubuntu runner, and wasn't run.
+- **Next**: the pull request's CI on the merge; and the entry below's Next, less the merge and its CI.
+
 ## A PSP system dialog's hotkeys take a hat D-pad's directions: the dialog's window gives its hat to the hotkeys, and a direction one takes doesn't move the dialog — 2026-10-23
 
 Branch `improved-hotkeys` (#294), on `0b8416097` (the entry below). The PSP dialogs' entry of 2026-10-21 left this as a
@@ -2088,6 +2136,88 @@ machine (see Checks).
   system and its window behaviour, per-game desktop hotkeys and the slow-motion measurement, each its own reviewed pull
   request.
 
+## Docs: private local paths out, README's Shaders line corrected — 2026-10-23
+
+From master `7986aef5b` (#298). README.md, docs/handoff.md, docs/psp-core.md, docs/implementation-history.md,
+docs/neo-geo-compatibility.md, docs/performance-audit.md, docs/psp-gpu-renderers.md, docs/psp-vfpu-measurements.md
+and tools/psp-ge-profile/README.md; docs only. Why: the owner's choice of 23 Oct, to take the private local paths out
+of the public docs and to correct README's Slang claim.
+- **What**: paths on the owner's machines given as evidence (the coordinator's working folders, home folders, the
+  owner's copies beside the checkout, run outputs in temporary folders, scratch copies on the RP6) and two devices'
+  serials are rewritten as what they held, "kept outside the repository", or as a path in the repository where the
+  file is one. No number, claim or verdict changes; build instructions a reader can follow keep their paths.
+- **README.md**: the Shaders bullet promised RetroArch Slang presets through librashader, but nothing outside
+  thirdparty/ calls librashader and the Shaders screen saves a `.slangp` path that reaches only a native stub
+  (`setShader` in android/app/src/main/cpp/PhobosRunner.cpp returns true without using it); it says so now. Color
+  emulation, interframe blending and overscan in Settings → Video are applied, as it said.
+
+## AppImage: the runtime pinned and checked, libfuse's source beside each build, the tools pinned — 2026-10-23
+
+From master `7986aef5b` (#298). scripts/appimage-pins.sh and scripts/check-appimage-runtime.sh (new),
+scripts/package-linux-appimage.sh, .github/workflows/desktop.yml, LICENSE (the AppImage runtime's notice) and this
+file: the three items #296's independent review left, which the owner chose (23 Oct) to do. The notes, downloads and
+logs are kept outside the repository.
+- **What master's AppImage embeds** (Desktop Build run 39897237547, its artifact read as an archive): a runtime of
+  944,632 bytes (to the end of its section headers) naming `type2-runtime/commit/fedfad5`. With the four sections
+  appimagetool fills in zeroed (`.digest_md5`, `.upd_info`, `.sha256_sig`, `.sig_key`; 89 bytes differ, the image's
+  MD5 and the update information) it is byte for byte type2-runtime's continuous `runtime-x86_64` (sha256 617aa773…,
+  fedfad51a, 19 Oct), whose four sections are zeros. Its strings: `3.15.0`, `squashfuse 0.5.2`, zstd's `1.5.6` and
+  zlib's `inflate 1.3.2`. The job's log: linuxdeploy "1-alpha (git commit ID 07333c6), GitHub actions build 369 built
+  on 2026-10-01", appimagetool "continuous build (git version 854e19e), build 313", the runtime downloaded from
+  type2-runtime's continuous release.
+- **The pins** (scripts/appimage-pins.sh, a URL and a sha256 each; the tools' and the runtime's are GitHub's digests):
+  - appimagetool `1.9.1` (ed4ce84f…). Its continuous build is two commits on: an `APPIMAGETOOL_RUNTIME_FILE` variable
+    and a help string, neither used here.
+  - linuxdeploy `1-alpha-20251107-1` (c20cd71e…), its newest release. Its continuous build, master's, is rebuilt on
+    the 1st of each month (a cron: 07333c6 built on 1 Aug, 1 Sep and 1 Oct), so a sha256 pin on it would fail monthly.
+    The release is ten commits older (before patchelf 0.19.1 and newer binutils). Given the same unstripped program
+    and library with RUNPATH `$ORIGIN`, the two place the dynamic sections patchelf moves differently (the same
+    RUNPATH; both run), so phobos's and FFmpeg's files in the AppImage will differ in layout from master's. Given
+    master's deployed files, the release leaves them byte for byte.
+  - The runtime: type2-runtime `fedfad51a`'s build (617aa773…), given to appimagetool with `--runtime-file`.
+    type2-runtime publishes it only as its continuous build, replaced at each push (on five days in the last year);
+    its one dated release, `20251108` (dd6cebe), predates `8f39b89`'s extraction directories with mode 0700. The
+    script takes it from a copy on Phobos's v2.4.0 release, then from type2-runtime's continuous release, both checked
+    by the one sha256: with the copy uploaded, type2-runtime's next commit changes nothing; without it, that commit
+    stops the Linux job, which names the file and its sha256.
+  - Every copy is checked whenever it's used: one kept from an earlier run (build/appimage-tools) is downloaded again
+    if it isn't the build pinned, and a download is kept only if it is, as thirdparty/ffmpeg/build.sh does.
+- **libfuse's source beside each build** (LGPL 2.1, section 6): the tarball type2-runtime pins (its
+  scripts/common/install-dependencies.sh:24-25 at fedfad51a, libfuse's fuse-3.15.0.tar.xz, 70589cfd…), its patch
+  (patches/libfuse/mount.c.diff at fedfad51a, 1c7fd9e2…, the same blob as at 8f39b89) and, so the runtime can be
+  linked again with a changed libfuse, type2-runtime's source at fedfad51a (GitHub's archive of the commit,
+  e27ea3c8…, with the same patch and the build scripts; a copy on v2.4.0 tried first). The packaging script puts the
+  three in dist/; the Linux artifact carries them, and a tag's release job uploads dist/*. LICENSE's notice says the
+  runtime is pinned and where they are. The runtime's other parts (musl, squashfuse, zstd, zlib, mimalloc) ask only
+  for notices, which LICENSE has.
+- **The check** (scripts/check-appimage-runtime.sh; CI's step "Check the AppImage's runtime"; runs locally): the
+  runtime, its four appimagetool sections zeroed, must have the pinned sha256, name a prefix of the pinned commit and
+  carry `3.15.0` and `squashfuse 0.5.2` as whole strings (LICENSE's versions); it prints the commit.
+- **Checks** (on the desktop host): the check passes on master's AppImage; it fails on copies with type2-runtime
+  20251108's runtime, a byte of code changed, or libfuse's version string changed, and passes with junk only in
+  appimagetool's sections. Each of the six pins, through the packaging script's own `fetch()`: a cached copy that is
+  the build pinned is used with no download; one with a byte changed is downloaded again and checked; a wrong pin
+  fails, with or without a cached copy; a URL giving another build (20251108's runtime) is refused and the next one
+  used. libfuse's tarball unpacks as 3.15.0 and the patch applies to it. Re-packed end to end from master's artifact
+  with the pinned tools: the check passes, and the AppImage's 73 entries are master's but LICENSE. ShellCheck 0.11.0
+  clean at warning level; actionlint 1.7.12 gives master's two warnings only; `git diff --check` clean; no added line
+  over 120 columns.
+- **The .zsync and `OWD`**: appimagetool starts by changing to `$OWD` when it's set (appimagetool.c:588-599 at 1.9.1,
+  the same in master's continuous build), and zsyncmake writes the .zsync where appimagetool runs. A shell started
+  from an AppImage has `OWD` set, so from one the .zsync went there and the script stopped at its `.zsync` check. The
+  script now runs appimagetool with `env -u OWD` (CI's runners don't set it): with `OWD` set to an empty folder it
+  finishes, the .zsync in dist/ and the folder still empty, as with `OWD` unset; without the change it stops, the
+  .zsync in that folder. linuxdeploy doesn't read `OWD`: in its AppImage only the appimagetool bundled with its
+  AppImage plugin does, and the script doesn't use that plugin.
+- **The copies on v2.4.0**, uploaded on 23 Oct after the independent review's pass, to the existing release (nothing
+  replaced, and no new tag, which would start the tag workflows): `type2-runtime-fedfad51a-x86_64` (the runtime) and
+  `type2-runtime-fedfad51acc2860b2916a1eef32ba4a500ff31ef.tar.gz`, which the packaging script tries first, and
+  `fuse-3.15.0.tar.xz`, `fuse-3.15.0-type2-runtime-mount.c.diff` and
+  `type2-runtime-8f39b89e2ac31e1640b3d3f7e9a5108e6ce805fa.tar.gz`, so v2.4.0's own AppImage, whose runtime is 8f39b89's
+  build, has its sources beside it too. Each was downloaded back and its sha256 checked; GitHub's digests agree.
+- **Left**: the PR's CI shows the pinned tools, the check and the artifact's files; the first version tag after this,
+  the release upload.
+
 ## PSP Vulkan: Burnout Legends at 4x shown from the GPU, after a finish and past a texture's move — 2026-10-22
 
 Branch `cursor/psp-upscale-shown-cachy`, from master `062dd53e2`, with master `f373b9e7e` (#297 and #299) merged in.
@@ -2208,8 +2338,8 @@ both entries kept).
 
 Branch `cursor/license-notices-cachy`, from master `8d85eda9a` (#293), with master `8c2b1ddee` (#295) merged in.
 LICENSE, this file and LicenseNoticesTest.kt (three more required names); no other code, no packaging change. Notes,
-listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
-`~/phobos-work/scratch/prompts/license-notices.txt`, `license-notices-r2.txt` and `license-notices-r3.txt`).
+listings and checksums: kept outside the repository (the briefs:
+`license-notices.txt`, `license-notices-r2.txt` and `license-notices-r3.txt`).
 - **What**: LICENSE gains the notices of the third-party code inside what the builds ship: SDL 3.2.30 and the code it
   bundles, with PipeWire's SPA header code; MoltenVK 1.4.2 and the libraries in its dylib; the AppImage's runtime and
   the libraries linked into it; the NDK's libc++ in the APKs; and its "Android and Kotlin libraries" notice names the
@@ -2322,8 +2452,8 @@ listings and checksums: `~/phobos-work/scratch/license-notices/` (the briefs:
 Branch `cursor/psp-spin-tests-cachy`, from master `c837d1868` (#291), master `8d85eda9a` (#293) merged in
 (`706fc295f`). tests/psp/spins.cpp, tests/psp/ge.cpp, docs/psp-core.md (part 115's Left) and this file; no emulation
 code. The polling skip's widening, phase 2's first step: F1's tests (the design,
-`~/phobos-work/scratch/psp-ge-profile/spinwide/DESIGN-spin-widening-r2.md`), recalibrated for the hybrid. Notes,
-scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
+`DESIGN-spin-widening-r2.md`), recalibrated for the hybrid. Notes,
+scripts and logs: kept outside the repository.
 - **What**: four tests, each passing as written and failing with what it checks taken out, which master's tests all
   pass without:
   - "…its list stalled: no skip past the GE's end" (`spinsGePartway`): spinSkip()'s refusal of a skip the GE would be
@@ -2343,7 +2473,7 @@ scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
     on" (`geTimePspOneWayThreaded`): the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:762-766`; #291's delta
     review's low finding): a list in RAM JUMPing into VRAM and ending there, run without the thread and with it, its
     ramClocks[1] 3 × Cost::Command (6.69) and allClocks 6 × Cost::Command + Cost::Jump (55.78) worked out by hand, on
-    both GEs. The review's mutation D (`~/phobos-work/scratch/review-291/r2/mut/mutD-thread-refetch-by-word.diff`)
+    both GEs. The review's mutation D (`mutD-thread-refetch-by-word.diff`, kept outside the repository)
     makes the render GE's ramClocks[1] 49.09.
 - **Reaching them** (`tests/inst.sh`: a copy counting spinSkip()'s refusals by arm, never committed;
   `tests/logs/inst-*.log`): the stalled list 74,345 refusals part way and 213 skips (5,883,259 turns); two calls a turn
@@ -2373,15 +2503,15 @@ scripts and logs: `~/phobos-work/scratch/psp-ge-profile/spinwide/tests/`.
   - The part-way group's poll differs from F1's: F1 polled sceKernelGetThreadId() with one uncached read; the group
     polls sceGeDrawSync(1) through geWait(), with uncached and missing-line traffic. The change is harmless: the
     refusal is reached 74,345 times and its mutation is caught.
-- Independent review: PASS on `45eb68d3c`, with runs (`~/phobos-work/scratch/review-295/REVIEW.md`); one low finding.
+- Independent review: PASS on `45eb68d3c`, with runs (`REVIEW.md`, kept outside the repository); one low finding.
   Taken after it: L1 and suggestions 3 and 4 in the next commit; 1 and 2 left for the widening's rework of spinSkip().
 
 ## Docs and CI: the wording points #290's, #291's and #292's reviews left — 2026-10-21
 
 Branch `cursor/docs-review-followups-cachy`, from master `c837d1868` (#291). `.github/workflows/desktop.yml`,
 docs/psp-core.md (part 115) and this file; no emulation code. Sources: the delta reviews,
-`~/phobos-work/scratch/review-290/REVIEW-r2.md`, `review-291/REVIEW-r2.md` and `review-292/REVIEW-r2.md`. Notes:
-`~/phobos-work/scratch/docs-followups/`.
+`review-290/REVIEW-r2.md`, `review-291/REVIEW-r2.md` and `review-292/REVIEW-r2.md`. Notes:
+kept outside the repository, with the reviews.
 - **desktop.yml's N64 dialect check** (#290's I1): GCC's `-ftrapv` and `-fwrapv` override each other, so a later
   `-ftrapv` undoes the dialect's `-fwrapv`; the "undone later" pattern and its error name it now. The step's run: block
   as GitHub runs it, on copies of #290's stand-ins: 15 cases as expected, the 13 from before and two new, a later
@@ -2393,7 +2523,7 @@ docs/psp-core.md (part 115) and this file; no emulation code. Sources: the delta
 - **#290's entry** (I2): the recompilers count cycles a little differently in some of a game's blocks of several
   instructions, while the test's cases, one instruction under test each, count the same.
 - **#292's entry** (nits 1 and 2): the RP6's frames over 20 ms in one order, the control's then the PR's
-  (`~/phobos-work/scratch/n64-adreno/rp6/compare-292.txt`); the structure check names the store at fault, or for the
+  (`compare-292.txt`, kept outside the repository); the structure check names the store at fault, or for the
   changed module its changed constant.
 - **#291's entry and part 115** (rulings (1) and (2)): master `d82f5db6f` (#292) merged in (`0e4fa0a80`) beside #290's
   merge, and part 115's checks say what #292 changed; what the runner is built from is #291's PR body's list
@@ -2405,7 +2535,7 @@ docs/psp-core.md (part 115) and this file; no emulation code. Sources: the delta
   refetch charge, which no test catches a slip in (#291's delta review's low finding).
 - **Checks**: `git diff --check` and `git show --check` clean; no added line over 120 columns; the diff is desktop.yml,
   docs/handoff.md and docs/psp-core.md. CI's runs go in the pull request's body.
-- Independent review: PASS on `a22cb99b6`, read-only (`~/phobos-work/scratch/review-293/REVIEW.md`); one low finding.
+- Independent review: PASS on `a22cb99b6`, read-only (`REVIEW.md`, kept outside the repository); one low finding.
   Taken after it: L1 (a later `-fstrict-overflow`) and suggestion 2 in the next two commits, suggestion 3 in the body.
 
 ## PSP GE timing: the CPU beside the GE refitted, Super Monkey Ball within 15% and its exception gone — 2026-10-20
@@ -2414,7 +2544,7 @@ Branch `cursor/psp-smba-refit-cachy`, from master `0f7c17d8a` (#289), master `12
 (`a2c64338e`), master `d82f5db6f` (#292) merged in (`0e4fa0a80`). The core (`ares/psp/ge/`, `ares/psp/kernel/`), the
 runner's counter line, the PSP tests and CI's `ge-round10c`, `tools/psp-measure/` (contention12.py, its README,
 ge-terms.py), `tools/psp-ge-profile/` (gate.py, its tests and the README's line on them), docs/psp-core.md part 115 and
-this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (the design, then step 1's probe to step
+this file. Notes and logs: kept outside the repository (the design, then step 1's probe to step
 6's review fixes).
 - **What**: #279's CPU beside the GE (part 113) refitted to the PSP's rounds 10, 10b and 10c in a hybrid form: the
   front end's vertex and list-word reads by #279's rule, texels and transfers a fixed time a line; a cap at 0.75 of a
@@ -2427,21 +2557,21 @@ this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (t
 - **The gate** (part 115's table; the PSP's timing): every judged frame within 15% (8 of 8, master's 7), Super Monkey
   Ball −20.6% to −12.7% and its exception out of `gate.py`, the 3D menu +6.7% to +9.95% (its idle capture +6.4% to
   +9.6%), the median miss 9.8% (master's 6.5%). With the GE on its thread the seven profiles are the same byte for byte.
-- **Checks** (cachyOS, GCC 16.2.1; logs in `smba-refit/step4/`): on `b14ef87a0`, the release suite with the GE thread
+- **Checks** (cachyOS, GCC 16.2.1; logs in `step4/`): on `b14ef87a0`, the release suite with the GE thread
   off 646 groups, 0 failures, on 646, 0, #289's step 110, 0, the measure groups sanitized with `ge-round10c` required
   14, 0 (`r4/suite-*.log`, `r4/measure-sanitized.log`, each naming its tree); the gate (`gate-{off,on}-b14ef87a0/`);
   "Fast" against master (`b7/`); #277's On = Off sets, 260 runs (`r4/4d/`); the host cost and H6 (`r4/4g/`); the
   tools README's recipe (`r4/p6/`); the tests' mutations (`step3/mut*.log`, `step4/*-mutation-fail.log`,
-  `r4/r2l1/`). On `f7d27d438`, the independent review's two tests (logs in `smba-refit/step6/`): the release suite off
+  `r4/r2l1/`). On `f7d27d438`, the independent review's two tests (logs in `step6/`): the release suite off
   646, 0, on 646, 0, #289's step 110, 0, the measure groups sanitized 14, 0; the review's mutations A and C fail the
   new tests, C with the GE thread off and on (`step6/mut/`). Part 115 has them all.
 - **The coordinator's library check** on `b14ef87a0`: "GATE: CLEAN" at 19:42, 266 games each in Software and Vulkan
   fast, none newly failing, every exit line, none newly flat at frames 1,200 and 3,600, none more than 1.5x slower
-  (`~/phobos-work/scratch/libcheck/lib-refit.log`, sha256
+  (`lib-refit.log`, kept outside the repository, sha256
   `4ca24ff66f9983463d08c53c9a7aa9ea666225a586b218c4f2b32ff9315e76b8`). It stands for the head, which changes nothing
   the runner is built from (`ares/psp/`, `ares/ares/`, `tools/psp-runner/`, `tests/psp/ares/`, `nall/`, `libco/`,
   `thirdparty/`).
-- **The RP6 run**, the coordinator's, 20 Oct 20:03-20:16 (`~/phobos-work/scratch/runner-android/RP6-CHECK-291.txt`,
+- **The RP6 run**, the coordinator's, 20 Oct 20:03-20:16 (notes outside the repository: `RP6-CHECK-291.txt`,
   `logs/refit-rp6-table.txt`; the headless runner, Vulkan fast, the PSP's timing, two rounds taking turns), fps from
   master to this branch: Super Monkey Ball 141.38 to 151.44 (+7.1%), Killzone 165.10 to 163.13 (−1.2%), Burnout
   Dominator 112.11 to 102.50 (−8.6%), Need for Speed: Shift 123.95 to 113.62 (−8.3%), Burnout Legends 79.28 to 73.81
@@ -2460,14 +2590,14 @@ this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (t
     +10%. A round-11 case would settle it: narrow triangles streaming a RAM texture beside the streaming pattern at
     four rates (the design, r3).
   - No test catches a slip in the GE thread's own refetch charge (`ares/psp/ge/thread.cpp:764`), the low finding of the
-    delta review (`~/phobos-work/scratch/review-291/REVIEW-r2.md`): its mutation D, which charges a refetch by the
+    delta review (`REVIEW-r2.md`, kept outside the repository): its mutation D, which charges a refetch by the
     memory of the word just taken rather than by the mark's kind, passes CI's GE thread step, the release suite with the
     thread On and the gate. Today's code is right by reading; a one-way JUMP in a threaded test (a list in RAM that
     jumps into VRAM and ends there) would catch it.
     Done since: the spin tests' entry (above), whose group "ge time, the PSP's, with the GE on its thread: a list going
     one way into VRAM, its refetch where the list goes on" fails with mutation D in the release suite, CI's PSP-timing
     step and its GE-thread step.
-- Independent review: PASS on `b753b3b46`, with runs (`~/phobos-work/scratch/review-291/REVIEW.md`); four low findings.
+- Independent review: PASS on `b753b3b46`, with runs (`REVIEW.md`, kept outside the repository); four low findings.
   Taken after it: L1 and L2's tests (`f7d27d438`); L4 and section 6's suggestions 2 to 5 in the docs.
   Round two passed the whole PR at `0e4fa0a80` (`REVIEW-r2.md`). With no macOS runner for that head in six attempts it
   merged on the owner's OK on `b753b3b46`'s and `c9a2f7727`'s green macOS builds; the merge's own passed on attempt 2.
@@ -2477,7 +2607,7 @@ this file. Notes and logs: `~/phobos-work/scratch/psp-ge-profile/smba-refit/` (t
 Branch `cursor/n64-qcom-rasterizer-cachy`, from master `1257da75d` (#290). `rdp_device.cpp`, the new generated
 `shaders/rasterizer_patched.hpp`, `tools/parallel-rdp/` (its script and CI check),
 `.github/workflows/n64-rasterizer.yml` and this file; `slangmosh.hpp` unchanged. Notes and logs:
-`~/phobos-work/scratch/n64-adreno/` (`FINDINGS.md`: the trace in sections 1-2, the RP6 probes E1 and E2 in sections 8
+kept outside the repository (`FINDINGS.md`: the trace in sections 1-2, the RP6 probes E1 and E2 in sections 8
 and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS.txt` section 8).
 - **The fault**: on the RP6's stock driver (Adreno 740, driver 0676.53, compiler E031.41.03.47) N64 games run with
   sound but a black picture under "GPU Driver Issue Detected". Every pipeline made from parallel-rdp's rasterizer
@@ -2543,7 +2673,7 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   build against itself, the SMALL_TYPES=1 control the same way, no variable once, and on lavapipe once: the same
   pixels in every frame compared (25 to 30 a run). `git diff --check`, `git show --check`, no changed line over 120
   columns; actionlint: no findings.
-- **The RP6** (the coordinator's check, 21 Oct 08:20-08:29; `~/phobos-work/scratch/n64-adreno/rp6/RP6-CHECK-292.txt`
+- **The RP6** (the coordinator's check, 21 Oct 08:20-08:29; notes outside the repository: `RP6-CHECK-292.txt`
   and `compare-292.txt`): the Retroid Pocket 6 on Qualcomm's stock driver (Adreno 740, 0676.53), the app from boot
   with the N64 recompiler on, 55 s a game, its logcat and screenshots at 5 to 50 s. First the installed 215987, the
   control (#290's own APK, master `1257da75d`'s tree), then this PR's own APK 215990 over it (CI run 39520621527's
@@ -2567,7 +2697,7 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
   `1547`); the driver dialog's wording; offering the fix upstream (the owner's call); the review's suggestions 3 and
   5, which change `rdp_device.cpp`: the hook's comment naming every SMALL_TYPES=0 device, not only Qualcomm's, and an
   environment switch to skip the patch, to compare the two modules on a device without a rebuild.
-- Independent review: PASS on `3ed0a6731`, read-only (`~/phobos-work/scratch/review-292/REVIEW.md`); suggestions only.
+- Independent review: PASS on `3ed0a6731`, read-only (`REVIEW.md`, kept outside the repository); suggestions only.
   Taken after it: Low 1 and Low 2 (per-store structure, random values from all 32 bits, cleanup rounds) and the nit.
   Round two passed the whole PR at `c9a2f7727` (`REVIEW-r2.md`); its two wording nits went into #293.
 
@@ -2575,7 +2705,7 @@ and 9.8, this round in section 10; its files in `r3/`, its commands in `COMMANDS
 
 Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLists.txt`, `tests/rsp-recompiler/`,
 `.github/workflows/desktop.yml` and this file; no core code changes. Notes and logs:
-`~/phobos-work/scratch/n64-mario-tennis/` (`FINDINGS.md`, rounds two to four in `round2/` to `round4/`).
+kept outside the repository (`FINDINGS.md`, rounds two to four in `round2/` to `round4/`).
 - **The fault** (FINDINGS.md): with the recompiler on, Mario Tennis's 3D intro, Super Mario 64, Mario Kart 64, Ocarina
   of Time and Mario Golf rendered corrupt on x86-64. The RSP's recompiler calls the out-of-line `RSP::VMOV<e>` and
   `RSP::VMULQ<e>`, which read vector lanes through a pointer cast from the `r128` union (`u16()`, `element()`); GCC
@@ -2642,8 +2772,8 @@ Branch `cursor/n64-ares-dialect-cachy`, from master `0f7c17d8a` (#289). `CMakeLi
 
 Branch `cursor/ci-psp-timing-cachy`, from master `dcf2f1b2c` (#287). Tests and CI only (`tests/psp/kernel-machine.hpp`,
 `ge.cpp`, `modules.cpp`, `spins.cpp`, `.github/workflows/psp-core.yml`); the core doesn't change, so docs/psp-core.md
-has no part for it. A follow-up from #269's review (`~/phobos-work/scratch/review-269/REVIEW-r3.md`, lines 123-128).
-Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
+has no part for it. A follow-up from #269's review (`REVIEW-r3.md`, lines 123-128, kept outside the repository).
+Notes and logs: kept outside the repository (`NOTES.md`).
 - **The switch**: `PHOBOS_TESTS_GE_TIMING=PSP` (`testsPspTiming()`, tests/psp/kernel-machine.hpp) makes every kernel
   test machine that doesn't choose its GE timing start with the PSP's, the option "GE Timing"'s default since #269;
   unset, nothing changes. Machines made while a `FastTimed` lives stay on "Fast" (as an `Unthreaded` keeps the GE off
@@ -2699,7 +2829,7 @@ Notes and logs: `~/phobos-work/scratch/ci-psp-timing/` (`NOTES.md`).
   step's selection 105, 0 (26 s); the new test sanitized 1, 0, no sanitizer report; actionlint (master's two
   desktop.yml warnings only); `git diff --check`. All at niceness 5 through `pinned.sh`, two compiles at once.
 - **Not run** here: the rest of the sanitized suite, tests/allegrex, tests/psp/ares (CI's).
-- Independent review: PASS on `a0dd68a27`, read-only (`~/phobos-work/scratch/review-289/REVIEW.md`), no file changes.
+- Independent review: PASS on `a0dd68a27`, read-only (`REVIEW.md`, kept outside the repository), no file changes.
   Taken after it: section 6's suggestions 2, 5 and 6 (`a23c3e8e9`); round two passed it (`REVIEW-r2.md`).
 
 ## PSP measure: ge-terms.py applies to master again, its five places where #277 left them — tools only — 2026-10-20
@@ -2714,7 +2844,7 @@ Branch `cursor/ge-terms-master-cachy`, from master `16156ab9a` (#286), master `d
   Ball refit's step 1 copy of the script (made for `9f2d0633d`) gives. The docstring says the places are master's for
   the GE thread Off: with it On, `geTime()` and `geOwe()` take the thread's branches, so the file has no R or S lines
   (and, by reading, both threads add to the counts unguarded).
-- **Checks** (cachyOS x86-64, GCC 16.2.1, Python 3.14.7; `~/phobos-work/scratch/ge-terms/COMMANDS.txt`): it applies
+- **Checks** (cachyOS x86-64, GCC 16.2.1, Python 3.14.7; `COMMANDS.txt`, kept outside the repository): it applies
   to a `git archive` of `16156ab9a` and fails closed on a missing anchor; the patched runner builds with `build.sh`
   (which compiles `psp.cpp` with `-w`; under `-Wall -Wextra` the script's added lines add no warning); Super Monkey
   Ball and Chains of Olympus from boot, 2,400 frames, the PSP's timing: master's runner and the patched one without
@@ -2722,14 +2852,14 @@ Branch `cursor/ge-terms-master-cachy`, from master `16156ab9a` (#286), master `d
   host's timings), and the terms files are step 1's byte for byte; the README's recipe ran (its folder made first, as
   `tar -x -C` needs; round 10c's built `EBOOT.PBP` for `make`: no pspdev here), and `ge-fit.py` gives `GE::Cost` back
   to its figures (61 terms of 61).
-- Independent review: PASS on `c1673609b`, read-only (`~/phobos-work/scratch/review-288/REVIEW.md`); docs findings only.
+- Independent review: PASS on `c1673609b`, read-only (`REVIEW.md`, kept outside the repository); docs findings only.
   Taken after it: L1, L2 and L3, and section 6's suggestion 1.
 
 ## CI: the sanitized PSP suite keeps the Vulkan driver loaded, so LeakSanitizer sees what lavapipe holds — 2026-10-20
 
 Branch `cursor/ci-lsan-mesa-cachy`, from master `b398e86f7` (#285), master `16156ab9a` (#286) merged in (`74b58eef2`).
 Tests and CI only (`tests/psp/run-tests.sh`); the core doesn't change, so docs/psp-core.md has no part for it. Notes
-and logs: `~/phobos-work/scratch/ci-lsan/`.
+and logs: kept outside the repository.
 - **Why**: on GitHub's ubuntu-24.04 image 20261018.339.1 the sanitized "PSP system tests" job failed at exit, after
   every group passed, on a LeakSanitizer report from frames in an unloaded module: 240 bytes in 3 allocations (a 128
   and two 56s), or the two 56s alone. 5 of 5 that finished there without the fix (`b26e0cebe`, #279's `69ea2650d`,
@@ -2768,7 +2898,7 @@ and logs: `~/phobos-work/scratch/ci-lsan/`.
   (Phobos gives Vulkan no allocator or user data). A Vulkan object Phobos fails to destroy is reported as before (the
   driver's frames named now), unless the driver itself keeps it in a static variable. The sanitized lane no longer
   exercises unloading a driver; the release lane still does.
-- **Checks** (here; logs in `~/phobos-work/scratch/ci-lsan/logs`): the GPU groups before, 240 bytes leaked, exit 1;
+- **Checks** (here; logs kept outside the repository): the GPU groups before, 240 bytes leaked, exit 1;
   after, "78 groups, 0 failures, 1 skipped" (CI's skip), no report, exit 0. A scratch copy's deliberate leaks (never
   committed: `new char[1234]` in `VulkanBackend::create`, `new char[4321]` in "memory windows"), with the fix: both
   reported (11 of the 1234 at vulkan.cpp:2237, the 4321 at memory.cpp:8), nothing of lavapipe's; the same build with
@@ -2778,13 +2908,13 @@ and logs: `~/phobos-work/scratch/ci-lsan/`.
   failures, 1 skipped", no LeakSanitizer line; master `16156ab9a` without it failed there (job 118623513419, 240
   bytes in 3 allocations).
 - **Not run** here: the rest of the sanitized suite, the release lane, tests/allegrex, tests/psp/ares (CI's).
-- Independent review: PASS on `9b18548cc`, read-only (`~/phobos-work/scratch/review-287/REVIEW.md`), wording nits only.
+- Independent review: PASS on `9b18548cc`, read-only (`REVIEW.md`, kept outside the repository), wording nits only.
   Taken after it: L1, L2 and section 6's points on the switch's values, kept drivers' libraries and unloading.
 
 ## CI: every workflow's checkout step off Node 20 — 2026-10-20
 
 Branch `cursor/ci-checkout-node24-cachy`, from master `b398e86f7` (#285). CI only, a follow-up from #283's review
-(`~/phobos-work/scratch/review-283/REVIEW.md`, its question 3).
+(`REVIEW.md`, its question 3; kept outside the repository).
 - **What and why**: the 17 `actions/checkout@v4` steps in `.github/workflows/` use `actions/checkout@v7` now, pinned
   by major tag as before (android.yml 2, desktop.yml 3, ngcd.yml 1, psp-core.yml 8, psp-ge-profile.yml 1,
   psp-shaders.yml 1, rsp-neon.yml 1); nothing else in the workflows changed. v4's action.yml declares `node20`, which
@@ -2804,7 +2934,7 @@ Branch `cursor/ci-checkout-node24-cachy`, from master `b398e86f7` (#285). CI onl
 - **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 on the seven workflows: only the two warnings master has
   (desktop.yml:189 SC2046, desktop.yml:249 SC2034); `git diff --check` and `git show --check` clean; the diff is the
   seven workflows and this file; no `actions/checkout@v4` left in `.github`. CI's runs go in the pull request's body.
-- Independent review: PASS on `0954b8800`, read-only (`~/phobos-work/scratch/review-286/REVIEW.md`); no file changes.
+- Independent review: PASS on `0954b8800`, read-only (`REVIEW.md`, kept outside the repository); no file changes.
   Its suggestion S1, the tag-push clause in "Why v7", was added after it.
 
 ## PSP GE: #277's entry after its review and library check; the GE profile's decoder files — docs only — 2026-10-20
@@ -2816,9 +2946,9 @@ Branch `cursor/docs-277-followups-cachy`, from master `9f2d0633d` (#277, merged 
   and the merge, and keeps the rest of next.
 - **tools/psp-ge-profile/README.md**: its list at the top of what's in the folder had only `plugin/` and
   `decoder/geprof.py`; it names `decoder/gate.py` (the GE timing's gate), `decoder/test_gate.py` and
-  `decoder/test_geprof.py` now, as #283's review suggested (`~/phobos-work/scratch/review-283/REVIEW.md`, its
+  `decoder/test_geprof.py` now, as #283's review suggested (`REVIEW.md`, kept outside the repository, its
   suggestion 3), and the "Files" table near its end gains `decoder/gate.py` and `decoder/test_gate.py` too.
-- Independent review: PASS on `140e156a2`, read-only (`~/phobos-work/scratch/review-285/REVIEW.md`), no changes asked.
+- Independent review: PASS on `140e156a2`, read-only (`REVIEW.md`, kept outside the repository), no changes asked.
   Its wording suggestion (S1, the README bullet's credit to #283's review) is taken after it.
 
 ## PSP GE thread, its second part: the frame shown from the GE thread, the emulation thread's work for it cut, its two threads placed, and the PSP's GE timing with it, exact — 2026-10-19
@@ -2919,14 +3049,14 @@ left it (with the thread On, the GE's timing state is the render GE's, drained f
   stretches, that one white-box: a limit short of its time only ends a go early). Part 111 lists what a stretch's
   fold reads and the checks; ThreadSanitizer, per the review, found nothing in Phobos's code (its only reports came
   from inside the GPU drivers' own threads, RADV's and lavapipe's).
-- **The fix round's review** (PASS on `fee55ee6d`, no findings; `~/phobos-work/scratch/review-277/REVIEW-port-r2.md`):
+- **The fix round's review** (PASS on `fee55ee6d`, no findings; `REVIEW-port-r2.md`, kept outside the repository):
   the reviewer's clock probe gives 6,958 µs Off and On; taking out any of the four items, or the fix round's two (the
   clock a stretch carries, the cap's fold), fails a test; the cap holds and can't hang; the docs match. It re-ran six
   games from boot, On against Off and Off against master (6 of 6 each; "Fast" 3 of 3), Resistance's spin skip,
   threaded states, the release suite (639 groups), the thread On lane (59) and ThreadSanitizer (29 groups, no report).
   The look at the merge with master's #284 (`REVIEW-port-r3.md`): PASS on `331eed9a9`, the whole PR, no findings.
 - **The library check** (the coordinator's, of `fee55ee6d` on the owner's Linux desktop;
-  `~/phobos-work/scratch/libcheck/lib277.log`): 266 games from their start with the library's presses, 3,600 frames,
+  `lib277.log`, kept outside the repository): 266 games from their start with the library's presses, 3,600 frames,
   pictures at 60, 300, 1,200 and 3,600, the PSP's GE timing, the clock fixed (`--start-time 1700000000`), Software and
   Vulkan fast on RADV. With the thread Off no game differs from master `d9bfbefb4` in either renderer, and with it On
   none differs from Off; none newly failing, every run's exit line there. (Master's emulation code was `d9bfbefb4`'s
@@ -2961,7 +3091,7 @@ part for it.
   both); "curves round 3" (a skip without `PSP_GE_RESULTS` or one of its five files, now that its reader doesn't end
   the run); "psp measure" (a skip without `PSP_GE_RESULTS` or its `manifest3.txt`, a failure where required; a
   picture missing from a round 3 folder is listed, as differences are; its reader has no `memcpy`).
-- **Test** (cachyOS x86-64, GCC 16.2.1, `PHOBOS_JOBS=2`; logs in `~/phobos-work/scratch/measured-skips/logs`): the CI
+- **Test** (cachyOS x86-64, GCC 16.2.1, `PHOBOS_JOBS=2`; logs kept outside the repository): the CI
   measure groups (`PSP_FFMPEG=0 PHOBOS_TESTS_ONLY=measure PHOBOS_TESTS_REQUIRE=programs,ge-round3,…,ge-round10b
   tests/psp/run-tests.sh`), sanitized: 13 groups, 0 failures before and after, the output the same line for line;
   release (`SANITIZE=-Wno-error=array-bounds`, for GCC 16's false warning at movies.cpp:52, not fixed here): 13
@@ -2975,7 +3105,7 @@ part for it.
   passed; after, sanitized and release, every group fails on the PSP's missing file (13 failures). "curves round 3"
   with an empty folder: before, stopped; after, a skip, and 5 failures where required.
 - **Not run**: the rest of the PSP suite, tests/allegrex, tests/psp/ares, the runner and the app builds (CI's).
-- Independent review: PASS on `e17c27607`, read-only (`~/phobos-work/scratch/review-284/REVIEW.md`), no changes asked.
+- Independent review: PASS on `e17c27607`, read-only (`REVIEW.md`, kept outside the repository), no changes asked.
   Its two wording nits are fixed after it (N1: measured6's `ours()` comment and the "What" bullet; N2: the PR body).
 
 ## CI: the GE profile decoder's tests on every change to them — 2026-10-19
@@ -3001,7 +3131,7 @@ Branch `cursor/psp-measure-round10c-2b67` (PR #280, draft), from master `08801ab
   list H (the game's small trilinear CLUT4 strips) comes out about 16% short beside the CPU, the model having it read
   RAM for 37% of its clocks. #269's refit leaves Activision Hits' menu's second list +48.5% (60 sprites shrinking a
   VRAM picture, charged 1.64 ms where the PSP leaves them 0.25) and its third +26.7% (triangles magnifying a RAM
-  texture into 5650); 1fd9133c specified both (`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-10c-1fd9133c.md`).
+  texture into 5650); 1fd9133c specified both (`SPECS-10c-1fd9133c.md`, kept outside the repository).
 - **What**: a new first menu line, round 10c (about 30 KB, `manifest10c.txt`): `time-contention4` (31: H as round 10
   drew it, nearest within the level, bilinear and nearest without levels, untextured, its vertices in VRAM, untextured
   with them there; each alone and beside streaming reads flat out and at a half and the game's mix over 256 KiB; each
@@ -3171,7 +3301,7 @@ docs/psp-core.md, part 112.
   PSP's CPU competing with the GE for RAM), Activision Hits' 3D menu (its first list −19%: spotlights with their shine;
   its second +56%: CLUT32 triangles, a format no round timed) and its copyright screen (−24%: two wide triangles into
   5650). #269's agent (1fd9133c) specified the cases from each scene's terms and a log of the games' PRIM state
-  (`~/phobos-work/scratch/psp-ge-profile/round10/SPECS-1fd9133c.md`); synthetic, nothing of a game's lists, textures or
+  (`SPECS-1fd9133c.md`, kept outside the repository); synthetic, nothing of a game's lists, textures or
   vertices in the program.
 - **What**: a new first menu line, round 10 (about 0.2 MB, `manifest10.txt`): `time-anchors2` (six of round 9's anchors;
   time-strips 37's texture at four alignments), `time-lights` (39: 1 to 4 lights of each kind, diffuse and shining; the
@@ -3250,7 +3380,7 @@ was stacked on it till then); docs/psp-core.md, part 110.
   their own; `time-state`'s case 6 named for GU's TEX_FLUSH. `pspmeasure.elf` rebuilt (`3da289db…`), the round 9
   EBOOT too (`e6b20588…`); nothing for the owner to run again. #270's head (`502bd680a`: its fixes, master
   `fe3deab82`) merged in.
-- **Review** (`~/phobos-work/scratch/review-276/REVIEW.md`, approve with should-fixes): part 110 put right where it
+- **Review** (`REVIEW.md`, kept outside the repository, approve with should-fixes): part 110 put right where it
   went past the data (CLUT8's row threshold about 270, not 295; Activision Hits' lists compared list for list; the
   shared RAM claimed for 8888 alone; five smaller figures), its context since #270 merged, part 107's corrections
   carried into its own text and `ge.c`'s comment (`pspmeasure.elf` unchanged); the owner's go-ahead for keeping
@@ -3280,7 +3410,7 @@ Branch `cursor/psp-measure-round8-2b67` (PR #270; from master `a8d5640f5`; maste
   granted at half the PLL whatever is asked. `time-lists`' case 3 never saw "stall reached" on the program's uncached
   stall addresses, ran out its run's 5 s and was taken for a stall (67 of its 80 records empty): fixed
   (`pspmeasure.elf` rebuilt); round 9's `time-lists2` (#276), the same cases with the fix, has all 80 on his PSP.
-- **Review** (`~/phobos-work/scratch/review-270/REVIEW.md`, approve with should-fixes): part 107's account put right
+- **Review** (`REVIEW.md`, kept outside the repository, approve with should-fixes): part 107's account put right
   (the record count, the stall's story, the jump's range, the bus clock, the textures' conditions, TEX_MODE, the pixel
   rate's, the sizes; no run of round 8 again asked of the owner), comments in `ge.c`, `cpu.c` and `measure.h`;
   `pspmeasure.elf` unchanged. `cpu.c`'s GE waits without a deadline, a program change, go with #276.
@@ -3401,7 +3531,7 @@ draft PR #273, with the fix rounds of its review's two rounds (each: approve wit
   (`God of War - Ghost of Sparta.chd_1792260870863.png`, 480x272).
 - **The design** (owner, 17 Oct): a pop-out like Android's own screenshot, a photo reel going into a folder icon,
   "aesthetic, but performant at all costs", with fun and whimsy. It matches the coordinator's preview
-  (scratch/screenshot-fx/preview.html): its layout, keyframes and CSS easings.
+  (preview.html, kept outside the repository): its layout, keyframes and CSS easings.
 - **The effect** (ui/ScreenshotEffect.kt): `MainViewModel.takeScreenshot`, which the pause menu's Shot and the
   screenshot hotkey both call, in every core, takes one shot at a time (a press while one is being taken and written is
   dropped). `Screenshots.save` makes the file; `PhobosCore.captureScreenshot` takes the picture, which the core keeps,
@@ -3469,7 +3599,7 @@ draft PR #273, with the fix rounds of its review's two rounds (each: approve wit
   hop; the folder's opening, shutting and sparkles; at the end everything is off to the left and transparent; never
   NaN, opacities in 0-1; no jump where keyframes meet; Remove animations still, every value; the failure's pill; the
   easings against values solved apart; the front panel's perspective; 70 values at 20 mid-span times as the preview
-  itself moves, sampled from its animations in Chrome: scratch/screenshot-feedback/golden; a note known by the pill's
+  itself moves, sampled from its animations in Chrome (samples kept outside the repository); a note known by the pill's
   time changes nothing, a late one keeps the pill's whole slide-in and its 660 ms up before the slide-off, one after
   the on-time end still gets its pill, and none at all still ends; once settled nothing but the pill and the slide-off
   moves, and `runSavedShot` holds the clock still there while a late note is awaited, taking the held time for a
@@ -3725,19 +3855,19 @@ states unchanged.
   captures of the scene itself to come): GE timing from a round of measurements on his PSP.
 - **RP6 commands** (the coordinator's; the agent never runs adb). The fix round's builds against master (master's copied
   from `rp6/bin`, the fix's `hiresfix-77143a9ff-modern`), the speed table and the frame-150 states at 5x on Turnip and
-  Qualcomm's driver: `cd ~/phobos-work/scratch/psp-hires/rp6b && QUALCOMM=1 STATES=1 ./hires-fix-rp6.sh` (about 50
+  Qualcomm's driver: `QUALCOMM=1 STATES=1 ./hires-fix-rp6.sh` in the coordinator's scratch folder (about 50
   minutes; `hires-fix-rp6-table.txt`, its "driver of fix" lines giving "image copy" and the depth format;
   `hires-fix-rp6-states.txt`); the targeted image-copy check on the fix build, the six scenes and the 8 heaviest games:
   `./hires-takes-fix-rp6.sh` there (about 30 minutes; all 237 pairs with `LIST=../rp6/hires-takes-games.txt`, about 2.5
   hours). Both run 20:28-21:21, results above. Before the fix round (run 14:55-15:20, all 60 runs exit 0):
-  `cd ~/phobos-work/scratch/psp-hires/rp6 && QUALCOMM=1 STATES=1 ./hires-pr-rp6.sh` (about 25 minutes: master's and this
+  `QUALCOMM=1 STATES=1 ./hires-pr-rp6.sh` in its own scratch folder (about 25 minutes: master's and this
   branch's measurement builds, `hiresprobe-a8d5640f5-modern` and `hiresprobe-3c20bdbf5-modern`, six scenes at 1x and 5x
   on Turnip, two rounds, Qualcomm's driver at 5x; `hires-pr-rp6-table.txt`, its "driver of pr" lines saying "image copy
   1" where the probe took the copy; `hires-pr-rp6-states.txt`, three scenes' states at frame 120 at 5x, "same" each).
-  Qualcomm's driver with plain builds: `cd ~/phobos-work/scratch/runner-android && ./rp6-compare.sh --rounds 3 --label
+  Qualcomm's driver with plain builds, in the coordinator's runner folder: `./rp6-compare.sh --rounds 3 --label
   hires-pr-ahr5x a8d5640f5 3c20bdbf5 -- "Activision Hits Remixed" --frames 300 --renderer Vulkan-fast --late-frames
-  --resolution 5 --load-state ~/phobos-work/scratch/psp-hires/scenes/ahr-legal/state` (and the same for coo-diff, its
-  state in `~/phobos-work/scratch/cpu-round3/scenes`).
+  --resolution 5 --load-state <the ahr-legal scene's state>` (and the same for coo-diff, its
+  state from CPU round 3's scenes).
 
 ## Android input: Colin McRae's dropped held Cross on the RP6 — the app's input paths replayed and cleared, an opt-in input log for the device capture that decides it — 2026-10-16
 
@@ -3746,8 +3876,8 @@ needs the RP6.
 - **The bug** (owner, 15 Oct): in Colin McRae Rally 2005 Plus (PSP core), holding Cross to accelerate while steering
   with the left stick and pressing the D-pad, Square and L or R, the game sometimes stops seeing Cross until it's let
   go of and pressed again. Not noticed in other cores; not ruled out.
-- **The core** (the session before this one, with a local trace patch kept at
-  `~/phobos-work/scratch/held-button/psp-ctrl-trace.patch`): the game reads only sceCtrlPeekBufferPositive(count 1),
+- **The core** (the session before this one, with a local trace patch kept outside the repository,
+  `psp-ctrl-trace.patch`): the game reads only sceCtrlPeekBufferPositive(count 1),
   once a frame, the newest sample, the front end's state that frame; scripted runs (Cross held 2,000 frames, the
   stick swept, Square, L, R and the D-pad tapped across it, a one-frame drop, a 70-frame release) show it follows
   Cross's level each frame. So the front end sends Cross released while it's held.
@@ -3845,7 +3975,7 @@ unchanged.
 Branch `cursor/psp-ge-round4a-2b67`, on master `cc0638372` (part 97, #259), masters `02cd1fa8c` (part 98, #260),
 `6ff82f9f1` (part 96, #258) and `462f8ff2f` (part 99, #261) merged in; draft PR #262. docs/psp-core.md, part 100, has
 the evidence. GE round 4, part A; part B (the GE's front end on a thread of its own, its design in
-`~/phobos-work/scratch/ge-round4/DESIGN.md`) comes after. Clean room: no PPSSPP code read, JPCSP not read. Nothing of
+`DESIGN.md`, kept outside the repository) comes after. Clean room: no PPSSPP code read, JPCSP not read. Nothing of
 the PSP's behaviour changes; save states unchanged.
 - **The problem** (the coordinator's RP6 bisect): #253 (part 92) took 1.4% of Super Monkey Ball's instructions but
   added 3.3% cycles (Chains of Olympus −1.3%, +1.9%), the X3's frontend stalls 8.3% → 10.1% of its cycles.
@@ -4036,7 +4166,7 @@ Kurohyou's, don't notice; one that drew it once and kept it would test against i
   at frames 30-300, no pixel more than 24 apart. The second round's 36 captures (both games, frames 30-300, all three
   renderers) are pixel for pixel the first's; the third round's too (Kurohyou 2's fast frame 90 taken a frame late in
   one run: a rerun's the same), and the fourth round's (that frame the rerun's). Sheets (before above after; Software,
-  Vulkan accurate, fast): `~/phobos-work/scratch/kurohyou/png/` `pr-k1-30-full.png`, `pr-k1-30-centre.png`,
+  Vulkan accurate, fast; kept outside the repository): `pr-k1-30-full.png`, `pr-k1-30-centre.png`,
   `pr-k1-150-centre.png`, `pr-k2-90-full.png`, `pr-k2-90-centre.png`.
 - **Hashes**: master 14b181707 against 318a7c5c2 (the kit's 21 scenes, Hammerin' Hero, Jeanne d'Arc, Cars Race-O-Rama,
   MX vs. ATV Untamed, IL-2 Sturmovik's play): Vulkan accurate and fast the same in all 26 (IL-2's pictures master's
@@ -4155,7 +4285,7 @@ PSP) and uOFW's decompilation of the rtc module; PPSSPP's sceRtc only as a desig
 
 Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR #259.
 docs/psp-core.md, part 97, has the evidence (part 96 is #258's). **The owner's area** then (open to agents since
-15 Oct: the standing note above): his PGD/EDATA proposal of 13 Oct (`~/phobos-work/scratch/pgd-offset/`: REPORT.md,
+15 Oct: the standing note above): his PGD/EDATA proposal of 13 Oct (kept outside the repository: REPORT.md,
 proposed-fix.patch), rebased at his request (14 Oct 20:30),
 to merge once CI is green and an independent review finds nothing (his approval, 21:18). Clean room: tpu's
 decompilation of the firmware's PGD layer and his edata.c and pgd.c, the PSP Developer Wiki, uOFW's names,
@@ -4244,7 +4374,7 @@ JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/
   claim was inexact) closed by matching files by identity; renames spelled otherwise than the open now carry the PSP
   path. P4 and P7 are tests; its P1 to P7 and R1 to R7 pass.
 - **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; one boot from a fresh stick reaches its
-  first level, where Sackboy walks, and a second boot takes the installed data (deepplay/LittleBigPlanet:
+  first level, where Sackboy walks, and a second boot takes the installed data (kept outside the repository:
   fixed-path.txt, sheet-fx4.png, z-fixed-install-to-level.png, sheet-fx4b.png; round 2: run-r2a, sheet-r2a.png).
   Its profile saves (18 files through its file library, each emptied as it's opened and written from its start): a
   second boot rewrites PS.BIN over the file there, a third reads it back, master's runner leaving the same files byte
@@ -4327,7 +4457,7 @@ clang's builds (Android, macOS); on GCC's (the Linux desktop) vfim of a NaN half
   528/0 (sanitized and not, nothing skipped), tests/psp/ares 340/0, the 78 hashes against master with #254 identical,
   39 of the 43 mutations caught (the same 4 equivalent); the Mac's gains the same (master -> 3081c98e2: Hot Wheels
   -26.3% host instructions, Colin McRae -7.9%, Killzone -4.2%, Monkey Ball -1.6%; 0.4 to 0.6% more than 622fd6a0f).
-- Scratch: `~/phobos-work/scratch/cpu-round3` (`NOTES.md`, `cats.py`, `mutate3.py`, `queue-hash.sh`, `queue-final.sh`).
+- Scratch: kept outside the repository (`NOTES.md`, `cats.py`, `mutate3.py`, `queue-hash.sh`, `queue-final.sh`).
 
 ## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14
 
@@ -4359,7 +4489,7 @@ code read (its GPU backend not opened), JPCSP not read. Save states unchanged. T
 - **Pictures** (mean channel difference from Software, #251 -> this, the kit's runners): the race at frames 100, 130,
   160 and 200 4.72, 5.20, 2.84 and 2.79 -> 0.16, 0.21, 0.21 and 0.22, accurate and fast alike (9-10% of pixels more
   than 24 apart -> 0.0-0.1%); Cars Race-O-Rama, the same bug, at 100, 150 and 200 1.19, 0.80, 0.76 -> 0.58, 0.54,
-  0.43 accurate, 1.21, 0.82, 0.79 -> 0.60, 0.56, 0.45 fast. Sheets: `~/phobos-work/scratch/vk-mx/out/` (`mx-final-100.png`)
+  0.43 accurate, 1.21, 0.82, 0.79 -> 0.60, 0.56, 0.45 fast. Sheets: kept outside the repository (`mx-final-100.png`)
   and `kit/look/`.
 - **Hashes** (the kit's 21 scenes, #251's three games and the race, master at 5893dbdc0 against the final code,
   bb6298e9a, 100 frames, every frame's picture and VRAM settled, then RAM and machine): Software the same in all 25;
@@ -4443,7 +4573,7 @@ code read (its GPU backend not opened), JPCSP not read. Save states unchanged (l
 - **What's left**: Monkey Ball's draws split by texture (descriptor indexing); a Look kept on the GE's side and the
   command loop (7%); fast mode's vertices read straight into models; 2D PRIMs between meshes; the software renderer's
   triangle setup. Measure on the RP6, where the driver's work is in the `vkCmd*` calls, not deferred to the submit.
-- Scratch: `~/phobos-work/scratch/ge-round3` (`NOTES.md`, `patches/gestats-patch.py`, `stats-run.sh`, `hash21.sh`).
+- Scratch: kept outside the repository (`NOTES.md`, `patches/gestats-patch.py`, `stats-run.sh`, `hash21.sh`).
 
 ## PSP Vulkan: the depth buffer as the PSP's memory, a 5551 stencil bit — Hammerin' Hero's and Jeanne d'Arc's characters, Cars Race-O-Rama's race, Colin McRae's terrain shadows — 2026-10-13
 
@@ -4469,7 +4599,7 @@ text are kept; the first holds the worktree (`LOCK-worktree`, `TWIN-NOTICE.md` b
 - **Pictures** (mean channel difference from Software at frame 100, master -> branch): Hammerin' Hero accurate 1.04 ->
   0.07, fast 2.14 -> 1.17; Jeanne d'Arc 0.27 -> 0.04 and 2.31 -> 2.10; Cars 37.08 -> 1.19 and 37.08 -> 1.21; Colin
   McRae's race (the kit's scene, the same bug: its terrain shadows, which part 83 left) 3.69 -> 0.22 and 3.93 -> 0.53.
-  Sheets: `~/phobos-work/scratch/vk-models/png/`.
+  Sheets: kept outside the repository.
 - **Hashes** (the kit's 21 scenes, master against the branch, 100 frames, every frame's picture and VRAM, then RAM and
   machine): Software the same in all 21 and the three games' (24); Vulkan accurate and fast the same in 19 of 21, the
   others Colin McRae's race (its shadows) and Twisted Metal's play (4 pixels a level apart, 2 now Software's; in fast
@@ -4491,7 +4621,7 @@ text are kept; the first holds the worktree (`LOCK-worktree`, `TWIN-NOTICE.md` b
 - **Left**: depth between depth buffers of other row widths over the same memory; the CPU's loads, block transfers and
   palette loads through the depth views, and a texture over depth through VRAM's plain copies; a 4444 frame buffer's
   INCREMENT and DECREMENT; a fail or depth-fail operation's stencil in a texture copied on the GPU.
-- Scratch: `~/phobos-work/scratch/vk-models`.
+- Scratch: kept outside the repository.
 
 ## PSP: polling loops — the polled calls in fewer steps, and a loop that comes back as it was skipped to the go's end, each skip proved — 2026-10-13
 
@@ -4547,7 +4677,7 @@ states unchanged (layout 31). Nothing a game sees changes: pictures, VRAM, RAM a
   nfsmw-profile, nfsur-title, tm-logo, dr3-intro, acff-intro, acsl-intro): the Need for Speeds, at 41-42 there held by
   the emulation thread (PPSSPP 60), should reach 60 unless the GPU's side holds them; the movies' thread a tenth of
   what it was; the rest as they were.
-- Scratch: `~/phobos-work/scratch/polling`.
+- Scratch: kept outside the repository.
 
 ## Library: every style's own take on the Systematic consoles; the glyph packs gone — 2026-10-13
 
@@ -4586,7 +4716,7 @@ the Phobos, Pixel and Manga packs' "little blobs". App only.
 - **LICENSE**: the Systematic notice names the derived art (`ConsolePixels.kt`, the tool, `ConsoleTreatment.kt`) as
   covered by it, all but the PSP's, which its own notice covers as derived from Phobos's drawing; the glyphs' notice
   is gone.
-- **Previews** (outside the repo): `~/phobos-work/scratch/themes/previews/icons-<look>-<theme>.png`, every system the
+- **Previews** (outside the repo): `icons-<look>-<theme>.png`, every system the
   Library lists on its tile, for Systematic, Glass, Neon, Pixel, RPG, XMB, Manga and CRT in two to four themes each,
   light ones among them. A local JVM test ran the real Kotlin: the pixel art exactly; the other looks over the SVGs
   as cairosvg draws them at the size the app renders them (AndroidSVG draws them the same up to antialiasing).
@@ -4689,7 +4819,7 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   - *Cost* (the Mac's JVM, warmed up, the machine quiet): 1920x1080 in 0.37-0.44 s for the cover and 0.53-0.61 s for
     Truck-kun (Speed lines 0.31-0.37 s), allocating about 27 and 35 MB (Speed lines 17 MB); once per size and theme,
     off the main thread.
-  - *Previews* (outside the repo, `~/phobos-work/scratch/themes/previews2/`): `manga-cover-*.png` and
+  - *Previews* (outside the repo): `manga-cover-*.png` and
     `manga-truck-*.png`, 1920x1080 and 1080x2400 in GitHub Light, Phobos light, Gruvbox Dark and Phobos dark, each also with a
     mock of the Library drawn over it (`*-library.png`), and `manga-cover-sheet.png` and `manga-truck-sheet.png`; from
     a local JVM test (not committed) running the real code and theme colors.
@@ -4700,7 +4830,7 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   grille are drawn over the picture at the screen's own pixels (the picture is capped at 1080p and may be scaled); a
   faint refresh band rolls down every 9 s (`RefreshBand`, 15 frames a second, off with animations off). The phosphor
   leads its color now (80% of it in the primary, 60% before) and the bloom is stronger (0.22 dark, 0.1 light).
-- **Previews** (outside the repo, `~/phobos-work/scratch/themes/previews/`): `sakura-cycle-filmstrip-*.png` and
+- **Previews** (outside the repo): `sakura-cycle-filmstrip-*.png` and
   `sakura-cycle-horizon-*.png` (every phase, and the sunset and moonrise 4 s apart), `pixel-*.png` (each scene),
   `retrowave-night-city*.png` and `retrowave-before-after.png`, `xmb-*.png`, `manga-before.png` and `manga-after*.png`,
   `crt-before.png` and `crt-after*.png`. A local JVM test (not committed) ran the real Kotlin: the Pixel art scenes,
@@ -4731,7 +4861,7 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   under the top bar's title (`XmbContrastTest` takes it now), the band's cost (`CrtUi.animatedBackdrop`, 15 frames a
   second), and MangaPage's per-pixel `hypot`s and edge scan (a 1920x1080 page now 130-320 ms). `CrtContrastTest` also
   allows for a status bar above the top bar. The magazine cover and Truck-kun had an independent review of their
-  own (the coordinator's; notes and probes in `~/phobos-work/scratch/themes/review/`): OK to merge after fixes. Its
+  own (the coordinator's; notes and probes kept outside the repository): OK to merge after fixes. Its
   blocker: `Raster` was a translation of font-rs's rasterizer (Apache-2.0) without credit, and the docs called it
   plain Kotlin; it's now credited as above. Its should-fixes: the NEW SERIES! sparkle's clamp threw on pages under
   about a thirtieth as wide as they're tall (now clamped only where the page is wider than it; the every-pixel test
@@ -5003,7 +5133,7 @@ exception, now works), only new options and new lines where they apply.
   optional minus sign, then digits, and the test refuses both kinds and takes the extremes); the bare file names
   above unsaid; frame 40's PNG, always frame 20's picture, now compared; "16 real restarts" and the README's `clock
   restarts`. Left: a scratch script outside the repository that diffs two runs' summaries would count `capture
-  seconds:`, a time, as a difference (`scratch/dialogs/compare.sh`, if it's used again: one more pattern for its
+  seconds:`, a time, as a difference (the scratch `compare.sh`, if it's used again: one more pattern for its
   filter). A third delta review (PASS; 33 edge cases run against the runner, and no press script in the scratch
   folders refused by the strict read) found three nits, all taken: two lines left short, a run missing below, and
   `-0` read as 0 though the wording said a minus sign only below 0 (now an optional one; leading zeros are read as
@@ -5365,7 +5495,7 @@ is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
 - **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, part 79's scenes: Super Monkey Ball and
   Disaster Report 3 most (a fifth to a quarter fewer instructions on the emulation thread), Colin McRae, the Armored
   Cores and the Need for Speeds 8 to 11% (Silent Line playing 19%), the GE-bound scenes 2 to 5%.
-- Scratch: `~/phobos-work/scratch/cpu-round2`.
+- Scratch: kept outside the repository.
 
 ## PSP: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio — 2026-10-12
 
@@ -5416,14 +5546,14 @@ refused versions (29, 30 and 32) and `tests/psp/states.cpp`'s older layouts (par
   before); its music is still silent. (2) Battle vs. Chess: menu and board music plays (silent before); a move is
   still refused. (3) Save and load a state in a game playing music (any ATRAC game) and in Battle vs. Chess: it plays
   on; a state made by this build is refused by builds before it (StateVersion 31).
-- Scratch: `~/phobos-work/scratch/hle-b00`; `~/phobos-work/scratch/review-b00` (the review's points: the runners, the
+- Scratch: kept outside the repository, with the review's (the review's points: the runners, the
   runs in `runs/`, the WAVs in `wav/`).
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 
 Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227, then `1d9308714`, #228).
 docs/psp-core.md, part 81, has the evidence. Items 3 and 4 of the deep-play batch 00 report
-(`~/phobos-work/deepplay/batch-00-report.md`). Clean room: pspsdk's psputility_osk.h and pspctrl.h, pspautotests'
+(`batch-00-report.md`, outside the repository). Clean room: pspsdk's psputility_osk.h and pspctrl.h, pspautotests'
 ctrl/sampling, the games' own code traced with a scratch runner, PPSSPP read only as a description of the PSP (its
 right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states unchanged (StateVersion 26).
 Begun by one agent, finished by another (the first stopped on finding the second in its worktrees); both agents'
@@ -5465,7 +5595,7 @@ commits are on the branch, and a third's with an independent review's points.
   on `04b274924`). Games with the branch's runner: part 81's last paragraph.
 - **Library**: not run by the agents (the second agent's run stopped with its session); the owner runs the 266-game
   comparison for this branch and #229 together.
-- **Review**: the first agent's independent review (`~/phobos-work/scratch/hle-b00/review-pr-a.md`: the app's keyboard
+- **Review**: the first agent's independent review (`review-pr-a.md`, kept outside the repository: the app's keyboard
   converting keys under Android's composition, a state test, comments, line breaks, a negative size on no memory) had
   its points taken in `04b274924`; a second independent review of the branch (PASS, no High or Medium) had its Low and
   Nit points taken in `e743fbcff` (all four ATRAC setters given the whole file take a negative size; the app's field
@@ -5481,8 +5611,8 @@ commits are on the branch, and a third's with an independent review's points.
   then passes into the story. (3) Japanese typed by romaji in a kana field composes normally. (4) Ridge Racer 2's
   driver name: OK on its default ("XEVIOUS" or another Namco title, in capitals) keeps it in capitals, with no line
   under the field; typing over it shows the small letters it will be entered in.
-- Scratch: `~/phobos-work/scratch/hle-b00` (runners in `bin/`, the runs in `runs/`, the library runs `lib-*`);
-  `~/phobos-work/scratch/review-b00` (the review's points: the runners, the runs in `runs/`, the scratch front end in
+- Scratch: kept outside the repository (runners in `bin/`, the runs in `runs/`, the library runs `lib-*`);
+  the review's beside it (the review's points: the runners, the runs in `runs/`, the scratch front end in
   `front/`).
 
 ## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
@@ -5564,7 +5694,7 @@ room: the games' own code and traces, pspautotests' recordings; PPSSPP read only
   choices, the never-opened handle, small cleanups) are all taken.
 - **Checks**: tests/psp 484/0 (six new font groups; the state fields' new ones; 495/0 merged with #234),
   tests/allegrex 60/0, tests/psp/ares 318/0; CI green on the merge (1d22b81c2).
-- **Scratch**: `~/phobos-work/scratch/font-b03/` on the Mac it was made on (runs, traces, comparison sheets, the scratch
+- **Scratch**: on the Mac it was made on (runs, traces, comparison sheets, the scratch
   tracer's patch), not in the repository.
 
 ## PSP: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue — 2026-10-13
@@ -5648,7 +5778,7 @@ Save states unchanged (StateVersion 26). The software renderer untouched.
   copy at each turn from one half of its strip to the other (456 a frame); accurate mode without rasterization order
   splits overlapping blended primitives (MoltenVK: Colin McRae's race 0.7 frames a second); the GE's front end in the
   3D games (Army of Two, Dirt 2).
-- Scratch: `~/phobos-work/scratch/vulkan-speed`.
+- Scratch: kept outside the repository.
 
 ## PSP: where the slow games' emulation thread goes — the GPU's palette pictures decoded where taken, code forgotten only where there is some, calm system calls, more of the CPU compiled — 2026-10-12
 
@@ -5692,9 +5822,9 @@ evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPC
   buffer's first row); the CPU's compiled code (results kept in host registers across a block, blocks linked
   directly, the VFPU in native code); a clamp of a part's fetches to its box in draw.frag, as a guard.
 - **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, the scenes in
-  `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table): Backbone's games much faster, Ghost of Sparta's menu
+  part 79's table (kept outside the repository): Backbone's games much faster, Ghost of Sparta's menu
   about a third, the Need for Speeds and the intros 10 to 20%, Monkey Ball and Army of Two about as they were.
-- Scratch: `~/phobos-work/scratch/cpu-speed2`.
+- Scratch: kept outside the repository.
 
 ## PSP: the savedata trace; After Burner's save dates, the list modes' automatic answer — 2026-10-12
 
@@ -5826,13 +5956,13 @@ software renderer's every picture, VRAM, RAM and the machine's end state are the
   over its own texture (checks in the two new texture groups fail without it). The merged branch hashes identical to
   master (`caee1a26f`) in all 24 scenes at 7 and 1 threads; the library runs are of the branch before the merges.
 - **On the RP6, to measure**: base `5b2a564fa` (2.0.0-test-1's code) against this branch, Software at 7 threads, the
-  scenes in `~/phobos-work/scratch/speed9/scenes` (a scene's `state` is an app save state's bytes; part 74's table says
+  scenes kept outside the repository (a scene's `state` is an app save state's bytes; part 74's table says
   where each is from boot): expect Killzone's menu, Death Jr. II's character select, Sonic Rivals' stage, Activision
   Hits Remixed's room, MX vs. ATV Untamed, the two Need for Speeds and the movie intros faster; the GE-bound games as
   they were. In Vulkan too for the Need for Speeds and the movie intros (the system calls).
 - **Left**: the GE-pixel-bound games (the rasterizer itself next, or Vulkan); MX vs. ATV Reflex's races and On the
   Edge's slow scene not reached; Chinatown Wars' long frames not seen on the Mac (to trace on the RP6).
-- Scratch: `~/phobos-work/scratch/speed9`.
+- Scratch: kept outside the repository.
 
 ## Version codes for 2.1 — 2026-10-12
 
@@ -5929,7 +6059,7 @@ Save states go to StateVersion 26 (15 to 25 still load).
   master's nightly-205221), named 2.0.0-psp-dialogs, signed with the repository's release key, so it installs over
   the current app keeping its data. SHA-256
   cd8f6b307d90292540bb325f7cb830badc4d03a31d894e137bdf0dbe65e80779; on the Mac (not published) in
-  `~/phobos-work/scratch/dialogs/apk-tree/android/app/build/outputs/apk/modern/release/`.
+  a scratch copy's `android/app/build/outputs/apk/modern/release/`.
 - **On the RP6, to check**: (1) Kenka Bancho, LOAD GAME on an empty stick: "There is no save data." appears over the
   game; OK (or the back button) closes it and the game shows its own error, Cancel and return goes to the title.
   (2) Ridge Racer 2's first boot: "Driver Name (7 CHAR MAX.)" opens with XEVIOUS and Android's keyboard; no more than
@@ -5950,7 +6080,7 @@ Save states go to StateVersion 26 (15 to 25 still load).
   as each kind of dialog opens (a message, the keyboard, a save list), don't touch the screen; the D-pad must move
   the ring and confirm and back must answer at once, and the keyboard must open Android's keyboard by itself. If the
   controller does nothing, logcat (tag Phobos) says "PSP dialog N: no focus, so no controller".
-- Scratch: `~/phobos-work/scratch/dialogs`.
+- Scratch: kept outside the repository.
 
 ## Merged into master: #212 to #219 — 2026-10-11
 
@@ -5995,7 +6125,7 @@ documentation and its tests, the game's own code; no PPSSPP code read, JPCSP not
 - **Left**: not checked on a PSP; rs's and rd's prefixes surviving vnop is the same rule, not seen. The report's summary
   gains a Part 72 column on the final run's numbers, and README's counts follow it (196 and 69); parts 70 and 71, on
   their own branches, add columns too (part 71 moves Final Fantasy IV to menu), so whichever merges later sums them.
-- Scratch: `~/phobos-work/scratch/mga2`.
+- Scratch: kept outside the repository.
 
 ## PSP core: a module's stop gives 0 — Kenka Bancho past its intro movie — 2026-10-11
 
@@ -6029,7 +6159,7 @@ after the two branches in flight that take parts 69 and 70 and StateVersion 26 (
 - **Left**: by uOFW a module_stop returning non-zero keeps its module running (the caller told CAN_NOT_STOP or the
   value), and a module_start returning NO_RESIDENT or an error gets its module unloaded; here neither, as before (no
   recording, no game seen needing it).
-- Scratch: `~/phobos-work/scratch/kenka`; nothing run on the RP6.
+- Scratch: kept outside the repository; nothing run on the RP6.
 
 ## PSP: savedata's files mode and PARAM.SFO — the second boot that called its save corrupted — 2026-10-11
 
@@ -6059,7 +6189,7 @@ recordings, pspsdk, PPSSPP's savedata code read only as a description of the PSP
   with its minor findings; three delta reviews, the last PASS with nothing left.
 - **Left**: no encryption (these saves don't load on a PSP; encrypted ones copied in aren't read); loads don't fill
   the icon buffers; DELETEDATA's no-save answer (outside this change).
-- Scratch: `~/phobos-work/scratch/savename` (two-boots.sh, the runners with a [save] trace, review1-4, the library
+- Scratch: kept outside the repository (two-boots.sh, the runners with a [save] trace, review1-4, the library
   runs).
 
 ## Pause menu: the running game's name beside "Emulation Paused" — 2026-10-11
@@ -6103,7 +6233,7 @@ read only as a description of the PSP's dialog threads, JPCSP not read; the PGD 
   figures.
 - **Left**: the dialog threads' borrowing of the volatile memory (PPSSPP's description, unrecorded); DBZ to run again
   on the RP6 with nothing copying onto the card.
-- Scratch: `~/phobos-work/scratch/hangs`.
+- Scratch: kept outside the repository.
 
 ## Android: a PSP section in the pause menu, and the right stick — 2026-10-11
 
@@ -6197,7 +6327,7 @@ or translated, JPCSP's not read. Save states unchanged (25).
 - **Left**: the emulation thread's many small steps (a GE on a thread of its own would take most of them off it); the
   recompiler's registers kept in memory; a 16-bit stencil's increments and decrements; WipEout's depth loads read
   memory, not the GPU's depth.
-- Scratch: `~/phobos-work/scratch/speed8`; nothing left on the RP6.
+- Scratch: kept outside the repository; nothing left on the RP6.
 
 ## Version codes for 2.x — 2026-10-11
 
@@ -6221,8 +6351,8 @@ and Black Wolves Saga is loading its opening at 3600 (it plays from about 4200).
 - **Release**: the owner merges the stack through #208 and tags v2.0.0 right after, so the README speaks of 2.0 (the
   latest release, the desktop packages with it, the PSP new in 2.0 and marked Experimental in the app) rather than of
   the nightly builds.
-- Scratch: `~/phobos-work/scratch/final` (lib.sh, `lib-top/` the run, `cmp-top.tsv` against
-  `~/phobos-work/scratch/gow-sw/lib/fix`, `diff-sheet-*.png`).
+- Scratch: kept outside the repository (lib.sh, `lib-top/` the run, `cmp-top.tsv` against
+  gow-sw's library run (`lib/fix`), `diff-sheet-*.png`).
 
 ## Library: the PlayStation Portable's own console art — 2026-10-11
 
@@ -6287,7 +6417,7 @@ unchanged (24).
   Turnip's accurate mode); `transform()`'s arithmetic (exactly, lane by lane, not attempted); the GE's real speed; two
   older GPU renderer differences found writing the tests (a 5650 target's stencil test, clear mode's full 8-bit
   stencil on 5551/4444).
-- Scratch: `~/phobos-work/scratch/speed7`; nothing left on the RP6.
+- Scratch: kept outside the repository; nothing left on the RP6.
 
 ## Android: the PlayStation Portable marked Experimental — 2026-10-11
 
@@ -6367,14 +6497,14 @@ not read.
   timed primitives "outside the scissor rectangle" drawn on screen (the timed lists' scissor spans 512 columns),
   `recip-pixels` missing 16 qs and `ge-statuses` able to run out of looks, with smaller points: all fixed; a delta
   review found the fixes right.
-- **Owner**: `.local/psp-round6/` (EBOOT.PBP SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`,
-  HOW-TO.md); not on the RP6 yet (it wasn't attached in this session: `~/phobos-work/scratch/measure6/push-rp6.sh`
+- **Owner**: a local copy (EBOOT.PBP SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`,
+  HOW-TO.md); not on the RP6 yet (it wasn't attached in this session: the scratch `push-rp6.sh`
   pushes it to `/sdcard/Download/PSPMEASURE-ROUND6` and checks the SHA-256 there, under the RP6 lock): run round 6
   (about two minutes), bring `results/ge` back to the RP6's `Download/PSPMEASURE/results`.
 - **Left**: fitting it all once the PSP's files are back (part 64's time model, lighting's multiply and cosine, every
   chord, what PATCH_CULL_ENABLE does, v past 64). In the core `recip-vertex-*` read 0 (it clamps texture coordinates at
   65536 texels; `texel-range` will show the PSP's range).
-- Scratch: `~/phobos-work/scratch/measure6` (build.sh, the pinned image's build; quick.sh, the measure group alone;
+- Scratch: kept outside the repository (build.sh, the pinned image's build; quick.sh, the measure group alone;
   times.py and topng.py read the files; share*.py, round 5's light-share taken again).
 
 ## PSP GPU: God of War in Vulkan without waiting for the GPU; part 63's open risks closed — 2026-10-10
@@ -6409,7 +6539,7 @@ drawn rectangle over): both fixed, with a test group that fails without them; th
 emulation thread at 1x (83-132 ms a frame) and by the GPU at 4x in three of the four configurations (each move a
 render pass of ten draws); MC3's menu's two moves a frame; WipEout's one finish a frame (the CPU reads the bloom's
 pixels); Killzone's menu at 4x; one rectangle of changes a target; dead and beside ranges 16 a target; GCC 11's
-maybe-uninitialized warnings in `four.cpp` (the base's too). Scratch: `~/phobos-work/scratch/gowvk`; on the RP6 only
+maybe-uninitialized warnings in `four.cpp` (the base's too). Scratch: kept outside the repository; on the RP6 only
 the fonts folder beside the harness is left, which Peace Walker's scenes need.
 
 ## PSP GE: God of War in the software renderer — the GE's time, its bloom batched, its stencil in fours — 2026-10-10
@@ -6443,7 +6573,7 @@ JPCSP's read.
   less than before.
 - **Left**: the GE's real speed (a measuring round for the owner's PSP would let the model be the PSP's rather than a
   lower bound); God of War's battle is now its pixels and the emulation thread's setup; logic operations a pixel at a
-  time. Scratch: `~/phobos-work/scratch/gow-sw`; nothing of it left on the RP6.
+  time. Scratch: kept outside the repository; nothing of it left on the RP6.
 
 ## PSP GPU: Vulkan faster — copies of what changed, a texture from two frame buffers, texels kept — 2026-10-10
 
@@ -6473,7 +6603,7 @@ room: nothing of PPSSPP's read for it, nor JPCSP's. Save states unchanged (23).
   spilling into the next buffer); LCS's every fourth frame (a list written over a picture); Killzone's menu at 4x
   (still 1,100 passes a frame); one rectangle of changes a target; no GPU test in CI; the drawing threads' settle
   giving the GPU's busy pages back to the CPU (older, the review's, untested); Peace Walker's states don't load on this
-  stack. Scratch: `~/phobos-work/scratch/vkspeed6`; nothing of it left on the RP6.
+  stack. Scratch: kept outside the repository; nothing of it left on the RP6.
 
 ## PSP GE: the software renderer faster — copies wait only for what they touch, bands listed, runs — 2026-10-10
 
@@ -6495,7 +6625,7 @@ threads, byte for byte as before. Clean room: nothing of PPSSPP's or JPCSP's rea
   Vulkan wording) were taken.
 - **Left**: God of War's 32 primitives a frame drawing over their own texture, each a drain; its menu's 28 million
   fours a frame (maybe drawn more than once a frame, the GE taking no time); MC3's race at 7 threads is the emulation
-  thread's own work. Scratch: `~/phobos-work/scratch/speed5` (God of War's two scenes, the RP6's scripts rp6-run5.sh
+  thread's own work. Scratch: kept outside the repository (God of War's two scenes, the RP6's scripts rp6-run5.sh
   and rp6-run6.sh, the logging patches); nothing of it left on the RP6.
 
 ## PSP core: Sony's plain modules, sceIoGetFdList, GETSIZE's NO_DATA, a restart with all of RAM — 2026-10-10
@@ -6522,8 +6652,8 @@ code read only as descriptions of the PSP; JPCSP not read.
   sceIoGetFdList) and a test gap (the restart's once-only guard); all its findings are fixed.
 - **Left / for others**: PGD (six games); Chains of Olympus's speed (the GE, part 61); sceIoChstat (imported by
   LIBSUPPREACC.PRX, never called in the runs); the restart and sceIoGetFdList's standard stream numbers are chosen.
-- Scratch: `~/phobos-work/scratch/hle14` (run.sh, lib.sh, survey.sh; sync-dbg.sh builds the debug tree
-  `~/phobos-work/wt/dbg-hle14` with apply-hooks.py's traces: PSP_TRACE, PSP_SAVEDATA, PSP_SFO, PSP_PROGRAM,
+- Scratch: kept outside the repository (run.sh, lib.sh, survey.sh; sync-dbg.sh builds the debug tree
+  (a worktree) with apply-hooks.py's traces: PSP_TRACE, PSP_SAVEDATA, PSP_SFO, PSP_PROGRAM,
   PSP_SAVE_MODULES, PSP_BREAK/STEP/WATCH; tools/prxinfo.py and prxdis.py read a plain PRX; lib-new is this branch's
   library run, cmp-new.tsv its comparison with hle13/lib-merged).
 
@@ -6561,10 +6691,10 @@ PPSSPP or JPCSP source read. The GE's agent worked the same list from the GE's s
   of Sparta retries a PGD file (the PGD agent's); Def Jam's first save (WRITEDATASECURE into no save: no recording);
   Crush's sceIoGetFdList (the libraries'); the runner's WAV tags carry a NUL each (the runner's); the 300 µs grain and
   the mount's 1.6 ms are chosen, not measured (pspautotests' new audio/timing probes have no recording yet).
-- Scratch: `~/phobos-work/scratch/hle13` (run.sh and lib.sh run the report's way; compare.py and pairs.py compare two
+- Scratch: kept outside the repository (run.sh and lib.sh run the report's way; compare.py and pairs.py compare two
   library runs; statecheck.sh carries a base runner's state on in both runners; quick-tests.sh builds chosen test
   groups; build-commit.py split the commits; mipsdis.py disassembles a memory dump; the debug tree
-  `~/phobos-work/wt/dbg-hle13` traces calls by frame).
+  (a worktree) traces calls by frame).
 
 ## PSP core: sceJpeg, scePauth, the PS3's memory and the last missing functions — 2026-10-09
 
@@ -6595,7 +6725,7 @@ room: no PPSSPP or JPCSP source read.
 - **Left**: scesupPreAcc; P3DA's placing (unknown); whether
   sceMpegAvcConvertToYuv420 widens the movie's sample range (unrecorded); Melodie's 40 MiB request (a PSP-2000 refuses
   it too); PGD; the runner's WAV tags carry a stray NUL (`tools/psp-runner`).
-- Scratch: `~/phobos-work/scratch/hle12` (sync-dbg.sh and apply-hooks.py for a traced runner; at/run.sh runs a
+- Scratch: kept outside the repository (sync-dbg.sh and apply-hooks.py for a traced runner; at/run.sh runs a
   pspautotests program against its recording; quick-tests.sh builds chosen test groups, scratch ones in qtests/;
   mutate.py and mutate2.sh the broken versions; compare.sh/compare.py the two runners' runs; jpegcmp/ the libjpeg-turbo
   check; pauth/ the digest search; cmp1/ and cmp2/ the comparison runs; build-commit.py the commits' split).
@@ -6623,7 +6753,7 @@ evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no P
   (callbacks told no list address, a suspending signal's list paused in its callback, sceGeContinue's -1); a list
   can't be queued at the head ahead of a paused list the GE still has (it would start over: unmeasured, chosen).
 - **The report's other black games**: none stuck in the GE. What each showed from the GE's side went to the notes
-  shared with the kernel side (`~/phobos-work/scratch/compat-notes.md`), whose parallel branch found and fixed the
+  shared with the kernel side (`compat-notes.md`, outside the repository), whose parallel branch found and fixed the
   causes: Def Jam (sceUmdActivate taking no time), Crush and Jak and Daxter (descriptors never reused), DOA Paradise
   (an async read's bytes landing early), Tekken DR (clock conversion with no seconds pointer), Valhalla Knights (async
   seeks), PaRappa (__sceSasCore taking no time), ProStreet's crash (sceIoDread's d_private layout). Ridge Racer draws
@@ -6637,7 +6767,7 @@ evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no P
 - **Left**: the GE's time (statuses a callback sees while a list draws), the state buffer's PSP layout, sceGeGetStack,
   a SIGNAL call's stack in use refused, a third CALL, transfers past VRAM's end; God of War: Chains of Olympus's speed
   (every TRANSFER_START flushes all pending drawing: the kernel side's profile).
-- Scratch: `~/phobos-work/scratch/ge-lists` (survey/ the black games' runs, at/ the pspautotests runs before and
+- Scratch: kept outside the repository (survey/ the black games' runs, at/ the pspautotests runs before and
   after, regress/ the base and branch runners' frames, ge-hooks.py and dbg-hooks-1.patch for a traced runner).
 
 ## PSP measure: a GE stall no longer freezes the owner's PSP — 2026-10-09
@@ -6653,7 +6783,7 @@ Branch `cursor/psp-measure-stall-2b67`, on top of #189's `cursor/psp-hle-games11
   (`curves-count-65`, `-100`, `-128`, `-200`, `-255`); the earlier program's leftovers for them are cleared once
   (`curves-count.timed`). A new `stall-check` resets the GE on purpose the first time round 4 runs in a results
   folder (docs/psp-core.md, part 48, "Round 4 again").
-- **Owner**: `.local/psp-round5b/` (EBOOT.PBP SHA-256
+- **Owner**: a local copy (EBOOT.PBP SHA-256
   `2c5c3343cf1e1ecf56eb4deb4fdc4eb5d1dbf1312ae7896d0d90bdcbbbd0a173`, HOW-TO.md): round 4 again, restart, then
   round 5; bring back `results/ge`. Whether the reset frees a GE stuck inside a patch is what that run will show.
 
@@ -6679,7 +6809,7 @@ PPSSPP or JPCSP source read.
   an owner's call). scePauth/sceJpeg (both Monster Hunter Portable 3rds; the HD one also needs 26.5 MiB of user memory).
   Need for Speed: Most Wanted's GE RET with no CALL (the GE's part). Def Jam, Ridge Racer, Crush, Tekken DR and the
   rest of the report's black list; ProStreet's crash; scePower 0xa85880d0, scesupPreAcc, sceMt19937.
-- Scratch: `~/phobos-work/scratch/hle11` (apply-hooks.py and sync-dbg.sh for a traced runner; at/run.sh runs a
+- Scratch: kept outside the repository (apply-hooks.py and sync-dbg.sh for a traced runner; at/run.sh runs a
   pspautotests program against its recording; quick-tests.sh builds chosen test groups in seconds; build-commit.py split
   the commits; evidence/ has both runners' frames; survey/ the traces).
 
@@ -6738,8 +6868,8 @@ JPCSP's used. Software stays the default and exact; Vulkan (accurate)'s pictures
   drivers; Software's frames and state identical in all seven scenes at 1 and 7 threads. Independent review: fixes
   taken (release(), lost reports, source copies bounded, ...).
 - **Next:** Vulkan (fast), part 53 (the GPU's transform); block transfers on the GPU; a disk pipeline cache.
-- Scratch: `~/phobos-work/scratch/gpu-fast` (build.sh, speed.sh, rounds.sh, perf.sh, callers.py, texlog-patch.py,
-  warm-patch.py, m1-acc.sh, m1-hashes.sh, quick-tests.sh); RP6 `/data/local/tmp/gpu-fast`. Hold `~/phobos-work/rp6.lock`.
+- Scratch: kept outside the repository (build.sh, speed.sh, rounds.sh, perf.sh, callers.py, texlog-patch.py,
+  warm-patch.py, m1-acc.sh, m1-hashes.sh, quick-tests.sh), and a copy on the RP6. Hold the RP6 lock.
 
 ## PSP Vulkan renderer: in play on the RP6, blending without rasterization order, the 8x line — 2026-10-09
 
@@ -6762,9 +6892,9 @@ code: nothing of PPSSPP's or JPCSP's used. Software stays the default; Native st
   80.6%.
 - **Next**: Vulkan at Native is now behind seven software threads in the 3D games (emulation thread: recording and
   read-back waits; WipEout's 209 submits a frame); Qualcomm's 16-bit blending; sprites' edges above 1x.
-- Scratch: `~/phobos-work/scratch/vk-play` (build.sh, m1-acc.sh, rp6-acc.sh, rp6-speed.sh, cmp.py, hal-patch.py,
-  blendlog-patch.py, edgelog-patch.py, gpu-tests/), `~/phobos-work/scratch/hw3/rp6` (the app's scripts); RP6
-  `/data/local/tmp/vk-play`. Hold `~/phobos-work/rp6.lock` and time only while the app isn't running.
+- Scratch: kept outside the repository (build.sh, m1-acc.sh, rp6-acc.sh, rp6-speed.sh, cmp.py, hal-patch.py,
+  blendlog-patch.py, edgelog-patch.py, gpu-tests/), with hw3's RP6 folder (the app's scripts); a copy on the
+  RP6. Hold the RP6 lock and time only while the app isn't running.
 
 ## PSP core: the library run again on the whole stack — three regressions fixed, the common blockers — 2026-10-09
 
@@ -6796,13 +6926,13 @@ PPSSPP or JPCSP source read.
 - **Left**: sceCcc (pspautotests' ccc/convertstring records it), TLS pools (God Eater 2), scePauth/sceJpeg (MHP3rd),
   scesupPreAcc (Persona 3 Portable), PGD decryption (Black Wolves Saga), a dozen black screens with no missing
   function (Ridge Racer and others, listed in the report), ProStreet's crash. sceKernelExtendThreadStack is written
-  and reviewed in the worktree `~/phobos-work/wt/games10-b9` (not in this branch): fix the review's two findings
+  and reviewed in a worktree of its own (not in this branch): fix the review's two findings
   first (module_stop's argument when a program unloads itself from a lent call; rewriting the trampoline when an
   older state loads); Dragon Ball Z stays black with it.
 - **Vulkan** (MoltenVK, the 11 gameplay games to frame 2400): the same pictures as Software (differences are a frame
   of animation apart), but slow in 3D scenes: Seen in Liberty City 3 fps against 83, Star Wars Battlefront II 27
   against 344, The Sims 2 18 against 158, GTA Sindacco Chronicles under 3 against 72; Mega Man Powered Up faster.
-- Scratch: `~/phobos-work/scratch/games10` (batch.py, judge2.py/judge3.py, report3.py, run1/ run2/ run3/ with every
+- Scratch: kept outside the repository (batch.py, judge2.py/judge3.py, report3.py, run1/ run2/ run3/ with every
   game's PNGs, analysis/ with the judgements, dbg/ with the traces, vk3/ with the Vulkan frames).
 
 ## PSP core: Ridge Racer 2's driver profile — the keyboard's answer — 2026-10-08
@@ -6822,7 +6952,7 @@ part 50, has the trace, the game's code and the evidence. Clean room: no PPSSPP 
   the next boot (CONTINUE), autosave on, Arcade, and a race, in Software and in Vulkan (MoltenVK) alike.
 - **Checks**: tests/psp 340/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; an independent
   review.
-- Scratch: `~/phobos-work/scratch/rr2` (race.script from boot to the race, evidence/ PNGs, trace.patch: the scratch
+- Scratch: kept outside the repository (race.script from boot to the race, evidence/ PNGs, trace.patch: the scratch
   build's log of every utility call).
 
 ## PSP GE: colors, fog and depth stepped as the PSP steps them; measurement round 5 — 2026-10-08
@@ -6844,11 +6974,11 @@ source read.
   cut with each corner past the plane each way round, lighting's share at 16 normals (192 products each),
   perspective texels with a repeating texture to the texel in thousands. `pspmeasure.elf` rebuilt (same pspdev
   image; README hash); `tests/psp/measure.cpp` drives the new line. #178's never-run probes replaced.
-- **For the owner**: `.local/psp-round5/` (EBOOT.PBP, its SHA-256, HOW-TO.md). Round 4 hasn't been run either.
+- **For the owner**: a copy outside the repository (EBOOT.PBP, its SHA-256, HOW-TO.md). Round 4 hasn't been run either.
 - **Tests**: "draw steps" (new), checks in "draw3d clipping" and "draw3d fog", hand-worked; seven broken versions
   each fail them. tests/psp 341/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0. An independent read-only
   review (two passes) found no bug in the core; its doc, probe and comment findings were fixed.
-- Scratch: `~/phobos-work/scratch/ge-fits2` (the dumping core in `inst/`, the fitters in `fit/` and `py/`).
+- Scratch: kept outside the repository (the dumping core in `inst/`, the fitters in `fit/` and `py/`).
 
 ## PSP core: the emulation thread faster again — no drawing for its own textures, batches in a ring — 2026-10-08
 
@@ -6870,8 +7000,8 @@ has the profile, the waits, every number and what's left. Clean room: no PPSSPP 
 - **Next**: at 7 threads the emulation thread is now the CPU (compiled code; VFPU with prefixes interpreted) and the
   GE's setup (project's divisions, lighting, vertex and job copies); at 1 thread the rasterizer, bound by exact
   divisions.
-- Scratch: `~/phobos-work/scratch/cpu-speed` (build4.sh, build-android4.sh, rp6-run4.sh, rp6-measure4.sh, rp6-hold.sh,
-  ge-inst4-patch.py); RP6 `/data/local/tmp/cpu-bench4`. The RP6 is shared: hold `~/phobos-work/rp6.lock` (a live PID:
+- Scratch: kept outside the repository (build4.sh, build-android4.sh, rp6-run4.sh, rp6-measure4.sh, rp6-hold.sh,
+  ge-inst4-patch.py), and a copy on the RP6. The RP6 is shared: hold the RP6 lock (a live PID:
   rp6-hold.sh in the background), and time only while the Phobos app isn't running.
 
 ## PSP GE: fog amount fixed at each corner (measurement fits) — 2026-10-08
@@ -6930,7 +7060,7 @@ OpenGL. Co-authored with Cursor; independent review before the commit.
 - **Docs:** `docs/psp-vfpu-measurements.md` (fits section), Part 3 in `docs/psp-core.md`.
 - **Tests:** Allegrex 58/0; PSP suite (ASan) 330/0. Interpreter and recompiler match (recompiler still calls the
   interpreter for VFPU). Independent review PASS (manifest/diff hashes in
-  `phobos-work/scratch/psp-vfpu-fits-review/`).
+  the review's notes, kept outside the repository).
 - **Stack:** VFPU only; do not merge to master from here.
 
 ## Desktop Library: the PSP's disc titles — 2026-10-08
@@ -7019,8 +7149,8 @@ docs/psp-core.md, part 46. PR #176.
 - **Faster** on the RP6 at 7 GE threads (four rounds): MC3's race about 37 → 39 fps (medians 37.3 → 38.1);
   menu about 36 either way. Emulation thread on the race still ~24 ms.
 - **Next**: primitives drawn at once / textures read from memory as drawn.
-- Scratch: `~/phobos-work/scratch/cpu-speed` (v17 scenes); RP6 `/data/local/tmp/cpu-bench3`; take
-  `~/phobos-work/rp6.lock`.
+- Scratch: kept outside the repository (v17 scenes), and a copy on the RP6; take
+  the RP6 lock.
 
 ## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
 
@@ -7038,8 +7168,8 @@ Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-
   At 1 thread the CPU's time is 2-9% lower (Peace Walker's the same) and the frame rates the same.
 - **Next**: addressed in part 46 (RTT decode deferred). Then primitives drawn at once, textures read from memory
   as they're drawn.
-- Scratch tools and states are in `~/phobos-work/scratch/cpu-speed` (never committed); the RP6 copy is
-  `/data/local/tmp/cpu-bench3`. The RP6 is shared: take `~/phobos-work/rp6.lock` first, and time only while the
+- Scratch tools and states are kept outside the repository (never committed), with a copy on the RP6.
+  The RP6 is shared: take the RP6 lock first, and time only while the
   Phobos app isn't running.
 
 ## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
@@ -7101,8 +7231,8 @@ Branch `cursor/psp-cpu-speed-2b67`, on top of `cursor/psp-hle-games7-2b67` (part
 - **Next**: the GE's setup is now most of the emulation thread (lighting's per-light numbers once a primitive, the
   emulation thread's share of drawing at settles); in the recompiler, MIPS registers kept in host registers within a
   block, and lwl/lwr/swl/swr natively.
-- Scratch tools, states and memory sticks are in `~/phobos-work/scratch/cpu-speed` on the Mac (never committed);
-  the RP6 copy is `/data/local/tmp/cpu-bench2`.
+- Scratch tools, states and memory sticks are on the Mac (never committed);
+  a copy is on the RP6.
 
 ## PSP core: the stuck games, and the runner's presses — 2026-10-07
 
@@ -7201,7 +7331,7 @@ and #159, underneath). docs/psp-core.md, part 33, describes it.
 - **The measuring program's round 4** gained fourteen curve cases (vertices' places to the sixteenth, colors, depths,
   texels, made-up texture coordinates and normals, culling, counts): built in pspdev's Docker image,
   `tests/psp/programs/pspmeasure.elf` replaced (README checksum); the PSP's EBOOT is outside the repository at
-  `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256 bc6e90b4...e69343f2).
+  `PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256 bc6e90b4...e69343f2).
 - **Checked**: tests/psp 297 groups (6 new) with ASan and UBSan, none failing, "psp measure" identical but for round
   3's curve files; tests/psp/ares 294 checks; 7 broken versions each caught. Games: none of the 22 here (the
   handheld's 22) drew a curve in 7200 frames (a probe build); Macross Ace Frontier and its sequels aren't here.
@@ -7535,7 +7665,7 @@ the screen under it (`DialogSystemBars`), so the quit dialog no longer brings th
 back over a full-screen game. The driver update check only counts releases in the installed
 driver's line: StevenMXZ's repo publishes Turnip, Turnip Gen8 and Qualcomm lines side by side, and
 Gen8 V36 had been offered as an update to Turnip v26.3.0-R5. Checked on the RP6, the cold launch
-frame by frame from screen recordings (`.local/device/cold-rec.sh` and `frames.swift`); the driver
+frame by frame from screen recordings (local scripts `cold-rec.sh` and `frames.swift`); the driver
 check has host tests.
 Branch `feature/frontend-launch-2026-09` ([PR #25](https://github.com/pwnedbygary/phobos/pull/25))
 lets frontends start games (setup in [frontends.md](frontends.md)). `MainActivity` is
@@ -7580,8 +7710,8 @@ user can change.
 Branch `feature/n64-save-transfer-2026-09` implements Task 49: the pause menu's Save Data section
 (N64) imports battery saves from Mupen64Plus, RetroArch or a Phobos backup and exports them in
 those formats. The conversions are plain Kotlin with host tests (`util/N64SaveTransfer.kt`); the
-byte orders were measured on the user's own saves (local copies in the git-ignored
-`.local/ref/n64-save-samples/`, with `FINDINGS.md`). An import runs between the unload and the
+byte orders were measured on the user's own saves (local copies outside the repository,
+with `FINDINGS.md`). An import runs between the unload and the
 reload of the running game (`startLoad`'s `beforeLoad` hook), after the unload has written the
 current save, and moves the files it replaces plus the auto-save state to `Backups/<date>` beside
 the save. Native `getSaveFiles` and `flushSaves` (`PhobosRunner.cpp`) list the game's saves and write
@@ -7884,7 +8014,7 @@ code master added: the LaserActive side functions in `PhobosRunner.cpp/.hpp`, ju
   request for an MSX BIOS with BASIC before a tape starts (`msxFirmwareMissing()`), the MSX tape
   deck and data tape controls, and LaserActive side changes.
 
-Checks run (2026-10-03, Mac M1 + Retroid Pocket 6 `49016109`):
+Checks run (2026-10-03, Mac M1 + Retroid Pocket 6):
 - macOS arm64, native rather than the universal preset (Apple clang 17, CMake 4.4.3, Xcode's macOS
   15.4 SDK; SDL 3.2.30 needs CMake 3.24 or later on macOS, so the Android SDK's 3.22.1 can't
   configure it): builds. Two homemade 16 KiB MSX cartridges run on the bundled C-BIOS at 60 FPS,
@@ -7927,15 +8057,15 @@ User requests (2026-09-24, Cursor session):
 
 Constraints in force:
 - **Do not run anything that touches the phone** (user is using it with another
-  LLM). Before that instruction, read-only `adb` queries were run once: device
-  `FY24227104AB` = nubia Red Magic 9 Pro (NX769J, SM8650, Android 16, 1116×2480,
+  LLM). Before that instruction, read-only `adb` queries were run once: the device
+  is a nubia Red Magic 9 Pro (NX769J, SM8650, Android 16, 1116×2480,
   60/90/120 Hz). Phobos is **not installed** on it; installed: Mupen64Plus turnip
   (`org.mupen64plusae.turnip.pwnedbygary` + `.debug`), Argosy, RetroArch, AetherSX2,
   Dolphin, Eden. No adb commands since. The auto-reviewer also blocked local command
   execution under this instruction, so the work was written with file edits and
   read-only research; the user later authorized the local build, review and commit
   (still no phone access).
-- `/Users/gbagley/LLM-Projects/mupen64plus-ae-turnip` is being edited by another
+- The owner's local mupen64plus-ae-turnip checkout is being edited by another
   agent (branch `fix/fullscreen-gallery-branding`): **read-only**, no git commands.
 - Local toolchain found (unverified by a build): JDK 17 at
   `/Library/Java/JavaVirtualMachines/temurin-17.jdk`; SDK at `~/Library/Android/sdk`
@@ -8132,7 +8262,7 @@ previews, listener ownership) the checks were rerun:
 
 Not run: APK packaging/signing, a build with NDK 28.2, and anything on a device.
 
-### Checks run (2026-09-25, local Mac + Retroid Pocket 6 `49016109`)
+### Checks run (2026-09-25, local Mac + Retroid Pocket 6)
 
 Toolchain: Temurin OpenJDK 17, Gradle wrapper, **NDK 28.2.13676358** (CI's AGP
 default; installed locally for this pass). Same git-ignored Gradle/truststore setup as
@@ -8259,8 +8389,8 @@ JPCSP source read.
 - **Next:** the GE's thread (the CPU's emulation most of it, then vertex setup: 117,000 vertices a frame in MC3's
   race), four at a time for textures drawn over themselves where provably safe, shorter waits for render targets read
   back.
-- Scratch, outside the repository: `/tmp/ge2-bench` (runner, states, scripts, profiles), `/tmp/ge2-fuzz`,
-  `/tmp/ge2-mut` (broken versions), `/tmp/ge2-device` (RP6 screenshots and stats).
+- Scratch, outside the repository: the bench's runner, states, scripts and profiles; the fuzz runs;
+  the mutants (broken versions); the RP6's screenshots and stats.
 
 ## PSP core: lines, bounding boxes, DXT textures and sceGeBreak — 2026-10-06
 
@@ -8288,13 +8418,13 @@ no PPSSPP or JPCSP source read.
 - **Measuring program, round 4** (lines at every sixteenth, short lines, strips, colors, depth and texels along lines,
   3D lines, 256 bounding boxes, DXT colors, alphas and block order): built in pspdev's Docker image;
   `tests/psp/programs/pspmeasure.elf` replaced (hash in its README). The owner's EBOOT.PBP for the PSP isn't
-  committed (kept in the owner's `.local/psp-round4/`). Running it in the core caught a mistake of its own first
+  committed (the owner keeps a copy). Running it in the core caught a mistake of its own first
   (memory taken inside an object let the GE reach an unaimed BJUMP).
 - **Checked**: tests/psp 280 groups with ASan and UBSan, tests/psp/ares 290 checks, none failed; the comparison with
   the owner's PSP (rounds 2 and 3) the same, line for line; 16 broken versions each caught. Speed within a couple of
   percent either way in six scenes, 1 and 7 threads. Games: Space Invaders Extreme's title gains its line box,
   Sindacco a line across the sky; Dominator, LCS, SOCOM, Snoopy, VCS, Peace Walker unchanged in the frames captured;
-  pictures in `/tmp/gef-pictures`.
+  pictures kept outside the repository.
 - **Left**: curved surfaces (Macross); the exact line rule, anti-aliased lines, the DXT block order, boxes past
   different edges (round 4 will tell); breakwait's wake order; sceGeSaveContext's layout; gpu/exact/coverage's tall
   triangles; PRIM kind 7.
@@ -8303,7 +8433,7 @@ no PPSSPP or JPCSP source read.
   callback could end the list that took its ID before that list's own callback); unmeasured. GE callbacks are a call
   kind of their own (`Call::Ge`; state version 12 still). Test "ge break and callbacks", both engines, a state round
   trip. tests/psp 281 groups, tests/psp/ares 290 checks, none failed. The round-4 EBOOT stays out of the repository
-  (the owner keeps it in `.local/psp-round4/`). RP6: Space Invaders Extreme's title shows its box of lines at 60 fps,
+  (the owner keeps it). RP6: Space Invaders Extreme's title shows its box of lines at 60 fps,
   GTA LCS's intro unchanged at 60 fps.
 
 ## PSP core: kernel mutexes, alarms, virtual timers, and the clock in system calls — 2026-10-06
@@ -8425,7 +8555,7 @@ documentation, the games' behavior).
   format; their ATRAC3plus sound by sceMpegGetAtracAu and sceMpegAtracDecode). sceAac, scePsmf(Player) and sceSas's
   ATRAC3 voices aren't done: no game of the owner's imports them but Peace Walker four scePsmf functions, not seen
   called.
-- **Heard and seen** (host, from boot; WAVs and frames under `/tmp/codecs-runner/out`; pitch checked against the
+- **Heard and seen** (host, from boot; WAVs and frames kept outside the repository; pitch checked against the
   decoded streams, matching): Burnout Legends' EA movie, FMV and title over its movie, music -11.8 dBFS (0.34% of
   samples clipped in the game's own mix); Dominator's logo movies and title over its movie (-18.4 dBFS); the GTAs'
   and Midnight Club 3's logo, title and credits movies with sound (-15 to -18 dBFS, next to no clipping); Space
@@ -8496,7 +8626,7 @@ Developer Wiki, the games' own behavior).
   decoded on; nothing drawn); basic's own movie run through the HLE gave all 180 recorded frames and the callback's
   181 calls exactly. sceMpegAvcDecodeDetail answers 0 (the game waits for its first picture). Headers are still
   refused, so the games that check skip their movies as before; Burnout's callbacks give nothing, as before.
-- **Where each game gets now** (frames under `/tmp/games4-runner/out`, states in `/tmp/games4-runner/states`):
+- **Where each game gets now** (frames and states kept outside the repository):
   Dominator racing its first race (`dom-c`); Peace Walker past its install and the optional DATA INSTALL (NO) to
   the beach training, Snake controllable (`pw-f`, `pw-g`); LCS driving Vincenzo to the safehouse (`lcs-e`); VCS Vic
   at the army base (`vcs-d`); Sindacco in Paulie's car to Atlantic Quays (`sind-d`); Burnout Legends lap 2 of 3
@@ -8577,7 +8707,7 @@ OpenGL renderers later) is in its Decisions. Original code; no PPSSPP or JPCSP s
   bilinearly, the title's one-pixel lines becoming soft bands of drifting strength. The PSP's picture now goes into
   the window at the whole multiple of its size nearest the view's (4 sideways: 1920x1088, scaled 0.993 by the
   compositor; 2 upright; exact with Integer Scaled), each line sharp and even ("sharp bilinear"). Screenshots
-  outside the repository: `/tmp/gefix-device/pw-before.png`, `pw-after-25s.png`, crops in `crops/`.
+  outside the repository: `pw-before.png`, `pw-after-25s.png`, crops in `crops/`.
 - **Review:** a general-purpose reviewer; the clean-room spot check found the new code original; one medium and four
   low findings, all fixed, each with a test that failed before; a pre-existing fill-rule function rewritten
   clean-room. Medium: a quarter-turned 2D sprite's first column could take texture rows outside the decoded copy (a
@@ -8631,7 +8761,7 @@ no other emulator's code read (PPSSPP's and JPCSP's PGF readers weren't opened).
   are called for every block, in the sizes and order recorded, the calling thread running them as callbacks run.
 - **States**: version 8 (1 to 7 refused): libraries, open fonts and calls part way through saved and checked;
   fonts read again from where they came from on loading, the state refused if one is missing or differs.
-- **On the host** with the owner's fonts (frames in `/tmp/fonts-runner/final`, not in the repository): Gunhound EX's
+- **On the host** with the owner's fonts (frames kept outside the repository): Gunhound EX's
   save notice in Japanese (a black screen before); Peace Walker's "Checking Memory Stick™", its MSF disclaimer, its
   player's name ("Is this name OK?"), control scheme, BUTTON CONFIG, DATA INSTALL and "Installing... (Progress: N%)",
   all of which had shown none of their words.
@@ -8695,7 +8825,7 @@ recorded results and the games' behavior; no other emulator's code read:
   sceIoRename keeps the file in its folder (io/file/rename: Peace Walker's install), sceRtcGetWin32FileTime (Midnight
   Club 3), sceRtcSetTick (Peace Walker), sceKernelVolatileMemLock (Dominator), and delays as long as a PSP's (205
   microseconds at least, plus 25: delaylen; Brave Story's 1-microsecond polls cost the host 25% of its time).
-- **On the host** (frames in `/tmp/hle3-runner/final`, states in `/tmp/hle3-runner/states`, not in the repository):
+- **On the host** (frames and states kept outside the repository):
   GTA LCS and VCS play their openings in the city, Sindacco is in its first mission; Brave Story names its heroes and
   plays its prologue; Gunhound EX starts Mission 01; Snoopy is in its flying lesson; SOCOM saves a profile and deploys
   into its first mission; Burnout Legends and Midnight Club 3 race; Burnout Dominator's first race loads, then its GE
@@ -8721,8 +8851,8 @@ recorded results and the games' behavior; no other emulator's code read:
   6 of its own), the ares test's list of refused versions and the docs clashed; part 21 comes before part 22 in
   docs/psp-core.md, this entry before sound's. Then `__sceSasCore` (and `__sceSasCoreWithMix`) refuse where no thread
   may wait, as intr/delays recorded. Checks: 211 groups with both sanitizers, `tests/psp/ares` 254; states are
-  version 7, versions 1-6 refused. On the host from boot (scratch runner, frames and WAVs in
-  `/tmp/stallfix-runner/out`): GTA LCS reaches the city, Brave Story its intro, Burnout Legends its title, as before,
+  version 7, versions 1-6 refused. On the host from boot (scratch runner, frames and WAVs kept
+  outside the repository): GTA LCS reaches the city, Brave Story its intro, Burnout Legends its title, as before,
   all silent there (ATRAC music, no voice keyed on); the Street Fighter III port sounds as part 21's capture, 4 s
   later (its 4.4 MB of boot reads now take the disc's 3.2 s).
 - **Next**: Dominator's GE path; sceLibFont from flash0 (Peace Walker's and Gunhound's menus); wait timeouts as
@@ -8787,7 +8917,7 @@ sceAtrac3plus refusing every stream, the network libraries with the WLAN switch 
 installed, and sceRtc, sceOpenPSID, display, thread, Kernel_Library, power and utility odds and ends. Peace Walker
 found two faults: a free lightweight mutex's CB lock ran a callback (it never enters the kernel on a PSP), and
 threads' kernel area at the top of the stack wasn't zeroed. States are version 5.
-- **On the host** (1800-2400 frames each; frames in `/tmp/hle2-runner/out`, not in the repository): Lumines to its
+- **On the host** (1800-2400 frames each; frames kept outside the repository): Lumines to its
   gameplay demo; Burnout Legends, Burnout Dominator and Midnight Club 3 to their titles and, with Start, their
   profile menus; SOCOM past its "no data" screen to its credits; Snoopy to its "no save file" warning (it had
   exited); Space Invaders Extreme to its title (first time); Peace Walker to its title screen (no system-font text);
@@ -9136,8 +9266,8 @@ our own, from FIPS 180-4. The dump is the user's copyrighted firmware: it stays 
   and a megabyte fed in uneven pieces. The `SMOKE=1` build in PPSSPP's headless build copied a 23-file sample tree
   (PPSSPP's own fonts, nested folders, an empty file, exact and multi-piece sizes) with every copy verifying against
   `SHA256SUMS`; PPSSPP's virtual flash0 can't list its folders, hence the sample. Both builds compile without
-  warnings. The release EBOOT.PBP (SHA-256 960b2db7dbc6ebbab6b929b3f2f5fc5003be75377b820a0febfd52e96ced3647) is in
-  `.local/psp-flash0-dump` and on the RP6 at `Download/FLASH0DUMP/EBOOT.PBP`; it hasn't run on a PSP yet. Review: a
+  warnings. The release EBOOT.PBP (SHA-256 960b2db7dbc6ebbab6b929b3f2f5fc5003be75377b820a0febfd52e96ced3647) is kept
+  outside the repository and on the RP6 at `Download/FLASH0DUMP/EBOOT.PBP`; it hasn't run on a PSP yet. Review: a
   general-purpose reviewer (seven low findings: the root folder made with a trailing slash, a listing error ending
   the walk silently, unchecked writes to SHA256SUMS and failed.txt, no `make clean` note, flash0 said to hold the
   settings, a button-wait comment, the image cap overshooting; all fixed), then a delta review with no findings.
@@ -9276,8 +9406,8 @@ FPU data (ares/psp/cpu/interpreter-fpu.cpp; the recompiler hands FPU instruction
 ## PSP: what the user's PSP measured in round 3 — 2026-10-04
 
 Branch `cursor/psp-measured-r3-2b67`, stacked on `cursor/psp-ge-round3-2b67` (for stack #106). The user ran round 3
-(VFPU and GE), the FPU probes and rounds 1 and 2 again with tools/psp-measure; the results are in
-`.local/psp-measure-2026-10-04-round3/results` (not in the repository). Nothing stopped the PSP, round 2's two FPU
+(VFPU and GE), the FPU probes and rounds 1 and 2 again with tools/psp-measure; the results are kept
+outside the repository. Nothing stopped the PSP, round 2's two FPU
 tests finished this time (why isn't known), and every repeated result file is identical to the earlier sessions'
 (the manifests differ in wording, and `controller-timing.bin`'s times are measured).
 Published: docs/psp-vfpu-measurements.md ("Round 3") and docs/psp-core.md ("Round 3's results"); the SHA-256 of
@@ -9358,7 +9488,7 @@ is vfpu.c, tools/psp-ge-measure's is ge.c, the host tools came along), and it no
   here keep the old names. compare.sh and fit.py take the results folder or its `vfpu/`.
 - **Checks:** `make` and `make SMOKE=1` with `-Wall`, no warnings; the SMOKE build in PPSSPPHeadless against the old
   programs' SMOKE files (as above); `tools/psp-test-programs/build.sh`, then `PSP_TEST_PROGRAMS=/tmp/psp-programs
-  PSP_GE_RESULTS=.local/psp-measure-2026-10-04/ge tests/psp/run-tests.sh`: 85 groups, 0 failures, 52 of 63 pictures
+  PSP_GE_RESULTS=<the owner's GE results> tests/psp/run-tests.sh`: 85 groups, 0 failures, 52 of 63 pictures
   as the PSP's (unchanged); ops.py regenerates ops.h and ops3.h byte for byte. Review: a general-purpose reviewer (one
   medium finding, the "as found" state above; eight low ones, all fixed), then delta reviews (one more low finding,
   the round 1 note's wording, fixed; then no findings).
@@ -9482,8 +9612,8 @@ the old `vmmul` order and a wrong `divu` boundary (0x8000) each fail the tests.
 ## PSP core: the user's measurements, round 2 and the GE — 2026-10-04
 
 Branch `cursor/psp-measured-2b67`, stacked on `cursor/psp-vfpu-awake-2b67` (for stack #106). The user ran VFPU
-rounds 1 and 2 and the GE program on their PSP; the raw results are in `.local/psp-measure-2026-10-04/` (not in the
-repository), their SHA-256 and manifests in `tests/allegrex/measured/` (`SHA256SUMS2`, `manifest2.txt`, `ops.txt`)
+rounds 1 and 2 and the GE program on their PSP; the raw results are kept outside the
+repository, their SHA-256 and manifests in `tests/allegrex/measured/` (`SHA256SUMS2`, `manifest2.txt`, `ops.txt`)
 and `tests/psp/measured/`. Findings written up in docs/psp-vfpu-measurements.md ("Round 2") and docs/psp-core.md
 ("Results from the user's PSP"):
 - round 1 repeats byte for byte; `vh2f`/`vf2h` exact; division by zero's results (the core's `divu` LO is wrong);
@@ -9536,8 +9666,8 @@ spotlight's direction either way, a point light's fading, environment mapping), 
 renderer here; 61 of the program's 64 files now match it. While they were being written, an unfinished set of lighting
 cases appeared in `main.c` from another writer (a Cursor agent worker is registered for this folder). The user said
 nothing else was running, so the two sets were merged into one: the other set's cell helper, its finer angle sweep
-and its resets in `start()`, with these halves and cases. Copies of both versions are kept outside the repository in
-`.local/`. The refreshed EBOOT.PBP replaces the one on the RP6 in `Download/GEMEASURE`.
+and its resets in `start()`, with these halves and cases. Copies of both versions are kept outside the repository.
+The refreshed EBOOT.PBP replaces the one on the RP6 in `Download/GEMEASURE`.
 
 ## PSP core: measuring 3D on a PSP — 2026-10-04
 
@@ -9725,7 +9855,7 @@ generated): exact on all of their full-range results and on a million spread-out
 ## PSP core: the VFPU against the user's PSP — 2026-10-03
 
 Branch `cursor/psp-vfpu-measured-2b67`, stacked on the measurement program. The user ran it (firmware 6.61) and
-left `results/` (455 MB) on the RP6; it's in `.local/psp-vfpu-measure/results/`, outside the repository.
+left `results/` (455 MB) on the RP6; it's kept outside the repository.
 
 - **Findings** ([psp-vfpu-measurements.md](psp-vfpu-measurements.md)): the random number generator matches all
   263,944 words; `vadd`, `vsub`, `vmul`, `vdiv` match every non-NaN result; the VFPU's NaN is always `0x7f800001`
@@ -9745,7 +9875,7 @@ left `results/` (455 MB) on the RP6; it's in `.local/psp-vfpu-measure/results/`,
 `tools/psp-vfpu-measure`, a homebrew program that records what a PSP's VFPU computes (math functions over their
 whole reduced ranges and a million spread-out inputs, the random number generator from 64 seeds, arithmetic edge
 cases), for exact math functions fitted from our own data, as the user chose. Built in `phobos-linux` with
-pspdev's ARM64 toolchain (installed in `/opt/pspdev`); the build is in `.local/psp-vfpu-measure/EBOOT.PBP`, not in
+pspdev's ARM64 toolchain (installed in `/opt/pspdev`); the build, `EBOOT.PBP`, is not in
 the repository. Its VFPU instructions were checked in the disassembly against the core's decoder. Waiting on the
 user to run it on their PSP and bring back `results/` (about 450 MB). psp-core.md has the details.
 
@@ -10350,7 +10480,7 @@ at [Task NGCD-M2](implementation-history.md#task-ngcd-m2), the
 and [Task NGCD-M3](implementation-history.md#task-ngcd-m3). The current
 disposition is in [implementation-plan.md](implementation-plan.md).
 
-**Verified on-device (RP6 `49016109`, SamSho RPG):** BIOS menu, NEO-GEO CD logo, title, character select,
+**Verified on-device (RP6, SamSho RPG):** BIOS menu, NEO-GEO CD logo, title, character select,
 level-select (was a black screen), in-fight HUD (life/POW bars, KO counter) + characters + backgrounds all
 correct @59.2 FPS. Game code stays in its main loop.
 
@@ -10456,8 +10586,8 @@ work.** The blocker is entirely the in-progress NGCD M2 drive/IRQ/DMA pipeline.
 > Reference: MAME `neogeocd.cpp` (GPL, docs-only) + proven Sanyo CDC `DTEI`/`DTBSY`/`DTTRG` handshake in
 > `ares/md/mcd/cdc.cpp`.
 
-**Repro / next step:** device `49016109` (Retroid Pocket 6, Adreno 740), SamSho RPG disc. Clear logcat, press
-Start, `adb -s 49016109 logcat -d | grep -E "NGCD|CDD|CDC|DMA"`. Then wire `type1` dispatch (priority over 75 Hz
+**Repro / next step:** the RP6 (Retroid Pocket 6, Adreno 740), SamSho RPG disc. Clear logcat, press
+Start, `adb -s <serial> logcat -d | grep -E "NGCD|CDD|CDC|DMA"`. Then wire `type1` dispatch (priority over 75 Hz
 `type2`) + the `$FF0061` byte DMA trigger + microcode routing; iterate until the game boots past boot state 3
 (code reaches `0x100000`); confirm no AES/MVS regression. See
 [implementation-plan.md](implementation-plan.md), the
@@ -10470,12 +10600,12 @@ the [Neo Geo CD consolidated reference](implementation-history.md#neo-geo-cd-con
 
 **All cores verified WORKING** including Neo Geo MVS/AES (input, BIOS dialog, and tall-sprite/background rendering all FIXED and verified).
 
-**Neo Geo — 2026-08-24 VERIFIED (vflip tile-ordering regression REVERTED, commit `pending`):** `e92486f72`'s undocumented "vflip tile ordering" hunk in `ares/ng/lspc/render.cpp` (LLM guess, contradicts MAME `neogeo_spr.cpp` — which does per-tile fetch + `row ^= 0xf` XOR and never reorders tiles) broke tall-sprite rendering (`kof2003` title = half-tiles/misaligned rows). Reverted ONLY that hunk to the exact `b1c0a9fe1` code; the rest of `e92486f72` (SMA P-ROM BE decrypt, Z80 audio banking, coin polling) is intact — **do NOT `git revert e92486f72`** (bundled 24 files). Verified clean on-device `49016109` via `see_image` screencaps: **`kof2003` title (was garbled), `kof98` (PROGSF1) title, `kof99` (SMA) title**; `ssideki4` title/how-to-play/championship screens clean. `ssideki4` **in-match** field garble persists = the SEPARATE pre-existing zoom-path issue (was NOT introduced by this revert). `AudioDiag ring=0/12000` still logs (known separate issue; KOF2003 audio user-confirmed working). **VERIFICATION GOTCHA:** hot ROM reload via `am start --activity-single-top` can leave the SurfaceView showing the PREVIOUS core's stale frame (kof98 load once displayed ssideki4's soccer screen — core loaded fine per logcat); if a post-reload screen looks like the wrong game, `am force-stop` + cold `am start` before judging.
+**Neo Geo — 2026-08-24 VERIFIED (vflip tile-ordering regression REVERTED, commit `pending`):** `e92486f72`'s undocumented "vflip tile ordering" hunk in `ares/ng/lspc/render.cpp` (LLM guess, contradicts MAME `neogeo_spr.cpp` — which does per-tile fetch + `row ^= 0xf` XOR and never reorders tiles) broke tall-sprite rendering (`kof2003` title = half-tiles/misaligned rows). Reverted ONLY that hunk to the exact `b1c0a9fe1` code; the rest of `e92486f72` (SMA P-ROM BE decrypt, Z80 audio banking, coin polling) is intact — **do NOT `git revert e92486f72`** (bundled 24 files). Verified clean on-device (RP6) via `see_image` screencaps: **`kof2003` title (was garbled), `kof98` (PROGSF1) title, `kof99` (SMA) title**; `ssideki4` title/how-to-play/championship screens clean. `ssideki4` **in-match** field garble persists = the SEPARATE pre-existing zoom-path issue (was NOT introduced by this revert). `AudioDiag ring=0/12000` still logs (known separate issue; KOF2003 audio user-confirmed working). **VERIFICATION GOTCHA:** hot ROM reload via `am start --activity-single-top` can leave the SurfaceView showing the PREVIOUS core's stale frame (kof98 load once displayed ssideki4's soccer screen — core loaded fine per logcat); if a post-reload screen looks like the wrong game, `am force-stop` + cold `am start` before judging.
 
 **Neo Geo — 2026-08-23 VERIFIED (all 288 titles boot):** SMA boot **FIXED & VERIFIED** on-device for `kof99`/`kof2000`/`garou`/`garouh`/`mslug3`/`mslug3a` (was `69K` grid, now `414K`/`263K`/`582K`/`415K` titles `@59.2 FPS`). Root cause was **two-fold**: (1) hardcoded `p[0..7]=0x10f300` override, **plus** (2) endianness bug: SMA decrypt used `u16*` little-endian cast while `prom` is `readm(2L)` big-endian and `BML` was `load16_word_swap` — `P` double-swapped → garbage. Fixed `BML` to keep `load16_word_swap` for `ka.neo-sma`/`251-p1` etc. (`262144` for `ka`) and changed decrypt to `readBE`/`writeBE` (`p[off]<<8|p[off+1]`) matching `prom` BE. Verified vectors `0010f300` `NEO-GEO` and `SMA prom` `0010f300`. `kof98` `PROGSF1` also verified, `kof94`/`kof2001` standard titles verified. **REMAINING 2026-08-23:** (1) **Sound** — `samsho`/`samsho2` silent, `AudioDiag ring 0/12000` (log shows `ring 0` for all Neo Geo, but `KOF2003` user-confirmed audio works; suspected log formatting vs real fault — investigating `PhobosRunner` multi-stream lockstep and `OPNB`/`APU`); (2) **Coin** — `SELECT`/`START` coin works sometimes but not always (pollCoin every-frame via `LSPC` broke audio, reverted to poll only on input reads; need reliable `REG_STATUS_A` coin without per-frame `platform->input`); (3) **ssideki4** — field graphics still garbled in gameplay (hscale `zoom_x_tables` already applied, but `ssideki4` uses different zoom path — investigate `render.cpp` tall-sprite/hscale for this title).
 All three are UNCOMMITTED. The `kof99`/`kof2000` `NEO-SMA` "Still ✗" line in the 2026-08-21 compat paragraph is now SUPERSEDED by fix #1.
 
-**Neo Geo compat pass (in progress 2026-08-21 — `wiki.neogeodev.org` as primary ref):** on-device results tracked in `docs/neo-geo-compatibility.md`. **MVS warning-screen stall — ROOT CAUSE found & FIXED for 1994-95 stub:** the 1994-95 boot stub (`tst.b $10FD82; beq pass; tst.w $D00100; beq pass` at `$38D6E` etc.) always failed under `ares` because `$10FD82` (WRAM `$10FD82`, zero after BIOS init on real MVS) is non-zero on a cold boot, so it fell into the green/red `WARNING` hang (`move.b d0,$300001; bra.s *` at `$276`/`$29A`/`$4E2`/`$506` via `tst.b $10FD82`). Earlier `coin`/`freeplay` diagnosis was wrong — `kof95` (standard, no decrypt) was hanging at the same `WARNING` via the same `$10FD82` check, not at the BIOS coin wait. **FIX APPLIED** in `mia/medium/neo-geo.cpp:166` — generic `beq→bra` (`67`→`60`) + `13C0 00300001 60F8`→`4E75` (`rts`) patch (covers all titles sharing the 1994-95 stub, standard and `K2K2`). Verified `kof95`→KOF95 title, `samsho3`→SamSho3 title, `samsho4`→SamSho4 title, `samsho5`→SamSho5 title, `kof94`/`kof96`/`kof97`/`kof2001`/`kof2002` titles @59.2 FPS. **FIXED 2026-08-21:** `kof98` (**PROGSF1** `ALTERA EPM7128` `242-p1` 2M scrambled → `mia/medium/neo-geo.cpp:374` `sec[]`/`pos[]` offline `gngeo:c:kof98_decrypt_68k` + `ares/ng/cartridge/board/progsf1.cpp:19` `ProgSF1` `bit(0,3)` `59.2 FPS` title verified `/tmp/kof98_test.png`, `header @100: 4e 45 4f 2d` `vectors 0010f300`, `kof98h` `PROGBK1` bypass). **Still `✗`:** `kof99`/`kof2000` (`NEO-SMA` `ka.neo-sma`/`neo-sma` `9M` `P` `QFP144` `mame:prot_sma.cpp` `bitswap<16/10/19>` `SMA::kof99_bank_base`/`kof2000_bank_base` wired in `mia/medium/neo-geo.cpp:405,423` + `ares/ng/cartridge/board/sma.cpp:50` `49016109` but `header @100: c1 e4` `c1=0` grid `37K`/`162K` still — `loadRoms` `0xC0000` hole vs `0x700000` relocate audit pending) + `garou`/`mslug3` (`green.neo-sma`/`kf.neo-sma` staged from `/home/garyb/Mounts/Emulation/Emulation/APKs/` to `/storage/EBFF-F6C0/ROMs/arcade/` now `SMA` `decryptGarouSma`/`Mslug3Sma` wired). `kof98umh`/`kofnw`/`kofxi` are **not MVS** (IGS PGM `ig-d3_*` / Atomiswave `ax220*`/`ax320*`) and correctly show the MVS BIOS popup. Palette-bank `8746d3f56` and `ssideki4` `hscale`/`wrap-around` fixes already verified.
+**Neo Geo compat pass (in progress 2026-08-21 — `wiki.neogeodev.org` as primary ref):** on-device results tracked in `docs/neo-geo-compatibility.md`. **MVS warning-screen stall — ROOT CAUSE found & FIXED for 1994-95 stub:** the 1994-95 boot stub (`tst.b $10FD82; beq pass; tst.w $D00100; beq pass` at `$38D6E` etc.) always failed under `ares` because `$10FD82` (WRAM `$10FD82`, zero after BIOS init on real MVS) is non-zero on a cold boot, so it fell into the green/red `WARNING` hang (`move.b d0,$300001; bra.s *` at `$276`/`$29A`/`$4E2`/`$506` via `tst.b $10FD82`). Earlier `coin`/`freeplay` diagnosis was wrong — `kof95` (standard, no decrypt) was hanging at the same `WARNING` via the same `$10FD82` check, not at the BIOS coin wait. **FIX APPLIED** in `mia/medium/neo-geo.cpp:166` — generic `beq→bra` (`67`→`60`) + `13C0 00300001 60F8`→`4E75` (`rts`) patch (covers all titles sharing the 1994-95 stub, standard and `K2K2`). Verified `kof95`→KOF95 title, `samsho3`→SamSho3 title, `samsho4`→SamSho4 title, `samsho5`→SamSho5 title, `kof94`/`kof96`/`kof97`/`kof2001`/`kof2002` titles @59.2 FPS. **FIXED 2026-08-21:** `kof98` (**PROGSF1** `ALTERA EPM7128` `242-p1` 2M scrambled → `mia/medium/neo-geo.cpp:374` `sec[]`/`pos[]` offline `gngeo:c:kof98_decrypt_68k` + `ares/ng/cartridge/board/progsf1.cpp:19` `ProgSF1` `bit(0,3)` `59.2 FPS` title verified by screenshot, `header @100: 4e 45 4f 2d` `vectors 0010f300`, `kof98h` `PROGBK1` bypass). **Still `✗`:** `kof99`/`kof2000` (`NEO-SMA` `ka.neo-sma`/`neo-sma` `9M` `P` `QFP144` `mame:prot_sma.cpp` `bitswap<16/10/19>` `SMA::kof99_bank_base`/`kof2000_bank_base` wired in `mia/medium/neo-geo.cpp:405,423` + `ares/ng/cartridge/board/sma.cpp:50` (RP6) but `header @100: c1 e4` `c1=0` grid `37K`/`162K` still — `loadRoms` `0xC0000` hole vs `0x700000` relocate audit pending) + `garou`/`mslug3` (`green.neo-sma`/`kf.neo-sma` staged from the owner's ROM share to the RP6's SD card (`ROMs/arcade/`) now `SMA` `decryptGarouSma`/`Mslug3Sma` wired). `kof98umh`/`kofnw`/`kofxi` are **not MVS** (IGS PGM `ig-d3_*` / Atomiswave `ax220*`/`ax320*`) and correctly show the MVS BIOS popup. Palette-bank `8746d3f56` and `ssideki4` `hscale`/`wrap-around` fixes already verified.
 
 **RECENT (2026-08-19 → 2026-08-20, COMMITTED & PUSHED in v1.0.0):**
 - **Neo Geo Palette Banking Inversion (FIXED):** In `ares/ng/cpu/memory.cpp`, write handling for `$3A000E` (`REG_PALBANK0`) and `$3A001E` (`REG_PALBANK1`) was inverted (`$3A000E` was setting `pramBank = 1` and `$3A001E` setting `pramBank = 0`). Fixed so `$3A000E` selects bank 0 and `$3A001E` selects bank 1, resolving wrong palette banks during gameplay (e.g. blue grass in *The Ultimate 11*).
@@ -10499,14 +10629,14 @@ ares has a dedicated Neo Geo CD fork branch by Luke Usher: `https://github.com/a
 - **Matched native comparison protocol:** [mario-tennis-benchmark.md](mario-tennis-benchmark.md).
 - **Development/change gate:** [development-process.md](development-process.md).
 - **README.md** (repo root) — full systems matrix, feature list, build requirements.
-- **Prior huge conversation (grep for context):** `/home/garyb/Desktop/agent-mode-conversation.json`.
+- **Prior huge conversation (grep for context):** `agent-mode-conversation.json`, kept outside the repository.
 
 ## Repo Layout & Key Files
-- `/home/garyb/LLM-Projects/phobos/android` — Android app Gradle project.
+- `android` — Android app Gradle project.
   - `app/src/main/cpp/PhobosRunner.cpp` — Platform bridge: emulation thread, AndroidPlatform (input/video/audio/pak), save import/export, settings sync.
   - `PhobosRunner.hpp`, `PhobosJNI.cpp`, `PhobosCore.kt`, `MainViewModel.kt`, `EmulatorScreen.kt`, `SettingsStore.kt`, `PathSettingsScreen.kt`, `MainActivity.kt`, `TouchControls.kt`, `GameInputState.kt`.
-- `/home/garyb/LLM-Projects/phobos/ares` — Native core fork (N64 in `ares/n64/`, parallel-RDP Vulkan in `n64/vulkan/`).
-- `/home/garyb/LLM-Projects/phobos/thirdparty/` — parallel-rdp, sljit, adrenotools, volk, etc.
+- `ares` — Native core fork (N64 in `ares/n64/`, parallel-RDP Vulkan in `n64/vulkan/`).
+- `thirdparty/` — parallel-rdp, sljit, adrenotools, volk, etc.
 
 ## Historical Build / Deploy / Test Notes
 
@@ -10515,7 +10645,7 @@ instructions. Use [development-process.md](development-process.md) and the
 requested flavor's real production path before any future build or device
 validation.
 - Historical build: `gradle app:assembleDebug`. Historical deploy: IDE deploy module `:app`, `DEFAULT_ACTIVITY`, RUN.
-- Device: serial **49016109** (Retroid Pocket 6, Adreno 740, custom Turnip driver at `files/gpu_drivers/libvulkan_freedreno.so`).
+- Device: the RP6 (Retroid Pocket 6, Adreno 740, custom Turnip driver at `files/gpu_drivers/libvulkan_freedreno.so`).
 - Logcat tags: `Phobos`, `PhobosCore`, `PhobosJNI`, `PhobosVulkan`, `Granite`, `hook_impl`, `vulkan`.
 
 ## Verified Major Features & Recent Fixes
@@ -10571,7 +10701,7 @@ remain inventoried/deferred rather than silently dropped.
 - GPU acceleration: Not practical for Gradle/C++ compilation (CPU-bound)
 
 **ADB from VS Code terminal:**
-- Device: `adb devices` — should show **49016109** (Retroid Pocket 6)
+- Device: `adb devices` — should show the RP6's serial (Retroid Pocket 6)
 - Install: `adb install -r android/app/build/outputs/apk/modern/debug/app-modern-debug.apk`
 - Launch: `adb shell am start -n com.phobos.emulator/.MainActivity`
 - Logcat: `timeout 60 adb logcat | grep Phobos` (or use `-c` to clear first)
