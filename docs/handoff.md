@@ -93,11 +93,14 @@ logs are kept outside the repository.
   finishes, the .zsync in dist/ and the folder still empty, as with `OWD` unset; without the change it stops, the
   .zsync in that folder. linuxdeploy doesn't read `OWD`: in its AppImage only the appimagetool bundled with its
   AppImage plugin does, and the script doesn't use that plugin.
-- **Left**: the copies on v2.4.0, a GitHub write after review: `type2-runtime-fedfad51a-x86_64` (the runtime) and
-  `type2-runtime-fedfad51acc2860b2916a1eef32ba4a500ff31ef.tar.gz`, with `fuse-3.15.0.tar.xz` and
-  `fuse-3.15.0-type2-runtime-mount.c.diff` beside them, uploaded to the existing release (a new tag would start the
-  tag workflows). The PR's CI shows the pinned tools, the check and the artifact's files; the first version tag after
-  this, the release upload.
+- **The copies on v2.4.0**, uploaded on 23 Oct after the independent review's pass, to the existing release (nothing
+  replaced, and no new tag, which would start the tag workflows): `type2-runtime-fedfad51a-x86_64` (the runtime) and
+  `type2-runtime-fedfad51acc2860b2916a1eef32ba4a500ff31ef.tar.gz`, which the packaging script tries first, and
+  `fuse-3.15.0.tar.xz`, `fuse-3.15.0-type2-runtime-mount.c.diff` and
+  `type2-runtime-8f39b89e2ac31e1640b3d3f7e9a5108e6ce805fa.tar.gz`, so v2.4.0's own AppImage, whose runtime is 8f39b89's
+  build, has its sources beside it too. Each was downloaded back and its sha256 checked; GitHub's digests agree.
+- **Left**: the PR's CI shows the pinned tools, the check and the artifact's files; the first version tag after this,
+  the release upload.
 
 ## PSP Vulkan: Burnout Legends at 4x shown from the GPU, after a finish and past a texture's move — 2026-10-22
 
