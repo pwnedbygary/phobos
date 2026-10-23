@@ -664,7 +664,7 @@ the repair outside this document.
 > the tiebreaker above it.
 
 > [!IMPORTANT]
-> **Docs:** ALWAYS update BOTH the handoff prompt (`~/Desktop/phobos-handoff-to-new-chat.md`)
+> **Docs:** ALWAYS update BOTH the handoff prompt (`phobos-handoff-to-new-chat.md`, kept outside the repository)
 > AND this plan whenever work may carry into a new chat — findings, root causes, decisions,
 > and current active work, so a fresh chat can resume without re-investigating.
 
@@ -810,7 +810,7 @@ the repair outside this document.
 
 ### Open tasks (full-width list — see Detailed Task Notes for full write-ups)
 
-- **Neo Geo MVS/AES — FINISH CORE FIRST (gates everything below):** graphics FIXED (vscale/`loadZoomy` + vflip/zoom decode; KOF2003 verified 59.2 FPS); P1/P2 input mirror FIXED (player-aware binding in `PhobosRunner.cpp::controllerPlayerIndex` — verified on-device: P1 only). **Audio works** (KOF2003 confirmed on-device) — the `ring buffer 0/12000` log line is suspected to be a string-formatting bug, not a real fault (verify formatting). Then broad compat pass via the matrix. PCEngineCD deferred (doc-only bug) until NG fully stable. **2026-08-24:** `e92486f72` vflip tile-ordering regression REVERTED in `ares/ng/lspc/render.cpp` (hunk restored to exact `b1c0a9fe1` code — contradicted MAME `neogeo_spr.cpp`); `kof2003`/`kof98` (PROGSF1)/`kof99` (SMA) titles verified clean on-device `49016109`; `ssideki4` in-match field garble = separate pre-existing zoom-path issue. _Status: 🟢 NG graphics+controls+audio done; compat pass remaining · Diff: 🟢 (verify log)_
+- **Neo Geo MVS/AES — FINISH CORE FIRST (gates everything below):** graphics FIXED (vscale/`loadZoomy` + vflip/zoom decode; KOF2003 verified 59.2 FPS); P1/P2 input mirror FIXED (player-aware binding in `PhobosRunner.cpp::controllerPlayerIndex` — verified on-device: P1 only). **Audio works** (KOF2003 confirmed on-device) — the `ring buffer 0/12000` log line is suspected to be a string-formatting bug, not a real fault (verify formatting). Then broad compat pass via the matrix. PCEngineCD deferred (doc-only bug) until NG fully stable. **2026-08-24:** `e92486f72` vflip tile-ordering regression REVERTED in `ares/ng/lspc/render.cpp` (hunk restored to exact `b1c0a9fe1` code — contradicted MAME `neogeo_spr.cpp`); `kof2003`/`kof98` (PROGSF1)/`kof99` (SMA) titles verified clean on-device (RP6); `ssideki4` in-match field garble = separate pre-existing zoom-path issue. _Status: 🟢 NG graphics+controls+audio done; compat pass remaining · Diff: 🟢 (verify log)_
 - **PER-CORE + PER-GAME CONTROLLER REMAPPING — NEXT PRIORITY (immediately after NG stable):** Tasks **13a** (per-core custom layouts), **13b** (per-core rebinding), **13c** (multi-controller / per-player pad assignment), **13d** (per-game rebinding). All four done together (same code path). RetroArch-style 3-tier hierarchy: **Global** default → **Per-Core** override → **Per-Game** override (highest priority wins). Pulled up from QoL phase: Neo Geo C/D currently map to R1/R2 (`resolveButtonBit` Genesis-heritage bit mapping); per-core defaults + user rebinding (and per-game overrides for weird default schemes) is the proper fix. _Status: ⬜ Open · Diff: 🟡 Medium_
 - **#10c/10a — PCE FIXED (`2795e5813`); ZX 128K FIXED (`1bf97e3ac`); Neo Geo MVS/AES remaining** — PCE root cause was the missing PROFILE_PERFORMANCE define (empty PSG::main → scheduler deadlock); ZX 128K root cause was the tape pak attribute lookup mismatch (empty pak → resampler ratio 0 → infinite loop). Both verified on-device at full FPS. Neo Geo (MIA database path) still gated, needs measurement. _Status: 🟡 1/3 cores gated · Diff: 🔴 Hard (deep)_
 - **#72 — N64 RDP-ParaLLEl performance investigation vs mupen64plus-ae-turnip** — some games run WAY faster in pwnedbygary/mupen64plus-ae-turnip's RDP-ParaLLEl renderer than in our N64 core. Investigate the fork's paraLLEl-RDP integration (command-ring/timeline/pipeline threading, VI post-processing, any vendor/Adreno-specific fast paths, scheduler/affinity tweaks) and port anything applicable to make Phobos's N64 as fast as possible. Diff against upstream ares paraLLEL-RDP + our Task 45 perf pass. _Status: ⬜ Open · Diff: 🟡 Medium (research + selective port)_
@@ -893,7 +893,7 @@ the sector is XA audio (`subMode & 0x44`), routes matching XA audio to the CD-XA
 decoder, and leaves non-audio Mode 2 sectors available to the CD FIFO.
 
 **Verification:** Built `./gradlew app:assembleDebug`, deployed and launched on
-Retroid Pocket 6 (`49016109`), reproduced the failure with bounded diagnostics,
+Retroid Pocket 6, reproduced the failure with bounded diagnostics,
 then verified the fix visually with the instrumented build and again with a
 clean non-instrumented build. The Ape Escape opening cinematic plays normally
 and proceeds to the menu; emulation remains at full speed. Temporary diagnostics
@@ -1581,7 +1581,7 @@ The blocker is entirely the in-progress **NGCD M2** drive/IRQ/DMA pipeline.
 param/microcode registers; verify `Dma::start()` modes against MAME; (2) rework `CPU::main()` CDD dispatch so
 `type1` (sector completion) beats the constant 75 Hz `type2`; confirm `tick→readLbaToBuffer→ctrlChecks→raiseType1`.
 
-**Verification:** deploy to `49016109` (Retroid Pocket 6, SamSho RPG disc); grep `NGCD|CDD|CDC|DMA`;
+**Verification:** deploy to the RP6 (Retroid Pocket 6, SamSho RPG disc); grep `NGCD|CDD|CDC|DMA`;
 pass = `type1` increments + DMA start fires non-busy + code reaches `0x100000` → game boots; no AES/MVS regression.
 
 > [!IMPORTANT]
@@ -1629,21 +1629,21 @@ pass = `type1` increments + DMA start fires non-busy + code reaches `0x100000` �
 > https://wiki.neogeodev.org/index.php/Main_Page
 
 **Environment**
-- Device: **Retroid Pocket 6**, serial **49016109**. ⚠ If the NotificationShade has stable focus, key events
+- Device: **Retroid Pocket 6**. ⚠ If the NotificationShade has stable focus, key events
   never reach the app — reboot the device, unlock, then relaunch (adb keyevents only work with the app focused).
 - Test disc: **Samurai Shodown RPG** (TRACK 29 / TIME 68:12).
 - ROM: `/storage/EBFF-F6C0/ROMs/neo-geo-cd/Samurai Spirits ~ Samurai Shodown (Japan) (En,Ja).chd`
   (dir is `neo-geo-cd`, not `neogeocd`). **Do NOT copy the ROM to /data/local/tmp — the app gets EACCES.**
 - Build (⚠ /home is mounted read-only; gradle wrapper lock fails):
-  `GRADLE_USER_HOME=/home/garyb/LLM-Projects/phobos/android/.gradle-home ./gradlew app:assembleModernDebug`
+  `GRADLE_USER_HOME=<checkout>/android/.gradle-home ./gradlew app:assembleModernDebug`
   → `app/build/outputs/apk/modern/debug/app-modern-debug.apk`.
 - **ALWAYS verify the native lib rebuilt**: `unzip -p <apk> lib/arm64-v8a/libphobos_android.so > /tmp/x.so &&
   grep -c "<new marker string>" /tmp/x.so` — string present = native picked up the change. (Burned twice.)
 - Deploy: `adb shell am force-stop com.phobos.emulator && adb install -r <apk> && adb logcat -c &&`
   `adb shell "am start -n com.phobos.emulator/.MainActivity --es load_uri 'file:///...shodown...chd' --es load_name SamShodown --es load_system 'Neo Geo CD'"` (~30-45 s to CD Player, ~60-90 s to title screen).
-- BIOS: `neocdz.bin` from `/home/garyb/Mounts/Emulation/Emulation/APKs/neocd.zip`, 524288 bytes. Working copies:
+- BIOS: `neocdz.bin` from the owner's copy of `neocd.zip`, 524288 bytes. Working copies:
   `ngcd_work/ngcd_bios.bin` (raw file) and **`ngcd_work/bios_swapped.bin` (the file the 68K actually executes —
-  ALWAYS disassemble THIS one)**. Helper: `/tmp/disasm_bios.py <start> <end>` (capstone m68k on swapped).
+  ALWAYS disassemble THIS one)**. Helper: a scratch `disasm_bios.py <start> <end>` (capstone m68k on swapped).
 
 **THE #1 GOTCHA: the BIOS file is byte-swapped.** `ares/ng/system/system.cpp:146` loads the BIOS with
 `fp->readl(2L)` (little-endian 16-bit word). The 68K therefore executes **each file word with its byte lanes
@@ -1775,7 +1775,7 @@ libretro `src/memory_input.cpp` is the authoritative controller model:
 - Wiki: https://wiki.neogeodev.org/index.php/Main_Page (68k memory map, Memory_mapped_registers, DMA, LC8953).
 
 **Tooling notes**
-- Static disasm: `ngcd_work/bios_swapped.bin` + `/tmp/disasm_bios.py` (capstone CS_ARCH_M68K). Beware data
+- Static disasm: `ngcd_work/bios_swapped.bin` + the scratch `disasm_bios.py` (capstone CS_ARCH_M68K). Beware data
   interleave — spammy regex scans over data pages produce false positives.
 - All TEMP diagnostics (ST/WR/TYPWR/WRX/P1RD/SB1RD/SELW traces, cputrace2.txt, RPL/import/GETSTAT/dbgPrint,
   SECT/RAWREAD/initTransfer dumps, rdCtrl probe, SETTLE EXPIRE/HLE logs, DMA logs, IRQ counter print) have
@@ -1841,7 +1841,7 @@ characters, backgrounds.
    machine reads CDC regs the pipeline hasn't written (DISC I/O ERROR ID=0000/0002, seen even at 2x).
 8. **`dumpNgGfx` harness** kept: `--ez dump_ng_gfx true` → `ng_{spr,fix,vram,pram,wram}.raw` (`System::dumpNgGfx`).
 
-**2026-09-01 static round — NGCD disc file format (full conclusions; scratch in /tmp/opencode/ngcd_static —**
+**2026-09-01 static round — NGCD disc file format (full conclusions; scratch kept outside the repository —**
 `ssrpg.bin`/`ssrpg.cue` from `chdman extractcd`, `ng_*.raw` pulled from the device, `neocd/` + `geolith/` clones):
 
 1. **Disc layout**: raw **2352-byte sectors** (MODE1/2352; LBA N at offset N*2352; user data at +16; the
@@ -1887,7 +1887,7 @@ L1→B+C, L2→A+B+C, R3→B+C+D (bitmask per core button; supersedes Genesis-he
 systems). Full per-core/per-game rebinder remains Tasks 13a-13d (3-tier hierarchy — next priority after
 NGCD stable).
 
-#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` `49016109`); **SMA grid (`kof99`/`kof2000`/`garou`/`mslug3`) FIXED 2026-08-22** — was a hardcoded 68K reset-vector override (`p[0..7]=0x10f300`) in all 6 SMA branches of `decrypt()`; only kof2000 matched, the others jumped to a wrong entry → BIOS slot-grid. Removed override (kept `NEO-GEO` header patch); P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. The `loadRoms 0xC0000 hole` hypothesis was WRONG. + SELECT-coin and switch-game SIGSEGV FIXED 2026-08-22 (see detailed note below)., plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
+#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` on the RP6); **SMA grid (`kof99`/`kof2000`/`garou`/`mslug3`) FIXED 2026-08-22** — was a hardcoded 68K reset-vector override (`p[0..7]=0x10f300`) in all 6 SMA branches of `decrypt()`; only kof2000 matched, the others jumped to a wrong entry → BIOS slot-grid. Removed override (kept `NEO-GEO` header patch); P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. The `loadRoms 0xC0000 hole` hypothesis was WRONG. + SELECT-coin and switch-game SIGSEGV FIXED 2026-08-22 (see detailed note below)., plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
 
 **✅ PCE / PC Engine CD / SuperGrafx — FIXED & VERIFIED 2026-08-18 (commit `2795e5813`):**
 
@@ -2209,8 +2209,8 @@ Phobos (`pwnedbygary/phobos`, branch `master`). The turnip fork is a Mupen64Plus
 video plugin. Phobos uses the ares C++ emulation core with parallel-RDP directly embedded.
 
 **Repo paths referenced:**
-- Turnip fork local: `/home/garyb/LLM-Projects/mupen64plus-ae-turnip/`
-- Phobos local: `/home/garyb/LLM-Projects/phobos/`
+- Turnip fork local: a local checkout of mupen64plus-ae-turnip
+- Phobos local: a local checkout of this repository
 
 ---
 
@@ -2487,7 +2487,7 @@ RDP) is the dominant difference.
 
 #### 2026-08-22 → 2026-08-23 — Neo Geo: SMA decrypt endianness + BML word_swap FIXED & VERIFIED ON-DEVICE
 
-Built `./gradlew assembleModernDebug`, deployed to Retroid Pocket 6 (`49016109`). All device Neo Geo games (including SMA titles `kof99`, `kof2000`, `garou`, `mslug3`, non-SMA `kof98`, `kof94`, `kof2001`, `samsho`) verified to boot into attract/title mode @ 59.2 FPS.
+Built `./gradlew assembleModernDebug`, deployed to Retroid Pocket 6. All device Neo Geo games (including SMA titles `kof99`, `kof2000`, `garou`, `mslug3`, non-SMA `kof98`, `kof94`, `kof2001`, `samsho`) verified to boot into attract/title mode @ 59.2 FPS.
 
 **Fix 1 — SMA diagnostic-grid (kof99 / kof2000 / garou / mslug3):**
 - **Symptom:** These titles booted to a BIOS slot-select / diagnostic cross-hatch grid instead of the title.
