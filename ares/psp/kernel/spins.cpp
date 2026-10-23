@@ -4,11 +4,13 @@
 //thread or a handler keeps moves on; the Twisted Metal, Disaster Report 3 and Armored Core intro movies ask the
 //movie's ring how full it is (and signal a semaphore already at its most) in 90,000 to 370,000 calls a frame till the
 //reader thread feeds it; Resistance asks the GE whether its list is done (sceGeListSync(id, 1)), with the PSP's GE
-//timing some 285,000 times a frame, till it is. (Need for Speed: Shift asks sceGeDrawSync(1) some 45,000 times a
-//frame, but each turn also takes a semaphore that's free, a wait that succeeds at once and so isn't calm: its loop is
-//never one that can be skipped.) A system call costs the clock one cycle, so a turn of such a loop is a few dozen
-//cycles of the PSP's time, and nothing else happens till the CPU's go ends at the next thing due (Kernel::run(): only
-//system functions bring that end sooner, and these, quiet or calm, don't).
+//timing some 285,000 times a frame, till it is; Need for Speed: Shift asks sceGeDrawSync(1) some 45,000 times a frame,
+//each turn also signalling a semaphore and taking it back, twice, with waits that succeed at once (calm: they wake no
+//thread and hand the CPU to none), as Burnout Dominator's and Legends' turns do; and Midnight Club: L.A. Remix checks
+//its callbacks (sceKernelCheckCallback) some 8,000 times a frame with none due (calm). A system call costs the clock
+//one cycle, so a turn of such a loop is a few dozen cycles of the PSP's time, and nothing else happens till the CPU's
+//go ends at the next thing due (Kernel::run(): only system functions bring that end sooner, and these, quiet or calm,
+//don't).
 //
 //So once a loop has come round the same way a few times, the kernel proves that its next turn leaves everything a
 //later turn sees as it was, and jumps ahead by whole turns to just before the go's end, the last turns running as
@@ -17,11 +19,12 @@
 //  - its loads and stores reach main RAM alone, the stores kept aside (the turn's own loads see them) and only to
 //    pages whose stores do nothing more (spinStorable(): no compiled code there, none the GE watches);
 //  - its system calls are worked out by the kernel without being made (Function::spin): what each returns, what it
-//    writes, what it changes (rotating the caller's own line, alone in it: the ready order's count), and which of the
-//    bytes it writes the time decides (a thread's run time), which the turn must never read, nor write over another
-//    way;
+//    writes, what it changes (rotating the caller's own line, alone in it: the ready order's count; a semaphore's
+//    count, as the turn's own signals and waits so far have it), and which of the bytes it writes the time decides (a
+//    thread's run time), which the turn must never read, nor write over another way;
 //  - it must come back to the call it started after (the anchor: the same syscall, going on to the same place), every
-//    register as it was, and every byte it stored holding what memory holds (but those the time decides).
+//    register as it was, every byte it stored holding what memory holds (but those the time decides), and every
+//    semaphore's count where it was.
 //Then every turn does what this one did, at its own time: the CPU is deterministic (the interpreter and compiled code
 //alike: tests/allegrex holds them to it), every value it reads is the same, and so is what each function returns. The
 //go ends at the first block end where the run's count reaches its limit, and a turn's blocks end at the same counts
@@ -59,6 +62,13 @@ struct SpinShadow : Allegrex {
     u32 executed;
   };
   std::vector<Timed> timed;
+  //What the turn's calls added to each semaphore's count so far, less what they took, by its ID (spinSignalSema(),
+  //spinWaitSemaphore()): each back at 0 by the turn's end, or the turn changes it
+  std::map<u32, s64> semaphores;
+  auto held(u32 uid) const -> s64 {
+    auto found = semaphores.find(uid);
+    return found == semaphores.end() ? 0 : found->second;
+  }
 
   SpinShadow(Kernel& kernel, Memory& memory) : kernel(kernel), memory(memory) {
     syscallHook = [this](u32 code) { return this->kernel.spinCall(*this, code); };
@@ -198,7 +208,7 @@ auto Kernel::spinSkip() -> void {
   //theirs would have by the last turn's end if the push the window owes (geContendDue()) is at its most there, or no
   //more than before the first turn: so it is where that push falls and then rises at most along the turns, which it
   //does with each turn one stretch (one system call), or with the turns moving no lines (then any number: a spin's
-  //turn makes no waits, so its stretches are all instructions), the window's time the same kind throughout
+  //turn never waits, so its stretches are all instructions), the window's time the same kind throughout
   //(geContendBound()): along the turns the cycles passed, the lines and the CPU's time with its stalls grow evenly and
   //the list's shares stay, so what the window owes is monotone along them, and each of its parts (geContendOwing():
   //the front end's a / (1 + a), the back end's b) times the cycles passed is convex, or concave and rising. The one
@@ -209,17 +219,19 @@ auto Kernel::spinSkip() -> void {
   //a skip inexact, so refusing at either end refuses more than it must, never less. With no lines in the window nor
   //the turns' the window owes nothing. And the last two turns run moved the same lines with as many system calls
   //(spinTurn()): each turn skipped moves what they did (below).
-  if(gePspTiming && !spin.steady) return;
+  if(gePspTiming && !spin.steady) return void(spinChecks.unsteady++);
   if(gePspTiming && ge.thread) geFold(true);  //(the window and the GE's time as the synchronous GE has them)
   if(gePspTiming && geDoneAt > cycles) {
-    if(geDoneAt <= cycles + skipped) return;
+    if(geDoneAt <= cycles + skipped) return void(spinChecks.partway++);
     bool moving = spin.moved[0] || spin.moved[1] || spin.moved[2] || spin.moved[3];
     GeWindow end = geWindow;
     end.passed += skipped, end.instructions += skipped;
     end.fills += turns * (spin.moved[0] + spin.moved[3]), end.writebacks += turns * spin.moved[1];
     end.uncached += turns * spin.moved[2];
     bool lines = moving || geWindow.fills || geWindow.writebacks || geWindow.uncached;
-    if(lines && ((moving && spin.calls > 1) || geContendBound(geWindow) != geContendBound(end))) return;
+    if(lines && ((moving && spin.calls > 1) || geContendBound(geWindow) != geContendBound(end))) {
+      return void(moving && spin.calls > 1 ? spinChecks.calls++ : spinChecks.kind++);
+    }
     if(lines && (geContendCapped(geWindow) || geContendCapped(end))) return spinRefused(skipped);
   }
   SpinShadow shadow{*this, memory};
@@ -312,6 +324,8 @@ auto Kernel::spinProve(SpinShadow& shadow) -> bool {
       }
     }
   }
+  //(every semaphore's count where it was: what the turn's waits took, its signals gave back)
+  for(auto& [uid, net] : shadow.semaphores) if(net) return false;
   return true;
 }
 
@@ -380,11 +394,57 @@ auto Kernel::spinRotateThreadReadyQueue(SpinShadow& shadow, u64) -> bool {
   return true;
 }
 
-//Refused (no such semaphore, a count past its most): a signal that counts changes the semaphore.
+//Refused (no such semaphore, a count past its most in the turn's view, its own signals and waits so far counted): its
+//result alone. One that counts, with no thread waiting on that semaphore and no better thread to take the CPU
+//(reschedule(), with the interrupts as the turn has them at the call: mtic may have changed them since the anchor):
+//the count up, in the turn's view. Any other may wake a thread or hand the CPU over.
 auto Kernel::spinSignalSema(SpinShadow& shadow, u64) -> bool {
-  u32 refused = signalRefused(shadow.arg(0), s32(shadow.arg(1)));
-  if(!refused) return false;
-  shadow.ipu.r[2] = refused;
+  u32 uid = shadow.arg(0);
+  s32 count = s32(shadow.arg(1));
+  if(u32 refused = signalRefused(uid, count, shadow.held(uid))) return shadow.ipu.r[2] = refused, true;
+  for(auto& [id, thread] : threads) {
+    if(thread->status == Status::Waiting && thread->wait == Wait::Semaphore && thread->waitID == uid) return false;
+  }
+  if(wouldPreempt(shadow.scc.interrupts)) return false;
+  shadow.semaphores[uid] += count;
+  shadow.ipu.r[2] = 0;
+  return true;
+}
+
+//A wait refused, the refusal decided with the interrupts as the turn has them at the call: its result alone (but
+//ILLEGAL_CONTEXT's, which comes only while interrupting, where no spin is skipped). One whose count is there in the
+//turn's view, a CB wait's callbacks not due (nothing makes one due within a go: a callback is notified between goes,
+//or by a call that is neither quiet nor calm): the count taken, in the turn's view. One that would wait, or run its
+//callbacks, isn't worked out.
+auto Kernel::spinWaitSemaphore(SpinShadow& shadow, bool callbacks) -> bool {
+  u32 uid = shadow.arg(0);
+  s32 count = s32(shadow.arg(1));
+  Semaphore* semaphore = nullptr;
+  if(u32 refused = semaphoreWaitRefused(uid, count, shadow.scc.interrupts, semaphore)) {
+    if(refused == ErrorIllegalContext) return false;
+    return shadow.ipu.r[2] = refused, true;
+  }
+  if(callbacks && callbacksDue()) return false;
+  if(s64(semaphore->count) + shadow.held(uid) < count) return false;
+  shadow.semaphores[uid] -= count;
+  shadow.ipu.r[2] = 0;
+  return true;
+}
+
+auto Kernel::spinWaitSema(SpinShadow& shadow, u64) -> bool {
+  return spinWaitSemaphore(shadow, false);
+}
+
+auto Kernel::spinWaitSemaCB(SpinShadow& shadow, u64) -> bool {
+  return spinWaitSemaphore(shadow, true);
+}
+
+//Nothing due to run: 0. Not its ILLEGAL_CONTEXT path (from a handler or a callback: the kernel's call there isn't calm,
+//so no turn making it is skipped), nor a check with one due, which runs it.
+auto Kernel::spinCheckCallback(SpinShadow& shadow, u64) -> bool {
+  if(interrupting || (current && current->inCallback)) return false;
+  if(current && pendingCallback(*current)) return false;
+  shadow.ipu.r[2] = 0;
   return true;
 }
 

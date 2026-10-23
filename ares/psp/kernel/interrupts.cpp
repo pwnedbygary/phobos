@@ -94,9 +94,16 @@ auto Kernel::callReturned() -> void {
 //before looking at what it waits on (an ID that isn't one); the few arguments it checks ahead of that, its callers
 //check first.
 auto Kernel::mayWait() -> bool {
-  if(interrupting) return result(ErrorIllegalContext), false;
-  if(dispatchSuspended || !interruptsEnabled) return result(ErrorCanNotWait), false;
+  if(u32 refused = mayWaitRefused(interruptsEnabled)) return result(refused), false;
   return true;
+}
+
+//mayWait()'s refusal, changing nothing (0: it may wait), with the CPU's interrupts as given: its own, or a spin's
+//turn's as the turn has them (spins.cpp).
+auto Kernel::mayWaitRefused(bool interrupts) const -> u32 {
+  if(interrupting) return ErrorIllegalContext;
+  if(dispatchSuspended || !interrupts) return ErrorCanNotWait;
+  return 0;
 }
 
 //For a function that makes the calling thread a mutex's holder, or takes its locks off (trying a lock, unlocking,
