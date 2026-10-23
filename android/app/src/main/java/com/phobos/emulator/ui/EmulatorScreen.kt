@@ -265,6 +265,12 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             override fun slowMotionHeld(held: Boolean) {
                 PhobosCore.setSlowMotion(if (held) SLOW_MOTION_SPEED else 1f)
             }
+            override fun later(delayMs: Long, run: () -> Unit) {
+                scope.launch {
+                    delay(delayMs)
+                    run()
+                }
+            }
         })
     }
     DisposableEffect(Unit) {

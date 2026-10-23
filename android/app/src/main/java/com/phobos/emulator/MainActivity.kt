@@ -104,6 +104,7 @@ class MainActivity : ComponentActivity() {
         override fun onInputDeviceAdded(deviceId: Int) {}
         override fun onInputDeviceChanged(deviceId: Int) {}
         override fun onInputDeviceRemoved(deviceId: Int) {
+            InputLog.note { "device $deviceId removed" }
             windowKeys.reset()
             viewModel.gameKeys?.forgetPressedKeys()
             GameInputState.releaseAllButtons()

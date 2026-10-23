@@ -25,6 +25,8 @@ class HotkeyRoutingTest {
     private var onScreen = true
     private var loaded = true
     private lateinit var coreInput: GameInputState.CoreInput
+    /** A test's own list of the taps waiting their moment (GameKeys.Screen.later), run by hand; null: at once. */
+    private var waiting: MutableList<() -> Unit>? = null
 
     /** The game screen as GameKeys asks it: the game running, every action applying. */
     private val gameKeys = GameKeys(object : GameKeys.Screen {
@@ -48,6 +50,9 @@ class HotkeyRoutingTest {
         }
         override fun slowMotionHeld(held: Boolean) {
             events += if (held) "slow motion held" else "slow motion let go"
+        }
+        override fun later(delayMs: Long, run: () -> Unit) {
+            waiting?.add(run) ?: run()
         }
     })
 
@@ -149,6 +154,46 @@ class HotkeyRoutingTest {
         key(DPAD_RIGHT, down = false)
         key(MODE, down = false)
         assertEquals(listOf(HotkeyAction.PAUSE, HotkeyAction.NEXT_SLOT), run)
+    }
+
+    @Test
+    fun aTapWaitsAMomentAndItsControllerGoingAwayMeanwhileDropsIt() {
+        val waiting = mutableListOf<() -> Unit>()
+        this.waiting = waiting
+        tap(MODE)
+        assertTrue("Pause waits its moment", run.isEmpty())
+        waiting.removeAt(0)()
+        assertEquals(listOf(HotkeyAction.PAUSE), run)
+        // Mode held as its controller goes: Android lets go of it, here before it reports the controller gone, and the
+        // activity's onInputDeviceRemoved then forgets the keys.
+        key(MODE, down = true)
+        assertTrue(key(MODE, down = false))
+        window.reset()
+        gameKeys.forgetPressedKeys()
+        GameInputState.releaseAllButtons()
+        waiting.forEach { it() }
+        assertEquals("no Pause for the controller going away", listOf(HotkeyAction.PAUSE), run)
+    }
+
+    @Test
+    fun aHatTapWaitsItsMomentTooAndItsControllerGoingAwayMeanwhileDropsIt() {
+        // The RP6's D-pad is a hat: down alone is a tap here, leading down + R1.
+        hotkeys = hotkeysOf(HotkeyAction.PAUSE to listOf(DPAD_DOWN), HotkeyAction.SAVE_STATE to listOf(DPAD_DOWN, R1))
+        val waiting = mutableListOf<() -> Unit>()
+        this.waiting = waiting
+        move(hatY = 1f)
+        move()
+        assertTrue("Pause waits its moment", run.isEmpty())
+        waiting.removeAt(0)()
+        assertEquals(listOf(HotkeyAction.PAUSE), run)
+        // Down held as the controller goes, if its last report lets go of the hat: the activity then forgets the keys.
+        move(hatY = 1f)
+        move()
+        window.reset()
+        gameKeys.forgetPressedKeys()
+        GameInputState.releaseAllButtons()
+        waiting.forEach { it() }
+        assertEquals("no Pause for the controller going away", listOf(HotkeyAction.PAUSE), run)
     }
 
     @Test

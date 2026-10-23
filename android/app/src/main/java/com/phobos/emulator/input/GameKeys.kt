@@ -7,6 +7,12 @@ import androidx.compose.ui.focus.FocusState
 val VOLUME_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
 
 /**
+ * How long a tap waits after its release: on the RP6 the activity hears of a controller gone within 3 ms of the
+ * release Android sends as it goes (InputLog).
+ */
+private const val TAP_WAIT_MS = 100L
+
+/**
  * The game screen's controller keys: its key handler, its hat listener and its focus, as EmulatorScreen and the
  * activity's window run them (and the JVM tests, which replay the RP6's events through this). The window hands it
  * every key while the game is on screen, whichever view has focus. Hotkeys come first, then the buttons a key is bound
@@ -33,18 +39,23 @@ class GameKeys(private val screen: Screen) : KeyHandler {
         fun frameAdvanceHeld(held: Boolean)
         /** The Slow Motion combo went down (true) or was let go (false). */
         fun slowMotionHeld(held: Boolean)
+        /** Runs [run] [delayMs] from now on this thread, unless the screen has gone by then; at once by default. */
+        fun later(delayMs: Long, run: () -> Unit) = run()
     }
 
     private val tracker = HotkeyTracker()
     private var fastForwardHeld = false
     private var slowMotionHeld = false
     private var frameAdvanceHeld = false
+    /** How many times the keys have been forgotten ([forgetPressedKeys]): a tap waiting from before is dropped. */
+    private var forgets = 0
 
     /**
      * Forgets the keys held, re-arming hotkey combos and letting go of the hold actions: as the game pauses, a PSP
      * dialog opens or a controller goes away.
      */
     fun forgetPressedKeys() {
+        forgets++
         tracker.reset()
         GameInputState.consumedHotkeyKeys = emptySet()
         endHolds()
@@ -105,11 +116,26 @@ class GameKeys(private val screen: Screen) : KeyHandler {
 
         // A press completes combos, each once however its keys arrive; a release completes only a tap.
         val completed = tracker.completions(hotkeys)
-        for (action in completed + tracker.taps(hotkeys)) {
+        for (action in completed) {
             if (action !in HotkeyAction.HOLDS && screen.hotkey(action)) consumed = true
         }
+        runTaps(tracker.taps(hotkeys))
         updateHolds(hotkeys, completed)
         return consumed
+    }
+
+    /**
+     * A tap's actions run a moment after its key is let go ([TAP_WAIT_MS]), unless the keys are forgotten first: a
+     * controller going away lets go of its keys, Android sometimes before it reports the controller gone (the
+     * activity's onInputDeviceRemoved then forgets them), and that release is no tap.
+     */
+    private fun runTaps(actions: List<String>) {
+        val taps = actions.filter { it !in HotkeyAction.HOLDS }
+        if (taps.isEmpty()) return
+        val at = forgets
+        screen.later(TAP_WAIT_MS) {
+            if (forgets == at) taps.forEach { screen.hotkey(it) }
+        }
     }
 
     /**
@@ -123,9 +149,10 @@ class GameKeys(private val screen: Screen) : KeyHandler {
         GameInputState.consumedHotkeyKeys = tracker.consumedTokens
         GameInputState.applyHotkeyConsumption()
         val completed = tracker.completions(hotkeys)
-        for (action in completed + tracker.taps(hotkeys)) {
+        for (action in completed) {
             if (action !in HotkeyAction.HOLDS) screen.hotkey(action)
         }
+        runTaps(tracker.taps(hotkeys))
         updateHolds(hotkeys, completed)
     }
 

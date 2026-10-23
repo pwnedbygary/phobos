@@ -35,6 +35,58 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## A controller going away on Android with a tap's key held no longer runs the tap: the tap waits 100 ms, and the keys forgotten as the controller goes drop it — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `833fe8cbe`. The desktop's fix for a pad unplugged with Guide held (`8d2f75a10`)
+left Android's case open; the owner chose on 2026-10-22 to check it on the RP6 with a virtual controller, and to fix it
+if so. Changed: `input/GameKeys.kt`, `ui/EmulatorScreen.kt`, a log line in `MainActivity.kt`, `HotkeyRoutingTest.kt`,
+this file (the entry below's Next too) and the plan row.
+- **Seen**: on the RP6, a test build of `833fe8cbe` beside the owner's apps (`com.phobos.emulator.hkc`) with Pause
+  bound to Back alone, so that Back is a tap, a Game Boy game running and a virtual pad (`uinput`): a tap paused the
+  game; Back held and the pad removed opened the pause menu in 3 runs of 5; the pad removed with nothing held did
+  nothing. Android lets go of a key held as its device goes, 3 to 8 ms after its InputReader removes the device: in a
+  cancelled release (`FLAG_CANCELED`; its dispatcher's, by AOSP's code, not seen) in four of the runs, and in a plain
+  one in the fifth. Derived, the build logging no removal: the release ran the tap when it reached the game's hotkeys
+  before the activity's `onInputDeviceRemoved` forgot the keys (on the fixed build the two come in either order).
+- **The fix**: a tap's actions now run 100 ms after its key is let go (`GameKeys.Screen.later`, in the game screen's
+  coroutine scope, so that a tap still waiting goes with the screen), unless the keys are forgotten first
+  (`forgetPressedKeys`, which `onInputDeviceRemoved` calls, as a pause and a PSP dialog do). Combos still run as their
+  last key goes down. `InputLog` notes each device removed: on the RP6 the activity hears of it from 1 ms before the
+  release to 3 ms after it. The defaults have no tap (Back alone runs nothing): only a player who binds a key
+  alone where it also leads a longer binding has one, and sees the wait.
+- **Tests** (`HotkeyRoutingTest`): `aTapWaitsAMomentAndItsControllerGoingAwayMeanwhileDropsIt`, a Mode tap's Pause
+  waiting its moment, then running, and Mode held, let go of and the keys forgotten as `onInputDeviceRemoved` forgets
+  them running no Pause; `aHatTapWaitsItsMomentTooAndItsControllerGoingAwayMeanwhileDropsIt`, the same through the hat
+  (`onHatChanged`), D-pad down a tap. With taps run at once the first fails, and with the hat's run at once the second.
+- **Checks** (Gradle 9.6.0, JDK 17.0.20.1, NDK 28.2.13676358): both flavors' JVM tests (457 each, 0 failures) and
+  `assembleLegacyDebug`; on the RP6, over Wi-Fi, test builds of this tree's code (2.4.0-344-g833fe8cbe-hkc: the last,
+  its APK's sha256 `24520ecc…`, of the code as it is, `TAP_WAIT_MS`'s comment corrected since on the same lines; the
+  first, `47376605…`, with that comment shorter):
+  the tap paused, 102 and 103 ms after its release; Back held as the pad went, 22 runs, none paused. In 16 a cancelled
+  release came before the activity heard of the removal, the case the fix is for (the build before it paused in two
+  runs with a cancelled release); in 6 the removal came first (one of them with a plain release), which the code
+  before it handled already. A plain release ahead of the removal, which paused the build before it once, didn't come
+  in the 22 runs: the routing tests stand in for it, the wait not looking at a release's flags. Nothing held, no pause
+  (2 runs). The test app was uninstalled afterwards, its copy of the game with it.
+- **Docs**: the entry below's Next and the plan row's Open had the pull request's CI on the merge still to come; it
+  passed on `833fe8cbe` (Desktop Build run 39745315669, macOS included; PSP Core Tests 39745315753, its Android runner
+  job run again after Google's server failed the NDK's download; Android Build 39745315819).
+- **Limits**:
+  - A virtual pad on the RP6 alone: no real controller unplugged or switched off.
+  - A tap runs 100 ms after its release, where it ran at once; a removal Android reports later than that (not seen)
+    would still let the tap through.
+  - The window's own tap, the Library hotkey from behind the Library (`WindowKeys`), still runs at once: a controller
+    going away with its key held there may bring the game back (unchecked).
+  - The hotkeys don't read `FLAG_CANCELED`: a cancelled release with no controller going away (a window taking the
+    keys while a tap's key is held, say) still taps, as before (unchecked).
+  - Whatever forgets the keys within the 100 ms drops a waiting tap: a pause, a PSP dialog opening, any controller
+    going away. So a second tap within 100 ms of a Pause tap no longer unpauses, and a combo pressed meanwhile runs
+    before the tap.
+- **Next**: master merged again (#297, #299 and #298 since the last merge; this file conflicts at its top), then the
+  pull request's CI; a PSP system dialog's hotkeys from a hat D-pad (the owner's fifth follow-up, a Limit of the PSP
+  follow-ups' entry); and the entry below's Next, less the CI and Android's check of a controller going away (done
+  here).
+
 ## Master merged into the hotkey branch again: its 22 commits since the first merge, #295's PSP spin tests and #296's license notices — 2026-10-22
 
 Branch `improved-hotkeys`, on `8d2f75a10` (the entry below), with master `062dd53e2` merged into it as a merge commit:
@@ -87,9 +139,9 @@ had: this file (this entry, and a sentence in the entry below) and the hotkey ro
   first said (the renderer takes the first Vulkan device it finds); the suite ran again on lavapipe alone, as above. It
   also found the commit message's review lines lacking a diff hash. The full record is in the commit that carries this
   entry.
-- **Next**: the pull request's CI on the merge, its macOS job included; `tests/psp/movies.cpp`'s false warning under GCC
-  16 settled in the code, as GCC 13's four were (master's as much as this branch's: CI's runners may meet it when their
-  GCC moves on); and the entry below's Next, less the merge.
+- **Next**: the pull request's CI on the merge, its macOS job included (passed: the entry above);
+  `tests/psp/movies.cpp`'s false warning under GCC 16 settled in the code, as GCC 13's four were (master's as much as
+  this branch's: CI's runners may meet it when their GCC moves on); and the entry below's Next, less the merge.
 
 ## A pad unplugged with Guide held no longer taps Pause on the desktop: the releases SDL sends as it removes a pad count as the pad going away — 2026-10-22
 
