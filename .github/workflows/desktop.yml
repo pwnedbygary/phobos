@@ -8,7 +8,9 @@ name: Desktop Build
 # Each carries FFmpeg's libavcodec and libavutil for the PSP's music and movies, built by CMake
 # with thirdparty/ffmpeg/build.sh from FFmpeg's release, which is kept (the build named by its
 # own name: the script, the system, the compiler) and published beside each package: the
-# libraries' complete source, as the LGPL asks (LICENSE, FFmpeg).
+# libraries' complete source, as the LGPL asks (LICENSE, FFmpeg). The AppImage's runtime links
+# libfuse statically, so libfuse's source, type2-runtime's patch to it and type2-runtime's source
+# are published beside the AppImage too (LICENSE, AppImage runtime; scripts/appimage-pins.sh).
 
 # Branches build through their pull requests; a push trigger for them too would run every
 # commit twice.
@@ -120,6 +122,11 @@ jobs:
       - name: Package AppImage and zsync
         run: bash scripts/package-linux-appimage.sh build/linux-x64
 
+      # The AppImage begins with the runtime scripts/appimage-pins.sh pins, which still carries the libfuse and
+      # squashfuse versions LICENSE names; its type2-runtime commit is printed.
+      - name: Check the AppImage's runtime
+        run: bash scripts/check-appimage-runtime.sh dist/*.AppImage
+
       - name: Stage FFmpeg's source
         run: cp .cache/ffmpeg/ffmpeg-*.tar.xz dist/
 
@@ -131,6 +138,9 @@ jobs:
             dist/*.AppImage
             dist/*.AppImage.zsync
             dist/ffmpeg-*.tar.xz
+            dist/fuse-*.tar.xz
+            dist/fuse-*.diff
+            dist/type2-runtime-*.tar.gz
           if-no-files-found: error
 
   windows:
