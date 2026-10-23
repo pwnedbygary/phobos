@@ -1,12 +1,12 @@
 package com.phobos.emulator
 
 import android.animation.ValueAnimator
+import android.hardware.input.InputManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.net.Uri
 import android.util.Log
 import android.view.InputDevice
-import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
@@ -42,9 +42,13 @@ import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
+import com.phobos.emulator.input.FallbackKeys
 import com.phobos.emulator.input.GameInputState
-import com.phobos.emulator.input.InputBindings
+import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.InputLog
+import com.phobos.emulator.input.KeyHandler
+import com.phobos.emulator.input.WindowKeys
+import com.phobos.emulator.input.isSystemBack
 import com.phobos.emulator.launch.launchRequestOf
 import com.phobos.emulator.ui.ConsoleArtFetcher
 import com.phobos.emulator.ui.ConsoleArtKeyer
@@ -95,6 +99,29 @@ class MainActivity : ComponentActivity() {
 
     // Debug/test harness scope for the adb-driven ROM loader (intent extras).
     private val debugScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private val windowKeys = WindowKeys(object : WindowKeys.App {
+        override fun gameKeys(): KeyHandler? =
+            viewModel.gameKeys?.takeIf { viewModel.emulatorScreenVisible.value && viewModel.isLoaded.value }
+        override fun gameKeysHolding(keyCode: Int): KeyHandler? = viewModel.gameKeys?.takeIf { it.holdsKey(keyCode) }
+        override fun swappedAway() =
+            viewModel.isLoaded.value && viewModel.isPaused.value && !viewModel.emulatorScreenVisible.value
+        override fun hotkeys() = viewModel.activeControls.value.hotkeys
+        override fun heldAxes(): Set<Int> = GameInputState.hotkeyKeys
+        override fun swapBackToGame() = viewModel.swapBackToGame()
+    })
+    private val fallbackKeys = FallbackKeys()
+
+    private val inputDeviceListener = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) {}
+        override fun onInputDeviceChanged(deviceId: Int) {}
+        override fun onInputDeviceRemoved(deviceId: Int) {
+            InputLog.note { "device $deviceId removed" }
+            windowKeys.reset()
+            viewModel.gameKeys?.forgetPressedKeys()
+            GameInputState.releaseAllButtons()
+        }
+    }
 
     // The intro over the Library as the app opens (IntroSplash): whether it's playing, whether a key or a touch has
     // skipped it, and the keys it takes meanwhile.
@@ -186,58 +213,49 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Key events (D-Pad, face buttons) are handled by Compose's onKeyEvent while
-        // the emulator screen holds focus; this fallback catches them if focus is lost.
-        installKeyEventFallback()
+        // A controller gone with keys down never sends their releases: forget them, or a held modifier would keep
+        // holding the game's buttons back and a held button would stay down for the game.
+        getSystemService(InputManager::class.java).registerInputDeviceListener(inputDeviceListener, null)
 
-        // Window-level interception for the swap-screen RETURN hotkey. When the
-        // emulator screen is NOT visible and a game is loaded+paused (we swapped
-        // away), a focused Compose node on the library/settings screens absorbs
-        // key events, so the content-view listener never sees them. ViewRootImpl
-        // consults Window.Callback BEFORE any view dispatch, so the wrapper below
-        // sees every key event regardless of focus. (ComponentActivity restricts
-        // overriding dispatchKeyEvent itself — hence the callback wrapper.)
+        // Every key event of the window, before any view sees it: ViewRootImpl consults Window.Callback before
+        // dispatching to the focused view, so the wrapper below gets each one whichever view has focus. While a game
+        // is on screen, WindowKeys hands them all to its GameKeys; behind the Library it watches for the Library
+        // hotkey that brings the game back. (ComponentActivity restricts overriding dispatchKeyEvent itself, hence
+        // the callback wrapper.)
         val originalCallback = window.callback
         window.callback = object : android.view.Window.Callback by originalCallback {
-            private val pressedKeys = mutableSetOf<Int>()
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 InputLog.key("window", event)
                 viewModel.noteUserActivity()
+                // Two keys Android makes up aren't a controller's. A fallback (the Back an unhandled B gives, say,
+                // marked or not: FallbackKeys) follows a key the capture and the hotkeys have had already, and goes to
+                // neither; the navigation bar's or gesture's Back cancels a capture and goes to no hotkey. With no
+                // predictive back (the manifest), both come here as keys.
+                val fallback = fallbackKeys.isFallback(event.keyCode, event.deviceId, event.scanCode, event.downTime, event.flags)
+                val systemBack = isSystemBack(event.keyCode, event.deviceId)
+                // A controller that sends Back, which starts the default hotkeys, is remembered (the Hotkeys page warns
+                // while no controller connected ever has); neither of those Backs is a controller's.
+                if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN && !fallback && !systemBack) {
+                    event.device?.descriptor?.let(viewModel::noteBackPress)
+                }
                 // While the intro plays every key is its own and skips it (IntroKeys), the volume keys aside.
                 if (event.action != KeyEvent.ACTION_MULTIPLE &&
                     introKeys.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount,
                         event.eventTime, introPlaying) { introSkipped = true }
                 ) return true
                 // A press being captured for a binding goes nowhere else — including the screensaver.
-                val systemBack = event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
-                if (event.action != KeyEvent.ACTION_MULTIPLE &&
+                if (event.action != KeyEvent.ACTION_MULTIPLE && !fallback &&
                     viewModel.controlCapture.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, systemBack)
                 ) return true
                 if (viewModel.consumeScreensaverInput()) return true
-                val visible = viewModel.emulatorScreenVisible.value
-                val loaded = viewModel.isLoaded.value
-                if (visible || (loaded && viewModel.isPaused.value)) {
-                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                        pressedKeys += event.keyCode
-                        val libraryCombo = viewModel.activeControls.value.hotkeys["library"] ?: emptyList()
-                        if (libraryCombo.isNotEmpty() &&
-                            libraryCombo.size == pressedKeys.size &&
-                            libraryCombo.all { pressedKeys.contains(it) }
-                        ) {
-                            if (visible) viewModel.swapToLibrary()
-                            else if (loaded) viewModel.swapBackToGame()
-                            return true
-                        }
-                    } else if (event.action == KeyEvent.ACTION_UP) {
-                        pressedKeys -= event.keyCode
-                    }
-                } else {
-                    pressedKeys.clear()
-                }
+                if (event.action != KeyEvent.ACTION_MULTIPLE && !fallback && !systemBack &&
+                    windowKeys.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount)
+                ) return true
                 // L1/R1 outside the game step through the Library, Console and Settings tabs (MainScaffold),
                 // unless the Library hotkey uses them.
+                val libraryKeys = viewModel.activeControls.value.hotkeys[HotkeyAction.LIBRARY].orEmpty().flatten()
                 val shoulder = event.keyCode == KeyEvent.KEYCODE_BUTTON_L1 || event.keyCode == KeyEvent.KEYCODE_BUTTON_R1
-                if (!visible && shoulder && event.keyCode !in (viewModel.activeControls.value.hotkeys["library"] ?: emptyList())) {
+                if (!viewModel.emulatorScreenVisible.value && shoulder && event.keyCode !in libraryKeys) {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         viewModel.stepTab(if (event.keyCode == KeyEvent.KEYCODE_BUTTON_L1) -1 else 1)
                     }
@@ -275,6 +293,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        getSystemService(InputManager::class.java).unregisterInputDeviceListener(inputDeviceListener)
         debugScope.cancel()
         super.onDestroy()
     }
@@ -360,67 +379,5 @@ class MainActivity : ComponentActivity() {
             )
         }
         return false
-    }
-
-    /**
-     * D-Pad and game buttons arrive as key events (e.g. KEYCODE_DPAD_UP = 19).
-     * The emulator screen handles them through Compose's onKeyEvent, which only
-     * fires while its Box holds focus. If focus is lost (e.g. after tapping the
-     * screen to toggle the control overlay, or after a dialog), D-Pad stops
-     * working on every system even though the analog sticks — which travel
-     * through [dispatchGenericMotionEvent] — keep working.
-     *
-     * ComponentActivity marks dispatchKeyEvent as @RestrictTo(LIBRARY_GROUP_PREFIX),
-     * so we can't override it from the app. Instead we attach an OnKeyListener to
-     * the root content view: Android dispatches key events to the focused view
-     * first (Compose's onKeyEvent), and only if nothing consumed the event does
-     * it bubble up to the root listener, which then translates mapped `k:*`
-     * bindings through [GameInputState].
-     */
-    private fun installKeyEventFallback() {
-        // Key tracking for the swap-screen hotkey while the emulator screen
-        // is NOT focused (library/settings visible). Mirrors the emulator's
-        // pressedKeys set; cleared on focus changes so stale combos don't fire.
-        val fallbackPressedKeys = mutableSetOf<Int>()
-        val onWindowFocusChanged = object : android.view.View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(v: android.view.View) {}
-            override fun onViewDetachedFromWindow(v: android.view.View) { fallbackPressedKeys.clear() }
-        }
-        findViewById<android.view.View>(android.R.id.content).addOnAttachStateChangeListener(onWindowFocusChanged)
-
-        // Fires only while the content view itself holds focus (Android doesn't pass unhandled
-        // keys up to parent listeners), so it never double-pushes a key the emulator screen handled.
-        findViewById<android.view.View>(android.R.id.content).setOnKeyListener { _, keyCode, event ->
-            // Swap-screen hotkey: works from ANY screen. With the emulator
-            // screen visible → pause + leave to library; from library/settings
-            // with a game loaded (paused) → navigate back and resume.
-            if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                fallbackPressedKeys += keyCode
-                val libraryCombo = viewModel.activeControls.value.hotkeys["library"] ?: emptyList()
-                if (libraryCombo.isNotEmpty()) {
-                    val allPressed = fallbackPressedKeys + GameInputState.hotkeyKeys
-                    if (libraryCombo.size == allPressed.size && libraryCombo.all { allPressed.contains(it) }) {
-                        if (viewModel.emulatorScreenVisible.value) viewModel.swapToLibrary()
-                        else if (viewModel.isLoaded.value) viewModel.swapBackToGame()
-                        return@setOnKeyListener true
-                    }
-                }
-            } else if (event.action == android.view.KeyEvent.ACTION_UP) {
-                fallbackPressedKeys -= keyCode
-            }
-
-            if (viewModel.isLoaded.value && !viewModel.isPaused.value) {
-                InputLog.key("fallback", event)
-                // Swallow auto-repeat so held buttons don't rapidly toggle.
-                if (event.repeatCount > 0) return@setOnKeyListener true
-
-                val bits = InputBindings.of(viewModel.activeControls.value.mappings).bitsForKey(keyCode)
-                if (bits != 0) {
-                    GameInputState.setButton(bits, event.action != android.view.KeyEvent.ACTION_UP)
-                    return@setOnKeyListener true
-                }
-            }
-            false
-        }
     }
 }

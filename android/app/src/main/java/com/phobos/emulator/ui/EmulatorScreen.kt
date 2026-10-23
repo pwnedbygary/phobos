@@ -3,6 +3,8 @@ package com.phobos.emulator.ui
 import android.app.Activity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -45,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,10 +58,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onPlaced
@@ -82,6 +82,7 @@ import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.GameKeys
 import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.InputLog
+import com.phobos.emulator.input.KeyHandler
 import com.phobos.emulator.input.VOLUME_KEYS
 import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.ui.hud.PerformanceHudOverlay
@@ -100,9 +101,15 @@ import com.phobos.emulator.ui.touch.touchLayoutKey
 import com.phobos.emulator.util.DisplayRefresh
 import com.phobos.emulator.util.pictureMultiple
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private const val MENU_REVEAL_MS = 3000L
+/** Frame advance held: the wait before it repeats, then the time between the frames it runs. */
+private const val FRAME_STEP_DELAY_MS = 300L
+private const val FRAME_STEP_MS = 100L
+/** Slow motion's speed while its hotkey is held. */
+private const val SLOW_MOTION_SPEED = 0.5f
 
 @Composable
 fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String, onBack: () -> Unit) {
@@ -148,10 +155,39 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val focusRequester = remember { FocusRequester() }
     val view = LocalView.current
     val window = (view.context as? Activity)?.window
+    // Keep the screen awake while a game is on screen; the app's screensaver is separate.
+    DisposableEffect(window) {
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+    val frameStepping by viewModel.frameStepping.collectAsState()
     // This screen, to the ViewModel: when a frontend starts a game over the running one, the new game's
     // screen arrives while this one is still leaving, and from then on this one leaves things to it.
     val screen = remember { Any() }
     fun takeFocus() { if (!viewModel.emulatorScreenReplaced(screen)) focusRequester.requestFocus() }
+    // Frame Advance (GameKeys): each press stops the game where it is, with no pause menu, and runs one frame, launched
+    // by the action once the event that pressed it is in, not when the screen next draws, so a press let go of at once
+    // still gets its frame; held on, it runs one every FRAME_STEP_MS after FRAME_STEP_DELAY_MS. The buttons held go
+    // into each frame.
+    val scope = rememberCoroutineScope()
+    fun advanceFrame() {
+        scope.launch {
+            // Focus to the screen before the pause menu closes: the menu leaving with focus in it would take focus
+            // from the screen, and GameKeys lets go of the keys held then, this combo's with them.
+            takeFocus()
+            viewModel.startFrameStep()
+            PhobosCore.frameAdvance()
+        }
+    }
+    var frameAdvancing by remember { mutableStateOf(false) }
+    LaunchedEffect(frameAdvancing) {
+        if (!frameAdvancing) return@LaunchedEffect
+        delay(FRAME_STEP_DELAY_MS)
+        while (true) {
+            PhobosCore.frameAdvance()
+            delay(FRAME_STEP_MS)
+        }
+    }
 
     var fastForwardToggled by remember { mutableStateOf(false) }
 
@@ -172,12 +208,19 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             HotkeyAction.PAUSE -> viewModel.togglePause()
             HotkeyAction.FAST_FORWARD_HOLD -> PhobosCore.setFastForward(true)
             HotkeyAction.FAST_FORWARD_TOGGLE -> toggleFastForward()
+            HotkeyAction.FRAME_ADVANCE -> advanceFrame()
             HotkeyAction.SAVE_STATE -> viewModel.saveState(systemName, romName, currentSlot)
             HotkeyAction.LOAD_STATE -> viewModel.loadState(systemName, romName, currentSlot)
             HotkeyAction.NEXT_SLOT -> viewModel.incrementSlot()
             HotkeyAction.PREVIOUS_SLOT -> viewModel.decrementSlot()
             HotkeyAction.RESET -> viewModel.resetSystem()
-            HotkeyAction.FRAME_ADVANCE -> if (isPaused) PhobosCore.frameAdvance()
+            HotkeyAction.N64_PAK -> {
+                if (!systemName.contains("Nintendo 64", ignoreCase = true)) return false
+                val paks = listOf("None", "Rumble Pak", "Controller Pak")
+                val next = paks[(paks.indexOf(settings.n64Pak).coerceAtLeast(0) + 1) % paks.size]
+                viewModel.setN64Pak(next)
+                Toast.makeText(view.context, "Controller Pak: $next", Toast.LENGTH_SHORT).show()
+            }
             HotkeyAction.MUTE -> viewModel.setMuteAudio(!settings.muteAudio)
             HotkeyAction.SCREENSHOT -> viewModel.takeScreenshot(systemName, romName)
             HotkeyAction.RELOAD -> viewModel.reloadGame(view.context)
@@ -185,7 +228,15 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             HotkeyAction.KEYBOARD -> if (hasKeyboard) showKeyboard = !showKeyboard else return false
             HotkeyAction.LIBRARY -> viewModel.swapToLibrary()
             HotkeyAction.PS1_ANALOG_TOGGLE -> if (systemName == "PlayStation") viewModel.togglePs1AnalogMode() else return false
-            else -> return false
+            else -> {
+                val saveSlot = action.removePrefix(HotkeyAction.SAVE_SLOT_PREFIX).toIntOrNull()
+                val loadSlot = action.removePrefix(HotkeyAction.LOAD_SLOT_PREFIX).toIntOrNull()
+                when {
+                    action.startsWith(HotkeyAction.SAVE_SLOT_PREFIX) && saveSlot != null && saveSlot in 1..9 -> viewModel.saveState(systemName, romName, saveSlot)
+                    action.startsWith(HotkeyAction.LOAD_SLOT_PREFIX) && loadSlot != null && loadSlot in 1..9 -> viewModel.loadState(systemName, romName, loadSlot)
+                    else -> return false
+                }
+            }
         }
         return true
     }
@@ -208,6 +259,18 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             override fun stopFastForward() {
                 PhobosCore.setFastForward(false)
             }
+            override fun frameAdvanceHeld(held: Boolean) {
+                frameAdvancing = held
+            }
+            override fun slowMotionHeld(held: Boolean) {
+                PhobosCore.setSlowMotion(if (held) SLOW_MOTION_SPEED else 1f)
+            }
+            override fun later(delayMs: Long, run: () -> Unit) {
+                scope.launch {
+                    delay(delayMs)
+                    run()
+                }
+            }
         })
     }
     DisposableEffect(Unit) {
@@ -215,10 +278,12 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         val physicalListener: () -> Unit = { if (!controllerActive) controllerActive = true }
         GameInputState.onHotkeyKeysChanged = hotkeyListener
         GameInputState.onPhysicalInput = physicalListener
+        viewModel.gameKeys = gameKeys
         onDispose {
-            // An incoming screen may already have installed its own listeners.
+            // An incoming screen may already have installed its own listeners and keys.
             if (GameInputState.onHotkeyKeysChanged === hotkeyListener) GameInputState.onHotkeyKeysChanged = null
             if (GameInputState.onPhysicalInput === physicalListener) GameInputState.onPhysicalInput = null
+            if (viewModel.gameKeys === gameKeys) viewModel.gameKeys = null
         }
     }
 
@@ -271,7 +336,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             InputLog.note { "$systemName game, bindings ${controls.mappings}, hotkeys ${controls.hotkeys}" }
             viewModel.setPause(false)
             PhobosCore.setEmulationRunning(true)
-            // Take focus right away so hardware keys (hotkeys, gamepad) reach onPreviewKeyEvent.
+            // Take focus right away: what the window's keys leave (Back) reaches onKeyEvent, and focus leaving the
+            // screen for a dialog lets go of the buttons held.
             takeFocus()
         }
     }
@@ -297,13 +363,15 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         if (viewModel.emulatorScreenVisible.value) {
             GameInputState.reset()
             PhobosCore.setFastForward(false)
+            PhobosCore.setSlowMotion(1f)
         }
         viewModel.emulatorScreenShown(screen)
         onDispose {
             if (!viewModel.emulatorScreenReplaced(screen)) {
                 GameInputState.reset()
-                // fastForwardToggled starts false when the screen returns, so native must match.
+                // fastForwardToggled starts false when the screen returns, and no hold is held, so native must match.
                 PhobosCore.setFastForward(false)
+                PhobosCore.setSlowMotion(1f)
             }
             viewModel.emulatorScreenGone(screen)
             // The game stays loaded (paused) when leaving the screen — the swap-screen hotkey
@@ -313,7 +381,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
     // The PSP's system dialog the game waits on (a message, the keyboard, saving or loading), over the running game;
     // hidden while the pause menu (which its pause hotkey opens) or a layout editor is up. The game's buttons are let
-    // go of as it opens, and the game takes the controller back once it's answered.
+    // go of as it opens, the hotkeys go on in it (GameKeys.onDialogKey), and the game takes the controller back once
+    // it's answered.
     val shownPspDialog = pspDialog?.takeIf { isLoaded && !isPaused && !editingTouchLayout && !editingHud }
     LaunchedEffect(shownPspDialog?.id) {
         if (shownPspDialog != null) {
@@ -324,7 +393,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         }
     }
     shownPspDialog?.let { request ->
-        PspSystemDialog(request, controls, settings.fullScreenMode, onPause = { viewModel.setPause(true) }) {
+        PspSystemDialog(request, controls, settings.fullScreenMode, hotkeys = KeyHandler(gameKeys::onDialogKey)) {
             viewModel.answerPspDialog(it)
         }
     }
@@ -393,11 +462,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             .onFocusChanged { gameKeys.onFocusChanged(it) }
             .focusRequester(focusRequester)
             .focusable()
-            .onPreviewKeyEvent { keyEvent ->
-                val native = keyEvent.nativeKeyEvent
-                InputLog.key("game", native)
-                gameKeys.onKey(native.keyCode, keyEvent.type == KeyEventType.KeyDown, native.repeatCount)
-            }
+            // Keys reach gameKeys from the activity's window (WindowKeys), whichever view has focus; what it leaves
+            // comes here.
             .onKeyEvent { keyEvent ->
                 val keyCode = keyEvent.nativeKeyEvent.keyCode
                 if (keyCode in VOLUME_KEYS) return@onKeyEvent false
@@ -521,6 +587,15 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 .padding(top = 16.dp),
         ) {
             MenuRevealButton(onOpenMenu = { menuRevealed = false; viewModel.setPause(true) })
+        }
+
+        if (frameStepping && isLoaded && !isPaused && !menuRevealed) {
+            FrameStepBadge(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    .padding(top = 16.dp),
+            )
         }
 
         if (isPaused && !editingTouchLayout && !editingHud) {
@@ -671,6 +746,20 @@ private fun MenuRevealButton(onOpenMenu: () -> Unit) {
         Spacer(modifier = Modifier.width(8.dp))
         Text("Menu", color = Color.White, style = MaterialTheme.typography.labelLarge)
     }
+}
+
+/** Says the game is stopped for frame advance, and how to carry on. */
+@Composable
+private fun FrameStepBadge(modifier: Modifier) {
+    Text(
+        "Frame advance · Pause for the menu",
+        color = Color.White,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.6f))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 @Composable

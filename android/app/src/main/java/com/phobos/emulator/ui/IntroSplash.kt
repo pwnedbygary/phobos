@@ -42,8 +42,8 @@ fun IntroSplash(skipped: Boolean, onSkip: () -> Unit, onDone: () -> Unit) {
     val skippedNow by rememberUpdatedState(skipped)
     val skip by rememberUpdatedState(onSkip)
     val done by rememberUpdatedState(onDone)
-    // On Android 13 and later Back goes to the back callbacks before any window sees it (the manifest's
-    // enableOnBackInvokedCallback), so IntroKeys never has it: without this it would leave the app.
+    // Back comes to the window as a key, which IntroKeys takes, while the manifest opts out of predictive back. Should
+    // a later Android drop that opt-out, Back would go to the back callbacks first, and without this leave the app.
     BackHandler { skip() }
     BoxWithConstraints(
         Modifier

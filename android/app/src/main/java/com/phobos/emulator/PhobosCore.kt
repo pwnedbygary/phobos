@@ -30,6 +30,7 @@ object PhobosCore {
     external fun setPause(paused: Boolean)
     external fun setFastForward(enabled: Boolean)
     external fun setFastForwardSpeed(speed: Float)
+    external fun setSlowMotion(speed: Float)
     external fun setNgcdLoadSpeed(speed: Int)
     external fun setZxLoadSpeed(speed: Int)
     external fun setMsxLoadSpeed(speed: Int)

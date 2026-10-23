@@ -73,26 +73,87 @@ class ControlLevelsTest {
 
     @Test
     fun hotkeysResolveAndUnbindTheSameWay() {
-        val globalHotkeys = mapOf("pause" to listOf(101, 96), "save" to listOf(101, 103))
+        val globalHotkeys = hotkeysOf("pause" to listOf(101, 96), "save" to listOf(101, 103))
         val overrides = ControlOverrides(hotkeys = mapOf(
-            "Nintendo 64" to mapOf("save" to listOf(102, 103)),
+            "Nintendo 64" to hotkeysOf("save" to listOf(102, 103)),
             tennis.scope!! to mapOf("pause" to emptyList()),
         ))
         val resolved = Controls.hotkeys(tennis, globalHotkeys, overrides)
-        assertEquals(listOf(102, 103), resolved["save"])
+        assertEquals(listOf(listOf(102, 103)), resolved["save"])
         assertFalse(resolved.containsKey("pause"))
-        assertEquals(listOf(101, 96), Controls.hotkeys(kart, globalHotkeys, overrides)["pause"])
+        assertEquals(listOf(listOf(101, 96)), Controls.hotkeys(kart, globalHotkeys, overrides)["pause"])
         assertEquals(tennis, Controls.hotkeySource(tennis, "pause", globalHotkeys, overrides))
         // Setting a game's combo to the one its console gives stores nothing.
-        assertNull(Controls.hotkeyChange(tennis, "save", listOf(102, 103), globalHotkeys, overrides))
-        assertEquals(emptyList<Int>(), Controls.hotkeyChange(kart, "pause", emptyList(), globalHotkeys, overrides))
+        assertNull(Controls.hotkeyChange(tennis, "save", listOf(listOf(102, 103)), globalHotkeys, overrides))
+        assertEquals(emptyList<List<Int>>(), Controls.hotkeyChange(kart, "pause", emptyList(), globalHotkeys, overrides))
+    }
+
+    @Test
+    fun overwritingClearsOnlyTheCollidingBindingAtEachLevel() {
+        val save = HotkeyAction.SAVE_STATE
+        val screenshot = HotkeyAction.SCREENSHOT
+        val global = mapOf(save to listOf(listOf(MODE, R1), listOf(F5)), screenshot to listOf(listOf(MODE, R3), listOf(F8)))
+        // All consoles: F8 as Save's third binding takes it from Screenshot, whose first binding stays.
+        assertEquals(
+            mapOf(save to listOf(listOf(MODE, R1), listOf(F5), listOf(F8)), screenshot to listOf(listOf(MODE, R3))),
+            Controls.bindHotkey(ControlLevel.AllConsoles, save, 2, listOf(F8), listOf(screenshot to 1), global, ControlOverrides()),
+        )
+        // A console overwriting a binding it inherits keeps the action's others, in their slots, as its own.
+        val console = Controls.bindHotkey(n64, save, 0, listOf(MODE, R3), listOf(screenshot to 0), global, ControlOverrides())
+        assertEquals(mapOf(save to listOf(listOf(MODE, R3), listOf(F5)), screenshot to listOf(emptyList(), listOf(F8))), console)
+        val stored = console.mapValues { (action, bindings) -> Controls.hotkeyChange(n64, action, bindings, global, ControlOverrides()) }
+        assertEquals("both differ from all consoles'", console, stored)
+        val overrides = ControlOverrides(hotkeys = mapOf(n64.scope!! to console))
+        assertEquals("the console's games follow it", listOf(emptyList(), listOf(F8)), Controls.hotkeys(tennis, global, overrides)[screenshot])
+        // A game taking F5 from Save leaves it the console's Mode + R3; binding back what the console gives stores nothing.
+        val game = Controls.bindHotkey(tennis, HotkeyAction.LOAD_STATE, 0, listOf(F5), listOf(save to 1), global, overrides)
+        assertEquals(mapOf(HotkeyAction.LOAD_STATE to listOf(listOf(F5)), save to listOf(listOf(MODE, R3))), game)
+        assertEquals(listOf(listOf(MODE, R3)), Controls.hotkeyChange(tennis, save, game.getValue(save), global, overrides))
+        val same = Controls.bindHotkey(tennis, save, 1, listOf(F5), emptyList(), global, overrides)
+        assertNull(Controls.hotkeyChange(tennis, save, same.getValue(save), global, overrides))
+    }
+
+    @Test
+    fun aKeyInBacksPlaceIsStoredAtEveryLevelAtOnceUnlessAnythingAnywhereIsInTheWay() {
+        val save = HotkeyAction.SAVE_STATE
+        val screenshot = HotkeyAction.SCREENSHOT
+        val quit = HotkeyAction.QUIT
+        // All consoles' as the store gives them: Save as a default leaves it (Back + R1, F5), Screenshot stored as F8.
+        val global = mapOf(save to listOf(listOf(BACK, R1), listOf(F5)), screenshot to listOf(listOf(F8)))
+        // The Nintendo 64 stores Quit as Back + R3; Mario Tennis unbinds Save and stores Screenshot with Back + Y.
+        val overrides = ControlOverrides(
+            hotkeys = mapOf(
+                n64.scope!! to mapOf(quit to listOf(listOf(BACK, R3))),
+                tennis.scope!! to mapOf(save to emptyList(), screenshot to listOf(listOf(F8), listOf(BACK, Y))),
+            ),
+        )
+        val swap = Controls.replaceHotkeyLeadEverywhere(BACK, MODE, global, overrides)
+        assertEquals("all consoles store Save whole; Screenshot, Back not in it, stays", mapOf(save to listOf(listOf(MODE, R1), listOf(F5))), swap.global)
+        assertEquals(
+            "each level what it stores itself, whole; the game's unbinding stays",
+            mapOf(n64.scope!! to mapOf(quit to listOf(listOf(MODE, R3))), tennis.scope!! to mapOf(screenshot to listOf(listOf(F8), listOf(MODE, Y)))),
+            swap.scoped,
+        )
+        assertTrue(swap.blockers.isEmpty())
+        // R3 is in the console's Quit, which would lose it (in Mario Tennis too, which inherits it): nothing is stored
+        // anywhere, and the console's Quit is named, where it's set.
+        val lost = Controls.replaceHotkeyLeadEverywhere(BACK, R3, global, overrides)
+        assertEquals(listOf(n64 to quit), lost.blockers)
+        assertTrue(lost.global.isEmpty() && lost.scoped.isEmpty())
+        // A game's own Mute on Mode + R1, where all consoles' Save would land: the game's Mute is named.
+        val clashing = ControlOverrides(hotkeys = mapOf(tennis.scope!! to mapOf(HotkeyAction.MUTE to listOf(listOf(MODE, R1)))))
+        assertEquals(listOf(tennis to HotkeyAction.MUTE), Controls.replaceHotkeyLeadEverywhere(BACK, MODE, global, clashing).blockers)
+        // A stored scope reads back as its level, a game's ROM name holding "|" included.
+        assertEquals(tennis, ControlLevel.of(tennis.scope!!))
+        assertEquals(n64, ControlLevel.of(n64.scope!!))
+        assertEquals(ControlLevel.Game("Nintendo 64", "Odd | Name.z64"), ControlLevel.of("Nintendo 64/Odd | Name.z64"))
     }
 
     @Test
     fun levelsReportWhatTheyChangeThemselves() {
         val overrides = ControlOverrides(
             mappings = mapOf(tennis.scope!! to mapOf(x to "")),
-            hotkeys = mapOf("Nintendo 64" to mapOf("save" to listOf(102, 103))),
+            hotkeys = mapOf("Nintendo 64" to hotkeysOf("save" to listOf(102, 103))),
         )
         assertTrue(overrides.changesMapping(tennis, x))
         assertFalse(overrides.changesMapping(kart, x))
@@ -103,6 +164,23 @@ class ControlLevelsTest {
         assertFalse(overrides.changesHotkey(tennis, "save"))
         assertTrue(overrides.hasHotkeys(n64))
         assertFalse(overrides.hasHotkeys(ControlLevel.AllConsoles))
+    }
+
+    @Test
+    fun theGameButtonsEverywhereAreAllConsolesAndEachConsolesAndGamesOwn() {
+        val overrides = ControlOverrides(
+            mappings = mapOf(
+                n64.scope!! to mapOf(a to "k:108"),  // Start on the N64's A
+                tennis.scope!! to mapOf(b to "a:17:1", x to ""),  // the left trigger on B, and X unbound, in one game
+            ),
+            hotkeys = mapOf(kart.scope!! to hotkeysOf("save" to listOf(MODE, R1))),
+        )
+        assertEquals(
+            "a hotkey isn't a game button",
+            setOf(96, 97, 99, START, L2),
+            Controls.gameTokensEverywhere(global, overrides),
+        )
+        assertEquals(setOf(96, 97, 99), Controls.gameTokensEverywhere(global, ControlOverrides()))
     }
 
     @Test
@@ -120,5 +198,18 @@ class ControlLevelsTest {
         assertFalse(key.startsWith("mapping_"))
         assertFalse(ScopedKeys.hotkey("Nintendo 64", "pause").startsWith("hotkey_combo_"))
         assertNull(ScopedKeys.parse("mapping_16", ScopedKeys.MAPPING_PREFIX))
+    }
+
+    companion object {
+        // KeyEvent constants (android.view).
+        const val BACK = 4
+        const val Y = 100
+        const val R1 = 103
+        const val L2 = 104
+        const val R3 = 107
+        const val START = 108
+        const val MODE = 110
+        const val F5 = 135
+        const val F8 = 138
     }
 }
