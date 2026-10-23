@@ -180,6 +180,8 @@ data class EmulatorSettings(
     val autoSaveState: Boolean = true,
     val autoLoadState: Boolean = false,
     val fullScreenMode: Boolean = false,
+    // The intro as the app opens to the Library (IntroSplash).
+    val introAnimation: Boolean = true,
     val showTouchControls: Boolean = true,
     val touch: TouchPrefs = TouchPrefs(),
     // "<familyKey>_<land|port>" -> TouchLayoutCodec-encoded per-element overrides.
@@ -331,6 +333,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val AUTO_SAVE_MEMORY = booleanPreferencesKey("auto_save_memory")
         val AUTO_LOAD_MEMORY = booleanPreferencesKey("auto_load_memory")
         val FULL_SCREEN_MODE = booleanPreferencesKey("full_screen_mode")
+        val INTRO_ANIMATION = booleanPreferencesKey("intro_animation")
         val SHOW_TOUCH_CONTROLS = booleanPreferencesKey("show_touch_controls")
         val TOUCH_OPACITY = floatPreferencesKey("touch_opacity")
         val TOUCH_OPACITY_PORTRAIT = floatPreferencesKey("touch_opacity_portrait")
@@ -585,6 +588,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             autoSaveState = safeGet(AUTO_SAVE_MEMORY, true),
             autoLoadState = safeGet(AUTO_LOAD_MEMORY, false),
             fullScreenMode = safeGet(FULL_SCREEN_MODE, false),
+            introAnimation = safeGet(INTRO_ANIMATION, true),
             showTouchControls = safeGet(SHOW_TOUCH_CONTROLS, true),
             touch = preferences.touchPrefs(),
             touchLayouts = touchLayouts,
@@ -749,6 +753,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setAutoSaveState(enabled: Boolean) = dataStore.edit { it[AUTO_SAVE_MEMORY] = enabled }
     suspend fun setAutoLoadState(enabled: Boolean) = dataStore.edit { it[AUTO_LOAD_MEMORY] = enabled }
     suspend fun setFullScreenMode(enabled: Boolean) = dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
+    suspend fun setIntroAnimation(enabled: Boolean) = dataStore.edit { it[INTRO_ANIMATION] = enabled }
     suspend fun setShowTouchControls(enabled: Boolean) = dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
     /** Read-modify-write in one transaction, so quick successive edits are not lost. */
     suspend fun updateTouchPrefs(transform: (TouchPrefs) -> TouchPrefs) = dataStore.edit {

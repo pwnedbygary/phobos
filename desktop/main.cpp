@@ -6,6 +6,7 @@
 #include "PspDiscInfo.hpp"
 #include "Settings.hpp"
 #include "PhobosHost.hpp"
+#include "PhobosIntro.hpp"
 #include "PhobosRunner.hpp"
 
 #include <SDL3/SDL.h>
@@ -108,6 +109,9 @@ private:
   auto render() -> void;
   auto drawLibrary(float width, float height) -> void;
   auto drawMenu(float width, float height) -> void;
+  auto skipIntro() -> void;
+  auto drawIntro(int outputWidth, int outputHeight) -> void;
+  auto endIntro() -> void;
   auto fill(float x, float y, float w, float h, Color color) -> void;
   auto print(float x, float y, const std::string& line, Color color, float maxWidth = 0) -> void;
   auto show(const std::string& line) -> void;
@@ -156,6 +160,18 @@ private:
   std::string message;
   Uint64 messageUntil = 0;
 
+  // The intro over the Library as Phobos opens (PhobosIntro.hpp): when it started, when a key, a button, a click or a
+  // touch skipped it (-1: not yet), and the texture its canvas is drawn into.
+  struct Intro {
+    Uint64 start = 0;
+    int skippedAt = -1;
+  };
+  std::optional<Intro> intro;
+  SDL_Texture* introTexture = nullptr;
+  std::vector<std::uint8_t> introPixels;
+  // The directions held as it ends (a pad's, its stick's, the arrow keys'): its own until they're let go of.
+  int introDirections = 0;
+
   std::mutex pickedMutex;
   Pick picking = Pick::Games;
   std::optional<std::string> pickedFolder;
@@ -198,6 +214,8 @@ auto Shell::run(int argc, char* argv[]) -> int {
       case SDL_EVENT_QUIT: quit = true; break;
       case SDL_EVENT_KEY_DOWN:
       case SDL_EVENT_KEY_UP: handleKey(event.key); break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+      case SDL_EVENT_FINGER_DOWN: skipIntro(); break;
       case SDL_EVENT_DROP_FILE: if (event.drop.data) open(event.drop.data); break;
       default: break;
       }
@@ -224,6 +242,7 @@ auto Shell::run(int argc, char* argv[]) -> int {
   quitting = true;
   if (pspTitlesThread.joinable()) pspTitlesThread.join();
   input.close();
+  endIntro();
   if (frameTexture) SDL_DestroyTexture(frameTexture);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
@@ -288,6 +307,9 @@ auto Shell::setup(int argc, char* argv[]) -> bool {
     open(argument);
     launchedWithGame = game.has_value();
   }
+  // Opening to the Library, not given a game (one that couldn't start says why, unhidden), the intro plays first,
+  // unless settings.ini's intro is false (the menu's switch).
+  if (argument.empty() && settings.flag("intro", true)) intro = Intro{SDL_GetTicks()};
   return true;
 }
 
@@ -404,6 +426,8 @@ auto Shell::open(const std::string& path) -> void {
 }
 
 auto Shell::launch(const Game& entry) -> void {
+  // (a game dropped on the window while the intro plays: the game, or why it can't start, without the intro)
+  endIntro();
   if (entry.system == "Nintendo 64" && !vulkanAvailable) {
     return show("Nintendo 64 games need a Vulkan driver, and none was found");
   }
@@ -576,6 +600,9 @@ auto Shell::menuItems() -> std::vector<MenuItem> {
     }});
   }
   if (game->system == "PlayStation Portable") pspMenuItems(items);
+  items.push_back({"Intro as Phobos opens: " + onOff(settings.flag("intro", true)), [this](int) {
+    settings.setFlag("intro", !settings.flag("intro", true));
+  }});
   items.push_back({"Fullscreen: " + onOff(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN), [this](int) { toggleFullscreen(); }});
   items.push_back({launchedWithGame ? "Quit" : "Quit to library", [this](int d) { if (d == 0) quitGame(); }});
   return items;
@@ -634,6 +661,11 @@ auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
 }
 
 auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
+  // While the intro plays every key is its own, a press skipping it.
+  if (intro) {
+    if (key.down && !key.repeat) skipIntro();
+    return;
+  }
   bool computer = game && isKeyboardComputer(game->system);
   bool msx = game && (game->system == "MSX" || game->system == "MSX2");
   if (key.down && !key.repeat) {
@@ -680,12 +712,22 @@ auto Shell::update() -> void {
   auto pressed = [&](int bit) { return (pad.buttons & bit) && !(previousButtons & bit); };
   Uint64 now = SDL_GetTicks();
   bool menuNavigation = screen != Screen::Playing;
-  bool navUp = up.step(menuNavigation && ((pad.buttons & PadUp) || pad.ly < -0.5f), now);
-  bool navDown = down.step(menuNavigation && ((pad.buttons & PadDown) || pad.ly > 0.5f), now);
-  bool navLeft = left.step(menuNavigation && ((pad.buttons & PadLeft) || pad.lx < -0.5f), now);
-  bool navRight = right.step(menuNavigation && ((pad.buttons & PadRight) || pad.lx > 0.5f), now);
+  int directions = (pad.buttons & (PadUp | PadDown | PadLeft | PadRight)) | (pad.ly < -0.5f ? PadUp : 0) |
+                   (pad.ly > 0.5f ? PadDown : 0) | (pad.lx < -0.5f ? PadLeft : 0) | (pad.lx > 0.5f ? PadRight : 0);
+  introDirections = intro ? directions : introDirections & directions;
+  int held = menuNavigation ? directions & ~introDirections : 0;
+  bool navUp = up.step((held & PadUp) != 0, now);
+  bool navDown = down.step((held & PadDown) != 0, now);
+  bool navLeft = left.step((held & PadLeft) != 0, now);
+  bool navRight = right.step((held & PadRight) != 0, now);
   bool confirm = pressed(PadA) || pressed(PadStart);
   int buttons = pad.buttons;
+  if (intro) {
+    // A button pressed skips the intro; it does nothing in the Library, which sees presses alone.
+    if (buttons & ~previousButtons) skipIntro();
+    previousButtons = buttons;
+    return;
+  }
   previousButtons = buttons;
 
   switch (screen) {
@@ -789,6 +831,7 @@ auto Shell::render() -> void {
     fill(8, height - 44, w, 16, panelColor);
     print(16, height - 40, message, textColor, w - 16);
   }
+  if (intro) drawIntro(outputWidth, outputHeight);
   SDL_RenderPresent(renderer);
 }
 
@@ -848,6 +891,44 @@ auto Shell::drawMenu(float width, float height) -> void {
   print(x + 12, y + boxHeight - 12, "A Select   B Back   Left/Right Change", dimColor, boxWidth - 24);
 }
 
+auto Shell::skipIntro() -> void {
+  if (intro && intro->skippedAt < 0) intro->skippedAt = (int)(SDL_GetTicks() - intro->start);
+}
+
+// The intro's frame over the Library: its canvas scaled up by a whole number, each pixel square, the Library showing
+// where it has dissolved.
+auto Shell::drawIntro(int outputWidth, int outputHeight) -> void {
+  auto canvas = phobos::intro::canvasFor(outputWidth, outputHeight);
+  if (!canvas.width || !canvas.height) return;
+  float textureWidth = 0, textureHeight = 0;
+  if (introTexture) SDL_GetTextureSize(introTexture, &textureWidth, &textureHeight);
+  if (!introTexture || (int)textureWidth != canvas.width || (int)textureHeight != canvas.height) {
+    if (introTexture) SDL_DestroyTexture(introTexture);
+    // The intro's pixels are RGBA bytes, as the runner's are.
+    introTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, canvas.width,
+                                     canvas.height);
+    if (!introTexture) return endIntro();
+    SDL_SetTextureScaleMode(introTexture, SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureBlendMode(introTexture, SDL_BLENDMODE_BLEND);
+  }
+  introPixels.resize(std::size_t(canvas.width) * canvas.height * 4);
+  int ms = (int)(SDL_GetTicks() - intro->start);
+  if (!phobos::intro::render(introPixels.data(), canvas.width, canvas.height, canvas.width * 4, ms, intro->skippedAt)) {
+    return endIntro();
+  }
+  SDL_UpdateTexture(introTexture, nullptr, introPixels.data(), canvas.width * 4);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+  SDL_FRect target{0, 0, (float)(canvas.width * canvas.scale), (float)(canvas.height * canvas.scale)};
+  SDL_RenderTexture(renderer, introTexture, nullptr, &target);
+}
+
+auto Shell::endIntro() -> void {
+  intro.reset();
+  if (introTexture) SDL_DestroyTexture(introTexture);
+  introTexture = nullptr;
+  introPixels = {};
+}
+
 auto Shell::fill(float x, float y, float w, float h, Color color) -> void {
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
   SDL_FRect rect{x, y, w, h};
@@ -868,6 +949,8 @@ auto Shell::show(const std::string& line) -> void {
   message = line;
   messageUntil = SDL_GetTicks() + 4000;
   SDL_Log("%s", line.c_str());
+  // (one while the intro plays, for a dropped file no system loads: the intro makes way for it)
+  skipIntro();
 }
 
 }

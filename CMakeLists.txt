@@ -121,6 +121,7 @@ set(OTHER_SOURCES
     thirdparty/volk/volk.c
     thirdparty/GLFW/glfw_stub.cpp
     android/app/src/main/cpp/PhobosRunner.cpp
+    android/app/src/main/cpp/PhobosIntro.cpp
     ares/ares/android_globals.cpp
     ares/pce/vdp-performance/vdp.cpp
     thirdparty/libchdr/src/libchdr_bitstream.c
@@ -337,6 +338,7 @@ if(ANDROID)
   add_library(phobos_android SHARED
       android/app/src/main/cpp/PhobosJNI.cpp
       android/app/src/main/cpp/PhobosHostAndroid.cpp
+      android/app/src/main/cpp/PhobosIntroJNI.cpp
   )
 
   find_library(log-lib log)
@@ -347,8 +349,9 @@ if(ANDROID)
   find_library(gles-lib GLESv3)
   find_library(z-lib z)
   find_library(dl-lib dl)
+  find_library(jnigraphics-lib jnigraphics)
 
-  target_link_libraries(phobos_android PRIVATE phobos_core ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
+  target_link_libraries(phobos_android PRIVATE phobos_core ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} ${jnigraphics-lib} adrenotools)
 
   # FFmpeg (above), for arm64-v8a with the NDK: libavcodec.so and libavutil.so, which the APK carries beside Phobos's
   # own library.
@@ -413,6 +416,18 @@ else()
   add_executable(rsp-recompiler EXCLUDE_FROM_ALL tests/rsp-recompiler/rsp-recompiler.cpp)
   target_link_libraries(rsp-recompiler PRIVATE phobos_core Threads::Threads ${CMAKE_DL_LIBS})
   set_property(SOURCE tests/rsp-recompiler/rsp-recompiler.cpp APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
+  # tests/intro: the intro's renderer, which the Android app and the program share (PhobosIntro.cpp), checked on the
+  # host with its own warnings as errors (the program builds with -w) and the sanitizers, undefined behaviour failing
+  # it too. Built on demand (desktop.yml's Linux job builds and runs it).
+  add_executable(intro-tests EXCLUDE_FROM_ALL tests/intro/intro.cpp android/app/src/main/cpp/PhobosIntro.cpp)
+  set_target_properties(intro-tests PROPERTIES
+    COMPILE_OPTIONS "-Wall;-Wextra;-Werror"
+    INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp)
+  if(NOT WIN32)
+    target_compile_options(intro-tests PRIVATE -fsanitize=address,undefined -fno-sanitize-recover=undefined
+                           -fno-omit-frame-pointer)
+    target_link_options(intro-tests PRIVATE -fsanitize=address,undefined)
+  endif()
   if(WIN32)
     # The icon is made from the PNG at configure time when Python is around; without it the
     # executable just has no icon.

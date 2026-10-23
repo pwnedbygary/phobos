@@ -35,6 +35,124 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## An intro as Phobos opens: pixel-art Mars and its moon, coming into focus as the logo, on Android and the desktop — 2026-10-23
+
+Branch `intro-splash`, from master `7986aef5b` (#298). The owner asked on 2026-10-22 for "a sick intro splash screen for
+phobos when its opened ... done in pixel art, space themed. Maybe Mars rotating in the background with the Phobos moon
+w/ d-pad orbiting it in the distance, and it comes into focus, then the logo loads with the PHOBOS text below it
+before going into the library screen", and chose: both apps, drawn by one shared renderer so they look the same;
+every time Phobos opens to the Library; any button, key or tap skips it; a Settings switch turns it off; never when a
+frontend launches a game directly, nor with the system's animations removed. New:
+`android/app/src/main/cpp/PhobosIntro.hpp` and `.cpp` (the renderer), `PhobosIntroArt.hpp` (its art, made by the new
+`tools/logo/build_intro.py` from `docs/images/phobos-logo.png`), `PhobosIntroJNI.cpp`, `ui/Intro.kt`,
+`ui/IntroSplash.kt`, `tests/intro/intro.cpp` and `ui/IntroTest.kt`. Changed: `CMakeLists.txt`,
+`.github/workflows/desktop.yml`, `MainActivity.kt`, `PhobosCore.kt`, `SettingsStore.kt`, `AppearanceSettingsScreen.kt`,
+`MainScaffold.kt`, `MainViewModel.kt`, `AppearanceSettingsTest.kt`, `desktop/main.cpp`, this file and a row of
+`docs/implementation-plan.md`.
+- **What it shows**, in about 5.6 s: the stars and Mars come out of black (0.7 s); Mars turns, its surface a map made
+  once from noise on the sphere (craters, a canyon, a volcano, ice caps) in the colours of the launcher icon's Mars,
+  while the logo's moon, with its D-pad, orbits it, from behind it and across its face, small and out of focus; from
+  2.1 s to 3.5 s the camera moves in, the moon growing to its art's own size and coming into focus as Mars sinks, blurs
+  and dims; "phobos" is wiped in below it along its italic's lean (to 4.1 s), a glint and two sparkles cross the logo,
+  and from 5 s the Library shows through an ordered dissolve (0.6 s; after a skip, 0.3 s). The canvas's shorter side is
+  about 180 pixels, scaled up by a whole number (6 on the RP6 and a 1080p screen), so each pixel stays square; the moon
+  and the word are the README banner's art, one pixel per art pixel.
+- **One renderer**: `phobos::intro` (`canvasFor`, `sceneAt`, `render`) is in `phobos_core`, which both builds compile.
+  Android draws each frame into an ARGB_8888 bitmap through JNI (`AndroidBitmap_lockPixels`, `libjnigraphics`), the
+  desktop into an SDL streaming texture; a pixel the dissolve lets the Library through is 0 in all four bytes, so a
+  premultiplied bitmap takes it as it is. A frame takes about 0.5 ms on this machine (the first 10 ms more: Mars's map).
+- **When it plays, Android**: `introPlays()` (`ui/Intro.kt`): a fresh start (not the activity made again after a
+  rotation or the process's death), no game asked for (a frontend's launch, adb's debug load), Settings → Appearance →
+  Effects → Intro on (`intro_animation`, on by default; settings not read within the start's 500 ms count as off), the
+  system's animations on (`ValueAnimator.areAnimatorsEnabled()`), and TalkBack not exploring by touch. A frontend's
+  launch arriving while it plays (`onNewIntent`) ends it. `IntroSplash` draws it over the Library, which is composed
+  under it all along. While it plays, MainActivity's window callback gives every key to `IntroKeys` first: each press
+  skips it, a key pressed meanwhile stays its own until let go of (so the Library gets neither its repeats nor its
+  release), and the volume keys are left to the system; a touch skips it and reaches nothing under it. Back never
+  reaches the window on Android 13 and later, which give it to the back callbacks first (the app opts into predictive
+  back), so `IntroSplash` has one (`BackHandler`) that skips it; without it, Back left the app. After a touch, Android
+  may keep the press that leaves touch mode (a D-pad's, not a typing key's): touch mode ending while the intro plays
+  counts as a press (`onUnseenPress`), and the next event of a key `IntroKeys` doesn't hold tells which it was, a
+  repeat or a release being that press's and a press the window's own; a repeat whose press didn't come counts as the
+  press too. The launch toasts (a newer Phobos, a newer driver) wait for its end, since a toast shows over the app's
+  window and the intro with it.
+- **When it plays, desktop**: `setup()` starts it when Phobos opens to the Library given no game (a game given on the
+  command line, even one that can't start, goes without it, so that game's message isn't hidden), unless settings.ini's
+  `intro` is false, which the pause menu's "Intro as Phobos opens" switches (the desktop's settings are in that menu, as
+  Fullscreen is). A key press, a pad button, a click or a touch skips it; while it plays, keys and buttons reach nothing
+  else; a direction held as it ends stays its own until let go of (`introDirections`); a game dropped on the window ends
+  it, and a message (for a dropped file no system loads) hurries it away. Unlike Android's, it doesn't follow the
+  system's animation settings (Windows' animation effects, macOS's Reduce motion, GNOME's or KDE's): SDL has no call
+  for them, so each system would need code of its own; its own switch turns it off.
+- **Tests**:
+  - `tests/intro` (CMake's `intro-tests`, built on demand under its own `-Wall -Wextra -Werror`, AddressSanitizer and
+    UndefinedBehaviorSanitizer, undefined behaviour fatal; a new step in desktop.yml's Linux job runs it after the
+    build, with a summary line as the RSP test's): 12 tests, 84 checks. The canvas for windows of several shapes (worked
+    out by hand), and its covering any window with a column or a row at most to spare; every pixel opaque or 0 in all
+    four bytes; the opening from black, brightening; the moon's and the word's art each found drawn exactly once,
+    centred, the word under the moon, on four window shapes, and neither while the camera still moves; the moon behind
+    Mars at the start, crossing in front small and blurred with Mars sharp, ending at its art's size and sharp with
+    Mars blurred, growing all the way; Mars turning; the word drawn in from the left; the dissolve's timing, never
+    undone, half at its middle; skips at the start, midway and during the dissolve, which hurry it and undo none of it;
+    a frame depending on its moment alone; rows further apart than the canvas; odd sizes; the ends of int's range (a
+    window `INT_MAX` pixels across, moments at `INT_MIN` and `INT_MAX`) without undefined behaviour.
+  - JVM: `IntroTest` (9 tests): `introPlays()`'s conditions; `IntroKeys` taking every key and skipping on each press,
+    a repeat taken without skipping again, Back taken (where it reaches the window), a key pressed during the intro
+    kept until let go of, a press after it the Library's, a repeat whose press it never had skipping and kept, touch
+    mode's unseen press skipping with its repeats and release taken (a brief one's release alone), a press that leaves
+    touch mode and still comes (a typing key's) leaving the Library's next key whole, touch mode ending after the intro
+    left alone, the volume keys untouched. `AppearanceSettingsTest`: the setting on by default, and off kept across
+    starts under the name `intro_animation`.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; Gradle 9.6.0, NDK 28.2.13676358):
+  - The work began on master `f373b9e7e` and moved onto `7986aef5b` when #298 merged, which changes only the PSP
+    renderer, its tests and docs. What follows was run on the final tree unless it says `f373b9e7e`.
+  - The desktop builds (`cmake --preset linux-x64`), and `intro-tests` passes: 84 checks, 0 failed. desktop.yml's new
+    step, run here as written with `bash --noprofile --norc -eo pipefail` (what `shell: bash` runs), writes
+    "- tests/intro: 84 checks, 0 failed"; with a stand-in test that fails, the step fails (exit 1), where GitHub's
+    default `bash -e` would have passed it (on `f373b9e7e`). With `-fno-sanitize-recover=undefined`, a test program's
+    signed overflow exits 1, where it exited 0 without.
+  - Ubuntu 22.04's GCC 11.4.0, the compiler of desktop.yml's Linux runner, in a container: `intro-tests` builds with
+    the target's flags (`-O3 -std=gnu++20 -Wall -Wextra -Werror`, both sanitizers, undefined behaviour fatal) without a
+    warning, and passes: 84 checks, 0 failed.
+  - Android: both flavours' unit tests (390 each, 0 failures) and `assembleLegacyDebug`.
+  - The review's fixes were each shown needed: with the old arithmetic the sanitizers stop `intro-tests` at a signed
+    overflow (`2147483647 + 11930465`, in `canvasFor`), and with the old `IntroKeys` the new `IntroTest` fails (the
+    Library's Enter release taken).
+  - On the RP6, over Wi-Fi, test builds beside the owner's apps (`com.phobos.emulator.intro`), recorded from cold
+    starts. On `f373b9e7e` (2.4.0-338-gf373b9e7e-intro, its APK's sha256 `578cc41d…`): the intro plays, and in a
+    screenshot 3.65 s in its moon is the art exactly, every art pixel a 6×6 block at (738, 132) (the RP6's screenshots
+    are in Display P3, so the art's sRGB colours were compared converted); a controller button and a tap 2 s in skip
+    it; a virtual pad's D-pad pressed after a touch skips it; that D-pad held across the intro's end leaves the
+    Library's focus where it was, and pressed again moves it once; a game asked for 1.5 s in ends it; adb's debug
+    launch, Remove animations (animator duration scale 0) and the switch turned off each start without it, and the
+    switch stays off; the update toast comes after it. On the final tree (2.4.0-341-g7986aef5b-intro, `7f885e23…`):
+    Back 2 s in, the system's (`input keyevent KEYCODE_BACK`) or a virtual pad's, dissolves it into the Library, where
+    the build before the fix sent Phobos to the background, the launcher in front; Home 1.5 s in, and the app brought
+    back 3 s later, finds it where its clock is (the logo) and it dissolves; the button, the tap, the D-pad after a
+    touch and the D-pad held across the end do as before. No crash in any log; the test app was uninstalled after.
+  - On a virtual X display (Xvfb, 1280×720, SDL's software renderer): the intro plays, its moon exact (every art pixel
+    a 4×4 block at (492, 88)); Space 2 s in skips it; given the games folder, it plays; given a game that can't start
+    (a stand-in `.gb`), it doesn't, and the game's "Couldn't start" shows. On `f373b9e7e`: a click 2 s in skips it;
+    Down held across its end leaves the Library's cursor where it was, and pressed again moves it once (with
+    `introDirections`' lines taken out, the cursor moved on its own as the intro ended); `intro=false` in settings.ini,
+    and a file no system loads given, each start without it.
+- **Limits**:
+  - Android was checked on the RP6 alone, in landscape: not in portrait, on other screens or Android versions, with
+    TalkBack, with a keyboard (`IntroTest` alone covers a typing key leaving touch mode), turned mid-intro, or from a
+    real frontend (adb's intents stood in for one).
+  - The desktop was checked on Linux alone, on a virtual display with SDL's software renderer, from the keyboard and
+    mouse: not on Windows or macOS, with a GPU renderer, or with a real pad (whose buttons take the path in `update()`
+    the arrow keys took), and nothing was dropped on its window during the intro (the message's path).
+  - The desktop doesn't follow the system's animation settings (above), though the owner's choice had the intro
+    skipped with them removed in every case; the owner is told, for a follow-up if wanted.
+  - Android 12 and later show their own splash, the launcher icon, before the app's first frame; the intro follows it,
+    from black.
+  - Each start to the Library takes about 5.6 s more unless the intro is skipped or switched off.
+- **Next**: a draft pull request against master and its CI (the new step's first run). #294 changes 9 of these 21
+  files: a trial merge (`git merge-tree`) with its `833fe8cbe` conflicts in `MainActivity.kt` (3 hunks),
+  `desktop/main.cpp` (6) and this file (1), both reworking the same key paths, so whichever merges second resolves
+  them; desktop.yml and `CMakeLists.txt` merge cleanly.
+
 ## PSP Vulkan: Burnout Legends at 4x shown from the GPU, after a finish and past a texture's move — 2026-10-22
 
 Branch `cursor/psp-upscale-shown-cachy`, from master `062dd53e2`, with master `f373b9e7e` (#297 and #299) merged in.

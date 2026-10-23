@@ -67,6 +67,15 @@ jobs:
           cmake --preset linux-x64
           cmake --build build/linux-x64
 
+      # The intro's renderer, which the Android app and the program share, against its host tests (tests/intro), with
+      # its own warnings as errors and the sanitizers: seconds.
+      - name: Intro renderer
+        shell: bash
+        run: |
+          cmake --build build/linux-x64 --target intro-tests
+          build/linux-x64/intro-tests | tee "$RUNNER_TEMP/intro-tests.log"
+          echo "- tests/intro: $(tail -1 "$RUNNER_TEMP/intro-tests.log")" >> "$GITHUB_STEP_SUMMARY"
+
       # ares's dialect (CMakeLists.txt) on every N64 source and not on the PSP core's, then the N64 RSP's recompiler
       # against its interpreter (tests/rsp-recompiler) on the objects just built: seconds.
       - name: N64 RSP recompiler against the interpreter
