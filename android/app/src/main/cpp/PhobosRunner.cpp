@@ -2872,6 +2872,10 @@ namespace ares {
         }
         root->unload();
         root.reset();
+        // Its threads leave the scheduler with it, not at the next load: at exit a core's threads take themselves out
+        // of the scheduler's list as they're destroyed, and the scheduler (android_globals.cpp) may be destroyed
+        // first, as the order of globals across files allows: with libstdc++ its list is freed without being emptied.
+        scheduler.reset();
 
         // No more audio() callbacks can arrive once the core is unloaded
         // (unloadSystem() set isPausedAtomic=true first). Drop the stream
