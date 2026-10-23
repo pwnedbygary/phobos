@@ -3,6 +3,8 @@ package com.phobos.emulator.ui
 import android.graphics.BitmapFactory
 import android.util.Log
 import android.view.KeyEvent as AndroidKeyEvent
+import android.view.MotionEvent
+import android.view.Window
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,6 +37,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -55,6 +58,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -65,9 +69,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import com.phobos.emulator.PhobosCore
 import com.phobos.emulator.input.ActiveControls
 import com.phobos.emulator.input.FallbackKeys
+import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.InputBindings
 import com.phobos.emulator.input.KeyHandler
 import com.phobos.emulator.input.isSystemBack
@@ -161,9 +167,10 @@ private class PspDialogInput {
 /**
  * The dialog's keys: the game's hotkeys first ([PspDialogKeys.hotkeys]), which keep the keys they take, but not a key
  * Android makes up, as at the activity's window (a fallback, or the navigation bar's or gesture's Back, which backs out
- * of the dialog); then [onKey] on each press of a PSP key (the D-pad's repeating while held; its release taken too, so
- * Android makes nothing else of it, such as Back from a controller's B). The dialog takes [input]'s focus
- * ([PspTakeFocus]); in the keyboard ([typing]) its first field taking text does.
+ * of the dialog), and one Android makes of a hat's direction that a hotkey has taken ([PspDialogHat]) does nothing;
+ * then [onKey] on each press of a PSP key (the D-pad's repeating while held; its release taken too, so Android makes
+ * nothing else of it, such as Back from a controller's B). The dialog takes [input]'s focus ([PspTakeFocus]); in the
+ * keyboard ([typing]) its first field taking text does.
  */
 private fun Modifier.pspKeys(request: PspDialogRequest, keys: PspDialogKeys, input: PspDialogInput,
                              typing: Boolean = false, onKey: (PspKey) -> Unit): Modifier {
@@ -179,6 +186,7 @@ private fun Modifier.pspKeys(request: PspDialogRequest, keys: PspDialogKeys, inp
             if (pressedOrLetGo && !madeUp && keys.hotkeys.onKey(code, down, native.repeatCount)) {
                 return@onPreviewKeyEvent true
             }
+            if (madeUp && GameInputState.hatDirectionTaken(code)) return@onPreviewKeyEvent true
             val key = pspKey(event, request, bindings, typing) ?: return@onPreviewKeyEvent false
             val moves = key == PspKey.UP || key == PspKey.DOWN || key == PspKey.LEFT || key == PspKey.RIGHT
             if (down && (event.nativeKeyEvent.repeatCount == 0 || moves)) onKey(key)
@@ -190,6 +198,33 @@ private fun Modifier.pspKeys(request: PspDialogRequest, keys: PspDialogKeys, inp
 /** Where [input]'s focus goes: what it focuses, and whether it (or something in it) has focus. */
 private fun Modifier.pspFocus(input: PspDialogInput): Modifier =
     onFocusChanged { input.focused = it.hasFocus }.focusRequester(input.focus)
+
+/**
+ * The hat's D-pad for the hotkeys while the dialog is up: a controller's motion goes to the dialog's window, not to the
+ * activity's (MainActivity.dispatchGenericMotionEvent), so a combo with a hat direction (Back + Right: the next slot)
+ * couldn't complete there. Each motion event goes to GameInputState.handleDialogMotionEvent first, then to the window's
+ * own handling; unhandled there, Android makes D-pad keys of it (the hat's and the left stick's) to move the selection
+ * ([pspKeys]). Call from inside the dialog's content.
+ */
+@Composable
+private fun PspDialogHat() {
+    val view = LocalView.current
+    val window = ((view as? DialogWindowProvider) ?: (view.parent as? DialogWindowProvider))?.window ?: return
+    DisposableEffect(window) {
+        val original = window.callback
+        val hook = object : Window.Callback by original {
+            override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+                GameInputState.handleDialogMotionEvent(event)
+                return original.dispatchGenericMotionEvent(event)
+            }
+        }
+        window.callback = hook
+        onDispose {
+            if (window.callback === hook) window.callback = original
+            GameInputState.endDialogMotion()
+        }
+    }
+}
 
 /**
  * Takes [input]'s focus, from inside the dialog's content: a Dialog has a window and a composition of its own, which
@@ -272,6 +307,7 @@ private fun PspMessageDialog(
         text = {
             Column {
                 DialogSystemBars(fullScreen, inGame = true)
+                PspDialogHat()
                 PspTakeFocus(request, input)
                 Text(text, Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()))
                 PspHints(request, if (choices.isNotEmpty()) "Enter" else null, if (request.back) backLabel else null)
@@ -325,6 +361,7 @@ private fun PspKeyboardDialog(
         properties = DialogProperties(dismissOnClickOutside = false),
         title = {
             DialogSystemBars(fullScreen, inGame = true)
+            PspDialogHat()
             Text(fields.singleOrNull()?.description?.ifEmpty { null } ?: "Enter Text")
         },
         text = {
@@ -457,6 +494,7 @@ private fun PspSaveDialog(
         properties = DialogProperties(dismissOnClickOutside = false),
         title = {
             DialogSystemBars(fullScreen, inGame = true)
+            PspDialogHat()
             Text(pspSaveHeading(request.mode))
         },
         text = {
@@ -511,6 +549,7 @@ private fun PspInstallDialog(request: PspDialogRequest, keys: PspDialogKeys, ful
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         title = {
             DialogSystemBars(fullScreen, inGame = true)
+            PspDialogHat()
             Text("Install")
         },
         text = {

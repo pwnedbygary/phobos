@@ -15,8 +15,8 @@ import org.junit.Test
  * them, and a keyboard's second bindings; and on a set led by Mode, as the defaults once were, taps, the hold actions
  * driven from the hat, from a trigger reported only as an axis and from a key that also leads a longer binding of the
  * same hold, a key bound alone beside a longer binding it leads, a button reported both ways, keys let go of while the
- * game is closed or away, and the Library's way back; and the keys of a PSP system dialog over the game, those a
- * Reload from it leaves to the window included.
+ * game is closed or away, and the Library's way back; and a PSP system dialog over the game: its keys, those a Reload
+ * from it leaves to the window included, and its hat D-pad, a direction held as it closes too.
  */
 class HotkeyRoutingTest {
     private val run = mutableListOf<String>()
@@ -96,6 +96,12 @@ class HotkeyRoutingTest {
     private fun move(hatX: Float = 0f, hatY: Float = 0f, rt: Float = 0f) {
         val axes = mapOf(AXIS_HAT_X to hatX, AXIS_HAT_Y to hatY, AXIS_RTRIGGER to rt, AXIS_GAS to rt)
         GameInputState.onJoystickMove({ axes[it] ?: 0f }, HeldCrossReplayTest.DEFAULT_MAPPINGS, LaunchSystems.PSP, PspRightStick.OFF)
+    }
+
+    /** A joystick move in a PSP system dialog's window (PspDialogHat): the hat and the left stick across. */
+    private fun dialogMove(hatX: Float = 0f, hatY: Float = 0f, x: Float = 0f) {
+        val axes = mapOf(AXIS_HAT_X to hatX, AXIS_HAT_Y to hatY, AXIS_X to x)
+        GameInputState.onDialogJoystickMove { axes[it] ?: 0f }
     }
 
     @Test
@@ -507,6 +513,65 @@ class HotkeyRoutingTest {
     }
 
     @Test
+    fun inAPspDialogBackAndTheHatsDirectionsChangeTheSlotAndTheDialogGetsNoneOfThoseDirections() {
+        hotkeys = DEFAULT_HOTKEYS
+        // The dialog opening (EmulatorScreen): the game's buttons let go of, the keys forgotten.
+        GameInputState.releaseAllButtons()
+        gameKeys.forgetPressedKeys()
+        assertTrue(gameKeys.onDialogKey(BACK, down = true, repeatCount = 0))
+        dialogMove(hatX = 1f)
+        assertEquals("Back + the hat's right: the next slot", listOf(HotkeyAction.NEXT_SLOT), run)
+        assertTrue("its Android D-pad key moves nothing", GameInputState.hatDirectionTaken(DPAD_RIGHT))
+        // Back, held and taken, is no direction: the navigation bar's Back isn't dropped in the dialog meanwhile.
+        assertFalse("nor is Back taken from the dialog", GameInputState.hatDirectionTaken(BACK))
+        dialogMove(hatX = 1f, x = 0.3f)
+        assertEquals("a move that leaves the hat as it was runs nothing more", listOf(HotkeyAction.NEXT_SLOT), run)
+        dialogMove()
+        assertFalse(GameInputState.hatDirectionTaken(DPAD_RIGHT))
+        dialogMove(hatX = -1f)
+        dialogMove()
+        assertEquals("Back + left: the previous slot", listOf(HotkeyAction.NEXT_SLOT, HotkeyAction.PREVIOUS_SLOT), run)
+        assertTrue("Back's release is taken", gameKeys.onDialogKey(BACK, down = false, repeatCount = 0))
+        assertEquals("the game gets no button", 0, GameInputState.buttons)
+        assertEquals(listOf(HotkeyAction.NEXT_SLOT, HotkeyAction.PREVIOUS_SLOT), run)
+    }
+
+    @Test
+    fun inAPspDialogTheHatsDirectionNoHotkeyTakesAndTheLeftStickStayTheDialogs() {
+        hotkeys = DEFAULT_HOTKEYS
+        dialogMove(hatY = 1f)
+        assertFalse("down alone moves the dialog's selection", GameInputState.hatDirectionTaken(DPAD_DOWN))
+        dialogMove()
+        dialogMove(x = 1f)
+        assertTrue("the left stick is no D-pad to the hotkeys", GameInputState.hotkeyKeys.isEmpty())
+        assertTrue(run.isEmpty())
+        assertEquals("the game gets nothing", 0, GameInputState.buttons)
+    }
+
+    @Test
+    fun aHatDirectionHeldAsAPspDialogClosesIsTheGamesOnlyOncePressedAgain() {
+        hotkeys = DEFAULT_HOTKEYS
+        dialogMove(hatX = 1f)
+        GameInputState.endDialogMotion() // the dialog answered, right still held
+        move(hatX = 1f)
+        assertEquals("pressed in the dialog, it isn't the game's", 0, GameInputState.buttons and Input.RIGHT)
+        move()
+        move(hatX = 1f)
+        assertEquals("pressed again, it is", Input.RIGHT, GameInputState.buttons and Input.RIGHT)
+    }
+
+    @Test
+    fun aHatDirectionPressedInAPspDialogAndLetGoOfOverTheGameStillReachesTheHotkeys() {
+        // Down alone is a tap here, leading down + R1.
+        hotkeys = hotkeysOf(HotkeyAction.PAUSE to listOf(DPAD_DOWN), HotkeyAction.SAVE_STATE to listOf(DPAD_DOWN, R1))
+        dialogMove(hatY = 1f)
+        assertTrue("down leads a combo: the hotkeys take it", GameInputState.hatDirectionTaken(DPAD_DOWN))
+        GameInputState.endDialogMotion()
+        move()
+        assertEquals("its release, the game's first move, is the tap", listOf(HotkeyAction.PAUSE), run)
+    }
+
+    @Test
     fun frameAdvanceOnModeAloneBesideModeAndL3RunsAFrameAsModeGoesDown() {
         hotkeys = mapOf(HotkeyAction.FRAME_ADVANCE to listOf(listOf(MODE, L3), listOf(MODE)))
         key(MODE, down = true)
@@ -576,6 +641,7 @@ class HotkeyRoutingTest {
         const val DPAD_DOWN = 20
         const val DPAD_LEFT = 21
         const val DPAD_RIGHT = 22
+        const val AXIS_X = 0
         const val AXIS_HAT_X = 15
         const val AXIS_HAT_Y = 16
         const val AXIS_RTRIGGER = 18

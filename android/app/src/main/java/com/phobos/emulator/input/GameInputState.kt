@@ -83,6 +83,7 @@ object GameInputState {
         consumedHotkeyKeys = emptySet()
         lastHatBits = 0
         lastHatKeyBits = 0
+        dialogHatKeys = emptySet()
     }
 
     /**
@@ -93,6 +94,7 @@ object GameInputState {
     fun releaseAllButtons() {
         lastHatBits = 0
         lastHatKeyBits = 0
+        dialogHatKeys = emptySet()
         hotkeyKeys.clear()
         hotkeyAxisKeys.clear()
         consumedHotkeyKeys = emptySet()
@@ -316,6 +318,64 @@ object GameInputState {
             (if (android.view.KeyEvent.KEYCODE_DPAD_LEFT in taken) 0 else PhobosCore.Input.LEFT) or
             (if (android.view.KeyEvent.KEYCODE_DPAD_RIGHT in taken) 0 else PhobosCore.Input.RIGHT)
     }
+
+    /** The hat's directions, as the D-pad's keycodes, that a PSP system dialog's window last reported. */
+    private var dialogHatKeys = emptySet<Int>()
+
+    private val dpadKeys = setOf(android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+        android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+
+    /**
+     * A joystick's motion in a PSP system dialog, whose window has the controller's motion while it's up: its hat's
+     * D-pad there is the hotkeys' alone ([hotkeyKeys]), so a combo with a direction completes, the game getting nothing
+     * until the dialog is answered. The event goes on to the window, where Android makes D-pad keys of the unhandled
+     * hat that move the dialog's selection; [hatDirectionTaken] says which of those a hotkey has taken.
+     */
+    fun handleDialogMotionEvent(event: MotionEvent) {
+        if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return
+        if (event.action != MotionEvent.ACTION_MOVE) return
+        onDialogJoystickMove { axis -> event.getAxisValue(axis) }
+    }
+
+    /** A dialog's joystick move, its axes read through [axisValue]: what [handleDialogMotionEvent] does. */
+    internal fun onDialogJoystickMove(axisValue: AxisValues) {
+        val hatX = axisValue.value(MotionEvent.AXIS_HAT_X)
+        val hatY = axisValue.value(MotionEvent.AXIS_HAT_Y)
+        val keys = buildSet {
+            if (hatX < -HAT_PRESS_THRESHOLD) add(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+            if (hatX > HAT_PRESS_THRESHOLD) add(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+            if (hatY < -HAT_PRESS_THRESHOLD) add(android.view.KeyEvent.KEYCODE_DPAD_UP)
+            if (hatY > HAT_PRESS_THRESHOLD) add(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+        }
+        if (keys == dialogHatKeys) return
+        InputLog.note { "dialog hat $keys" }
+        hotkeyKeys.removeAll(dialogHatKeys)
+        hotkeyKeys.addAll(keys)
+        dialogHatKeys = keys
+        hotkeyKeysVersion++
+        onHotkeyKeysChanged?.invoke()
+    }
+
+    /**
+     * The dialog gone: a direction its hat still holds goes on as the game's hat's (updateHatDpad), so letting go of it
+     * reaches the hotkeys, and counts as already given to the game, so the game gets it only once it's pressed again,
+     * as a key pressed in the dialog.
+     */
+    fun endDialogMotion() {
+        val held = (if (android.view.KeyEvent.KEYCODE_DPAD_UP in dialogHatKeys) PhobosCore.Input.UP else 0) or
+            (if (android.view.KeyEvent.KEYCODE_DPAD_DOWN in dialogHatKeys) PhobosCore.Input.DOWN else 0) or
+            (if (android.view.KeyEvent.KEYCODE_DPAD_LEFT in dialogHatKeys) PhobosCore.Input.LEFT else 0) or
+            (if (android.view.KeyEvent.KEYCODE_DPAD_RIGHT in dialogHatKeys) PhobosCore.Input.RIGHT else 0)
+        lastHatKeyBits = held
+        lastHatBits = held
+        dialogHatKeys = emptySet()
+    }
+
+    /**
+     * Whether a hotkey has taken [keyCode], a D-pad direction: then the key Android makes of a dialog's hat for it
+     * doesn't move the dialog's selection.
+     */
+    fun hatDirectionTaken(keyCode: Int): Boolean = keyCode in dpadKeys && keyCode in consumedHotkeyKeys
 
     /**
      * The trigger axes and the stick directions: their held tokens join [hotkeyKeys], so a combo can

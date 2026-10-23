@@ -35,6 +35,69 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## A PSP system dialog's hotkeys take a hat D-pad's directions: the dialog's window gives its hat to the hotkeys, and a direction one takes doesn't move the dialog — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `0b8416097` (the entry below). The PSP dialogs' entry of 2026-10-21 left this as a
+Limit: in a PSP system dialog, a controller's motion goes to the dialog's window, not to the game's input state, so a
+binding with a direction of a D-pad that's a hat couldn't complete there, and on the RP6, whose built-in D-pad is a hat,
+Back + a direction (Next or Previous Slot by default) did in a dialog what the direction alone does (derived there, not
+seen). The owner chose on 2026-10-22 to have it fixed among #294's follow-ups. Changed: `input/GameInputState.kt`,
+`ui/PspSystemDialogs.kt`, `HotkeyRoutingTest.kt`, this file (that Limit marked, and the Next of the two entries below)
+and the plan row.
+- **The fix**: each PSP dialog (the message, keyboard, save and install dialogs) hooks its own window's callback while
+  it's up (`PspDialogHat`, which puts the callback back as the dialog goes). A joystick's motion there goes first to
+  `GameInputState.handleDialogMotionEvent`, which puts the hat's directions, as the D-pad's keycodes, among the hotkeys'
+  held keys alone and tells the hotkeys (`onHotkeyKeysChanged`), as the game's hat does; then to the window as before,
+  where Android makes D-pad keys of the hat that move the dialog's selection. Such a key, made up and so kept from the
+  hotkeys, now does nothing where a hotkey has taken its direction (`hatDirectionTaken`), as a D-pad key a hotkey takes
+  never reaches the dialog. The game gets nothing from the hat while a dialog is up. As the dialog goes, a direction its
+  hat still holds goes on as the game's hat's (`endDialogMotion`): letting go of it reaches the hotkeys, and the game
+  has it only once it's pressed again, as a key pressed in the dialog. A direction no hotkey takes, and the left stick,
+  no D-pad to the hotkeys, move the dialog as before. `InputLog` notes the dialog's hat as it changes.
+- **Tests** (`HotkeyRoutingTest`, through `onDialogJoystickMove`, the dialog's entry with its axes given):
+  `inAPspDialogBackAndTheHatsDirectionsChangeTheSlotAndTheDialogGetsNoneOfThoseDirections`, Back + the hat's right,
+  then left, running Next and Previous Slot once each, the right kept from the dialog while held, the game getting no
+  button; `inAPspDialogTheHatsDirectionNoHotkeyTakesAndTheLeftStickStayTheDialogs`, down alone and the left stick left
+  to the dialog, nothing run; `aHatDirectionHeldAsAPspDialogClosesIsTheGamesOnlyOncePressedAgain`; and
+  `aHatDirectionPressedInAPspDialogAndLetGoOfOverTheGameStillReachesTheHotkeys`, down a tap leading down + R1, pressed
+  in the dialog and let go of over the game, running the tap. Five mutants each fail one or two of them: the hotkeys
+  not told of the dialog's hat; a taken direction still moving the dialog; the game given a direction held as the
+  dialog closes; that direction's release unseen by the hotkeys; the left stick read as the hat.
+- **Checks** (Gradle 9.6.0, JDK 17.0.20.1, NDK 28.2.13676358): both flavours' JVM tests (461 each, 0 failures;
+  `HotkeyRoutingTest`'s 36 among them), and `assembleLegacyDebug` of this entry's sources as first reviewed
+  (32,669,367 bytes, SHA-256 `96fc6fce…`; since then, two comments were reworded line for line and a test assertion
+  added). On the RP6, over Wi-Fi: a test build of those sources beside the owner's apps (`com.phobos.emulator.hkd`,
+  2.4.0-359-g0b8416097-hkd, its APK's sha256 `cc4d73a3…`; the classes of the two changed files the same in it as in the
+  gate's APK, by `dexdump`, offsets and indices aside), Crash Tag Team Racing taken to its save list as the PSP dialogs'
+  entry did (New Game, a name, Done), the built-in controls driven through their own input node (`sendevent`; Android
+  reads them by `Generic.kl`, the hat as a hat), the default hotkeys:
+  - In the save list, Back + the hat's right changed the slot ("Selected Slot 1"); the hat's down alone moved the
+    selection (the list takes no left or right).
+  - In the save dialog's question before it overwrites a save ("Do you want to overwrite this data?", No selected),
+    Back + right gave "Selected Slot 2" and Back + left "Selected Slot 1", No still selected; left alone selected Yes,
+    and right alone No. Back + left is the step that shows a taken direction leaving the dialog alone (right from No
+    moves nothing).
+  - Over the game, after a save closed the dialog: Back + right and Back + left changed the slot, the game's menu
+    unmoved; right and left alone moved it.
+  - `InputLog` noted each of the dialog's hat changes, its direction as sent. No crash. The test app was uninstalled
+    afterwards, its copy of the game with it.
+- **Docs**: the entry below's Next and the plan row's Open had the pull request's CI on the merge still to come; it
+  passed on `0b8416097` (Android Build run 39915965128, Desktop Build 39915965107, PSP Core Tests 39915965065).
+- **Limits**:
+  - On the device, the save dialog alone (its list and its question): the message, keyboard and install dialogs have
+    the same hook, not pressed there. No other controller or device.
+  - A direction held as a dialog closes is checked by the routing tests alone, not on the device. One already held as
+    a dialog opens reaches the hotkeys only with the controller's next motion (unchecked).
+  - A trigger reported only as an axis, or a stick direction, still can't complete a binding in a dialog: the rest of
+    the PSP dialogs' Limit holds.
+  - The left stick wasn't moved on the device: that it still moves a dialog, as the hat alone does, is derived from
+    the code (the hook leaves the stick's motion to Android, which makes D-pad keys of it as before), not seen.
+  - While a hotkey holds one of the hat's directions, the left stick's same direction doesn't move the dialog either:
+    the D-pad keys Android makes of the two are alike (unchecked).
+- **Next**: master merged again (#301 and #302 since the third merge; this file conflicts at its top), then the pull
+  request's CI; and the entry below's Next, less the CI (passed: Docs above) and a PSP system dialog's hotkeys from a
+  hat D-pad (done here).
+
 ## Master merged into the hotkey branch a third time: its 13 commits since the second merge, part 116's polling skip, #299's license notice and part 117's Burnout Legends at 4x — 2026-10-23
 
 Branch `improved-hotkeys`, on `54c7077c3` (the entry below), with master `7986aef5b` merged into it as a merge commit:
@@ -79,8 +142,8 @@ line between the branch's entries and master's) and the hotkey row of `docs/impl
 - **Limits**: nothing ran on a device (no CI job runs on one either), on Windows or on macOS (where the pull
   request's CI builds the desktop program and runs its host test); the PSP suite ran on lavapipe alone, not on this
   machine's GPU as well, as the second merge's did.
-- **Next**: the pull request's CI on the merge; a PSP system dialog's hotkeys from a hat D-pad (the owner's fifth
-  follow-up); and the entry below's Next, less the merge.
+- **Next**: the pull request's CI on the merge (passed: the entry above); a PSP system dialog's hotkeys from a hat
+  D-pad (the owner's fifth follow-up; done: the entry above); and the entry below's Next, less the merge.
 
 ## A controller going away on Android with a tap's key held no longer runs the tap: the tap waits 100 ms, and the keys forgotten as the controller goes drop it — 2026-10-23
 
@@ -129,10 +192,10 @@ this file (the entry below's Next too) and the plan row.
   - Whatever forgets the keys within the 100 ms drops a waiting tap: a pause, a PSP dialog opening, any controller
     going away. So a second tap within 100 ms of a Pause tap no longer unpauses, and a combo pressed meanwhile runs
     before the tap.
-- **Next**: master merged again (#297, #299 and #298 since the last merge; this file conflicts at its top), then the
-  pull request's CI; a PSP system dialog's hotkeys from a hat D-pad (the owner's fifth follow-up, a Limit of the PSP
-  follow-ups' entry); and the entry below's Next, less the CI and Android's check of a controller going away (done
-  here).
+- **Next**: master merged again (#297, #299 and #298 since the last merge; this file conflicts at its top; done: the
+  entry above), then the pull request's CI (passed: the hat D-pad entry, two above); a PSP system dialog's hotkeys
+  from a hat D-pad (the owner's fifth follow-up, a Limit of the PSP follow-ups' entry; done: the hat D-pad entry); and
+  the entry below's Next, less the CI and Android's check of a controller going away (done here).
 
 ## Master merged into the hotkey branch again: its 22 commits since the first merge, #295's PSP spin tests and #296's license notices — 2026-10-22
 
@@ -708,7 +771,9 @@ below (The entries below) and the hotkey row of `docs/implementation-plan.md`. C
     of their D-pad buttons), so there Back + a direction, Next or Previous Slot by default, does in a dialog what the
     direction alone does. Letting those keys reach the hotkeys would let the left stick's in too, though over the game
     the stick is no D-pad to them. Derived from Android's input handling, the code and the RP6's layout, not seen; the
-    second review found this limit still saying the hotkeys saw those keys.
+    second review found this limit still saying the hotkeys saw those keys. The hat D-pad entry above changed this for
+    the hat: the dialog's window gives the hat's directions to the hotkeys, and a direction one takes no longer moves
+    the dialog; for a trigger reported only as an axis, and for a stick direction, this limit still holds.
   - Guide or PS, where it starts no hotkey, still goes Home from a dialog; R3 and L3 alone still confirm in a message or
     a save dialog (their fallback); and the soft keyboard over the PSP keyboard still has Back first (the entry led by
     Back, Limits).
