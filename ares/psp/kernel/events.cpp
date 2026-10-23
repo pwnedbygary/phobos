@@ -459,7 +459,7 @@ auto Kernel::sceKernelSleepThreadCB() -> void {
 //callback, nor from an interrupt handler (ILLEGAL_CONTEXT, as PPSSPP's reading of the PSP has it).
 auto Kernel::sceKernelCheckCallback() -> void {
   if(interrupting || (current && current->inCallback)) return result(ErrorIllegalContext);
-  if(!current || !pendingCallback(*current)) return result(0);
+  if(!current || !pendingCallback(*current)) return calm = true, result(0);  //(none due: it changes nothing)
   result(1);
   runCallbacks(*current);
 }

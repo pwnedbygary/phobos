@@ -381,6 +381,12 @@ struct Kernel {
   bool spins = true;   //(tests turn it off to compare)
   bool going = false;  //a go of the CPU's is under way (run()): its limit and count are what a skip works from
   u64 spun = 0;        //turns skipped
+  //Tries the PSP's GE timing's checks refused (spinSkip()), each check's, so that a test can tell which one stopped a
+  //try: the last two turns unlike, the GE done part way through the turns, several calls a turn with lines moved, the
+  //busy window's time not the same kind at both ends. Nothing reads them but tests (not saved).
+  struct SpinChecks {
+    u64 unsteady = 0, partway = 0, calls = 0, kind = 0;
+  } spinChecks;
   //SpinLongest: the longest turn, in instructions (the shadow's) and so in cycles (the detector's)
   static constexpr u32 SpinTurns = 4, SpinLongest = 2048, SpinMargin = 2, SpinWaitMost = 4096;
   auto spinTurn() -> void;
@@ -394,6 +400,10 @@ struct Kernel {
   auto spinReferThreadStatus(SpinShadow& shadow, u64 time) -> bool;
   auto spinRotateThreadReadyQueue(SpinShadow& shadow, u64 time) -> bool;
   auto spinSignalSema(SpinShadow& shadow, u64 time) -> bool;
+  auto spinWaitSema(SpinShadow& shadow, u64 time) -> bool;
+  auto spinWaitSemaCB(SpinShadow& shadow, u64 time) -> bool;
+  auto spinWaitSemaphore(SpinShadow& shadow, bool callbacks) -> bool;
+  auto spinCheckCallback(SpinShadow& shadow, u64 time) -> bool;
   auto spinMpegRingbufferAvailableSize(SpinShadow& shadow, u64 time) -> bool;
   auto spinGetVcount(SpinShadow& shadow, u64 time) -> bool;
   auto spinGeListSync(SpinShadow& shadow, u64 time) -> bool;
@@ -521,7 +531,9 @@ struct Kernel {
   auto extendReturned() -> void;
   auto extensionsEnded(Thread& thread) -> void;
   auto signalSemaphores(Semaphore& semaphore) -> bool;  //(whether it woke a thread)
-  auto signalRefused(u32 uid, s32 count) const -> u32;
+  auto signalRefused(u32 uid, s32 count, s64 held = 0) const -> u32;
+  auto semaphoreWaitRefused(u32 uid, s32 count, bool interrupts, Semaphore*& semaphore) -> u32;
+  auto wouldPreempt(bool interrupts) const -> bool;
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
   auto deleteThread(Thread& thread) -> void;
@@ -1022,6 +1034,7 @@ struct Kernel {
   auto startCall() -> bool;
   auto callReturned() -> void;
   auto mayWait() -> bool;
+  auto mayWaitRefused(bool interrupts) const -> u32;
   auto fromThread() -> bool;
   auto sceKernelCpuSuspendIntr() -> void;
   auto sceKernelCpuResumeIntr() -> void;

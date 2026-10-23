@@ -886,6 +886,9 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
           {"sceKernelReferThreadStatus", &Kernel::spinReferThreadStatus},
           {"sceKernelRotateThreadReadyQueue", &Kernel::spinRotateThreadReadyQueue},
           {"sceKernelSignalSema", &Kernel::spinSignalSema},
+          {"sceKernelWaitSema", &Kernel::spinWaitSema},
+          {"sceKernelWaitSemaCB", &Kernel::spinWaitSemaCB},
+          {"sceKernelCheckCallback", &Kernel::spinCheckCallback},
           {"sceMpegRingbufferAvailableSize", &Kernel::spinMpegRingbufferAvailableSize},
           {"sceDisplayGetVcount", &Kernel::spinGetVcount},
           {"sceGeListSync", &Kernel::spinGeListSync},
@@ -916,6 +919,7 @@ auto Kernel::power() -> void {
   cycles = 0;
   spin = {};
   spun = 0;
+  spinChecks = {};
   nextUID = 0x100;
   imports.clear();
   threads.clear();
