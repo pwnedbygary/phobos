@@ -1536,6 +1536,15 @@ auto GPU::sprite(const GE::Job& job) -> void {
     base.columnFirst = s.columnFirst, base.columnStep = s.columnStep;
     base.columnStart = s.columnStart + s32(column) * 16;
     base.rowFirst = s.rowFirst, base.rowStep = s.rowStep, base.rowStart = s.rowStart + s32(row) * 16;
+    //Above 1x a 2D sprite's pixels (and a 3D one's with a corner behind the camera, stepped as 2D's) are held between
+    //the middles of its first and last (draw.frag), where the PSP's pixels sample, as a 2D triangle's are
+    //(triangleAt()): at its edges the GPU's would sample past them, a filter's into the texel past its picture
+    //(Burnout Legends' banner, repeating, its dark top row along its bottom). Not from a copy of a target at its
+    //resolution, which has the texels between the PSP's: the GPU's pixels at a texel-for-texel sprite's edges sample
+    //inside the texel the PSP's pixel takes. Its right and bottom edges go in u and v.
+    if(!divided && backend->scale > 1 && state.push.textureScale == 1) {
+      base.flags |= 8, base.u = s.right + s32(column) * 16, base.v = s.bottom + s32(row) * 16;
+    }
   }
   //a corner at pixel edge (x, y): in 3D, its values where the GE's straight lines across and down reach it
   auto corner = [&](s32 x, s32 y) {

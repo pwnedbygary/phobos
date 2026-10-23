@@ -326,14 +326,22 @@ void main() {
     if((vertexFlags & 2u) != 0u) {
       //a 2D sprite's, stepped from its edge as the GE steps them (raster.cpp's spriteRows()): the pixel's middle
       //in sixteenths from the start (exact), times the step, plus the first, rounded once as the GE's doubles are.
-      //(At a higher resolution, the middle of the GPU's pixel, in the PSP's sixteenths: between the GE's steps.)
+      //(At a higher resolution, the middle of the GPU's pixel, in the PSP's sixteenths: between the GE's steps;
+      //held, between the middles of the sprite's first and last pixels, found from its edges as draw.cpp's
+      //spriteJob() finds them, the left and top its start, the right and bottom in its coordinates: gpu.cpp's
+      //sprite().)
       vec2 middle = gl_FragCoord.xy * 16.0 / float(push.resolution);
+      if((vertexFlags & 8u) != 0u) {
+        ivec2 first = (vertexStart + ivec2(6, 7)) >> 4, last = (ivec2(round(vertexCoordinates.xy)) - 9) >> 4;
+        middle = clamp(middle, vec2(first * 16 + 8), vec2(last * 16 + 8));
+      }
       precise float column = fma((middle.x - float(vertexStart.x)) / 16.0, vertexStepping.y, vertexStepping.x);
       precise float row = fma((middle.y - float(vertexStart.y)) / 16.0, vertexStepping.w, vertexStepping.z);
       at = (vertexFlags & 4u) != 0u ? vec2(row, column) : vec2(column, row);
+    } else if((vertexFlags & 8u) != 0u) {
+      //(above 1x, a 2D triangle's texels where its pixels' middles reach at 1x: gpu.cpp's triangle())
+      at = clamp(at, vertexStepping.xz, vertexStepping.yw);
     }
-    //(above 1x, a 2D triangle's texels where its pixels' middles reach at 1x: gpu.cpp's triangle())
-    if((vertexFlags & 8u) != 0u) at = clamp(at, vertexStepping.xz, vertexStepping.yw);
     color = textureFunction(color, sampleTexture(at, (vertexFlags & 1u) != 0u || chosen));
   }
   uvec4 shine = uvec4(clamp(floor((FLAT != 0u ? vertexFlatSpecular : vertexSpecular) + 1.0 / 512.0), 0.0, 255.0));

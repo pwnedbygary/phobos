@@ -307,7 +307,7 @@ alone.
 | 07 | Verify compiled shader artifacts | P0 | Do now | — | [#239](https://github.com/pwnedbygary/phobos/pull/239) |
 | 08 | Make PSP runs reproducible | P0 | Do now (pulled forward; adapted: the runner only) | stacked on 03 | [#250](https://github.com/pwnedbygary/phobos/pull/250) |
 | 09 | Automate PSP throughput comparisons | P0 | Later | 08 | — |
-| 10 | Protect high-resolution Vulkan output | P0 | Later (part 117 tests frames shown above 1x) | 04, 07; #240 | — |
+| 10 | Protect high-resolution Vulkan output | P0 | Later (parts 117 and 119 test frames above 1x) | 04, 07; #240 | — |
 | 11 | Remove timing-sensitive thread tests | P1 | Later | #240 (`tests/psp/ge.cpp`) | — |
 | 12 | Test historical PSP state compatibility | P1 | Later | #223 settling the layout (31 on master since #229; #223's own 28 must move) | — |
 | 13 | Measure the actual Android driver | P0 | Later, on the RP6 | 09, 10 | — |

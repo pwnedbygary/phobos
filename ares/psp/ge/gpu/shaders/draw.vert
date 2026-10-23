@@ -23,7 +23,8 @@ layout(push_constant) uniform Push {
 } push;
 
 layout(location = 0) in vec4 position;  //x, y in pixels; the depth; w
-layout(location = 1) in vec3 coordinates;  //u, v in texels, and q (texture projection's divisor; 1 otherwise)
+layout(location = 1) in vec3 coordinates;  //u, v in texels, and q (texture projection's divisor; 1 otherwise);
+                                           //a held 2D sprite's right and bottom edges (sixteenths) and 1
 layout(location = 2) in vec4 color;     //8888, 0-1 (UNORM)
 layout(location = 3) in vec4 specular;  //lighting's shine kept apart, added after texturing
 layout(location = 4) in float fog;      //how much of the color stays: 0-1

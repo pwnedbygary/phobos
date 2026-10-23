@@ -20426,10 +20426,11 @@ Midnight Club 3's 3D title had detail inside 70% of its 4x4 blocks: the core's, 
 
 ### Left
 
-- **Burnout's top banner above 1x** has a dark line along the bottom half of native row 63: its 512x64 sprite (CLUT8
-  in RAM, filtered, repeating) takes the texture's first row past its last. It was drawn into the 4x target before this
-  part too, and hidden because the frame was memory's. It's how every game's filtered, repeating sprite edge samples
-  above 1x, outside this part: a rule and tests of its own.
+- **Burnout's top banner above 1x** had a dark line along the bottom half of native row 63: its sprite, covering
+  480x64 pixels (rows 0-63, across the screen) from a 512x64 texture (CLUT8 in RAM, filtered, repeating), took the
+  texture's first row past its last. It was drawn into the 4x target before this part too, and hidden because the
+  frame was memory's. It was how every game's filtered, repeating sprite edge sampled above 1x, outside this part;
+  part 119 holds a 2D sprite's pixels where the PSP's sample, and it's gone.
 - **Cost**, as the independent review measured it on the desktop runner (`-O1`, RADV, a shared host): Burnout's route
   at 4x ran at 109.3 and 112.2 frames a second on master against 82.5 and 84.2 with the change (-24.5% and -25.0%;
   to frame 2,600 alone, 112.2 against 86.5, -23%), the GPU waiting only 0.60-0.79 to 0.93-0.94 ms a frame; so it's
@@ -20438,3 +20439,124 @@ Midnight Club 3's 3D title had detail inside 70% of its 4x4 blocks: the core's, 
   frames). Android presents the target with no read-back; the RP6 not timed.
 - **The RP6** not run: Android presents through the same `shownTarget()`.
 - The investigation's notes, frames, scripts and logs are kept outside the repository.
+
+## Part 119: Vulkan above 1x — 2D sprites' edges held where the PSP's pixels sample; part 117's other two follow-ups
+
+Part 117's reviews left three items, which the owner chose to do now (23 Oct): the dark line along the bottom of
+Burnout Legends' top banner at 4x (part 117's Left), the two-part take's texel test not checking that it still takes
+that path, and CI's run with the GE on its thread leaving out most of the GPU's tests (which would have caught part
+117's first test failing there).
+
+### Why
+
+- **What the PSP samples**: a 2D sprite's texture coordinates at each pixel's middle, stepped from its left (top)
+  corner (draw.cpp's `spriteAxis()`), over the pixels `spriteJob()` finds from its edges; the step is the same
+  throughout, so its samples lie between those of its first and last pixels. `draw.frag` steps the same way from the
+  middle of each of the GPU's pixels: above 1x those in the outer half of a sprite's first and last pixels lie outside,
+  and step up to half a pixel past the PSP's last sample, where a filter takes the texel past the picture.
+- **Burnout's banner** is a sprite covering 480x64 pixels (rows 0-63, across the screen), its texture 512x64 CLUT8 in
+  RAM, filtered, repeating, u running to 512 and v to 64. At 4x rows 254 and 255 (native row 63's lower half) stepped
+  v to 63.625 and 63.875, and the filter took row 64, which repeats to row 0, the banner's dark top edge. At 1x the
+  middle's v is 63.5, where row 64 weighs nothing.
+- 2D triangles have been held since part 49 (`triangleAt()`, inside their corners' coordinates by half a pixel's
+  move: `gpuSeams`); sprites weren't.
+
+### The change
+
+- **`GPU::sprite()`** (gpu.cpp): above 1x a sprite whose coordinates are stepped (2D's, and a 3D sprite's with a
+  corner behind the camera) and whose texture is at the PSP's resolution sets the vertex's held flag, with its right
+  and bottom edges (sixteenths, the target's offset added) in u and v, which stepping doesn't use. **`draw.frag`**
+  finds the sprite's first and last pixels from its edges as `spriteJob()` does (a column while the left edge is at
+  most 9/16 into it, a row by its middle, the right and bottom edges left out) and holds the GPU's pixel's middle
+  between theirs before stepping: a held pixel takes the coordinates the PSP's pixel at that edge takes (the same
+  arithmetic, from the same middle, as at 1x), the others what they took before. A 2D triangle's clamp is as it was,
+  now only where not stepped. shaders.hpp made again with glslang 16.6.0, the pinned one.
+- **Not from a copy of a target at its resolution** (render to texture): that has the texels between the PSP's, and
+  the GPU's pixels at a texel-for-texel sprite's edges sample inside the texel the PSP's pixel takes (the last at
+  32 - 1/(2N) of a 32-texel sprite, the copy's 32N - 0.5, a filter's fraction 0 there), so they reach nothing past
+  it, and holding them would only lose the detail the copy has (a full-screen effect's edges, the borders of tiles
+  taken from one copy).
+- **At 1x** the flag is never set: the vertices are 1x's as before, and `draw.frag` takes the path it took.
+- **Which sprites change above 1x**: textured, stepped ones whose texture the GE decodes (from RAM or from VRAM's
+  bytes), filtered or nearest, repeating or held at the texture's edges, in both Vulkan modes (fast mode draws
+  sprites through `sprite()` as the accurate mode does; only 3D triangles take its GPU transform): their GPU pixels in
+  the outer half of their first and last pixels across or down, where those stepped past the PSP's samples (at 4x two
+  of each four). A filtered sprite's there blended in the next texel, which repeating made the far edge's; a nearest
+  one's changes only where that half crossed into another texel.
+- **The texel test** (`gpuBelowTextureTexels`) also asserts that a copy was made and nothing finished, as
+  `gpuShownBelowTexture` does, so it can't pass by decoding memory's texels after a finish.
+- **CI**: "Run the GE thread's tests with the thread on" (psp-core.yml, built as the app is, on lavapipe) runs every
+  GPU group too (`PHOBOS_TESTS_ONLY` gains `gpu `), with the GPU's capabilities required as in the job's first run,
+  so a GPU group skipped there for want of one of them fails. The barriers without rasterization order (`gpuBarriers`)
+  skip there, as in the first run: lavapipe reads in order, so vulkan-unordered-reads can't be required.
+
+### Measured (the desktop runner, RADV, GE timing Fast; master `7986aef5b` and the change side by side)
+
+- **Burnout at 4x**, Vulkan (fast), part 117's route (4,990 frames): frame 2,600's banner, rows 254 and 255 had mean
+  red 55.1 and 45.5 against row 253's 62.6; with the change all three are 62.6 (and green 94.2, blue 124.4). Its top
+  edge had the same fault the other way: rows 0 and 1, 24.8 and 38.9 against rows 2 and 3's 48.8 (the texel before the
+  first, the bottom row, through the repeat); with the change all four 48.9. Rows 254 and 255 are now 1x's row 63
+  byte for byte (3,840 of 3,840 pixels; 4 before), rows 0 and 1 its row 0 in 3,408 (none before). Vulkan (accurate),
+  to the same menu: its frames 2,500 and 2,600 are the fast mode's byte for byte, before and after.
+- **Which pixels changed** at 4x: in 10 of the 11 frames compared (the 11th the intro movie, which the CPU writes and
+  no sprite draws over), 15,940 to 48,505 of
+  2,088,960 each, all at sprites' edges: 95-99.95% in a band of the 2 of 4 GPU pixels next to one edge, the rest where
+  two sprites' edges meet and at outlines' corners, a few between abutting glyphs. Each glyph of the menus' text is a
+  sprite taking its texels from a font sheet, and its edge pixels took in its neighbours' there. The car and its
+  reflection (render to texture) didn't change, nor the GPU's counters (draws, copies, finishes, pictures).
+- **At 1x**, Burnout and the eight games part 117's review ran at 4x, the same byte for byte: of each game's 29 frames
+  (3,000 frames run, a dense window of 21 among them), every one of the change's equals one of master's within three
+  frames and the other way round, most the very frame (the capture can slip a frame or two, and "arrived in frame"
+  doesn't always say so); Burnout's 87 along its route the same but one, whose capture took a later picture: run
+  again twice with every frame of 3,190-3,210 captured, 21 of 21 the same each time, and that capture is frame 3,201's.
+- **At 4x** the eight the same byte for byte, 9 frames each: God of War: Chains of Olympus and Ghost of Sparta (their
+  sprites take render-to-texture copies), Death Jr. II, Midnight Club 3, Grand Theft Auto: Liberty City Stories, Colin
+  McRae Rally 2005, Dirt 2 and Lumines; the GPU's counters the same.
+
+### Tests and checks
+
+- **"gpu above 1x: 2D sprites keep to their texels at their edges, the texture repeating or held"**
+  (`gpuSpriteSeams`): filtered sprites texel for texel, across, mirrored and turned, from a 32x32 texture whose 16x16
+  picture is white and whose texels past it are black, repeating or held at its edges, from RAM, from VRAM the CPU
+  wrote and from a frame buffer drawn first, in both modes at 1x, 2x and 3x: every pixel of each sprite the picture's
+  white, and memory's bytes the software renderer's. With the hold never set (a scratch build), 28 checks fail: every
+  2x and 3x case from RAM or VRAM not white, and in 12 of them memory's bytes too (the read-back takes an edge pixel
+  where it shrinks the picture); the copy's and 1x's pass either way.
+- **`gpuBelowTextureTexels`** asserts a copy made and no finish: with `holds()` refusing every texture (a scratch
+  build) those two fail and its old checks pass, as the review said they would.
+- Both pass in three runs with the GE on the emulation thread and three on its own; each mutant fails the same checks
+  in all six of its runs.
+- **The GPU group** (82 groups with the new one): with the change 82 and 0 failures with the GE on the emulation
+  thread and on its own, and on lavapipe with the sanitized job's requirements 82, 0, one skipped (lavapipe reads in
+  order); master 81 and 0 each way, and on lavapipe 81, 0, the same one skipped.
+- **The suites** (GCC 16.2.1, RADV; CI has GCC 13 and lavapipe): sanitized (ASan and UBSan), master 659 groups and 0
+  failures, with the change 660 and 0; release (GCC 16 needs `-Wno-error=array-bounds` for its false positives in test
+  files this doesn't touch), master 659 and 0, with the change 660 and 0.
+- **CI's step** run here as the workflow runs it (its environment, the release run's objects linked again, lavapipe
+  the loader's choice): 146 groups and 0 failures, one skipped (lavapipe reads in order), 82 of them the GPU's, in
+  5 min 14 s, where the step as it was ran 76 (12 the GPU's) in 2 min 20 s; master the same way 145 and 0, the same
+  one skipped (81 the GPU's), in 5 min 16 s. The PSP-timing step after it: 121 and 0 both (48 s).
+- **The Android build**: `tools/psp-runner/build-android.sh` (NDK r28's clang 19.0.1, the app's release flags) builds
+  it. `compile.sh --check` passes (glslang 16.6.0, the pinned one, which made master's shaders.hpp byte for byte
+  here); actionlint clean; `git diff --check` clean; no added line over 120 columns.
+
+### Left
+
+- **Copies of targets** keep stepping past the PSP's samples at their sprites' edges above 1x. A texel-for-texel sprite
+  can't reach past its texels there; a scaled one can, by the copy's own finer texels, which part 52 holds inside what
+  it took. 2D triangles are held whatever their texture (part 49); the same exception may suit them, not measured.
+  Each wants a game measured first: one drawing scaled sprites from a copy, one drawing 2D triangles from one.
+- **The copy exception isn't pinned by a test**: without `textureScale == 1`, `gpuSpriteSeams`' copy cases would
+  still be white (a held texel-for-texel sprite blends two copy texels inside the picture). A copy whose texels
+  between the PSP's differ at the sprite's edge (drawn at the target's resolution with detail inside one PSP pixel
+  there) would pin it.
+- **No test sprite's edges sit at fractions of a pixel**: one with a left edge 9/16 into a column and a right one on a
+  middle, against the software renderer's samples at 1x, would pin `draw.frag`'s +6, +7 and -9 to `spriteJob()`'s
+  rule, which they now match by reading.
+- **The RP6** not run: Android draws sprites through the same `sprite()` and `draw.frag`.
+- **Cost**: a branch and a clamp in each held sprite's pixels, nothing at 1x. Burnout's route at 4x took 66.4 s on
+  master and 66.6 s with the change, run side by side on a shared host.
+
+### Scratch
+
+Kept outside the repository: this part's notes, the runs' frames and reports, the mutants and the suites' logs.

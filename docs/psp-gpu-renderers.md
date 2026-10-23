@@ -548,9 +548,19 @@ images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
   the vertex's "held" flag; `draw.frag` clamps them), which is as far as its pixels' middles reach at 1x. The GPU's
   pixels within half a PSP pixel of an edge sampled up to half a texel beyond it before: Ridge
   Racer 2's menu draws its picture as two quads meeting at x = 240, the right one mirroring the left, and the filter
-  blended the texel past the picture into a one-pixel line down the middle (`gpuSeams`). At 1x nothing changes. A
-  2D sprite's stepped coordinates aren't held, but since part 52 every fetch is held inside the picture on the GPU,
-  so a sprite's edge pixels above 1x that step past the rows or columns copied read the last of them.
+  blended the texel past the picture into a one-pixel line down the middle (`gpuSeams`). At 1x nothing changes.
+- **2D sprites' edges** (part 119): above 1x a 2D sprite's pixels are held between the middles of its first and last
+  pixels, where the PSP's pixels sample (`sprite()` sets the vertex's "held" flag and puts the sprite's right and
+  bottom edges in its u and v, which a stepped sprite doesn't use; `draw.frag` finds its first and last pixels from
+  its edges as `spriteJob()` does and holds the GPU's pixel's middle between theirs before stepping). Its other
+  pixels step as before; a held one takes the coordinates the PSP's pixel at that edge takes. Before, the GPU's
+  pixels in the outer half of a sprite's edge pixels stepped up to half a pixel past them: Burnout Legends' top
+  banner (480x64 pixels from a 512x64 texture, CLUT8 in RAM, filtered, repeating) blended its texture's first row,
+  dark, into the lower half of its last at 4x (`gpuSpriteSeams`). Not where the texture is a copy of a target at its
+  resolution, which has the texels between the PSP's: the GPU's pixels at a texel-for-texel sprite's edges sample
+  inside the texel the PSP's pixel takes, so render to texture keeps its detail there; and since part 52 every fetch
+  is held inside the picture on the GPU, so such a sprite's edge pixels that step past the rows or columns copied read
+  the last of them. At 1x nothing changes.
 
 The shown picture, read back (where it isn't presented): the screen is made `MostShown` (4) times the PSP's size
 at most, and the picture is read back at the renderer's scale and copied (nearest) into it. That's the desktop's

@@ -341,9 +341,9 @@ struct GE {
       //starts (in sixteenths), by a step a pixel
       f64 columnFirst, columnStep, rowFirst, rowStep;
       s32 columnStart, rowStart;
-      //3D: the corners' sixteenths; s (the coordinate across x over w) and q (its divisor) at the left and right
-      //corners, and t (the one down y over w) at the top and bottom ones, each as 15-bit integers on its unit, as a
-      //triangle's corners take them (draw.cpp)
+      //The corners' sixteenths (2D's too, for a hardware renderer above 1x: gpu.cpp's sprite()); 3D: s (the
+      //coordinate across x over w) and q (its divisor) at the left and right corners, and t (the one down y over w)
+      //at the top and bottom ones, each as 15-bit integers on its unit, as a triangle's corners take them (draw.cpp)
       s32 left, right, top, bottom;
       s32 leftS, rightS, leftQ, rightQ, topT, bottomT;
       float sUnit, qUnit, tUnit;

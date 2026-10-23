@@ -58,7 +58,9 @@ struct GPU : GE::Renderer {
     }
     //A 2D sprite's texture coordinates as the GE steps them (draw.cpp's rectangle()): across x from columnFirst at
     //sixteenth columnStart, by columnStep a pixel; down y likewise. The coordinate across x is v when turned.
-    //Held (a 2D triangle above 1x: triangle()): u kept from columnFirst to columnStep, v from rowFirst to rowStep.
+    //Held (a 2D triangle above 1x: triangle()): u kept from columnFirst to columnStep, v from rowFirst to rowStep;
+    //a 2D sprite (above 1x: sprite()), its pixels kept inside its first and last, its right and bottom edges in u
+    //and v (sixteenths).
     float columnFirst, columnStep, rowFirst, rowStep;
     s32 columnStart, rowStart;
   };
