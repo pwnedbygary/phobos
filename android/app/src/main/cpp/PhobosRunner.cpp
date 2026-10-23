@@ -4123,12 +4123,17 @@ else if (port->type() == "Keyboard") {
     #endif
     LOGI("System reset requested");
   }
-  // One frame run with the game paused, and drawn (pausedFramesToDraw), so a screenshot then has it too.
+  // One frame run with the game paused, and drawn (pausedFramesToDraw), so a screenshot then has it too. A PSP game's
+  // step asks for that frame's own picture (exactFrame): with the GE on its thread the screen gets the newest picture
+  // the thread has taken, the frame before, and while the game is paused no later frame brings the step's in.
   auto frameAdvance() -> void {
     lock_guard<recursive_mutex> lock(*runMutex);
     if (!root) return;
     pausedFramesToDraw += steppedSincePause.exchange(true) ? 1 : 2;
+    bool psp = root->name() == "PlayStation Portable";
+    if (psp) ::ares::PlayStationPortable::system.exactFrame = true;
     root->run();
+    if (psp) ::ares::PlayStationPortable::system.exactFrame = false;
   }
   auto dumpNgGfx(const char* dir) -> void {
     lock_guard<recursive_mutex> lock(*runMutex);

@@ -94,7 +94,8 @@ struct System {
   auto unserialize(serializer& s) -> bool;
   u64 frames = 0;            //run so far (never reset: frame pictures are told apart by them)
   bool exactFrame = false;   //the screen given this frame's own picture at its end, the GE thread waited for (a
-                             //front end's capture: the runner's PNGs); else the newest it has taken, a frame behind
+                             //front end's capture: the runner's PNGs; the app's frame-advance step); else the newest
+                             //it has taken, a frame behind
 
 private:
   std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)

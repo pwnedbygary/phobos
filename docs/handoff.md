@@ -35,6 +35,73 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## A PSP game's frame-advance step shows its own frame with the GE on its thread: the step asks for that frame's own picture — 2026-10-23
+
+Branch `improved-hotkeys` (#294), on `83345cfc9` (the entry below). The first master merge's entry (2026-10-21) left
+this as a Limit, derived from the code and not run: with "PSP Graphics Overlap" On (the core's "GE Thread"; Android's
+setting, off by default and not offered in the app's settings, so only a stored value turns it on) and the picture
+drawn by the app (the software renderer, or the Vulkan renderer where it doesn't present on the window itself), a
+frame-advance step showed the frame before it. Master's GE thread gives the screen the newest picture it has taken, a
+frame behind (`System::run()`), the app never asked for the frame's own (`exactFrame`), and while the game is paused no
+later frame brings the step's own in. The owner chose on 2026-10-22 to have it fixed among #294's follow-ups
+(verbatim: "PSP: with Graphics Overlap on (off by default, not offered on Android), a frame-advance step can show the
+frame before it"). It's on this branch, not master: a paused step that draws its frame (`pausedFramesToDraw`) is this
+branch's alone, master's step drawing nothing where the app draws the picture. The desktop program never turns the GE
+thread on. Changed: `android/app/src/main/cpp/PhobosRunner.cpp` (`frameAdvance()`), `ares/psp/system/system.hpp`
+(`exactFrame`'s comment), this file (that Limit marked, and the Next of that entry and of the entry below) and the plan
+row.
+- **Seen**: on this machine, through the app's runner as the desktop program links it (`phobos_core`), driven by a
+  harness kept outside the repository: the runner's own calls (`initialize()`, `setPspGraphicsOverlap()`, `setPause()`,
+  `loadState()`, `frameAdvance()`), and a stand-in for the host's window keeping each picture the runner draws on it.
+  pspsdk's cube sample (`tests/psp/programs/cube.elf`, a new picture every frame), the software renderer, a state saved
+  2 s in and loaded with the game paused, then 30 steps, with the GE on its thread three times and off once. On
+  `83345cfc9`, of each GE-thread run's 30 steps, 28 or 29 showed the picture the GE-off run showed a step earlier, the
+  first step a picture from before the state, and one step in one run its own (the thread had taken it in time).
+- **The fix**: `frameAdvance()` sets the PSP's `exactFrame` for the step's frame and clears it after, so `System::run()`
+  waits for the GE thread to take that frame's own picture (`waitFrames(0)`) before the screen is given it, as the
+  headless runner (`tools/psp-runner`) does for the frames it writes as PNGs. Where the Vulkan renderer presents on the
+  window, the step now waits for the GE thread to present it there; with the GE on the emulation thread nothing changes
+  (the flag isn't read there), nor for other systems.
+- **Tests**: no test in the repository builds the app's runner with a game. The PSP core's system tests build the core
+  alone, where `geThreadFrames` already checks that a frame asked for its own picture is the GE-off run's; a test of the
+  step itself needs a target linking the whole core (`phobos_core`) and a stand-in for the host, which the harness above
+  is. With the fix, all 30 steps showed the GE-off run's picture for the same step in each of the three GE-thread runs,
+  and the GE-off run's pictures were the same as before it.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; lavapipe, `llvmpipe (LLVM 23.1.1, 256 bits)`, alone; JDK
+  17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358):
+  - The PSP core's system tests (`tests/psp/ares/run-tests.sh`, `programs` required): 417 checks, 0 failed,
+    `geThreadFrames` among them. The PSP suite (`tests/psp/run-tests.sh`) wasn't run: none of its sources includes
+    either changed file.
+  - The desktop: the program relinks with the changed runner, and ctest passes (the host test, run on its own, prints
+    220 checks, 0 failed). Android: both flavours' JVM tests pass (461 each), and the legacy debug APK builds
+    (32,670,443 bytes, SHA-256 `22b96f661bf57c7f60f6b1a340aeed902a0a65acef04230c814bf4146486d94b`), the runner and the
+    PSP core recompiled for its native library.
+  - The harness: its one source built with the desktop program's compile command for `desktop/main.cpp`, and linked as
+    the program is, with the core library before the change (SHA-256
+    `e2bd0b6775a421fa1ed5b9234f9dca0544f5e085fd1059dc1eb8158a48fe52b6`) and after it
+    (`7785028329ede2f65e0fb67f769f59dba1fc9d0087baba4b1840f1ebb6e618da`).
+- **Docs**: the first merge's entry's Limit says this entry changed it, and that entry's Next and the entry below's
+  mark this done; the plan row has a new part, and its Open no longer lists this.
+- **Limits**:
+  - Nothing ran on a device: the RP6 was locked (the entry below's Not run). On Android the setting is a stored value
+    alone.
+  - A step now waits for the GE thread to finish its frame, and Android steps on its main thread (`EmulatorScreen`'s
+    coroutines), holding the runner's lock. So a GE thread slow over that frame (a wait for the GPU, up to its five
+    seconds) holds the app (its main thread: menus and input) that long, and one that never comes back from it (a
+    driver call that never returns) holds it for good, where before the step returned and the hang came at the next
+    frame: at a second step, on the main thread too, or on the emulation thread if the game was resumed, which an
+    unload leaves behind after two seconds (`waitFrames()` has no time limit). Derived, not run.
+  - The first step after a pause can still leave the screen a frame behind the game, where the emulation loop had
+    begun its next frame as the pause came (it reads the pause before it takes the runner's lock): that frame then
+    runs after the step without asking for its own picture, and its picture is let through (the first step lets two
+    through, `pausedFramesToDraw`), so with the GE on its thread the screen may keep the step's picture with the game a
+    frame on. So it was before the change too. Derived, not run.
+  - Only the software renderer ran. The Vulkan renderer, where it doesn't present on the window, gives the screen the
+    GPU's picture of the frame through the same wait (derived); where it presents, the step's frame was its own
+    already.
+- **Next**: the pull request's CI; then the entry below's Next, less this. If wanted, the harness as a test target built
+  on demand (as `tests/rsp-recompiler` is), so that CI checks the step.
+
 ## A wait for the GPU that timed out no longer freezes the PSP's screen: the swapchain and the surface held till the GPU's runs end, then let go of — 2026-10-23
 
 Branch `improved-hotkeys` (#294), on `848eb204d` (the entry below). The lost GPU's entry of 2026-10-21 (the PSP's
@@ -124,8 +191,8 @@ the plan row.
     has ended by then, so only presents are left to wait for (derived).
 - **Next**: the pull request's CI; the RP6 run of the final code with its fences polled over many frames, once the
   device is unlocked (Not run, above); a frame-advance step showing its own frame with "PSP Graphics Overlap" On where
-  the app draws the picture (the plan row's Open; on this branch too, its paused step being this branch's); and the
-  entry below's Next, less the CI (passed: Docs above).
+  the app draws the picture (the plan row's Open; on this branch too, its paused step being this branch's; done: the
+  entry above); and the entry below's Next, less the CI (passed: Docs above).
 
 ## Master merged into the hotkey branch a fourth time: #301's AppImage runtime pinned and checked, and #302's docs without private local paths — 2026-10-23
 
@@ -531,7 +598,8 @@ and the hotkey row of `docs/implementation-plan.md`.
     `tools/psp-runner` do), and while the game is paused nothing takes the step's own picture in. Where the Vulkan
     renderer presents on the window, the GE thread presents each step's own frame there (`frameEnded()`, `present()`).
     Derived from the code, not run. Neither side had this case before: where the app draws the picture, master's frame
-    advance drew nothing, and the branch had no GE thread.
+    advance drew nothing, and the branch had no GE thread. The frame-advance entry of 2026-10-23 above changed this:
+    a step asks for its frame's own picture now.
   - Nothing with the GE on its thread ran on the RP6: the drain and the let-go there rest on the host tests alone.
 - **Review**: the first review found two Minors in wording, both fixed: the frame-advance Limit above held only where
   the app draws the picture (with the Vulkan renderer presenting, the GE thread presents each step's own frame), and it
@@ -540,8 +608,9 @@ and the hotkey row of `docs/implementation-plan.md`.
   carries this entry.
 - **Next**: the RP6's test copy replaced with a build of the finished branch, and a draft pull request (the owner's
   choices), whose run of the desktop workflow is the CI change's first; a frame-advance step showing its own frame with
-  "PSP Graphics Overlap" On where the app draws the picture (Limits); the Game Boy core's read of freed memory at exit,
-  if wanted; the hands-on checks (the RP6 pass, a pad, a window manager, Wayland, Steam, Windows and macOS).
+  "PSP Graphics Overlap" On where the app draws the picture (Limits; done: the frame-advance entry of 2026-10-23
+  above); the Game Boy core's read of freed memory at exit, if wanted; the hands-on checks (the RP6 pass, a pad, a
+  window manager, Wayland, Steam, Windows and macOS).
 
 ## Desktop follow-ups: "Fullscreen and pause (toggle)" following fullscreen as ares 1810 asks, Screenshot with the pause menu open, no abort when the display goes away first, the host test in CI — 2026-10-21
 
