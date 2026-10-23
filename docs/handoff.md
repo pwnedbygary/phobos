@@ -37,9 +37,10 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP tests: GCC 16's false warning in movies.cpp settled in the code, the sound frames made at their full size — 2026-10-23
 
-Branch `psp-movies-gcc16`, from master `11983f8d4`, master's `ac0ad694c` (#302: docs alone) merged in since. Checked
-on `7986aef5b`, as #301, between that and `11983f8d4`, touches the AppImage's scripts, `desktop.yml`, `LICENSE` and
-this file alone. A release build of the PSP tests (`PHOBOS_TESTS_MODE=release
+Branch `psp-movies-gcc16`, from master `11983f8d4`, master's `ac0ad694c` (#302: docs alone) and `67e221a8f` (#304:
+the runner's unload path, which the PSP tests don't build) merged in since. Checked on `7986aef5b`, as #301, between
+that and `11983f8d4`, touches the AppImage's scripts, `desktop.yml`, `LICENSE` and this file alone. A release build
+of the PSP tests (`PHOBOS_TESTS_MODE=release
 tests/psp/run-tests.sh`, `-Wall -Wextra -Werror` at `-O3`) stopped under GCC 16 (16.2.1 here) at a false
 `-Warray-bounds` in `tests/psp/movies.cpp`'s `movie()`, twice: each sound frame there was its 12-byte header grown to
 388 bytes with `resize()`, and with `resize()` inlined, into `movie()` at line 52 and through it into
@@ -71,6 +72,72 @@ As GCC's earlier false warnings were, `pools.cpp`'s `-Warray-bounds` in a vector
   its later two, with the GE thread on and with the PSP's GE timing). The change was built with GCC 16.2.1 and 13.3,
   on x86-64 alone: CI builds the PSP tests on x86-64 too (`psp-core.yml`'s ARM64 lanes build the CPU's tests and the
   runner's measurements), so nothing has built it on ARM64. A later GCC may find another false warning elsewhere.
+- **Next**: the pull request's CI.
+
+## Quitting after a Game Boy game no longer reads freed memory: the scheduler emptied as a game unloads — 2026-10-23
+
+Branch `gb-apu-exit`, from master `ac0ad694c`. Seen under AddressSanitizer while #294's desktop follow-ups were checked
+(that pull request's handoff, its entry of 2026-10-21, "Also seen"), and older than them: after a Game Boy game,
+Phobos's exit read memory already freed, in the Game Boy core's APU destructor. The owner asked for it fixed on
+2026-10-22.
+- **Why**: a core's components are global objects, `ares::Thread`s (the Game Boy's CPU, PPU and APU among them), and a
+  `Thread`'s destructor takes it out of the scheduler's list (`Thread::destroy()`, `Scheduler::remove()`, in
+  `ares/ares/scheduler/`). The scheduler is a global in another file (`ares/ares/android_globals.cpp`), and across files
+  C++ leaves the order of globals open: made in one order, destroyed in the reverse. The runner unloads the game on a
+  quit (`unloadSystem()`) but left its threads in the list until the next load emptied it (the `scheduler.reset()` in
+  `ares::initialize()`, and in most cores' `System::load()`). Where the scheduler is destroyed first and its list is
+  libstdc++'s `std::vector`, whose destructor frees the list's memory without emptying it, the threads' destructors then
+  read that memory: AddressSanitizer's heap-use-after-free in `Scheduler::remove()` (`scheduler.cpp:59`), from
+  `GameBoy::APU`'s destructor at exit, the memory allocated as the PPU's thread joined the list (`Thread::create()` in
+  `GameBoy::PPU::power()`) and freed by the scheduler's destructor. libc++'s `std::vector` empties the list as it frees
+  it, so with libc++ the removal reads no freed memory.
+- **Which builds have that order** (each one's `.init_array`, read with `readelf`): the desktop program as built makes
+  the scheduler first (`android_globals.cpp`'s entry 8 of 63, the Game Boy core's 14), so it's destroyed last and
+  nothing reads freed memory there. #294's check compiled the runner, `desktop/main.cpp` and the Game Boy core again
+  with AddressSanitizer (its script is gone, so how it linked them is inferred); linked ahead of the core's library, as
+  the copy below has them, those make the Game Boy core's globals first and give the same error. The Android library has
+  that order too (the Game Boy core's entry 276 of 302, the scheduler's 295), but it's built with libc++: its
+  scheduler's destructor sets the list's end to its start before freeing it (read in the built library), so even an exit
+  would read no freed memory there; and nothing in the app exits its process (no `System.exit()` or the like): Android
+  ends it with a signal, which runs no destructors (derived, not checked on a device). The Windows program is built with
+  MSYS2's GCC, so with libstdc++, its order not read; the macOS program with Apple's clang and libc++, as the Android
+  library (derived from libc++'s code).
+- **The fix**, in `android/app/src/main/cpp/PhobosRunner.cpp`'s `unloadSystem()` alone: `scheduler.reset()` right
+  after the core is unloaded and let go of (`root->unload()`, `root.reset()`), with a comment saying why.
+  `Scheduler::reset()` empties the list (`clear()`), so at exit the threads' removal reads no freed memory, whichever is
+  destroyed first; the next load empties it again, as before. The runner is shared: every core goes through it, on the
+  desktop and on Android.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358, the SDK's CMake
+  3.22.1 for the Android library). The desktop program (the `linux-x64` preset's Release build) under Xvfb, with SDL's
+  software renderer and its dummy audio; the game a homebrew Game Boy music player made with hUGETracker, so the
+  sound chip runs; started from the command line and quit 6 s later with SIGTERM, which the program takes as a quit
+  (the saves' flush, "System unloaded", then the exit):
+  - As built: master's ran the game at 59.6 to 59.9 FPS and quit with status 0; the fixed one at 59.8 FPS, quitting
+    the same way.
+  - With AddressSanitizer on `desktop/main.cpp`, the runner and the Game Boy core (compiled by the build's own
+    commands, `ninja -t commands`, adding `-fsanitize=address -fno-omit-frame-pointer -g`) and linked ahead of
+    `libphobos_core.a`, so that the Game Boy core's globals are made first (entry 9 of 66, the scheduler's 31):
+    master's runner reported the heap-use-after-free above and exited 1; the fixed runner reported nothing and exited
+    0.
+  - The same with `android_globals.cpp` compiled again too and linked between the runner and the Game Boy core, the
+    scheduler made first as in the program as built (entry 10 of 67, the Game Boy core's 11): master's runner reported
+    nothing and exited 0. The order decides.
+  - A game loaded twice in one run (the Library, the game, the menu's "Quit to library", the game again, then the
+    quit), for the load after the new reset: with the fix the game started both times and the quit gave status 0, as
+    built and with AddressSanitizer in the fault's order; master's runner, in that order, reported the fault at the
+    exit (status 1).
+  - Android: the JVM tests of both flavours, 380 each, 0 failures, and the legacy debug APK (2.4.0-347-gac0ad694c,
+    SHA-256 `bfc224a32d1237700add80c4abb98d3d47e69716ed56468e6820f0f5441c6903`), its native library compiled after the
+    change.
+- **Limits**: only the Game Boy ran. Every ares core's components but the PSP's are `Thread`s that leave the list the
+  same way (the PSP core keeps no scheduler threads, nor does the Saturn's stub), and every core unloads through the
+  runner (derived from the code). Nothing ran on a device, on Windows or on macOS, and those builds' order of these
+  globals wasn't read. An exit with a game still loaded, past the unload, still depends on the order, and so does a quit
+  after a frame stuck past 2 s made `unloadSystem()` abandon the system (it returns before the reset, its thread still
+  stuck in the core); the desktop program unloaded before each quit here. Where the scheduler is destroyed first, the
+  threads' destructors still call into it after its own destructor: with its list empty that call reads no freed memory
+  (no AddressSanitizer report), but only ordering ares's globals, or keeping the scheduler to the very end, would end
+  the call itself, a change to ares's code not made here.
 - **Next**: the pull request's CI.
 
 ## Docs: private local paths out, README's Shaders line corrected — 2026-10-23
