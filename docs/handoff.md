@@ -35,6 +35,73 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## AppImage: the runtime pinned and checked, libfuse's source beside each build, the tools pinned — 2026-10-23
+
+From master `7986aef5b` (#298). scripts/appimage-pins.sh and scripts/check-appimage-runtime.sh (new),
+scripts/package-linux-appimage.sh, .github/workflows/desktop.yml, LICENSE (the AppImage runtime's notice) and this
+file: the three items #296's independent review left, which the owner chose (23 Oct) to do. The notes, downloads and
+logs are kept outside the repository.
+- **What master's AppImage embeds** (Desktop Build run 39897237547, its artifact read as an archive): a runtime of
+  944,632 bytes (to the end of its section headers) naming `type2-runtime/commit/fedfad5`. With the four sections
+  appimagetool fills in zeroed (`.digest_md5`, `.upd_info`, `.sha256_sig`, `.sig_key`; 89 bytes differ, the image's
+  MD5 and the update information) it is byte for byte type2-runtime's continuous `runtime-x86_64` (sha256 617aa773…,
+  fedfad51a, 19 Oct), whose four sections are zeros. Its strings: `3.15.0`, `squashfuse 0.5.2`, zstd's `1.5.6` and
+  zlib's `inflate 1.3.2`. The job's log: linuxdeploy "1-alpha (git commit ID 07333c6), GitHub actions build 369 built
+  on 2026-10-01", appimagetool "continuous build (git version 854e19e), build 313", the runtime downloaded from
+  type2-runtime's continuous release.
+- **The pins** (scripts/appimage-pins.sh, a URL and a sha256 each; the tools' and the runtime's are GitHub's digests):
+  - appimagetool `1.9.1` (ed4ce84f…). Its continuous build is two commits on: an `APPIMAGETOOL_RUNTIME_FILE` variable
+    and a help string, neither used here.
+  - linuxdeploy `1-alpha-20251107-1` (c20cd71e…), its newest release. Its continuous build, master's, is rebuilt on
+    the 1st of each month (a cron: 07333c6 built on 1 Aug, 1 Sep and 1 Oct), so a sha256 pin on it would fail monthly.
+    The release is ten commits older (before patchelf 0.19.1 and newer binutils). Given the same unstripped program
+    and library with RUNPATH `$ORIGIN`, the two place the dynamic sections patchelf moves differently (the same
+    RUNPATH; both run), so phobos's and FFmpeg's files in the AppImage will differ in layout from master's. Given
+    master's deployed files, the release leaves them byte for byte.
+  - The runtime: type2-runtime `fedfad51a`'s build (617aa773…), given to appimagetool with `--runtime-file`.
+    type2-runtime publishes it only as its continuous build, replaced at each push (on five days in the last year);
+    its one dated release, `20251108` (dd6cebe), predates `8f39b89`'s extraction directories with mode 0700. The
+    script takes it from a copy on Phobos's v2.4.0 release, then from type2-runtime's continuous release, both checked
+    by the one sha256: with the copy uploaded, type2-runtime's next commit changes nothing; without it, that commit
+    stops the Linux job, which names the file and its sha256.
+  - Every copy is checked whenever it's used: one kept from an earlier run (build/appimage-tools) is downloaded again
+    if it isn't the build pinned, and a download is kept only if it is, as thirdparty/ffmpeg/build.sh does.
+- **libfuse's source beside each build** (LGPL 2.1, section 6): the tarball type2-runtime pins (its
+  scripts/common/install-dependencies.sh:24-25 at fedfad51a, libfuse's fuse-3.15.0.tar.xz, 70589cfd…), its patch
+  (patches/libfuse/mount.c.diff at fedfad51a, 1c7fd9e2…, the same blob as at 8f39b89) and, so the runtime can be
+  linked again with a changed libfuse, type2-runtime's source at fedfad51a (GitHub's archive of the commit,
+  e27ea3c8…, with the same patch and the build scripts; a copy on v2.4.0 tried first). The packaging script puts the
+  three in dist/; the Linux artifact carries them, and a tag's release job uploads dist/*. LICENSE's notice says the
+  runtime is pinned and where they are. The runtime's other parts (musl, squashfuse, zstd, zlib, mimalloc) ask only
+  for notices, which LICENSE has.
+- **The check** (scripts/check-appimage-runtime.sh; CI's step "Check the AppImage's runtime"; runs locally): the
+  runtime, its four appimagetool sections zeroed, must have the pinned sha256, name a prefix of the pinned commit and
+  carry `3.15.0` and `squashfuse 0.5.2` as whole strings (LICENSE's versions); it prints the commit.
+- **Checks** (on the desktop host): the check passes on master's AppImage; it fails on copies with type2-runtime
+  20251108's runtime, a byte of code changed, or libfuse's version string changed, and passes with junk only in
+  appimagetool's sections. Each of the six pins, through the packaging script's own `fetch()`: a cached copy that is
+  the build pinned is used with no download; one with a byte changed is downloaded again and checked; a wrong pin
+  fails, with or without a cached copy; a URL giving another build (20251108's runtime) is refused and the next one
+  used. libfuse's tarball unpacks as 3.15.0 and the patch applies to it. Re-packed end to end from master's artifact
+  with the pinned tools: the check passes, and the AppImage's 73 entries are master's but LICENSE. ShellCheck 0.11.0
+  clean at warning level; actionlint 1.7.12 gives master's two warnings only; `git diff --check` clean; no added line
+  over 120 columns.
+- **The .zsync and `OWD`**: appimagetool starts by changing to `$OWD` when it's set (appimagetool.c:588-599 at 1.9.1,
+  the same in master's continuous build), and zsyncmake writes the .zsync where appimagetool runs. A shell started
+  from an AppImage has `OWD` set, so from one the .zsync went there and the script stopped at its `.zsync` check. The
+  script now runs appimagetool with `env -u OWD` (CI's runners don't set it): with `OWD` set to an empty folder it
+  finishes, the .zsync in dist/ and the folder still empty, as with `OWD` unset; without the change it stops, the
+  .zsync in that folder. linuxdeploy doesn't read `OWD`: in its AppImage only the appimagetool bundled with its
+  AppImage plugin does, and the script doesn't use that plugin.
+- **The copies on v2.4.0**, uploaded on 23 Oct after the independent review's pass, to the existing release (nothing
+  replaced, and no new tag, which would start the tag workflows): `type2-runtime-fedfad51a-x86_64` (the runtime) and
+  `type2-runtime-fedfad51acc2860b2916a1eef32ba4a500ff31ef.tar.gz`, which the packaging script tries first, and
+  `fuse-3.15.0.tar.xz`, `fuse-3.15.0-type2-runtime-mount.c.diff` and
+  `type2-runtime-8f39b89e2ac31e1640b3d3f7e9a5108e6ce805fa.tar.gz`, so v2.4.0's own AppImage, whose runtime is 8f39b89's
+  build, has its sources beside it too. Each was downloaded back and its sha256 checked; GitHub's digests agree.
+- **Left**: the PR's CI shows the pinned tools, the check and the artifact's files; the first version tag after this,
+  the release upload.
+
 ## PSP Vulkan: Burnout Legends at 4x shown from the GPU, after a finish and past a texture's move — 2026-10-22
 
 Branch `cursor/psp-upscale-shown-cachy`, from master `062dd53e2`, with master `f373b9e7e` (#297 and #299) merged in.
