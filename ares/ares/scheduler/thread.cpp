@@ -9,9 +9,10 @@ inline auto Thread::Enter() -> void {
   for(u32 index : range(EntryPoints().size())) {
     if(co_active() == EntryPoints()[index].handle) {
       auto entryPoint = EntryPoints()[index].entryPoint;
+      auto owner = EntryPoints()[index].scheduler;
       EntryPoints().erase(EntryPoints().begin() + index);
       while(true) {
-        scheduler.synchronize();
+        owner->synchronize();
         entryPoint();
       }
     }
@@ -53,20 +54,21 @@ inline auto Thread::create(double frequency, std::function<void ()> entryPoint) 
   } else {
     co_derive(_handle, Thread::Size, &Thread::Enter);
   }
-  EntryPoints().push_back({_handle, entryPoint});
+  EntryPoints().push_back({_handle, entryPoint, _scheduler});
   setFrequency(frequency);
   setClock(0);
-  scheduler.append(*this);
+  _scheduler->append(*this);
 }
 
 //returns a thread to its entry point (eg for a reset), without resetting the clock value
 inline auto Thread::restart(std::function<void()> entryPoint) -> void {
   co_derive(_handle, Thread::Size, &Thread::Enter);
-  EntryPoints().push_back({_handle, entryPoint});
+  EntryPoints().push_back({_handle, entryPoint, _scheduler});
 }
 
+//leaves the entry point list alone: made at the first create(), it's destroyed before the cores' global threads at exit
 inline auto Thread::destroy() -> void {
-  scheduler.remove(*this);
+  _scheduler->remove(*this);
   if(_handle) co_delete(_handle);
   _handle = nullptr;
 }
@@ -79,7 +81,7 @@ inline auto Thread::step(u32 clocks) -> void {
 inline auto Thread::synchronize() -> void {
   //note: this will call Thread::synchronize(*this) at some point, but this is safe:
   //the comparison will always fail as the current thread can never be behind itself.
-  for(auto thread : scheduler._threads) synchronize(*thread);
+  for(auto thread : _scheduler->_threads) synchronize(*thread);
 }
 
 //ensure the specified thread(s) are caught up the current thread before proceeding.
@@ -90,7 +92,7 @@ inline auto Thread::synchronize(Thread& thread, P&&... p) -> void {
   while(thread.clock() < clock() && thread.handle()) {
     //disable synchronization for auxiliary threads during scheduler synchronization.
     //synchronization can begin inside of this while loop.
-    if(scheduler.synchronizing()) break;
+    if(_scheduler->synchronizing()) break;
     co_switch(thread.handle());
   }
   //convenience: allow synchronizing multiple threads with one function call.
@@ -102,7 +104,7 @@ inline auto Thread::serialize(serializer& s) -> void {
   s(_scalar);
   s(_clock);
 
-  if(!scheduler._synchronize) {
+  if(!_scheduler->_synchronize) {
     static u8 stack[Thread::Size];
     bool resume = co_active() == _handle;
 
@@ -110,7 +112,7 @@ inline auto Thread::serialize(serializer& s) -> void {
       s(stack);
       s(resume);
       memory::copy(_handle, stack, Thread::Size);
-      if(resume) scheduler._resume = _handle;
+      if(resume) _scheduler->_resume = _handle;
     }
 
     if(s.writing()) {

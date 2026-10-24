@@ -3,6 +3,7 @@
 namespace ares {
 
 struct Scheduler;
+extern Scheduler scheduler;
 
 struct Thread {
   enum : u64 { Second = (u64)-1 >> 1 };
@@ -11,12 +12,15 @@ struct Thread {
   struct EntryPoint {
     cothread_t handle = nullptr;
     std::function<void ()> entryPoint;
+    Scheduler* scheduler = nullptr;
   };
 
   static auto EntryPoints() -> std::vector<EntryPoint>&;
   static auto Enter() -> void;
 
+  //a thread runs on one scheduler for its whole life: ares::scheduler, or the one it's made with (the Game Boy's)
   Thread() = default;
+  explicit Thread(Scheduler& owner) : _scheduler(&owner) {}
   Thread(const Thread&) = delete;
   auto operator=(const Thread&) = delete;
   virtual ~Thread();
@@ -49,6 +53,7 @@ protected:
   u64 _frequency = 0;
   u64 _scalar = 0;
   u64 _clock = 0;
+  Scheduler* const _scheduler = &scheduler;
 
   friend struct Scheduler;
 };

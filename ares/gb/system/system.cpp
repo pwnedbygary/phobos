@@ -16,6 +16,7 @@ auto load(Node::System& node, string name) -> bool {
   return system.load(node, name);
 }
 
+Scheduler scheduler;
 System system;
 SuperGameBoyInterface* superGameBoy = nullptr;
 #include "controls.cpp"

@@ -108,6 +108,7 @@ auto unload(ares::Node::System& root) -> void {
   if(root) root->unload();
   root.reset();
   ares::scheduler.reset();
+  ares::GameBoy::scheduler.reset();
 }
 
 auto mapping(const Layout& layout) -> void {

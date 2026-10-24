@@ -35,6 +35,114 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Super Game Boy: the Game Boy on a scheduler of its own, which the ICD runs inside the Super Famicom's — 2026-10-24
+
+Made on master `1024054c4` (#310), moved onto `8d20e4af8` (#311, which touches only the PSP's graphics code, its tests
+and docs; the checks below ran on `1024054c4`) and reviewed independently before it was committed.
+ares/ares/scheduler/thread.hpp, thread.cpp and scheduler.cpp, ares/gb/gb.hpp, ares/gb/system/system.cpp,
+android/app/src/main/cpp/PhobosRunner.cpp, tests/sgb-scheduler (new: two programs, their header and a Game Boy state),
+tests/gb-boot-rom/gb-boot-rom.cpp (its unload), CMakeLists.txt, .github/workflows/desktop.yml (its opening comment),
+docs/implementation-plan.md (a row) and this file. It builds the scheduler design of the investigation's report as its
+independent review amended it; the report, the reviews, the runs and the logs are kept outside the repository.
+- **What**: a `Thread` runs on one scheduler for its whole life: `ares::scheduler`, or the one it's made with
+  (`Thread(Scheduler&)`), kept in `_scheduler`. Each use a thread makes of a scheduler goes to its own: the safe point
+  in `Thread::Enter`'s loop, `create()` and `restart()`, `destroy()`, both `synchronize()`s (the list a thread catches
+  up with, and the check that stops an auxiliary thread in a save's pass) and `serialize()` (the synchronize flag, and
+  the thread a state resumes). The entry points of threads not yet started stay one list, each marked with its
+  thread's scheduler: `Scheduler::reset()` erases only its own, and `destroy()` leaves the list alone (a function's
+  static made at the first `create()`, it's destroyed before the cores' global threads at exit). The Game Boy has a
+  scheduler of its own, `GameBoy::scheduler`, as upstream ares has (its master at `c76aaffa6e69`), declared at the top
+  of gb.hpp's namespace, ahead of all the core's code, so that the core's 10 uses of `scheduler` name it, and the
+  core's threads are made on it by their type (`GameBoy::Thread`), wherever they're made: five places, ppu/io.cpp's
+  among them, which makes the PPU's thread again as the LCD is turned on or off. It's defined in
+  gb/system/system.cpp, the first file gb.cpp includes, so it's made before the core's components and destroyed after
+  them. The runner resets it with `ares::scheduler` as a game unloads and before each load (`#if defined(CORE_GB)`).
+  Save states keep their format: master's Game Boy state loads and goes on as master went on, and the Game Boy's, the
+  Game Boy Color's and the Super Famicom's come out the size master's do (below).
+- **Why**: a Super Game Boy game stayed on its border around a black screen, the picture frozen (on the RP6, in the
+  investigation). Phobos ran every core's threads on one scheduler, `ares::scheduler`, while the Super Game Boy's ICD
+  runs the Game Boy from inside the Super Famicom's (`ICD::main()`, `GameBoy::system.run()`, the Game Boy's
+  `scheduler.enter()`). On one scheduler that enter took it over, by the investigation's report, each point checked
+  against the code by its review: the Game Boy's `power()`, at the BIOS's `$6003` write from inside the Super
+  Famicom's CPU, made the Game Boy's CPU the scheduler's primary and resume thread and reset every clock; each nested
+  `enter()` made the ICD the scheduler's host; the Game Boy's CPU caught up every thread on it at each clock, the Super
+  Famicom's too; and with the Game Boy's threads idle until the BIOS starts it, the clocks overflowed about 2 emulated
+  seconds after the last `power()`. Which of these froze the device is unknown. On a scheduler of their own, the Game
+  Boy's five exits (`cpu/cpu.cpp:95`; `cpu/memory.cpp:4` and `:12`, the Super Game Boy's stop and halt;
+  `ppu/ppu.cpp:86` and `:134`, its frames) return to the ICD. The review found that the design as first written left
+  two uses on `ares::scheduler`, the safe point in `Thread::Enter` and the check in `synchronize()`, and that loop is
+  the Game Boy's only safe point: a Game Boy save never finished that way (the tests below stall on it). Synchronized
+  states, the only ones the runner makes, hold no thread's stack (`thread.cpp`'s `serialize()`).
+- **Tests** (tests/sgb-scheduler, under PHOBOS_DESKTOP_TESTS, so desktop.yml's Test step runs them on Linux, Windows
+  and macOS; no Nintendo code or data: a boot stub, a cartridge, an IPL and a 65816 program the tests write):
+  - `scheduler-threads` (T1, T2): stand-ins shaped like the Super Famicom's CPU and PPU and the ICD on one scheduler,
+    and like the Game Boy's CPU and PPU on a second, which the ICD enters from inside the first. Frames come back with
+    the Game Boy never started (5 emulated seconds, past the 2 a thread's clock lasts beside an idle thread), started
+    mid-run, inside the Super Famicom with that scheduler's save passes (whose auxiliary threads mustn't run the
+    primary), and alone with a pass every 30 frames, its PPU's thread made again or not; a destroyed thread leaves its
+    own scheduler; a synchronized state holds a thread's clocks and no stack. Then the Game Boy core: after `power()`
+    and after an LCD off and on, its four threads are on `GameBoy::scheduler` and none on `ares::scheduler`, each
+    with its entry point marked as the Game Boy's; resetting either scheduler leaves the other's threads able to
+    start.
+  - `gb-save-state` (T3): a Game Boy state saved at frame 60, loaded and run 60 frames, as it was without the load and
+    as master ran it; then the state master's build saved there (gb-state-v144.bst, 17,774 bytes, "v144") loads and
+    goes on as master went on.
+  - `sgb-smoke` (T4): a Super Famicom with the Super Game Boy's board (SGB-R-10) and the test's own IPL, boot stub,
+    65816 program and cartridge: 300 frames come back, the Game Boy runs the cartridge, LY changes, the cartridge's
+    tile reaches the 65816 program through the ICD's VRAM port (640 rows of 640), and the state saves.
+  - `sgb-owner-files` (T5): the same with a Super Game Boy cartridge, its boot ROM and a game named by
+    PHOBOS_SGB_CART, PHOBOS_SGB_BOOT and PHOBOS_GB_GAME, never in the repository: 20 emulated seconds past the boot
+    ROM's hand-over to the game, the picture in the ICD's output, and a state saved 10 s on and loaded twice, the same
+    120 frames after each load. Without the three it reports itself skipped, as in CI.
+  - On master's code T4 and T5 stall as the Super Famicom starts (no frame for 10 s, the tests' watchdog), and T1 and
+    T2 don't build (they name the new constructor and `GameBoy::scheduler`); T3 passes there, as it must. With the
+    design as first written, T1 and T3 stall in the first save and T4 passes. Each binding point put back on
+    `ares::scheduler`, or as master had it, fails a test: `Thread::Enter`'s safe point, the entry point's mark at
+    `create()` and at `restart()`, `create()`'s join, `synchronize()`'s list and its check, `destroy()`,
+    `serialize()`'s flag, `reset()` emptying the whole list, and the Game Boy's threads made as plain `ares::Thread`s.
+    `serialize()`'s resume is the one untested: it applies to a state saved from inside a thread, which the runner
+    never makes.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; CI's Linux job has Ubuntu 22.04's GCC and CMake 3.31.6):
+  `cmake --preset linux-x64 -DPHOBOS_DESKTOP_TESTS=ON`, `cmake --build --target phobos-desktop-tests gb-boot-rom
+  scheduler-threads sgb-cores phobos` and `ctest --output-on-failure`: five tests pass and `sgb-owner-files` reports
+  itself skipped; master's two pass. With the owner's files, T5 passes: an SGB1 cartridge with Donkey Kong (SGB
+  Enhanced) reaches the game at frame 457 and an SGB2 with Kirby's Dream Land 2 at frame 379, each 20 s on with a
+  picture, its state saved and loaded twice. The desktop program as built, under Xvfb with SDL's software renderer,
+  dummy audio and lavapipe: that Super Game Boy and game at the runner's 60.2 FPS, the game as a Game Boy game at
+  59.8, each quit with SIGTERM to "System unloaded" and status 0. The 23 Oct exit check (desktop/main.cpp, the runner
+  and the Game Boy core, here the Super Famicom core too, compiled again with AddressSanitizer by the build's own
+  commands and linked ahead of libphobos_core.a): after the Game Boy game and after the Super Game Boy session, no
+  report and status 0. Super Famicom states (a LoROM loop, its entropy fixed) and Game Boy Color ones (the cartridge
+  with the boot ROM's own logo, booted by boot.cgb-0.rom), saved by master's build (265,953 and 50,542 bytes), load
+  with this change and go on as on master, its own come out the same size, and its runs are master's. ares/gb/gb.cpp,
+  ares/sfc/sfc.cpp and the runner compile with NDK 28.2's clang for the app's legacy flavour (round one's flags,
+  copied by hand, FFmpeg's left out). CI's four PSP suite steps as psp-core.yml runs them, on lavapipe: sanitized
+  (AddressSanitizer and UndefinedBehaviorSanitizer) 665 groups, 0 failures, 1 skipped, with no sanitizer report;
+  release 665, 0, 1; the GE-thread step 148, 0, 1; the PSP-timing step 126, 0; group for group as on master.
+  In the review, tests/ngcd (which ngcd.yml runs for any change under ares/ares): 2,835 checks, 0 failures. No N64
+  Transfer Pak game: nothing gives the Transfer Pak a Game Boy game (the desktop offers no Transfer Pak, and the
+  runner hands a Game Boy cartridge the main game's pak outside the Super Game Boy), and with one the Game Boy's
+  cartridge makes no thread (gb/cartridge/cartridge.cpp:62, :76). `git diff --check` clean; no added line over 120
+  columns but the plan's table row, one line like the table's others.
+- **Left**: the app's build and the RP6 (a Super Game Boy game past the BIOS into the game, a state saved and loaded in
+  it; a Game Boy and a Game Boy Color game and their states; an N64 Transfer Pak game). A Super Game Boy state saved
+  mid-game loads, the same way each time, but the run after it isn't the run without it: the ICD saves the Game Boy's
+  threads without their stacks wherever the Game Boy's scheduler left them (`ICD::serialize()`, the Game Boy's
+  `System::serialize(serializer&, bool)`), as upstream's same code does. Running the Game Boy's own pass in the ICD's
+  save would likely make them match (not tried): a change beyond this one. a52, the Atari 5200 core, isn't built, but
+  it binds split, as the design review found: `antic/timing.cpp:62` and `system/serialization.cpp:4` and `:43` name
+  `ares::scheduler`, and `system/system.cpp:30`, `:67` and `:110` the core's own, defined at `:21` after the others:
+  whoever builds it should declare that scheduler in a52.hpp first, as gb.hpp does. The design review's optional
+  assertion in `Scheduler::exit()` that no clock has wrapped isn't added. The app, the desktop program and the
+  desktop's ctest are built with nall's `BUILD_RELEASE`, and so with `NDEBUG`, which compiles an `assert` out; the host
+  suites built without `NDEBUG`, tests/ngcd and the PSP suites' default mode, would keep the assertion, though by a
+  search of their code (not a run) neither reaches `Scheduler::exit()`. A check kept in Release would change what every
+  core does on a wrap, and T1's never-started Game Boy covers the case here.
+- Independent review: its first round (NEEDS CHANGES for the diff `924abfa4`) found the change and its tests as
+  described and asked for two sentences to be corrected: the commit message's claim that every binding point fails a
+  test, and this entry's reason for leaving out the overflow assertion. Both are corrected in this commit, and the
+  change is moved onto `8d20e4af8`. The delta reviews' verdicts go in the commit message.
+
 ## PSP Vulkan above 1x: 3D draws' texture rows from their vertices, textures from fresh targets — 2026-10-24
 
 Branch `cursor/psp4x-fix-cachy`, made on master `919c238b` (#306), moved onto `1024054c` (#309 and #310, neither of

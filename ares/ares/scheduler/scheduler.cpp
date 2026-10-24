@@ -1,7 +1,8 @@
 namespace ares {
 inline auto Scheduler::reset() -> void {
   _threads.clear();
-  Thread::EntryPoints().clear();
+  //only this scheduler's pending entry points: another scheduler's threads may still be waiting to start
+  std::erase_if(Thread::EntryPoints(), [this](const Thread::EntryPoint& entry) { return entry.scheduler == this; });
   _host = nullptr;
   _resume = nullptr;
   _primary = nullptr;

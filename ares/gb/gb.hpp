@@ -7,6 +7,11 @@
 #include <component/eeprom/m93lcx6/m93lcx6.hpp>
 
 namespace ares::GameBoy {
+  //the Game Boy has a scheduler of its own, as upstream's does, so that the Super Game Boy can run it inside the Super
+  //Famicom's: declared ahead of all its code, which then names this one, and its threads made on it by their type
+  extern Scheduler scheduler;
+  struct Thread : ares::Thread { Thread() : ares::Thread(scheduler) {} };
+
 auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
