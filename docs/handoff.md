@@ -35,6 +35,44 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the workflows' actions off Node 20, setup-gradle aside — 2026-10-24
+
+Made on master `c9c7d2d2a` (#309) and reviewed independently before it was committed. .github/workflows/android.yml,
+desktop.yml and psp-core.yml (their `uses:` lines alone) and this file. The inventory and its evidence (each action's
+action.yml at the old and new tags, the notes of every release between them, the sources compared) are kept outside
+the repository; the pull request carries the inputs table.
+- **What**: 27 `uses:` lines move to the newest major that runs on Node 24, pinned by major tag as before: actions/cache
+  v4 to v6 (9), actions/upload-artifact v4 to v7 (9), actions/download-artifact v4 to v8 (3), actions/setup-java v4 to
+  v6 (2), android-actions/setup-android v3 to v4 (3), softprops/action-gh-release v2 to v3 (1). No `with:` input
+  changes: none of the new majors renamed or removed one the workflows pass.
+- **Why**: the old majors' action.yml files say `using: node20`, and master's runs at `c9c7d2d2a` warn that the ones
+  they ran "target Node.js 20 but are being forced to run on Node.js 24". #286 moved actions/checkout to v7 on 20 Oct.
+- **Versions**: the new tags point at cache v6.1.0, upload-artifact v7.0.2, download-artifact v8.0.2, setup-java
+  v6.1.0, setup-android v4.0.4 and action-gh-release v3.0.3, each `using: node24`, which GitHub's runners already run
+  (actions/checkout v7 does in every job that checks out). What changes here: download-artifact v8 fails on a digest
+  mismatch where v4 warned, and unzips a download only when it's served as a zip, as upload-artifact v7 serves its
+  own; setup-android v4's default command-line tools are 22.0, not 16.0 (sdkmanager's main class is built for Java 11
+  in 22.0 and for Java 17 in 16.0, which the jobs run today); upload-artifact v7's new `archive` input defaults to
+  zipping, as before. Artifact names, paths, retention, overwrite and hidden files, the download paths, cache keys and
+  paths, temurin 17 with no caching, and the release's files and notes keep their meaning.
+- **Left**: gradle/actions/setup-gradle@v4 (2, android.yml) stays on node20: v6, its newest major, puts caching in a
+  proprietary component whose Terms of Use upgrading accepts (v6.0.0's notes), which is the owner's decision; v5 runs
+  on Node 24 and its action.yml is v4's otherwise; v6.1.0 and later also offer an MIT `cache-provider: basic` (an
+  added input). msys2/setup-msys2@v2 needs nothing: v2 is v2.33.0, on node24 since v2.31.0.
+- **Publish jobs** (skipped on pull requests; nothing was dispatched or tagged): Publish nightly build and Attach to
+  the GitHub Release use download-artifact, Publish GitHub Release download-artifact and action-gh-release. A download
+  left zipped or put in a folder fails the nightly at `apks/update.json` before it publishes or deletes anything, but
+  on a tag the release would get the zip or no files. The nightly's download is the release job's (same artifact,
+  path and version), so the first nightly after the merge tests it; Attach's merge-multiple download and
+  action-gh-release v3 first run at the next tag: check that android.yml made that release (its APKs and update.json)
+  and that its assets match the previous release's; if android.yml's release job fails, desktop.yml creates the
+  release after 20 minutes with the desktop packages only.
+- **Checks**: actionlint 1.7.12 (ShellCheck 0.11.0) on the eight workflows: master's two findings, desktop.yml:269
+  SC2046 and desktop.yml:329 SC2034, and nothing new (it knows upload-artifact v7's and download-artifact v8's inputs;
+  every `with:` key was also checked against each new action.yml). `git diff --check` clean; a grep for each old ref,
+  empty; the privacy check, clean. No build or CI run here.
+- Independent review: its verdict goes in the commit message.
+
 ## Game Boy Color: the boot ROM read 256 bytes off, every game white — 2026-10-24
 
 Branch `cursor/gbc-boot-rom-cachy`, made on master `919c238ba` (#306) and reviewed independently before it was

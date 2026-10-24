@@ -47,13 +47,13 @@ jobs:
           filter: blob:none
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
@@ -87,7 +87,7 @@ jobs:
         run: echo "name=$(thirdparty/ffmpeg/build.sh --name android "$ANDROID_SDK_ROOT/ndk/28.2.13676358" 26)" >> "$GITHUB_OUTPUT"
 
       - name: Cache FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
@@ -115,7 +115,7 @@ jobs:
         run: cp .cache/ffmpeg/ffmpeg-*.tar.xz android/dist/
 
       - name: Upload release APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phobos-apks
           path: android/dist/*
@@ -140,13 +140,13 @@ jobs:
           filter: blob:none
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
@@ -169,7 +169,7 @@ jobs:
 
       - name: Upload the test reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-reports
           path: |
@@ -188,13 +188,13 @@ jobs:
       contents: write
     steps:
       - name: Download release APKs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: phobos-apks
           path: apks
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: apks/*
           generate_release_notes: true
@@ -211,7 +211,7 @@ jobs:
       contents: write
     steps:
       - name: Download release APKs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: phobos-apks
           path: apks
