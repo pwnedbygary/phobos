@@ -544,10 +544,11 @@ else()
     endif()
   endif()
 
-  # The desktop's host tests (tests/desktop: the hotkeys' rules, and settings.ini reading their keys back), built only
-  # when asked for with -DPHOBOS_DESKTOP_TESTS=ON; then `cmake --build <folder> --target phobos-desktop-tests` and
+  # The desktop's host tests (tests/desktop: the hotkeys' rules, and settings.ini reading their keys back;
+  # tests/gb-boot-rom: the Game Boy Color's boot ROM as the core loads and maps it), built only when asked for with
+  # -DPHOBOS_DESKTOP_TESTS=ON; then `cmake --build <folder> --target phobos-desktop-tests gb-boot-rom` and
   # `ctest --test-dir <folder>`.
-  option(PHOBOS_DESKTOP_TESTS "Build the desktop's host tests (tests/desktop)" OFF)
+  option(PHOBOS_DESKTOP_TESTS "Build the desktop's host tests (tests/desktop, tests/gb-boot-rom)" OFF)
   if(PHOBOS_DESKTOP_TESTS)
     enable_testing()
     add_executable(phobos-desktop-tests tests/desktop/hotkeys.cpp desktop/Hotkeys.cpp desktop/Input.cpp
@@ -565,5 +566,20 @@ else()
       target_link_options(phobos-desktop-tests PRIVATE -fsanitize=address,undefined)
     endif()
     add_test(NAME desktop-hotkeys COMMAND phobos-desktop-tests)
+    # On phobos_core's own objects (the core as the program links it), its own source in ares's dialect too, given the
+    # boot ROMs the app ships.
+    add_executable(gb-boot-rom tests/gb-boot-rom/gb-boot-rom.cpp)
+    target_link_libraries(gb-boot-rom PRIVATE phobos_core Threads::Threads ${CMAKE_DL_LIBS})
+    # nall needs shlwapi and Winsock on Windows, as the program does, and CoreFoundation on macOS, as tests/ngcd does
+    # (the program and phobos-desktop-tests get Apple's frameworks through SDL)
+    if(WIN32)
+      target_link_libraries(gb-boot-rom PRIVATE shlwapi ws2_32)
+    elseif(APPLE)
+      target_link_libraries(gb-boot-rom PRIVATE "-framework CoreFoundation")
+    endif()
+    set_property(SOURCE tests/gb-boot-rom/gb-boot-rom.cpp APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
+    set(GB_BOOT_ROMS "${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/System/Game Boy Color")
+    add_test(NAME gb-boot-rom COMMAND gb-boot-rom "${GB_BOOT_ROMS}/boot.cgb-0.rom" "${GB_BOOT_ROMS}/boot.cgb-1.rom")
+    set_tests_properties(gb-boot-rom PROPERTIES TIMEOUT 120)
   endif()
 endif()
