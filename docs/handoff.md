@@ -35,6 +35,65 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Game Boy Color: the boot ROM read 256 bytes off, every game white — 2026-10-24
+
+Branch `cursor/gbc-boot-rom-cachy`, made on master `919c238ba` (#306) and reviewed independently before it was
+committed. ares/gb/cartridge/memory.cpp, ares/gb/system/system.cpp, tests/gb-boot-rom/gb-boot-rom.cpp (new),
+CMakeLists.txt, .github/workflows/desktop.yml (its opening comment), docs/implementation-history.md (Task 22's
+correction), docs/implementation-plan.md (a row) and this file. The investigation's report, runs and logs are kept
+outside the repository.
+- **What**: `Cartridge::read()` reads the boot ROM's $0200-$08ff part at `address - 0x100`, upstream ares's line (its
+  master at `c76aaffa6e69`, 22 Oct 2026; the file last changed upstream in `ea688c77`, 2023-08-10). The core keeps the
+  2,048-byte layout (Pan Docs: 256 + 1792 bytes, $0000-$00ff then $0200-$08ff, the cartridge's header between them),
+  which both of the app's boot ROMs are in. `System::power()` takes an image of 2,304 bytes or more as a full dump
+  ($0100-$01ff included) and drops those 256 bytes as it loads it, leaving out anything after its first 2,304: such a
+  dump with bytes after it booted on master, while a 2,048-byte image padded that long never did. A smaller image
+  loads as before. Both changes apply to the Game Boy Color alone: the Game Boy's and the Super Game Boy's 256-byte
+  boot ROMs load and map as before.
+- **Why**: every game launched as Game Boy Color stayed on a white screen (Pokémon Crystal on the RP6, nightly 216052,
+  `7986aef5b`: the core ran at 59.8 fps, and the boot ROM was unmapped 17 ms after the start). Read 256 bytes off, the
+  boot ROM ran the wrong code from its first call ($0082 to $0275) and unmapped itself with a push in an `rst` loop
+  that ran the stack down to $ff50. Task 22 (2026-08-09) recorded `read(address)` as matching upstream, which it
+  didn't. A full dump reaches the core from the desktop program, which maps a file named `cgb_boot.bin` or
+  `gbc_bios.bin`, whatever its size, or one by its CRC32, to `fw_gbc_boot` (desktop/Firmware.cpp:51-52, 81, 139-146);
+  with upstream's line alone such a dump never booted. The app fills `fw_gbc_boot` only from its folder scan, with the
+  two bundled 2,048-byte images (MainViewModel.kt:2656-2696, FirmwareIds.kt:74-77), and Settings → Firmware has no row
+  for it (FirmwareSettingsScreen.kt:74-125). With no file in the slot, both use the APK's boot.cgb-0.rom.
+- **Tests** (tests/gb-boot-rom, a ctest test under PHOBOS_DESKTOP_TESTS, so desktop.yml's Test step runs it on Linux,
+  Windows and macOS; on macOS it links CoreFoundation, which nall needs, as tests/ngcd does): synthetic images, no
+  Nintendo code, whose bytes tell their offsets apart, in the 2,048-byte and 2,304-byte layouts, full ones of 2,305
+  and 4,096 bytes and a 256-byte Game Boy one, read through the bus at every address of $0000-$0fff with the boot ROM
+  mapped and after the write to $ff50, each byte against the offset Pan Docs' layout gives; then the app's
+  boot.cgb-0.rom and boot.cgb-1.rom, each as 2,048 and 2,304 bytes and as full images of 2,305 and 4,096 bytes, boot a
+  cartridge as a Game Boy Color game and as a Game Boy one, whose first instructions store the registers they were
+  handed, against Pan Docs' table (A=11 F=80 B=00 C=00 D=ff E=56 H=00 L=0d SP=fffe, and D=00 E=08 H=00 L=7c in DMG
+  mode): 26 checks. On master's core 8 fail (the 2,048-byte image wrong at all 1,792 bytes of $0200-$08ff, the full
+  ones at $0800-$08ff, and every boot of the 2,048-byte layout unmapped in frame 1 without reaching the cartridge's
+  code); with the conversion for exactly 2,304 bytes, 10 (the 2,305- and 4,096-byte images wrong at $0200-$08ff, and
+  their eight boots still mapped after 600 frames); with `> 0x900` for `>= 0x900`, 5 (the 2,304-byte image and its
+  four boots); with this change, none: every boot hands over in frame 186 with Pan Docs' registers.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; CI's Linux job has Ubuntu 22.04's GCC and CMake 3.31.6):
+  `cmake --preset linux-x64 -DPHOBOS_DESKTOP_TESTS=ON` (gb-boot-rom's link line in build.ninja is the same with and
+  without the CoreFoundation lines, which apply on Apple alone), `cmake --build --target gb-boot-rom
+  phobos-desktop-tests` (the two targets ctest runs, 511 steps; CI builds every target; FFmpeg 9.0.2 built without
+  nasm, which CI installs) and `ctest --output-on-failure`: with this change both tests pass, and each variant above
+  fails gb-boot-rom. The changed unit (ares/gb/gb.cpp) compiles with NDK 28.2's clang for the app's legacy flavour,
+  its flags copied by hand from CMakeLists.txt's Android branch (CMake's own Android configuration needs the
+  libadrenotools submodule, not checked out here). No Mac or Windows machine here: CI's jobs decide those links.
+  `git diff --check` clean; no added line over 120 columns but the plan's table row, one line like the table's others.
+- **Left**: the app's build and the RP6: a Game Boy Color game from the card should show the logo animation, then the
+  game. With Auto-Load State on (off by default), a game whose auto state was written in a white-screen session comes
+  back white, so start the check with no auto state, with Auto-Load off, or with Reset System. The Windows and macOS
+  test runs are CI's; macOS's decides the CoreFoundation link. Follow-ups, not changed here: the app's scan could match
+  the 2,304-byte dumps, or a Firmware row could take one; the desktop's CRC32s for `fw_gb_boot` and `fw_gbc_boot`
+  (desktop/Firmware.cpp:81) match none of the bundled boot ROMs, and nothing reads its `fw_sgb_boot` (the Super Game
+  Boy's boot ROM goes to the core with its cartridge, `fw_sgb1` or `fw_sgb2`: the dump's own 256 bytes when it carries
+  them, else the copy mia bundles). The Super Game Boy's stall (its scheduler) is a later round.
+- Independent review: its first round (NEEDS CHANGES for the diff `12f5a2af`) found the core's line right, asked for
+  CoreFoundation for the test on macOS and for the docs' claim that the app uses a boot ROM picked by hand to be taken
+  out (Settings → Firmware has no row for one), and noted that full dumps longer than 2,304 bytes, which boot on master,
+  would have stopped booting: all three are dealt with here. The delta reviews' verdicts go in the commit message.
+
 ## PSP kernel: Dante's Inferno's frame pacing skipped, its turns worked out from the clock's ticks — 2026-10-23
 
 Branch `cursor/psp-dante-skip-cachy` (pull request #306), made on master `ac0ad694` (#302); master merged in since
