@@ -66,7 +66,7 @@ jobs:
 
       - name: Keep the groups' results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: allegrex-report
           path: ${{ runner.temp }}/allegrex-report.tsv
@@ -150,7 +150,7 @@ jobs:
         run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
 
       - name: Cache FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
@@ -179,7 +179,7 @@ jobs:
 
       - name: Keep the groups' results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: psp-report
           path: ${{ runner.temp }}/psp-report.tsv
@@ -215,7 +215,7 @@ jobs:
         run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
 
       - name: Cache FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
@@ -294,7 +294,7 @@ jobs:
 
       - name: Keep the groups' results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: psp-report-release
           path: ${{ runner.temp }}/psp-report-release.tsv
@@ -330,7 +330,7 @@ jobs:
         run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
 
       - name: Cache FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
@@ -366,7 +366,7 @@ jobs:
         run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
 
       - name: Cache FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
@@ -401,7 +401,7 @@ jobs:
           filter: blob:none
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
@@ -417,7 +417,7 @@ jobs:
         run: echo "name=$(thirdparty/ffmpeg/build.sh --name android "$ANDROID_SDK_ROOT/ndk/28.2.13676358" 26)" >> "$GITHUB_OUTPUT"
 
       - name: Cache FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
@@ -445,7 +445,7 @@ jobs:
           tools/psp-runner/android/measure-test.sh
 
       - name: Keep the build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: psp-runner-android-${{ steps.build.outputs.name }}
           path: |
