@@ -35,6 +35,84 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP kernel: Dante's Inferno's frame pacing skipped, its turns worked out from the clock's ticks — 2026-10-23
+
+Branch `cursor/psp-dante-skip-cachy` (pull request #306), made on master `ac0ad694` (#302); master merged in since
+(#304, #303, #294, #300, #305), of which #294 and #305 change PSP code (the PSP suites pass on the combination).
+ares/psp/kernel (spins.cpp, system.cpp, kernel.hpp, kernel.cpp), tests/psp/spins.cpp, docs/psp-core.md (part 118;
+part 116's Left) and this file.
+The design (its third round, passed by its review's second round), its prototype's runs, the owner's decisions and
+this round's notes, scripts and logs are kept outside the repository.
+- **What** (part 118): where a spin's anchor is `sceRtcGetCurrentTick`'s and its code is Dante's Inferno's frame
+  pacing (ULUS10469: a timer's `update()` adding the microseconds since the tick it kept to a float of seconds, its
+  `elapsed()`, and a wait going round while the float is below a threshold), `spinSkip()` matches the template word
+  for word wherever it is (`spinTicking()`), works out the turns that come back with the CPU's own float functions
+  under its FCSR (`spinTickTurns()`), no further than the room or, with the PSP's GE timing and the GE busy, than the
+  turns that end before it's done, checks one turn on the shadow against `spinTickLast()`'s state (the clock answered
+  there alone), and skips them, writing what the last turn leaves (`spinTickSkip()`). A try at it that the GE busy
+  block refuses waits longer, as a failed proof; the general path is unchanged, and its proof still fails at the
+  clock's call. `rtcTick()` (system.cpp) is the clock's tick at given cycles, the function's and the skip's.
+- **Why**: the loop is 79.9% of the instructions Dante's compiled blocks run under the PSP's timing (80.6% "Fast"),
+  and part 91's skip can't take it. The owner allowed this recogniser of one game's code on 21 Oct, "once its reviews
+  and frame-by-frame exactness checks pass".
+- **Tests** (tests/psp/spins.cpp, five groups named for CI's PSP-timing step, the two beside the GE for its GE-thread
+  step too): `spinsClock`, the loop run on both engines under both timings with the skip on and off, every step's
+  state the same (waits past a frame's end, the tick's low word wrapping, FCSR's rounding modes and flush bit, the
+  frames on the stubs' page, whose code the clock call's own write at S + 24 drops right before each try), the frames
+  from S + 8 to S + 23 or the timer on the stubs' page, which then keeps its code (none skipped on the recompiler,
+  skipped as run on the interpreter), and programs near the template refused; `spinsClockDirect`, a skip made
+  directly at the anchor's call against the same turns run, each case placed from the anchor's cycles and checked to
+  be the case meant (the last turn's tick change wrapping the low word or not, the last call's tick new, a
+  microsecond's first and last cycles, the exit within the room, the float -0.0, the float +0 rounding up, the room
+  and the margin), the threshold put in memory alone refused by the shadow's turn, and `spinTicking()` with each of
+  17 things changed and with the frames' page alone watched; `spinsClockBesideGe`, the GE's list done part way (more
+  than 99% of the waits' turns skipped, the states the same; directly, the GE's bound deciding the turns);
+  `spinsClockCapped`, held at the cap (directly, a refused try's wait 4, the next try 8 turns on, then 12, 16 on);
+  `spinsClockSaved`, the state saved mid-wait and loaded.
+- **Mutations**: 18 (the design's list, B's "early" as one of its own, and two for the cases the independent review
+  asked for), each one change built as the debug suite is, without the sanitizers (`BUILD_DEBUG`, -O1), and run
+  through the five groups: every one fails, from 1 to 58 checks. The step's constant (`0x358637bd`, 1e-6 to the
+  nearest) failed only once B had its case rounding up: an odd multiple of 2^-43, added to a float of 2^-19 or more
+  and rounded up it gives the sum `0x358637be` gives, and A's waits rounding up start far above that. A page holding
+  compiled code taken as storable fails the straddling frames' and the timer's cases (151,039 turns each for none);
+  the recogniser's frame checks dropped fails the frames' page watched alone (on a running program the shadow's turn
+  refuses what they would).
+- **Checks** (on `ac0ad694`; GCC 16.2.1, RADV; CI has GCC 13 and lavapipe): the sanitized suite 664 groups, 0
+  failures (master 659, 0), the release suite 664, 0 (659, 0), CI's PSP-timing step 126, 0 (121, 0) and its
+  GE-thread step 78, 0 (76, 0); the spin tests (21 of spins.cpp's 25 groups) in the release build, three times with
+  the GE thread off and three times on: 21, 0 each time; `tools/psp-runner/build-android.sh` (NDK r28, the app's
+  release flags) builds it; `git diff --check` clean, no added line over 120 columns.
+- **The game** (Dante's Inferno from boot, master's runner against this code's): 3,600 frames, Software, the
+  recompiler, both GE timings, the GE thread off and on: every frame's hash master's, and the last frame's saved
+  state; turns skipped 260,480,442 under the PSP's timing and 270,437,185 under "Fast" (master none of the loop's).
+  The interpreter, the skip off against on, 1,200 frames: every frame's hash the same under both timings. Host
+  instructions a frame (the headless runner at -O1 on one x86-64 desktop; the app's -O3 LTO build, the RP6 and the
+  Mac not measured): under the PSP's timing 150.69 M on master, 27.61 M with the skip (−81.7%); "Fast" 122.01 and
+  23.78 (−80.5%); the GE thread on, 191.32 and 62.70, 158.63 and 58.89. A scratch probe checked every try's
+  prediction (at most 13 turns) against the turns run (15.3 M tries under the PSP's timing, 15.9 M "Fast"): all
+  landed as predicted. These runs were made with the first revision on `7986aef5b` (it differs in `TickLast last{}`
+  alone, and this revision's runner leaves the two host-cost runs in the same states; master's code they build is
+  `ac0ad694`'s). The design's other seven games (Burnout Dominator, Burnout Legends, Dragon Ball Z: Shin Budokai -
+  Another Road, Midnight Club: L.A. Remix, Need for Speed: Shift, Shepherd's Crossing, Super Stardust Portable), with
+  this revision, 3,600 frames from boot under both timings: every state at frame 3,600 master's, and so are the turns
+  part 91's skip takes.
+- **Departures from the design**: no `why` out-parameter (the design keeps the refusals' reasons out of the code);
+  the float after the last turn returned through `spinTickTurns()`'s `acc`; the top bit refused in `spinSkip()`'s
+  branch before the replay; `spinTickProve()` also fails on a changed semaphore count (#297's ledger), as
+  `spinProve()` does; the growth covers #297's split check (`calls` or `kind`); the replay's additions not printed by
+  the runner. In the tests: A's vtable-slot and caller cases are programs refused by the period (the checks
+  themselves are B's); C1's count of skips the GE shortens dropped (the code keeps none); C2's and the growth test's
+  tries in a go made by hand; B's own c, its oracle the turns run; B adds the threshold in memory alone,
+  `spinTicking()` itself and the float +0 rounding up; "early" run as a mutation of its own.
+- **Left**: the other seven games frame by frame and their host cost, the RP6, the Mac and the app's build (not run
+  or measured); the frames' page on the game at the tries (on the test machine the clock call's own write at S + 24
+  drops its compiled code right before each try; Dante's Inferno's call writes into its frame the same way); the
+  runner's report doesn't print the replay's additions.
+- Independent review: its first round found the mutations' build misdescribed (they're built without the sanitizers),
+  why the frames' page held no compiled code untraced, and two wording slips in part 118, and suggested
+  `TickLast last{}`, the refused cases as running programs, the frames' page watched alone and the other seven games:
+  all fixed or done here. The delta review's verdict goes in the commit message.
+
 ## PSP Vulkan: 2D sprites' edges held where the PSP's pixels sample above 1x, and #298's other follow-ups — 2026-10-23
 
 Branch `cursor/psp-298-followups-cachy` (pull request #305), made on master `ac0ad694` (#302) and measured on

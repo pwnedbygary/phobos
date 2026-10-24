@@ -14,7 +14,11 @@
 //signals a semaphore a thread waits on, or waits, not skipped. And skips made directly, against the same turns run:
 //every register and byte, the clock, the ready order's count and the run time the last turn wrote (to the cycle); the
 //turns' boundaries, none outside a go or with a thread of the caller's priority ready, nor past a callback notified as
-//a turn begins (its CB wait's, or its callback check's); and the pages a turn may store to.
+//a turn begins (its CB wait's, or its callback check's); and the pages a turn may store to. And Dante's Inferno's
+//clock loop, whose turns are worked out from the clock's ticks: skipped as run (its waits past a frame, the tick's
+//low word wrapping, FCSR's rounding and flush bit), and beside the GE with its list done part way and with its busy
+//window at the cap, where a refused try waits longer; skipped directly against the same turns run, the last turn's
+//registers and stack included; across a saved state; and loops other than its template, not skipped.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -40,8 +44,11 @@ auto startThread(Assembler& main, KernelMachine& m, const char* name, u32 entry,
 //What a loop does besides polling, to make it one that can't be skipped (Plain: none); or, Equal, its ticker at
 //main's own priority, ready at main's next rotation once its delay ends (as the go ends) and taking the CPU there; or,
 //Size88, the status's size word set to 88 before each call, which then copies the run time's first word alone (and
-//writes the size word back as the whole's).
-enum class Twist : u32 { Plain, Stored, Counting, RunTime, Clock, Counted, OwnCode, Fpu, OtherLine, Equal, Size88 };
+//writes the size word back as the whole's). Rtc: the real-time clock's tick asked for each turn, into memory no turn
+//reads.
+enum class Twist : u32 {
+  Plain, Stored, Counting, RunTime, Clock, Counted, OwnCode, Fpu, OtherLine, Equal, Size88, Rtc
+};
 
 //Where the idle loop's anchor is, for the direct skip: sceKernelReferThreadStatus's syscall, and where main goes on.
 struct Idle { u32 refer = 0, back = 0; };
@@ -89,6 +96,7 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
   case Twist::Counting: main.put(addiu(s6, s6, 1)); break;
   case Twist::RunTime: main.put(lw(t6, 0x10 + 84, sp)); break;
   case Twist::Clock: main.call("sceKernelGetSystemTimeLow"); break;
+  case Twist::Rtc: main.li(a0, Spare), main.call("sceRtcGetCurrentTick"); break;
   case Twist::Counted: main.put(addu(a0, s7, zero)), main.li(a1, 1), main.call("sceKernelSignalSema"); break;
   case Twist::OwnCode: main.li(t5, 0x0880'1ff0), main.put(lw(t6, 0, t5)), main.put(sw(t6, 0, t5)); break;
   case Twist::Fpu: main.put(fop(0x00, 1, 1, 2)); break;  //add.s f1, f1, f2
@@ -1618,6 +1626,665 @@ static auto spinsCallbackCheck() -> void {
   notifiedDirectly(atAnchor);
 }
 
+//Dante's Inferno's frame pacing (spins.cpp's clock loop), assembled from its words with the harness's encoders where a
+//test puts it: a timer at its owner's + 24 (its vtable's pointer, its float of seconds and the tick it keeps), the
+//wait's threshold at the owner's + 100, the vtable's slots 3 and 4 at update() and elapsed(), and the wait, entered
+//with the vtable in t9.
+constexpr u32 TickUpdateAt = 0x0880'6000, TickElapsedAt = 0x0880'6100, TickOther = 0x0880'6200;
+constexpr u32 TickVtable = R + 0x500, TickOwner = R + 0x540, TickTimer = TickOwner + 24, TickExits = R + 0x5c0;
+constexpr u32 TickBefore = R + 0x600;
+constexpr u32 TickSpan = 55;  //(a turn's instructions: from one call to the clock to the next)
+
+//How the clock loop goes besides (tickWait()): Plain, its threshold 0.025 s; Long, 0.040 s (a wait longer than a
+//frame); Zero, Up and Down, FCSR's rounding toward zero, up and down; Flush, FCSR's flush bit set. And loops that
+//aren't the template's: Threshold96, the wait reading its threshold at the owner's + 96 (one word other; the same
+//threshold there); Trampoline, the vtable's slot 3 at another function, which goes on into update() past its first
+//word (a turn of 56); Direct, the wait calling update() itself and reading the float (a turn of 44). And the template's
+//loop with a turn's stores on the stubs' page, which holds compiled code: CodeStack, its frames there (update()'s at S
+//and elapsed()'s, S + 8 to S + 47), whose code the clock call's own write at S + 24 drops right before each try;
+//SplitStack, S + 8 to S + 23 there and S + 24 on the next page, so that the stubs' page keeps its code; CodeTimer, the
+//timer there (its owner at the stubs' + 0xe00).
+enum class Tick : u32 {
+  Plain, Long, Zero, Up, Down, Flush, Threshold96, Trampoline, Direct, CodeStack, SplitStack, CodeTimer
+};
+
+//The timer's owner (its timer at its + 24): CodeTimer's on the stubs' page.
+auto tickOwner(Tick how) -> u32 { return how == Tick::CodeTimer ? KernelMachine::Stubs + 0xe00 : TickOwner; }
+
+auto read64(KernelMachine& m, u32 address) -> u64 {
+  return m.system.memory.read(4, address) | u64(m.system.memory.read(4, address + 4)) << 32;
+}
+
+auto write64(KernelMachine& m, u32 address, u64 value) -> void {
+  m.system.memory.write(4, address, u32(value)), m.system.memory.write(4, address + 4, u32(value >> 32));
+}
+
+//The clock loop's pieces: update() at TickUpdateAt (its words 22-27, the way a difference with its top bit set takes,
+//as an unsigned count), elapsed() at TickElapsedAt, the vtable, and the timer, its float 0 and the threshold given.
+auto tickParts(KernelMachine& m, u32 threshold, Tick how = Tick::Plain) -> void {
+  auto& memory = m.system.memory;
+  Assembler u{m, TickUpdateAt};
+  u.put(addiu(sp, sp, -32)); u.put(sw(ra, 12, sp)); u.put(sw(s0, 8, sp)); u.put(addu(s0, a0, zero));
+  u.put(jal(m.stub("sceRtcGetCurrentTick"))); u.put(addiu(a0, sp, 24));
+  u.put(lw(a2, 24, sp)); u.put(lw(a0, 8, s0)); u.put(lw(a1, 28, sp)); u.put(lw(v0, 12, s0));
+  u.put(sltu(v1, a2, a0)); u.put(subu(a0, a2, a0)); u.put(subu(v0, a1, v0)); u.put(sw(a2, 8, s0));
+  u.put(subu(v0, v0, v1)); u.put(sw(v0, 20, sp)); u.put(sw(a1, 12, s0)); u.put(bltz(a0, 4)); u.put(sw(a0, 16, sp));
+  u.put(mtc1(a0, 0)); u.put(beq(zero, zero, 7)); u.put(cvtsw(1, 0));
+  u.put(mtc1(a0, 0)); u.put(cvtsw(1, 0)); u.put(lui(v0, 0x4f80)); u.put(mtc1(v0, 2)); u.put(fop(0x00, 1, 1, 2));
+  u.put(nop);
+  u.put(lui(v0, 0x4974)); u.put(ori(v0, v0, 0x2400)); u.put(mtc1(v0, 0)); u.put(fop(0x03, 1, 1, 0));
+  u.put(lwc1(0, 4, s0)); u.put(fop(0x00, 0, 0, 1)); u.put(swc1(0, 4, s0));
+  u.put(lw(ra, 12, sp)); u.put(lw(s0, 8, sp)); u.put(jr(ra)); u.put(addiu(sp, sp, 32));
+  Assembler e{m, TickElapsedAt};
+  e.put(addiu(sp, sp, -16)); e.put(sw(ra, 12, sp)); e.put(sw(s0, 8, sp));
+  e.put(lw(t9, 0, a0)); e.put(lw(t9, 12, t9)); e.put(jalr(ra, t9)); e.put(addu(s0, a0, zero));
+  e.put(lwc1(0, 4, s0)); e.put(lw(ra, 12, sp)); e.put(lw(s0, 8, sp)); e.put(jr(ra)); e.put(addiu(sp, sp, 16));
+  Assembler other{m, TickOther};
+  other.put(j(TickUpdateAt + 4)); other.put(addiu(sp, sp, -32));
+  memory.write(4, TickVtable + 12, how == Tick::Trampoline ? TickOther : TickUpdateAt);
+  memory.write(4, TickVtable + 16, TickElapsedAt);
+  u32 owner = tickOwner(how);
+  memory.write(4, owner + 24, TickVtable);
+  memory.write(4, owner + 28, 0);
+  memory.write(4, owner + 96, threshold), memory.write(4, owner + 100, threshold);
+}
+
+//The wait's words at a's here (Direct: its own). Where it leaves.
+auto tickWaitCode(Assembler& a, Tick how = Tick::Plain) -> u32 {
+  u32 at = a.here();
+  a.put(lw(t9, how == Tick::Direct ? 12 : 16, t9)); a.put(jalr(ra, t9)); a.put(addiu(a0, s1, 24));
+  if(how == Tick::Direct) a.put(lwc1(0, 28, s1));
+  a.put(lwc1(1, how == Tick::Threshold96 ? 96 : 100, s1)); a.put(ccond(0xc, 0, 1)); a.put(nop);
+  a.put(bc1(Bc1tl, branchTo(a, at))); a.put(lw(t9, 24, s1));
+  return a.here();
+}
+
+//The clock loop as Dante's Inferno paces its frames with it: main asks the clock for the tick its timer keeps, then
+//waits waits times (the clock's tick noted at TickBefore as each begins), after each taking the threshold off the
+//float, noting the clock and the count, and working 3 milliseconds (a delay); a ticker thread (every `every`
+//microseconds; 0: none) ends the CPU's goes mid-wait. Its anchor; and where the wait leaves, at exit if given.
+auto tickWait(KernelMachine& m, Tick how = Tick::Plain, u32 every = 1000, u32 waits = 8, u32* exit = nullptr)
+-> Anchor {
+  tickParts(m, how == Tick::Long ? 0x3d23'd70a : 0x3ccc'cccd, how);  //(0.040, 0.025)
+  if(every) {
+    Assembler ticker{m, 0x0880'3000};
+    u32 again = ticker.here();
+    ticker.li(a0, every); ticker.call("sceKernelDelayThread");
+    ticker.li(t0, Count); ticker.put(lw(t1, 0, t0)); ticker.put(addiu(t1, t1, 1)); ticker.put(sw(t1, 0, t0));
+    ticker.put(beq(zero, zero, branchTo(ticker, again))); ticker.put(nop);
+  }
+  Assembler main{m, 0x0880'1000};
+  if(every) startThread(main, m, "ticker", 0x0880'3000);
+  u32 csr = how == Tick::Zero ? 1 : how == Tick::Up ? 2 : how == Tick::Down ? 3 : how == Tick::Flush ? 1 << 24 : 0;
+  if(csr) main.li(t0, csr), main.put(ctc1(t0, 31));
+  main.li(s1, tickOwner(how));
+  main.li(a0, tickOwner(how) + 24 + 8); main.call("sceRtcGetCurrentTick");
+  if(how == Tick::CodeStack) main.li(sp, KernelMachine::Stubs + 0xf00);
+  if(how == Tick::SplitStack) main.li(sp, KernelMachine::Stubs + 0x1018);  //(S, sp less 48: the stubs' + 0xfe8)
+  main.li(s4, 0);
+  u32 round = main.here();
+  main.put(addiu(s4, s4, 1));
+  main.put(sll(t1, s4, 3)); main.li(t2, TickBefore); main.put(addu(a0, t2, t1)); main.call("sceRtcGetCurrentTick");
+  main.put(lw(t9, 24, s1));
+  u32 leaves = tickWaitCode(main, how);
+  if(exit) *exit = leaves;
+  main.put(lwc1(0, 28, s1)); main.put(lwc1(1, 100, s1)); main.put(fop(0x01, 0, 0, 1)); main.put(swc1(0, 28, s1));
+  main.call("sceKernelGetSystemTimeLow");
+  main.put(sll(t1, s4, 2)); main.li(t2, Seen); main.put(addu(t2, t2, t1)); main.put(sw(v0, 0, t2));
+  main.li(t0, TickExits); main.put(sw(s4, 0, t0));
+  main.li(a0, 3000); main.call("sceKernelDelayThread");
+  main.put(sltiu(t3, s4, waits)); main.put(bne(t3, zero, branchTo(main, round))); main.put(nop);
+  main.call("sceKernelExitGame");
+  return {m.stub("sceRtcGetCurrentTick") + 4, TickUpdateAt + 0x18};
+}
+
+//Dante's Inferno's clock loop, skipped (thousands of turns) with every step's state the same as with every turn run,
+//on both engines, with "Fast"'s timing and the PSP's: eight waits of 0.025 s (each about 120,000 turns) with a ticker
+//ending the CPU's goes every millisecond; waits of 0.040 s, past a frame's end; the tick's low word wrapping 5 ms into
+//the third wait; FCSR's rounding toward zero, up and down; its flush bit; its frames on the stubs' page (with the
+//recompiler too: the clock call's own write at S + 24 drops that page's compiled code right before each try). Its
+//frames from S + 8 to S + 23, or its timer, on the stubs' page, which then keeps its code: refused with the recompiler
+//(a turn's store there would drop it), skipped with the interpreter, the same either way. And not skipped, the same
+//either way: a wait reading its threshold at another place, the vtable's slot 3 at another function, update() called
+//by the wait itself, and the idle loop asking the clock each turn, its answer unread (the general proof meets the
+//clock's call, which has no Function::spin: a skip would leave its bytes stale).
+static auto spinsClock() -> void {
+  //(the clock's start moved so that its tick's low word is 2^32 - 5,000 as the third wait begins: a program's course
+  //is the same whatever the start, its turns taking the ticks' differences and its delays the system time)
+  auto scout = machine([](KernelMachine& m) { tickWait(m); }, true, true);
+  scout->kernel.run(Step * 256);
+  CHECK(scout->kernel.exited, true);
+  u64 shift = u32(0u - 5000u - u32(read64(*scout, TickBefore + 3 * 8)));
+  for(bool recompile : {false, true}) {
+    for(bool psp : {false, true}) {
+      for(auto how : {Tick::Plain, Tick::Long, Tick::Zero, Tick::Up, Tick::Down, Tick::Flush}) {
+        u64 skipped = 0;
+        CHECK(bothWays([how](KernelMachine& m) { tickWait(m, how); }, recompile, 256, skipped, psp), true);
+        if(skipped <= 1000) {
+          std::printf("  tick %u (psp %u) skipped %llu turns\n", u32(how), psp, (unsigned long long)skipped);
+        }
+        CHECK(skipped > 1000, true);
+      }
+      u64 skipped = 0;
+      auto wrapping = [shift](KernelMachine& m) { m.kernel.startTime += shift; tickWait(m); };
+      CHECK(bothWays(wrapping, recompile, 256, skipped, psp), true);
+      if(skipped <= 1000) std::printf("  wrapping (psp %u) skipped %llu turns\n", psp, (unsigned long long)skipped);
+      CHECK(skipped > 1000, true);
+    }
+  }
+  auto wrapped = machine([shift](KernelMachine& m) { m.kernel.startTime += shift; tickWait(m); }, true, true);
+  wrapped->kernel.run(Step * 256);
+  CHECK(u32(read64(*wrapped, TickBefore + 3 * 8)), 0u - 5000u);
+  CHECK(read64(*wrapped, TickBefore + 4 * 8) >> 32, (read64(*wrapped, TickBefore + 3 * 8) >> 32) + 1);
+  for(bool recompile : {false, true}) {
+    for(auto how : {Tick::Threshold96, Tick::Trampoline, Tick::Direct, Tick::CodeStack}) {
+      u64 skipped = 0;
+      u32 waits = how == Tick::CodeStack ? 1 : 3;
+      CHECK(bothWays([how, waits](KernelMachine& m) { tickWait(m, how, 1000, waits); }, recompile, 256, skipped), true);
+      bool skips = how == Tick::CodeStack;
+      if(skips ? skipped <= 1000 : skipped != 0) {
+        std::printf("  tick %u (recompiler %u) skipped %llu turns\n", u32(how), recompile, (unsigned long long)skipped);
+      }
+      CHECK(skips ? skipped > 1000 : skipped == 0, true);
+    }
+    for(auto how : {Tick::SplitStack, Tick::CodeTimer}) {
+      u64 skipped = 0;
+      CHECK(bothWays([how](KernelMachine& m) { tickWait(m, how, 1000, 1); }, recompile, 256, skipped), true);
+      if(recompile ? skipped != 0 : skipped <= 1000) {
+        std::printf("  tick %u (recompiler %u) skipped %llu turns\n", u32(how), recompile, (unsigned long long)skipped);
+      }
+      CHECK(recompile ? skipped == 0 : skipped > 1000, true);
+    }
+    u64 skipped = 0;
+    CHECK(bothWays([](KernelMachine& m) { idleLoop(m, Twist::Rtc); }, recompile, 16, skipped), true);
+    if(skipped) std::printf("  the idle loop asking the clock skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped, 0);
+  }
+}
+
+//One skip of the clock loop made directly, as a syscall in a go would make it (spinsDirect's anchor(), "Fast"'s
+//timing), against the same turns run, right after it: every register and byte, and the clock. Both machines are
+//placed alike at the anchor's call, main in its first wait: the timer's tick that of the call before (so turn 1's
+//difference is 0 or 1), its float 0.005, and markers in what no turn reads before it writes (the stack's difference;
+//a1, a2, v1 and f0), which a skip leaving them as they were shows. Each case is placed from the anchor's own cycles c
+//(a call j turns on is at c + 55j; a microsecond is 333 cycles), and checks that it's the case meant: the last turn
+//seeing a tick change that wraps the tick's low word (the borrow 1, the difference 1), or that doesn't (the difference
+//1); the last call's tick new (a2, the tick the last turn kept, isn't the frame's last tick); the last call on a
+//microsecond's first cycle (the same) and on its last. The exit within the room: the skip stops at the turn before,
+//and one more turn leaves the loop, as with every turn run. The float -0.0 at the try (a state no turn leaves there)
+//added to as the CPU does; +0 with FCSR rounding up, which the first tick change leaves the step as FCSR works it out.
+//Room for one turn and the margin, one; the margin alone, none; outside a go, none. And the template found as the
+//anchor's call leaves the CPU (spinTicking()), and not with any one thing of it changed, nor with the GE watching the
+//timer's page or, alone, the frames'.
+static auto spinsClockDirect() -> void {
+  FastTimed fastTimed;
+  u32 exit = 0;
+  AtAnchor atAnchor{[&exit](KernelMachine& m) { return tickWait(m, Tick::Plain, 0, 8, &exit); }, {}};
+  auto probe = atAnchor.make();
+  CHECK(atAnchor.period(*atAnchor.make()), TickSpan);
+  u64 c = probe->kernel.cycles, q = c / 333, kept = read64(*probe, TickTimer + 8);
+  u32 stack = probe->system.ipu.r[29];
+  auto tick = [&](s64 call) { return kept + (c + TickSpan * call) / 333 - (c - TickSpan) / 333; };
+  auto changed = [&](u64 r) { return (333 * (q + r) - c + TickSpan - 1) / TickSpan; };  //(the r-th call, a new tick)
+  auto onCycle = [&](u64 cycle) { u64 n = 10; while((c + TickSpan * n) % 333 != cycle) n++; return n; };
+  auto place = [&](KernelMachine& m, u64 shift, u32 acc) {
+    auto& memory = m.system.memory;
+    m.kernel.startTime += shift;
+    write64(m, TickTimer + 8, kept + shift);
+    memory.write(4, TickTimer + 4, acc);
+    memory.write(4, stack + 16, 0x5a5a'5a5a), memory.write(4, stack + 20, 0x5a5a'5a5a);
+    m.system.ipu.r[3] = m.system.ipu.r[5] = m.system.ipu.r[6] = 0x5a5a'5a5a;
+    m.system.fpu.r[0] = 0x5a5a'5a5a;
+  };
+  auto anchor = [&](KernelMachine& m, u64 turns, bool going = true) {
+    auto& k = m.kernel;
+    k.spins = true;
+    k.spin = {atAnchor.anchor.site, atAnchor.anchor.back, k.cycles - TickSpan, TickSpan, Kernel::SpinTurns - 1, 0};
+    k.counted = 0;
+    k.going = going;
+    m.system.instructionsRun = 0;
+    m.system.runLimit = (turns + Kernel::SpinMargin) * TickSpan + 1;
+    m.system.instruction();
+    k.going = false;
+    u64 ran = m.system.instructionsRun + 1;
+    k.cycles += ran - k.counted, k.counted = ran;
+    return k.spun;
+  };
+  //x skipping turns turns (room for them and the margin), y running them, both placed alike; meant(y) the case's own
+  //check. The turns skipped, or ~0 where the states differ.
+  auto direct = [&](const char* name, u64 turns, u64 shift, u32 acc, const std::function<bool(KernelMachine&)>& meant) {
+    auto x = atAnchor.make(), y = atAnchor.make();
+    place(*x, shift, acc), place(*y, shift, acc);
+    u64 skipped = anchor(*x, turns);
+    y->kernel.run(skipped * TickSpan + 1);
+    bool same = saveState(*x) == saveState(*y), right = meant(*y);
+    if(!same || !right || skipped != turns) {
+      std::printf("  %s: %llu turns skipped of %llu, the states %s, %s the case meant\n", name,
+                  (unsigned long long)skipped, (unsigned long long)turns, same ? "the same" : "differ",
+                  right ? "is" : "isn't");
+    }
+    return same && right ? skipped : ~0ull;
+  };
+  auto read = [stack](KernelMachine& m, u32 at) { return m.system.memory.read(4, stack + at); };
+  u64 wrap = u32(0u - u32(tick(changed(2))));  //(tick(n - 1)'s low word 0 for n = changed(2) + 1)
+  CHECK(direct("B-wrap", changed(2) + 1, wrap, 0x3ba3'd70a, [&](KernelMachine& y) {
+    return y.system.ipu.r[3] == 1 && read(y, 16) == 1 && read(y, 20) == 0;
+  }), changed(2) + 1);
+  CHECK(direct("B-change", changed(2) + 1, 0, 0x3ba3'd70a, [&](KernelMachine& y) {
+    return y.system.ipu.r[3] == 0 && read(y, 16) == 1;
+  }), changed(2) + 1);
+  CHECK(direct("B-last", changed(2), 0, 0x3ba3'd70a, [&](KernelMachine& y) {
+    return y.system.ipu.r[6] != read(y, 24);
+  }), changed(2));
+  CHECK(direct("B-first", onCycle(0), 0, 0x3ba3'd70a, [&](KernelMachine& y) {
+    return y.system.ipu.r[6] != read(y, 24);
+  }), onCycle(0));
+  CHECK(direct("B-final", onCycle(332), 0, 0x3ba3'd70a, [&](KernelMachine& y) {
+    return y.system.ipu.r[6] == read(y, 24);
+  }), onCycle(332));
+  CHECK(direct("-0.0", 20, 0, 0x8000'0000, [](KernelMachine&) { return true; }), 20u);
+  //the exit: the threshold the float reaches at the third tick change after turn 1 (as single precision adds, to
+  //the nearest), so turn changed(3) + 1 leaves; in memory and in f1, where the turn before left it
+  float step = 1.0f / 1'000'000.0f, reached = 0.005f + (tick(0) != tick(-1) ? step : 0.0f);
+  for(u32 r : range(3)) reached += step, (void)r;
+  u32 threshold = std::bit_cast<u32>(reached);
+  auto x = atAnchor.make(), y = atAnchor.make();
+  for(auto* m : {x.get(), y.get()}) {
+    place(*m, 0, 0x3ba3'd70a);
+    m->system.memory.write(4, TickOwner + 100, threshold), m->system.fpu.r[1] = threshold;
+  }
+  CHECK(anchor(*x, changed(3) + 20), changed(3));
+  y->kernel.run(changed(3) * TickSpan + 1);
+  CHECK(saveState(*x) == saveState(*y), true);
+  for(auto* m : {x.get(), y.get()}) for(u32 n = 0; n < 2 * TickSpan && m->system.ipu.pc != exit; n++) m->kernel.run(1);
+  CHECK(x->system.ipu.pc == exit && y->system.ipu.pc == exit, true);
+  CHECK(saveState(*x) == saveState(*y), true);
+  //that threshold put in memory alone at the try (f1 still the one the turn before loaded): the shadow's turn isn't
+  //the first turn as spinTickLast() has it, nothing is skipped, and the next try waits longer
+  x = atAnchor.make();
+  place(*x, 0, 0x3ba3'd70a), x->system.memory.write(4, TickOwner + 100, threshold);
+  CHECK(anchor(*x, changed(3) + 20), 0u);
+  CHECK(x->kernel.spin.wait, Kernel::SpinTurns);
+  //the step as FCSR works it out, rounding up: from the float +0, turn 1's difference 0 (the timer's tick the anchor
+  //call's), the first tick change leaves the float the step itself, 1e-6 rounded up (0x358637be; to the nearest,
+  //0x358637bd). From a float of 2^-19 or more, rounding up gives the same sum with either step.
+  x = atAnchor.make(), y = atAnchor.make();
+  for(auto* m : {x.get(), y.get()}) {
+    place(*m, 0, 0);
+    write64(*m, TickTimer + 8, tick(0));
+    m->system.fpu.csr = (m->system.fpu.csr & ~3u) | 2;
+  }
+  CHECK(anchor(*x, changed(1) + 1), changed(1) + 1);
+  y->kernel.run((changed(1) + 1) * TickSpan + 1);
+  CHECK(y->system.memory.read(4, TickTimer + 4), 0x3586'37beu);
+  CHECK(saveState(*x) == saveState(*y), true);
+  //room for one turn and the margin; the margin alone; outside a go
+  CHECK(direct("one", 1, 0, 0x3ba3'd70a, [](KernelMachine&) { return true; }), 1u);
+  x = atAnchor.make();
+  CHECK(anchor(*x, 0), 0u);
+  x = atAnchor.make();
+  CHECK(anchor(*x, 20, false), 0u);
+  //the template, as the anchor's call leaves the CPU
+  auto m = atAnchor.make();
+  auto& k = m->kernel;
+  auto& memory = m->system.memory;
+  k.spins = false;
+  m->system.instruction();  //(the anchor's call)
+  k.spin = {atAnchor.anchor.site, atAnchor.anchor.back, k.cycles - TickSpan, TickSpan, 0, 0};
+  Kernel::SpinTick found;
+  CHECK(k.spinTicking(found), true);
+  CHECK(found.update == TickUpdateAt && found.elapsed == TickElapsedAt && found.wait == exit - 0x20, true);
+  CHECK(found.stack == stack && found.timer == TickTimer && found.threshold == 0x3ccc'cccd, true);
+  auto without = [&](const char* what, u32 address, u32 value) {
+    u32 was = memory.read(4, address);
+    memory.write(4, address, value);
+    bool matched = k.spinTicking(found);
+    memory.write(4, address, was);
+    if(matched) std::printf("  the template found with %s changed\n", what);
+    return !matched && k.spinTicking(found);
+  };
+  CHECK(without("update()'s borrow", TickUpdateAt + 40, sltu(v1, a0, a2)), true);
+  CHECK(without("update()'s jal", TickUpdateAt + 16, jal(m->stub("sceRtcGetCurrentTick") + 8)), true);
+  CHECK(without("update()'s last word", TickUpdateAt + 0x98, addiu(sp, sp, 16)), true);
+  CHECK(without("elapsed()'s float", TickElapsedAt + 28, lwc1(0, 8, s0)), true);
+  CHECK(without("the wait's threshold", exit - 0x20 + 12, lwc1(1, 96, s1)), true);
+  CHECK(without("the wait's delay slot", exit - 4, lw(t9, 20, s1)), true);
+  CHECK(without("the stub's jr", atAnchor.anchor.site - 4, nop), true);
+  CHECK(without("the vtable's slot 3", TickVtable + 12, TickOther), true);
+  CHECK(without("update()'s saved timer", stack + 8, TickTimer + 4), true);
+  CHECK(without("update()'s saved return", stack + 12, TickElapsedAt + 0x18), true);
+  CHECK(without("the clock's answer", stack + 24, memory.read(4, stack + 24) + 1), true);
+  //(the vtable's slots read from the tick the turn keeps, update() and elapsed() put there: a store over a load)
+  u32 timer[3] = {memory.read(4, TickTimer), memory.read(4, TickTimer + 8), memory.read(4, TickTimer + 12)};
+  memory.write(4, TickTimer, TickTimer - 4);
+  memory.write(4, TickTimer + 8, TickUpdateAt), memory.write(4, TickTimer + 12, TickElapsedAt);
+  bool overlapping = k.spinTicking(found);
+  memory.write(4, TickTimer, timer[0]);
+  memory.write(4, TickTimer + 8, timer[1]), memory.write(4, TickTimer + 12, timer[2]);
+  CHECK(!overlapping && k.spinTicking(found), true);
+  auto changedRegister = [&](u32 index, u32 value) {
+    u32 was = m->system.ipu.r[index];
+    m->system.ipu.r[index] = value;
+    bool matched = k.spinTicking(found);
+    m->system.ipu.r[index] = was;
+    return !matched && k.spinTicking(found);
+  };
+  CHECK(changedRegister(2, 1), true);  //(the call's result)
+  CHECK(changedRegister(4, stack + 28), true);
+  CHECK(changedRegister(17, TickOwner + 4), true);
+  k.spin.period = TickSpan + 1;
+  CHECK(k.spinTicking(found), false);
+  k.spin.period = TickSpan;
+  memory.watch(TickTimer & ~0xfffu, 0x1000);  //(the GE watching the timer's page: a store there isn't storable)
+  CHECK(k.spinTicking(found), false);
+  //(the GE watching the frames' page alone, the timer's apart)
+  u32 frames = (stack + 8) & ~0xfffu;
+  CHECK(frames == ((stack + 47) & ~0xfffu) && frames != (TickTimer & ~0xfffu), true);
+  auto n = atAnchor.make();
+  n->kernel.spins = false;
+  n->system.instruction();
+  n->kernel.spin = {atAnchor.anchor.site, atAnchor.anchor.back, n->kernel.cycles - TickSpan, TickSpan, 0, 0};
+  CHECK(n->kernel.spinTicking(found), true);
+  n->system.memory.watch(frames, 0x1000);
+  CHECK(n->kernel.spinTicking(found), false);
+}
+
+//How the clock loop goes beside the GE (tickBeside()): Dots, a list of 2,000 one-pixel sprites whose corners the GE
+//reads from RAM (geDots()), queued with its stall address at its FINISH, so that the GE draws it all and waits there;
+//Capped, spinsGeCapped()'s sprite textured from a 512x512 8888 texture in RAM, its FINISH due.
+enum class Beside : u32 { Dots, Capped };
+
+//The clock loop with the CPU beside the GE: main sets the timer's float to 0 and its tick to the clock's (Capped:
+//after its delay), queues the list (Dots: its finish callback counting the lists done), reads a word from each of
+//4,096 lines it hasn't read before (spinsGeCapped()'s loop, each round its own; the GE's busy window takes them all
+//at once, its time then the CPU's), (Capped: waits 1.8 ms,) and waits till the float reaches 0.010 s; Dots then moves
+//the list's stall address to its end, so that it finishes, and waits 3 ms. Dots: three rounds; Capped: one. Its anchor.
+auto tickBeside(KernelMachine& m, Beside beside) -> Anchor {
+  constexpr u32 Texture = 0x0900'0000, Lines = 0x0940'0000;
+  auto& memory = m.system.memory;
+  tickParts(m, 0x3c23'd70a);  //(0.010)
+  u32 end = 0;
+  if(beside == Beside::Dots) {
+    end = geDots(m, GeList, GeVertices, 2000);
+    Assembler callback{m, 0x0880'4000};  //(the finish callback: one more list done)
+    callback.li(t0, Finished); callback.put(lw(t1, 0, t0)); callback.put(addiu(t1, t1, 1));
+    callback.put(sw(t1, 0, t0)); callback.put(jr(ra)); callback.put(nop);
+    memory.write(4, GeCallbacks + 8, 0x0880'4000);
+  } else {  //(spinsGeCapped()'s list)
+    for(u32 n = 0; n < 512 * 512; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0305'0709 & 0xff'ffff));
+    u32 at = GeList;
+    auto put = [&](u32 command, u32 argument = 0) {
+      memory.write(4, at, command << 24 | (argument & 0xff'ffff));
+      at += 4;
+    };
+    put(GE::FrameBufferPointer, 0); put(GE::FrameBufferWidth, 512); put(GE::FrameBufferPixelFormat, 3);
+    put(GE::Scissor1, 0); put(GE::Scissor2, 271 << 10 | 479); put(GE::Region2, 1023 << 10 | 1023);
+    put(GE::VertexType, 0x80'0102);
+    put(GE::TextureMappingEnable, 1); put(GE::TextureAddress0, Texture);
+    put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 512); put(GE::TextureSize0, 9 << 8 | 9);
+    put(GE::TextureFormat, 3); put(GE::TextureFunction, 3);
+    put(GE::Base, GeVertices >> 8 & 0xf'0000); put(GE::VertexAddress, GeVertices);
+    u32 vertex = GeVertices;
+    for(u32 half : {0u, 0u, 0u, 0u, 0u, 512u, 512u, 480u, 272u, 0u}) memory.write(2, vertex, half), vertex += 2;
+    put(GE::Primitive, 6 << 16 | 2);
+    put(GE::Finish); put(GE::End);
+  }
+  bool dots = beside == Beside::Dots;
+  Assembler main{m, 0x0880'1000};
+  if(dots) main.li(a0, GeCallbacks), main.call("sceGeSetCallback"), main.put(addu(s2, v0, zero));
+  else main.li(s2, 0xffff'ffff);
+  main.li(s1, TickOwner); main.li(s4, 0);
+  u32 round = main.here();
+  main.put(addiu(s4, s4, 1));
+  auto timer = [&] {
+    main.put(sw(zero, 28, s1));
+    main.li(a0, TickTimer + 8); main.call("sceRtcGetCurrentTick");
+  };
+  if(dots) timer();
+  main.li(a0, GeList); main.li(a1, dots ? end - 8 : 0); main.put(addu(a2, s2, zero)); main.li(a3, 0);
+  main.call("sceGeListEnQueue");
+  main.put(addu(s0, v0, zero));
+  main.put(sll(s5, s4, 18)); main.li(t5, Lines); main.put(addu(s5, s5, t5)); main.li(s6, 256);
+  u32 reads = main.here();
+  for(u32 n = 0; n < 16; n++) main.put(lw(t1, s16(n * 64), s5));
+  main.put(addiu(s5, s5, 1024)); main.put(addiu(s6, s6, -1));
+  main.put(bne(s6, zero, branchTo(main, reads))); main.put(nop);
+  if(!dots) main.li(a0, 1800), main.call("sceKernelDelayThread"), timer();
+  main.put(lw(t9, 24, s1));
+  tickWaitCode(main);
+  if(dots) {
+    main.put(addu(a0, s0, zero)); main.li(a1, end); main.call("sceGeListUpdateStallAddr");
+    main.li(a0, 3000); main.call("sceKernelDelayThread");
+  }
+  main.put(sltiu(t3, s4, dots ? 3 : 1)); main.put(bne(t3, zero, branchTo(main, round))); main.put(nop);
+  main.call("sceKernelExitGame");
+  return {m.stub("sceRtcGetCurrentTick") + 4, TickUpdateAt + 0x18};
+}
+
+//The clock loop's machine (tickBeside()) on the recompiler with the PSP's GE timing, run till main is at the clock's
+//stub for the visit-th time in its first wait (each step a go of a block; with no thread running, to the next thing
+//due), with the skip off, or (spins) on from five visits before, so that the detector learns the turns from the turns
+//themselves, as a go has it, and tries at that visit's call; and that call made in a go of its own (spinsGeTwoCalls'
+//go: the stub's jr, then its syscall), with room for turns turns and the margin: the turns skipped.
+struct BesideAt {
+  Beside beside;
+  Anchor anchor;
+  auto at(KernelMachine& m) const -> bool {
+    return m.system.ipu.pc == anchor.site - 4 && m.system.ipu.r[31] == anchor.back;
+  }
+  auto step(KernelMachine& m) const -> void {
+    m.kernel.run(m.kernel.current ? 1 : std::max<u64>(1, m.kernel.untilNextEvent()));
+  }
+  auto make(u32 visit, bool spins = false) -> std::unique_ptr<KernelMachine> {
+    auto m = machine([this](KernelMachine& m) { anchor = tickBeside(m, beside); }, true, false, true);
+    u32 seen = 0;
+    for(u64 steps = 0; seen < visit && steps < 4'000'000; steps++) {
+      step(*m);
+      if(at(*m) && ++seen == visit - 5 && spins) m->kernel.spins = true, m->kernel.spin = {};
+    }
+    CHECK(seen, visit);
+    return m;
+  }
+  auto toStub(KernelMachine& m) const -> bool {  //(from the anchor's return: the turn's instructions but its call)
+    for(u32 n = 0; n < TickSpan && !at(m); n++) step(m);
+    return at(m);
+  }
+  auto go(KernelMachine& m, u64 turns) const -> u64 {
+    auto& k = m.kernel;
+    //(the stub's line fetched as compiled code fetches it: below, its jr and syscall run in the interpreter, whose
+    //fetches the caches don't see)
+    u32 stub = anchor.site - 4, set = stub >> 6 & (Allegrex::Cache::Sets - 1);
+    auto& code = m.system.instructionCache;
+    if(code.enabled && code.recent[set] != Allegrex::Cache::codeKey(stub)) m.system.instructionCacheMiss(stub);
+    m.system.instruction();
+    k.counted = 0, k.going = true;
+    m.system.instructionsRun = 1;  //(the jr, counted as the syscall catches the clock up)
+    m.system.runLimit = (turns + Kernel::SpinMargin) * TickSpan + 2;
+    m.system.instruction();
+    k.going = false;
+    u64 ran = m.system.instructionsRun + 1, tail = ran - k.counted;  //(and the syscall: the go's end, as run() has it)
+    k.cycles += tail;
+    if(k.gePspTiming) k.geContend(k.cycles - tail, k.cycles, tail);
+    k.counted = ran;
+    return k.spun;
+  }
+};
+
+//Which of a machine's states' parts differ from another's (memory, the CPU, the GE, the kernel), and where first.
+auto stateDifference(KernelMachine& x, KernelMachine& y) -> std::string {
+  auto parts = [](KernelMachine& m) {
+    std::vector<std::vector<u8>> parts;
+    for(u32 n : range(4)) {
+      serializer s;
+      if(n == 0) m.system.memory.serialize(s);
+      if(n == 1) m.system.serialize(s);
+      if(n == 2) m.system.ge.serialize(s);
+      if(n == 3) m.kernel.serialize(s);
+      parts.push_back({s.data(), s.data() + s.size()});
+    }
+    return parts;
+  };
+  auto a = parts(x), b = parts(y);
+  std::string text;
+  for(u32 n : range(4)) {
+    if(a[n] == b[n]) continue;
+    u32 at = 0;
+    while(at < a[n].size() && at < b[n].size() && a[n][at] == b[n][at]) at++;
+    text += std::string(" ") + (n == 0 ? "memory" : n == 1 ? "the CPU" : n == 2 ? "the GE" : "the kernel");
+    text += " at byte " + std::to_string(at);
+  }
+  return text.empty() ? " none" : text;
+}
+
+//With the PSP's GE timing, the clock loop with the CPU beside the GE, its list done part way through a wait
+//(tickBeside()'s Dots): every turn run pushes the GE's end back by 8 to 17 cycles (the busy window's lines, read just
+//before the wait, its time the CPU's), so a skip must end before that end, the turn that takes it past it run (a
+//skip across it counts only that turn's part before the end, where run the turn pushes it on past). Every step's state
+//the same with the skip on as off, on both engines; on the recompiler more than 99% of the waits' turns skipped (with
+//every skip across the GE's end refused, under 97%). And directly (BesideAt), at a call of the first wait past its
+//ninth where the GE's end falls inside a turn (r, the part of the turn after the last skipped that's past it, not 0),
+//no vertical blank before: the GE's bound decides, (geDoneAt - 1 - c) / 55 turns skipped, the state right after the
+//skip the same as with those turns run.
+static auto spinsClockBesideGe() -> void {
+  auto dots = [](KernelMachine& m) { tickBeside(m, Beside::Dots); };
+  for(bool recompile : {false, true}) {
+    auto on = machine(dots, recompile, true, true), off = machine(dots, recompile, false, true);
+    bool same = true;
+    for(u32 step = 0; step < 128 && !(on->kernel.exited && off->kernel.exited); step++) {
+      on->kernel.run(Step), off->kernel.run(Step);
+      if(saveState(*on) == saveState(*off)) continue;
+      if(same) {
+        std::printf("  step %u (recompiler %u): clock %llu against %llu, the GE done at %llu against %llu\n", step + 1,
+                    recompile, (unsigned long long)on->kernel.cycles, (unsigned long long)off->kernel.cycles,
+                    (unsigned long long)on->kernel.geDoneAt, (unsigned long long)off->kernel.geDoneAt);
+      }
+      same = false;
+    }
+    CHECK(same, true);
+    CHECK(on->kernel.exited && off->kernel.exited, true);
+    CHECK(on->system.memory.read(4, Finished), 3u);
+    CHECK(off->kernel.spun, 0);
+    if(!recompile) continue;
+    if(on->kernel.spun * 100 <= off->kernel.syscalls * 99) {
+      std::printf("  %llu turns skipped, of %llu calls with every turn run\n", (unsigned long long)on->kernel.spun,
+                  (unsigned long long)off->kernel.syscalls);
+    }
+    CHECK(on->kernel.spun * 100 > off->kernel.syscalls * 99, true);
+  }
+  Unthreaded unthreaded;  //(a go made by hand: the synchronous GE's, no bound of the GE thread's in it)
+  BesideAt at{Beside::Dots, {}};
+  bool made = false;
+  for(u32 visit = 10; visit < 40 && !made; visit++) {
+    auto x = at.make(visit, true), y = at.make(visit);
+    at.go(*y, 4000);
+    u64 c = y->kernel.cycles - 1, done = y->kernel.geDoneAt;
+    if(done <= c + TickSpan) break;
+    u64 n = (done - 1 - c) / TickSpan, r = c + TickSpan * (n + 1) - done;
+    if(!r || y->kernel.nextVblank <= c + TickSpan * (n + 2)) continue;
+    made = true;
+    u64 skipped = at.go(*x, 4000);
+    y->kernel.run(skipped * TickSpan);
+    bool same = saveState(*x) == saveState(*y);
+    if(skipped != n || !same) {
+      std::printf("  call %u: %llu turns skipped, the GE's bound %llu (r %llu); differing:%s; the GE done at %llu "
+                  "against %llu\n", visit, (unsigned long long)skipped, (unsigned long long)n, (unsigned long long)r,
+                  stateDifference(*x, *y).c_str(), (unsigned long long)x->kernel.geDoneAt,
+                  (unsigned long long)y->kernel.geDoneAt);
+    }
+    CHECK(skipped, n);
+    CHECK(same, true);
+  }
+  CHECK(made, true);
+}
+
+//With the PSP's GE timing, the clock loop beside spinsGeCapped()'s list (tickBeside()'s Capped): its busy window owes
+//past the cap as the wait begins and falls through it as the turns run, so the first tries at it are refused
+//(spinSkip()'s cap), then skips are taken. Every step's state the same with the skip on as off, on both engines; on
+//the recompiler, tries refused and turns skipped by the thousand, each refused try's turns worked out, and, as each
+//refused try waits longer than the one before, at most 23 of them (an allowance of the design's for a wait of 60,545
+//turns) and their additions with the skips' at most 75,132. And directly (BesideAt, at the wait's eighth call, the
+//detector learning from its third), a try refused by the cap makes the next wait longer, as a proof that fails:
+//SpinTurns turns more (spin.wait 4), so that no try comes till 8 turns on, and refused again there, 12 more (16 on);
+//the general path's refusal leaves it as it was (spinsGeCapped()).
+static auto spinsClockCapped() -> void {
+  auto capped = [](KernelMachine& m) { tickBeside(m, Beside::Capped); };
+  for(bool recompile : {false, true}) {
+    u64 skipped = 0;
+    CHECK(bothWays(capped, recompile, 64, skipped, true), true);
+    if(skipped <= 1000) std::printf("  skipped %llu turns\n", (unsigned long long)skipped);
+    CHECK(skipped > 1000, true);
+  }
+  auto m = machine(capped, true, true, true);
+  m->kernel.run(Step * 64);
+  CHECK(m->kernel.exited, true);
+  auto& k = m->kernel;
+  if(!k.geSkipsRefused || k.geSkipsRefused > 23 || k.spinTickAdditions > 75'132) {
+    std::printf("  %llu tries refused, %llu additions\n", (unsigned long long)k.geSkipsRefused,
+                (unsigned long long)k.spinTickAdditions);
+  }
+  CHECK(k.geSkipsRefused > 0 && k.geSkipsRefused <= 23, true);
+  CHECK(k.spinTickAdditions <= 75'132, true);
+  CHECK(k.spun > 1000, true);
+  Unthreaded unthreaded;
+  BesideAt at{Beside::Capped, {}};
+  auto x = at.make(8, true);
+  auto& kx = x->kernel;
+  CHECK(at.go(*x, 1000), 0u);
+  if(kx.geSkipsRefused != 1 || kx.spin.wait != Kernel::SpinTurns) {
+    std::printf("  the first try: %llu refused by the cap, the wait %u; checks %llu %llu %llu %llu\n",
+                (unsigned long long)kx.geSkipsRefused, kx.spin.wait, (unsigned long long)kx.spinChecks.unsteady,
+                (unsigned long long)kx.spinChecks.partway, (unsigned long long)kx.spinChecks.calls,
+                (unsigned long long)kx.spinChecks.kind);
+  }
+  CHECK(kx.geSkipsRefused, 1u);
+  CHECK(kx.spin.wait, Kernel::SpinTurns);
+  //(the turns to the next try each in a go of its own, none trying, then its call in a go with room: refused again)
+  auto next = [&](u32 turns) {
+    bool none = true;
+    for(u32 turn = 1; turn < turns; turn++) kx.run(TickSpan), none &= kx.spin.turns == turn;
+    bool there = at.toStub(*x);
+    at.go(*x, 1000);
+    if(!none || !there || kx.spin.turns) std::printf("  a try before %u turns, or none at it\n", turns);
+    return none && there && !kx.spin.turns;
+  };
+  CHECK(next(2 * Kernel::SpinTurns), true);
+  if(kx.geSkipsRefused != 2 || kx.spin.wait != 3 * Kernel::SpinTurns) {
+    std::printf("  the second try: %llu refused by the cap, the wait %u, %llu skipped\n",
+                (unsigned long long)kx.geSkipsRefused, kx.spin.wait, (unsigned long long)kx.spun);
+  }
+  CHECK(kx.geSkipsRefused, 2u);
+  CHECK(kx.spin.wait, 3 * Kernel::SpinTurns);
+  CHECK(next(4 * Kernel::SpinTurns), true);
+}
+
+//A state saved mid-wait (the skip on) loads into a fresh machine, the same state; both then run on alike, each step's
+//state the same, the loaded one finding the loop again and skipping it (nothing of the skip is kept in a state).
+static auto spinsClockSaved() -> void {
+  for(bool recompile : {false, true}) {
+    auto m = machine([](KernelMachine& m) { tickWait(m); }, recompile, true);
+    auto inWait = [&] {
+      u32 pc = m->system.ipu.pc;
+      return m->kernel.spun > 1000 && m->kernel.current && m->kernel.current->name == "main" &&
+             ((pc >= TickUpdateAt && pc < TickUpdateAt + 0x9c) || (pc >= TickElapsedAt && pc < TickElapsedAt + 0x30));
+    };
+    for(u32 step = 0; step < 256 && !inWait(); step++) m->kernel.run(Step / 16);
+    CHECK(inWait(), true);
+    auto state = saveState(*m);
+    KernelMachine n;
+    n.system.recompiler.enabled = recompile;
+    CHECK(loadState(n, state), true);
+    CHECK(saveState(n) == state, true);
+    bool same = true;
+    for(u32 step = 0; step < 256 && !(m->kernel.exited && n.kernel.exited); step++) {
+      m->kernel.run(Step), n.kernel.run(Step);
+      same &= saveState(*m) == saveState(n);
+    }
+    CHECK(same, true);
+    CHECK(m->kernel.exited && n.kernel.exited, true);
+    CHECK(n.kernel.spun > 1000, true);
+  }
+}
+
 auto spinTests() -> Tests {
   return {
     {"spins skipped as run", spinsSkipped}, {"spins refused", spinsRefused}, {"a spin skipped directly", spinsDirect},
@@ -1649,6 +2316,12 @@ auto spinTests() -> Tests {
      spinsSemaphoreWaits},
     {"the GE's looks polled beside a callback check with none due: skipped as run, not with the callback notified",
      spinsCallbackCheck},
+    {"spins of the clock polled as Dante's Inferno paces its frames, skipped as run", spinsClock},
+    {"a spin of the clock skipped directly", spinsClockDirect},
+    {"a spin of the clock polled with the CPU beside the GE, its list done part way", spinsClockBesideGe},
+    {"a spin of the clock polled with the CPU beside the GE held at the cap: a refused try waits longer",
+     spinsClockCapped},
+    {"a spin of the clock, its state saved mid-wait", spinsClockSaved},
   };
 }
 

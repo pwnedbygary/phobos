@@ -173,9 +173,15 @@ namespace {
   constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;  //microseconds from 0001-01-01 to 1970-01-01
 }
 
-//(where): the real-time clock's tick, a microsecond count from the start of year 1 (as the PSP's sceRtc counts).
+//The real-time clock's tick at the cycles given, a microsecond count from the start of year 1 (as the PSP's sceRtc
+//counts): what sceRtcGetCurrentTick writes, and what the turns of a loop polling it write (spins.cpp).
+auto Kernel::rtcTick(u64 at) const -> u64 {
+  return From1To1970 + startTime + at / (CPUFrequency / 1'000'000);
+}
+
+//(where): the real-time clock's tick (rtcTick()).
 auto Kernel::sceRtcGetCurrentTick() -> void {
-  u64 tick = From1To1970 + startTime + cycles / (CPUFrequency / 1'000'000);
+  u64 tick = rtcTick(cycles);
   memory.write(4, arg(0), u32(tick));
   memory.write(4, arg(0) + 4, u32(tick >> 32));
   result(0);
