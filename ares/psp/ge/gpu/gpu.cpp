@@ -1942,7 +1942,8 @@ auto GPU::depthChanged(u32 block) -> void {
 //16-bit frame buffer, CLUT32 of an 8888 one: Death Jr. II takes each of its picture's colors through a palette so),
 //looked up on the GPU; else the GE decodes it from memory, which finishes drawing first.
 auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
-                const std::function<auto () -> GE::Region>& takes) -> bool {
+                const std::function<auto () -> GE::Region>& takes,
+                const std::function<auto () -> GE::Region>& reached) -> bool {
   this->ge = &ge;
   held.reset();
   if(!ready()) return false;
@@ -1967,6 +1968,21 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
   std::function<auto () -> GE::Region> taking = [&] { if(!texels) texels = takes(); return *texels; };
   u32 width = std::min<u32>({columns, texture.width, 512});
   rows = std::min<u32>({rows, texture.height, 512});
+  //Above 1x a 3D PRIM's rows are those the PSP's pixels take (reached: as the GE draws it), where a target may hold
+  //the texture (one has drawn in its pages, or one none has drawn over since has its first row: take()): the GPU's
+  //pixels between the PSP's take any past them at the last held (draw.frag), and a frame buffer read as a texture 512
+  //rows tall by a quad over its picture isn't filled from memory past the picture (textureFor()), over the targets
+  //after it, which a finish of theirs would then make stale (Armored Core's bloom, Sonic Rivals' palette passes).
+  if(!exact && backend->scale > 1 && rows && texture.bufferWidth) {
+    u64 last = std::min<u64>(offset + (u64(rows - 1) * texture.bufferWidth + width) * bytes, Memory::VRAMSize) - 1;
+    bool target = false;
+    for(u32 page = offset / Memory::PageSize; page <= last / Memory::PageSize && !target; page++) {
+      target = owners[page] != nullptr;
+    }
+    if(!target) target = freshTarget(texture, offset, 1) != nullptr;
+    GE::Region r = target ? reached() : GE::Region{0, 0, -1, -1};
+    if(r.left <= r.right && r.top <= r.bottom) rows = std::min<u32>(rows, r.bottom + 1);
+  }
   //(a texture declared past VRAM's end, its rows not known: its rows inside VRAM taken, those past it, where the
   //PSP's addresses run round to VRAM's start, held at the last of them, as holdable() allows)
   u64 rowBytes64 = u64(texture.bufferWidth) * bytes;
@@ -2123,6 +2139,35 @@ auto GPU::paletteFor(const GE::Sampler& texture) -> u32 {
   return found->id;
 }
 
+//Whether a texture's texels are a target's own (take()): of its row width, memory not changed under it (not stale),
+//its format; or palette indices of as many bits as its pixels, none of them its stencil's, which the GPU's copy of its
+//colors doesn't hold.
+auto GPU::fitsTexture(const Target* t, const GE::Sampler& texture) -> bool {
+  if(!t || t->stale || t->stride != texture.bufferWidth) return false;
+  if(texture.format <= 3) return t->format == texture.format;
+  u64 bits = u64(texture.clutMask) << texture.clutShift;
+  if(texture.format == 7) return t->format == 3 && !(bits & 0xff00'0000);
+  if(texture.format == 6) return t->format < 3 && !(bits & (t->format == 1 ? 0x8000 : t->format == 2 ? 0xf000 : 0));
+  return false;
+}
+
+//Above 1x, the target a texture none has drawn in since the last finish is taken from (take()): the one whose texels
+//it fits (fitsTexture()), its first row, at offset, among those the target has filled, and room in it for every row
+//taken (those past its filled rows filled from memory first, as for any target: textureFor(); Sonic Rivals' bloom,
+//filtered, takes the row past its smallest picture); none where no target, or more than one, is so.
+auto GPU::freshTarget(const GE::Sampler& texture, u32 offset, u32 rows) const -> Target* {
+  u32 bytes = texture.format == 3 || texture.format == 7 ? 4 : 2;
+  Target* found = nullptr;
+  for(auto& t : targets) {
+    if(!fitsTexture(t.get(), texture) || offset < t->address) continue;
+    u32 y = (offset - t->address) / (t->stride * bytes);
+    if(y >= t->rows || y + rows > t->height) continue;
+    if(found) return nullptr;
+    found = t.get();
+  }
+  return found;
+}
+
 //The texture held from the targets that drew its pages (holds()), where its pages are one target's, or a target's
 //and then, from a page on, another's: next. (A page's owner that drew none of the texture's bytes in it, a page
 //holding rows of both, hasn't the newest of them: God of War's shadows, 64 rows each, end in the page the frame
@@ -2146,16 +2191,12 @@ auto GPU::take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 r
     else { more = true; break; }
     last = owner;
   }
-  //(palette indices: as many bits as the target's pixels, none of them its stencil's, which the GPU's copy of its
-  //colors doesn't hold)
-  auto fits = [&](Target* t) {
-    if(!t || t->stale || t->stride != texture.bufferWidth) return false;
-    if(texture.format <= 3) return t->format == texture.format;
-    u64 bits = u64(texture.clutMask) << texture.clutShift;
-    if(texture.format == 7) return t->format == 3 && !(bits & 0xff00'0000);
-    if(texture.format == 6) return t->format < 3 && !(bits & (t->format == 1 ? 0x8000 : t->format == 2 ? 0xf000 : 0));
-    return false;
-  };
+  auto fits = [&](Target* t) { return fitsTexture(t, texture); };
+  //Above 1x a texture none has drawn in since the last finish comes from the target that still has its pixels at its
+  //resolution, where one alone does (freshTarget()), as shownTarget() shows such a target: memory has them narrowed,
+  //and its changes since are heard (written()) and revived first, below. (Sonic Rivals draws its bloom from its
+  //smallest picture so; IL-2 samples the frame buffer it drew so, after the finish a depth texture's read asked for.)
+  if(!t && backend->scale > 1) t = freshTarget(texture, offset, rows);
   if(!fits(t) || !direct || offset < t->address) return false;
   //(a texture wider than the target's row, as a 3D PRIM's reach isn't known: only the columns inside it copied, those
   //past it, in memory the next rows' first, left as they are; the design's accuracy notes count it)

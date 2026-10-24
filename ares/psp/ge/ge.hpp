@@ -464,6 +464,8 @@ struct GE {
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
   auto reachedBy(bool through, const std::vector<Vertex>& vertices, const Transform& t, const Region& region)
     -> Reached;
+  auto texelsReached(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
+                     const std::vector<Vertex>& vertices) -> Region;
   auto meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                      std::vector<Vertex>& vertices) -> void;
   auto submit(Job& job) -> bool;
@@ -504,7 +506,8 @@ struct GE {
                                     float u, float v, u32 fog) -> void;
   template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
-  auto texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool;
+  auto texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2], bool weighed = false) const -> bool;
+  auto spriteSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool;
   static auto texelRuns(const s32 (&span)[2], u32 size, bool clamp, s32 (&runs)[2][2]) -> u32;
   auto texelReach(const Job& job, Reach& reach) const -> void;
   struct LinePixel { s32 x, y; u32 z, color, specular, fog; float u, v; };
@@ -703,9 +706,11 @@ struct GE {
     //A texture (its first rows and columns, those the PRIM can reach) in a frame buffer whose newest pixels are on
     //the GPU: the renderer takes it from there for the PRIM (begin()), so the GE doesn't decode it, and memory's
     //pages under it stay the renderer's. takes: the texels (columns and rows, inclusive) the PRIM may take, asked
-    //for where it holds the texture.
+    //for where it holds the texture. reached: those the PSP's pixels take, as the GE draws them (a 3D PRIM's:
+    //texelsReached(); none, left past right, where that can't be told), asked for above 1x.
     virtual auto holds(GE& ge, const Sampler& texture, u32 rows, u32 columns,
-                       const std::function<auto () -> Region>& takes) -> bool = 0;
+                       const std::function<auto () -> Region>& takes,
+                       const std::function<auto () -> Region>& reached) -> bool = 0;
     //Of a texture it doesn't hold, whose PRIM's rows aren't known (a 3D one's), the rows memory gives: all, or those
     //before the pages of a frame buffer it has drawn since, the rest held at the last of them (its copies' way),
     //where the texels the PRIM may take (takes) allow.
