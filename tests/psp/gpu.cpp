@@ -5879,6 +5879,244 @@ static auto gpuShownBelowTexture() -> void {
   gpu->resolution(1);
 }
 
+//A frame buffer sampled as a texture taller than its picture (128 rows; another frame buffer, 48 pixels wide, begins
+//below its 48) by a 3D quad over its picture, from its first row: two triangles, or a 3D sprite; nearest, the texture
+//repeating (Sonic Rivals' palette passes), or filtered and held at its edges (MX vs. ATV Untamed's 3D sprites over its
+//picture). Above 1x the GPU holds the rows the PSP's pixels take (texelsReached()), the picture's, not all 128 filled
+//from memory past it (whose corners' coordinates alone reach a row past each end); so the frame buffer below, drawn
+//after, and every target finished by another frame buffer's refused PRIM, doesn't make it stale: it's shown from its
+//target, the picture it showed before. And what the 3D PRIM drew from it shows the picture's last row, which isn't the
+//row before it (a row fewer held, the GPU's pixels there would take the last held): nearest, it's the picture texel
+//for texel; filtered, its last row is nearer the picture's last than the one before, at every pixel (at 3x a 3D
+//sprite's interpolated coordinates can fall a hair below a copy texel's middle, and the filter, placing them in
+//256ths of a texel, then gives the texel before a sixteenth: up to 13 per channel at edges inside the PSP's pixels).
+//At 1x, memory's picture after the finish, as ever, and in accurate mode, nearest, every byte the software
+//renderer's. In each mode, at 1x-3x. (Filtered and repeating, the triangles' first row takes the texture's last
+//too, a hair below its texels' middle as the GE steps it: all its rows held, as before.)
+static auto gpuPictureRowsHeld() -> void {
+  if(!renderer()) return;
+  auto sprite3D = [](System& s, u32 rows, f32 x0, f32 x1, f32 y0, f32 y1) {  //(quad3D()'s, as one 3D sprite)
+    u32 to = GPUVertices;
+    for(u32 corner : {0u, 3u}) {
+      f32 x = corner & 1 ? x1 : x0, y = corner >> 1 ? y1 : y0;
+      for(u32 word : {bitsOf(x / 64), bitsOf(y / rows), 0xffff'ffffu, 0u, 0u, bitsOf(1), bitsOf(x / 32 - 1),
+                      bitsOf(1 - y / 24), 0u}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Sprites, 2);
+  };
+  std::mt19937 random{20261024};
+  auto drawn = randomSprites(random, 20, false);
+  drawn.push_back({{{0, 0, 0, 46}, {0, 0, 64, 47}}, 0xff20'c040});  //(its last two rows, each a colour of its own)
+  drawn.push_back({{{0, 0, 0, 47}, {0, 0, 64, 48}}, 0xffc0'2080});
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    for(u32 scale : {1u, 2u, 3u}) {
+      if(!scaleTaken(gpu, scale)) continue;
+      gpu->resolution(scale);
+      for(bool sprites : {false, true}) {
+        for(bool filtered : {false, true}) {
+          System software, hardware;
+          hardware.ge.setRenderer(gpu);
+          std::vector<u32> before, picture;
+          for(System* s : {&software, &hardware}) {
+            auto& c = s->ge.commands;
+            prepare(*s, 0, 3);
+            for(auto& one : drawn) sprite(*s, one);
+            if(s == &hardware) {
+              drainThreads();  //(before each picture: with the GE on its thread, the GPU is that thread's till done)
+              CHECK(gpu->picture(0, 64, 3, 64, 48, before, scale), true);
+            }
+            prepare(*s, 0x2'0000, 3);
+            orthographic(*s, 128);
+            c[GE::TextureWrap] = filtered ? 0x101 : 0, c[GE::TextureFilter] = filtered ? 1 | 1 << 8 : 0;
+            if(sprites) sprite3D(*s, 128, 0, 64, 0, 48);
+            else quad3D(*s, 128, 0, 64, 0, 48, 0);
+            prepare(*s, 0x3000, 3);  //(below the picture's 48 rows, 48 pixels wide)
+            c[GE::FrameBufferWidth] = 48, c[GE::Scissor2] = 47 | 15 << 10;
+            sprite(*s, {{{0, 0, 0, 0}, {0, 0, 48, 16}}, 0x5a12'3456});
+          }
+          u64 finishes = stats(gpu).finishes;
+          prepare(hardware, 0x8'0000, 3);
+          hardware.ge.commands[GE::Scissor2] = 63 | 1023 << 10;
+          sprite(hardware, {{{0, 0, 4, 520}, {0, 0, 40, 530}}, 0xff33'66cc});  //(rows 520-529: past the target's 512)
+          CHECK(stats(gpu).finishes > finishes, true);
+          drainThreads();
+          bool shown = gpu->picture(0, 64, 3, 64, 48, picture, scale);
+          if(shown != (scale > 1)) {
+            std::printf("  %s, %ux, %s, %s: %s\n", gpu->fast ? "fast" : "accurate", scale,
+                        sprites ? "a 3D sprite" : "two triangles", filtered ? "filtered, held" : "nearest, repeating",
+                        shown ? "shown from its target at 1x" : "not shown from its target (stale)");
+          }
+          CHECK(shown, scale > 1);
+          if(shown) CHECK(picture == before, true);
+          if(scale > 1) {
+            std::vector<u32> copy;
+            bool copied = gpu->picture(0x2'0000, 64, 3, 64, 48, copy, scale) && copy.size() == before.size();
+            if(copied && !filtered) copied = copy == before;
+            auto distance = [](u32 a, u32 b) {
+              u32 sum = 0;
+              for(u32 shift : {0u, 8u, 16u}) sum += std::abs(s32(a >> shift & 255) - s32(b >> shift & 255));
+              return sum;
+            };
+            u32 width = 64 * scale;
+            for(u32 y = 47 * scale; copied && y < 48 * scale; y++) {
+              for(u32 x = 0; copied && x < width; x++) {
+                u32 pixel = copy[y * width + x], last = before[(48 * scale - 1) * width + x];
+                copied = distance(pixel, last) < distance(pixel, before[(47 * scale - 1) * width + x]);
+              }
+            }
+            if(!copied) {
+              std::printf("  %s, %ux, %s, %s: the 3D PRIM's copy isn't the frame buffer's picture\n",
+                          gpu->fast ? "fast" : "accurate", scale, sprites ? "a 3D sprite" : "two triangles",
+                          filtered ? "filtered, held" : "nearest, repeating");
+            }
+            CHECK(copied, true);
+          }
+          if(scale == 1 && !gpu->fast && !filtered) CHECK(apart(software, hardware), 0u);
+          hardware.ge.setRenderer(nullptr);
+        }
+      }
+    }
+    gpu->resolution(1);
+  }
+}
+
+//A frame buffer drawn (gpuShownAfterFinish's floor, whose edges above 1x fall inside the PSP's pixels), every target
+//then finished by another frame buffer's refused PRIM (its pages given back, none drawing in them since), and sampled
+//after as a texture, texel for texel into another frame buffer: by a 2D sprite, or a 3D quad over its picture (Sonic
+//Rivals draws its bloom from its smallest picture so; IL-2 samples the frame buffer it drew so, after a finish). Above
+//1x it comes from its target, which has its pixels at the GPU's resolution (freshTarget()), not decoded from memory at
+//the PSP's, one colour for each of the PSP's pixels: the copy is the frame buffer's picture as its target shows it. At
+//1x, from memory as ever: that picture too. In each mode, at 1x-3x.
+static auto gpuFreshTarget() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    for(u32 scale : {1u, 2u, 3u}) {
+      if(!scaleTaken(gpu, scale)) continue;
+      gpu->resolution(scale);
+      for(bool quad : {false, true}) {
+        System s;
+        s.ge.setRenderer(gpu);
+        prepare(s, 0, 3);
+        farFloor(s);
+        std::vector<u32> picture, copy;
+        drainThreads();  //(before each picture: with the GE on its thread, the GPU is that thread's till it's done)
+        CHECK(gpu->picture(0, 64, 3, 64, 48, picture, scale), true);
+        u32 width = 64 * scale, detailed = 0;  //(the PSP's pixels whose samples differ)
+        for(u32 y = 0; y < 48 && picture.size() == u64(width) * 48 * scale; y++) {
+          for(u32 x = 0; x < 64; x++) {
+            u32 corner = picture[y * scale * width + x * scale];
+            bool one = true;
+            for(u32 dy = 0; dy < scale; dy++) {
+              for(u32 dx = 0; dx < scale; dx++) {
+                one = one && picture[(y * scale + dy) * width + x * scale + dx] == corner;
+              }
+            }
+            detailed += !one;
+          }
+        }
+        CHECK(detailed > 0, scale > 1);
+        u64 finishes = stats(gpu).finishes;
+        prepare(s, 0x8'0000, 3);
+        s.ge.commands[GE::Scissor2] = 63 | 1023 << 10;
+        sprite(s, {{{0, 0, 4, 520}, {0, 0, 40, 530}}, 0xff33'66cc});  //(rows 520-529: past the target's 512)
+        CHECK(stats(gpu).finishes > finishes, true);
+        prepare(s, 0x2'0000, 3);
+        if(quad) {
+          orthographic(s, 64);
+          quad3D(s, 64, 0, 64, 0, 48, 0);
+        } else {
+          texture(s, Memory::VRAMBase, 64, 64, 64);
+          sprite(s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+        }
+        drainThreads();
+        CHECK(gpu->picture(0x2'0000, 64, 3, 64, 48, copy, scale), true);
+        bool same = copy == picture;
+        if(!same) {
+          std::printf("  %s, %ux, %s: the copy isn't the frame buffer's picture\n", gpu->fast ? "fast" : "accurate",
+                      scale, quad ? "a 3D quad" : "a 2D sprite");
+        }
+        CHECK(same, true);
+        s.ge.setRenderer(nullptr);
+      }
+    }
+    gpu->resolution(1);
+  }
+}
+
+//A texture two targets fit, none of them drawn in since the last finish: gpuFreshTarget's frame buffer, drawn and
+//finished, and the one above it in memory, whose rows past its picture a texture taller than it, sampled after that
+//finish, filled from memory, over the first. freshTarget() takes a target only where one alone fits, so neither is
+//taken: the texture is decoded from memory, and copied texel for texel by a 2D sprite or a 3D quad, the copy is
+//memory's picture, one colour for each of the PSP's pixels; above 1x the first's own picture isn't, and it's the first
+//of the two among the targets. At 1x, from memory as ever. In each mode, at 1x-3x.
+static auto gpuTwoFreshTargets() -> void {
+  if(!renderer()) return;
+  constexpr u32 Below = 48 * 64 * 4;  //(the frame buffer above's rows 48 on)
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    for(u32 scale : {1u, 2u, 3u}) {
+      if(!scaleTaken(gpu, scale)) continue;
+      gpu->resolution(scale);
+      for(bool quad : {false, true}) {
+        System s;
+        s.ge.setRenderer(gpu);
+        auto finish = [&] {  //(another frame buffer's PRIM the GPU refuses: rows 520-529, past a target's 512)
+          u64 finishes = stats(gpu).finishes;
+          prepare(s, 0x8'0000, 3);
+          s.ge.commands[GE::Scissor2] = 63 | 1023 << 10;
+          sprite(s, {{{0, 0, 4, 520}, {0, 0, 40, 530}}, 0xff33'66cc});
+          CHECK(stats(gpu).finishes > finishes, true);
+        };
+        prepare(s, Below, 3);
+        farFloor(s);
+        std::vector<u32> own, copy;
+        drainThreads();  //(before each picture: with the GE on its thread, the GPU is that thread's till it's done)
+        CHECK(gpu->picture(Below, 64, 3, 64, 48, own, scale), true);
+        finish();
+        prepare(s, 0, 3);
+        sprite(s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
+        prepare(s, 0x2'0000, 3);
+        texture(s, Memory::VRAMBase, 64, 128, 64);
+        sprite(s, {{{0, 0, 0, 0}, {64, 96, 64, 48}}, 0xffff'ffff});  //(rows 0-95: the frame buffer below's too)
+        finish();
+        prepare(s, 0x4'0000, 3);
+        if(quad) {
+          orthographic(s, 64, Memory::VRAMBase + Below);
+          quad3D(s, 64, 0, 64, 0, 48, 0);
+        } else {
+          texture(s, Memory::VRAMBase + Below, 64, 64, 64);
+          sprite(s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+        }
+        drainThreads();
+        CHECK(gpu->picture(0x4'0000, 64, 3, 64, 48, copy, scale), true);
+        s.ge.settleAll();
+        u32 width = 64 * scale;
+        std::vector<u32> fromMemory(u64(width) * 48 * scale);
+        for(u32 y = 0; y < 48 * scale; y++) {
+          for(u32 x = 0; x < width; x++) {
+            const u8* pixel = &s.memory.vram[Below + (y / scale * 64 + x / scale) * 4];
+            fromMemory[y * width + x] = 0xff00'0000 | pixel[0] | pixel[1] << 8 | pixel[2] << 16;
+          }
+        }
+        bool same = copy == fromMemory;
+        if(!same) {
+          std::printf("  %s, %ux, %s: the copy isn't memory's picture\n", gpu->fast ? "fast" : "accurate", scale,
+                      quad ? "a 3D quad" : "a 2D sprite");
+        }
+        CHECK(same, true);
+        CHECK(own != fromMemory, scale > 1);
+        s.ge.setRenderer(nullptr);
+      }
+    }
+    gpu->resolution(1);
+  }
+}
+
 //gpuShownBelowTexture's texture, taken in two parts with its rows not known, against the software renderer at 1x: the
 //strip, its v from 0, repeating, samples the frame buffer texel for texel as a texture of 128 rows, its rows 48-95
 //the frame buffer below, both drawn with sprites (exact in either renderer); taken so, from copies, nothing moved or
@@ -6024,6 +6262,12 @@ auto gpuTests() -> Tests {
      "parts, nothing moved, the one below shown from its target", gpuShownBelowTexture},
     {"gpu that texture taken in two parts, rows not known, at 1x: the software renderer's texels",
      gpuBelowTextureTexels},
+    {"gpu above 1x: a frame buffer read as a taller texture by a 3D quad over its picture holds the picture's rows "
+     "alone, so the frame buffer below doesn't make it stale", gpuPictureRowsHeld},
+    {"gpu above 1x: a frame buffer none has drawn in since a finish, sampled as a texture: taken from its target, not "
+     "decoded from memory at 1x", gpuFreshTarget},
+    {"gpu above 1x: a texture two targets none has drawn in since a finish both fit, one filled from memory over the "
+     "other: decoded from memory, neither taken", gpuTwoFreshTargets},
     {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
     {"gpu above 1x: 2D sprites keep to their texels at their edges, the texture repeating or held", gpuSpriteSeams},
     {"gpu pipelines kept between sessions", gpuPipelineCache},

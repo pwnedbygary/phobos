@@ -35,6 +35,56 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan above 1x: 3D draws' texture rows from their vertices, textures from fresh targets — 2026-10-24
+
+Branch `cursor/psp4x-fix-cachy`, made on master `919c238b` (#306), moved onto `1024054c` (#309 and #310, neither of
+which touches PSP code) and reviewed independently before it was committed. ares/psp/ge (draw.cpp, raster.cpp, ge.hpp,
+gpu/gpu.cpp, gpu/gpu.hpp), tests/psp/gpu.cpp, tests/psp/draw3d.cpp, docs/psp-core.md (part 120),
+docs/psp-gpu-renderers.md ("Upscaling") and this file. The probe's and the rounds' notes, frames, scripts and logs are
+kept outside the repository.
+- **What** (part 120): above 1x only. `GE::texelsReached()` works out the texels a 3D PRIM mapped by UV takes at the
+  PSP's pixels (its triangles' jobs and `texelSpan()`, now with `weighed`; its 3D sprites' `spriteSpan()`, new), and
+  `GPU::holds()` holds those rows of a target's texture, not the texture's height (`Renderer::holds()` takes it as a
+  second callback, `reached`). `GPU::take()` takes a texture no target drew in since the last finish from the one
+  target whose texels it fits (`freshTarget()`, with `take()`'s rule moved into `fitsTexture()`; where two fit,
+  neither). At 1x nothing new is asked.
+- **Why**: a 272-row frame buffer sampled as a 512x512 texture by 3D quads was held whole and its target filled from
+  memory past the picture, over the targets kept there (bloom, the other frame buffer), whose finish then made it
+  stale: refused when shown, filled again at the PSP's resolution. And a texture from a target none drew in since a
+  finish was decoded from memory at 1x.
+- **Measured** (on `919c238b`; desktop runner, RADV, each scene's saved state, 900 frames): Armored Core: Formula
+  Front real 4x in both modes (899 frames of 900 from the GPU, from 536 and 894); Sonic Rivals and Death Jr. II with
+  detail in 90-95% of their 4x4 blocks (5-32% on master), their strong edges (across and down pooled) 25-31% on the
+  4-pixel grid (87-100%); the controls (WipEout, Army of Two) and six other scenes the same byte for byte at 4x; IL-2
+  and MX vs. ATV Untamed still native; every scene's 1x frames the same byte for byte in both modes (192 of 192).
+- **Tests**: `gpuPictureRowsHeld` (also what the 3D PRIM draws from the frame buffer: its last row, not the one
+  before it), `gpuFreshTarget` and `gpuTwoFreshTargets` (new: a texture two fresh targets fit, decoded from memory)
+  (tests/psp/gpu.cpp), both modes at 1x-3x; without the change the first two fail 16 and 8 checks (the second with
+  the first change alone), every case above 1x, and the same on master's code, which passes the third.
+- **Mutations**: one row fewer than `reached` held (the review's) or `texelsReached()` a row short, 16 checks fail;
+  one row more, 16; the first of two fitting targets taken (the review's) or only one starting at the texture, 8; the
+  fresh target taken only above 2x, 4; the last of two taken passes (its rows are memory's picture).
+- **Checks** (on `c9c7d2d2`; GCC 16.2.1, lavapipe alone, as psp-core.yml runs them; CI has GCC 13): the sanitized
+  suite 668 groups, 0 failures, 1 skipped (master 665, as #306's last merge records it), the release suite 668, 0, 1
+  skipped (665), CI's GE-thread step 151, 0, 1 skipped (148) and its PSP-timing step 126, 0 (126); the GPU's 85
+  groups alone with the GE thread off and on, 0 failures, the same one skipped; the skip is the barriers without
+  rasterization order (lavapipe reads in order); no shader changed; `git diff --check` clean, no added line over 120
+  columns.
+- **Left**: IL-2 (its scissor's row past the picture makes the other frame buffer stale at each finish) and MX vs. ATV
+  Untamed (its 3D frame buffer and a 16-bit view of the same bytes make each other stale) need `finish()`'s rule for
+  overlapping read-backs, kept out of this change; filtered, repeating 3D quads from a texture's first row are held
+  whole as before; Sonic Rivals and Death Jr. II keep their dither's steps on the PSP's grid; a texture two fresh
+  targets fit is memory's; a filtered 3D copy of a target at 3x can take a sixteenth of the texel before (a rounding
+  in the GPU's interpolation, the same on master); the RP6 not run; cost not timed.
+- Independent review: its first round (NEEDS CHANGES for the diff `d84f6291`) found the code right and every figure
+  reproduced, but its own mutant of each cause passing every GPU test (a 3D PRIM holding one row too few;
+  `freshTarget()` taking the first of two fitting targets), and part 120 giving the IL-2 one-off a cause its evidence
+  doesn't show; it asked for tests that catch both and that sentence reworded: done here, with its suggestions for
+  part 120 (strong edges pooled; at 1x nothing new is asked; the counts on master's code). Its second round (NEEDS
+  CHANGES for `ef7ec326`) found the tests catch both mutants and asked only that part 120 and the test's comment give
+  the filtered 3D sprite's sixteenth at 3x its real cause (an interpolated coordinate a hair below a copy texel's
+  middle, not the PSP's sixteenths): done here too. The delta reviews' verdicts go in the commit message.
+
 ## CI: the workflows' actions off Node 20, setup-gradle aside — 2026-10-24
 
 Made on master `c9c7d2d2a` (#309) and reviewed independently before it was committed. .github/workflows/android.yml,

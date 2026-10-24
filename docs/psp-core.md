@@ -20812,3 +20812,155 @@ that path, and CI's run with the GE on its thread leaving out most of the GPU's 
 ### Scratch
 
 Kept outside the repository: this part's notes, the runs' frames and reports, the mutants and the suites' logs.
+
+## Part 120: Vulkan above 1x — 3D draws' texture rows from their vertices, textures from fresh targets
+
+Parts 117 and 119 fixed reasons the Vulkan renderer showed pictures at the PSP's resolution above 1x. Ten scenes a
+survey before part 117 found native or partly so at 4x were looked at again on master (each scene's saved state, the
+desktop runner, both Vulkan modes): Colin McRae Rally 2005 and Kurohyou 2 are real 4x now; Disaster Report 3 and Need
+for Speed: Most Wanted lose nothing in the renderer (their edges on the PSP's grid are the 16-bit dither, drawn for
+each PSP pixel above 1x by `draw.frag`'s `dithered()`, and HUD-like edges); Armored Core: Formula Front, Sonic
+Rivals, Death Jr. II, IL-2 Sturmovik: Birds of Prey and MX vs. ATV Untamed (two scenes) still lost resolution, for
+four causes. This part fixes two of them.
+
+### Why
+
+- **A frame buffer read as a texture 512 rows tall by a 3D draw.** draw.cpp works out exactly the rows a 2D sprite
+  takes (`spriteReach()`), but a 3D PRIM hands `holds()` the texture's own height: a 272-row picture sampled as a
+  512x512 texture is held whole, and `textureFor()` fills its target's rows 272-511 from memory. These games keep other
+  targets right after the picture: Sonic Rivals' and Death Jr. II's bloom begins at row 272 of the scene's frame
+  buffer, Armored Core's at row 408, and Armored Core's two frame buffers are 272 rows apart. Each finish's read-back
+  of one of those then made the grown target stale (`finish()`): refused when shown, and filled again from memory at
+  the PSP's resolution before its next draw. In accurate mode `take()` also refused the texture where its rows reached
+  a bloom target drawn since the last finish (rows past a frame buffer are held at its last only in fast mode, or where
+  the PRIM's texel box stops before them: `holdable()`), and the GE's decode of it finished every target first, after
+  which every pass of the frame sampled memory.
+- **The box draw.cpp gives a 3D triangle** (`texelsTaken`, from its corners' coordinates) can't help: a quad whose v
+  runs from 0 to 272 over the picture may reach texel 272 for all its corners tell, and texel -1 where the texture
+  repeats, which is all 512 rows. The PSP's pixels, their middles half a pixel in, take rows 0-271.
+- **A texture from a target none drew in since a finish.** `take()` finds a texture's target only through the pages
+  drawn since the last finish; after one, the GE decodes it from memory, narrowed to the PSP's resolution, though the
+  target still holds its pixels at its own and memory hasn't changed them (Sonic Rivals' bloom drawn from its smallest
+  picture; IL-2's frame buffers sampled after the finish a depth texture's read asks for).
+
+### The change
+
+- **`GE::texelsReached()`** (draw.cpp): the texels a 3D PRIM mapped by UV takes at the PSP's pixels. Its corners are
+  placed as the GE places them (`transform()`), each triangle is set up as `placedTriangle()` sets it up
+  (`triangleJob()`) and its texels found by `texelSpan()` (raster.cpp), each 3D sprite's by `spriteSpan()`; a filter's
+  second texel counts only where its weight isn't 0 (`texelSpan()`'s new `weighed`, as `spriteReach()` counts for a
+  hardware renderer); inside the texture, held at its edges, or none where it would repeat round. **`spriteSpan()`**
+  (raster.cpp, new): a 3D sprite whose q is the same at both corners steps each coordinate one way from its job's
+  first column (row) to its last (`spriteRows()`), so its texels are those at the ends. None where it can't tell: a
+  corner off the screen, past the depths, behind the camera or cut (as `reachedBy()` gives up), q changing across a
+  primitive, more than 1,024 corners. The renderer gets it as a second callback beside `takes`
+  (`Renderer::holds()`'s `reached`), asked only above 1x.
+- **`GPU::holds()`** (gpu.cpp): above 1x, where a target may hold the texture (one drew in its pages, or a fresh one,
+  below, has its first row), a 3D PRIM's rows are those `reached` gives: its copy holds no more (the GPU's pixels
+  between the PSP's take any past them at the last held, `draw.frag`, part 52), and the frame buffer isn't filled from
+  memory past its picture, over the targets after it.
+- **`GPU::take()` and `freshTarget()`** (gpu.cpp): above 1x a texture whose pages no target drew in since the last
+  finish comes from the one target whose texels it fits (`fitsTexture()`, `take()`'s rule moved out: its format, or
+  palette indices of as many bits, its row width, not stale), its first row among the target's filled rows and room in
+  it for the rest (those past its picture filled from memory first, as for any target); where two fit, neither, and
+  the texture is memory's as before. `shownTarget()` shows such a target above 1x on the same grounds (part 117):
+  memory has its pixels narrowed, and memory's changes since reach `written()`, which keeps them beside its pixels
+  (revived before the texture is taken, as `take()` always did) or makes it stale.
+- **At 1x** nothing new is asked: `reached` isn't, and no fresh target is looked for (the callback is still made for
+  each textured PRIM, and handed to `holds()`).
+
+### Measured (the desktop runner, RADV, GE timing Fast; each scene's saved state, 900 frames, 7 frames judged at 4x)
+
+Judged as the survey judged them: the share of colour edges on the 4-pixel grid (100% native, 25% chance) and of 4x4
+blocks with detail inside (0% native).
+
+- **Armored Core**: real 4x in both modes at every frame judged (30.8-32.6% of edges on the grid, 53.7-71.0% of
+  blocks with detail; on master accurate mode was native at four of the seven, fast mode partly at two), 899 frames of
+  900 from the GPU (536 and 894 on master).
+- **Sonic Rivals and Death Jr. II**: 30.6-52.1% and 30.4-83.8% of edges on the grid, 94.7-94.9% and 89.8-95.5% of
+  blocks with detail (on master 83.8-93.6% and 95.6-100%, 14.7-32.4% and 5.1-27.7%). Strong edges alone
+  (|dR|+|dG|+|dB| at least 96; across and down pooled, where the grid share above takes the larger of the two)
+  29.7-30.8% and 24.7-29.8% on the grid (master 87.4-91.3% and 91.5-100%; WipEout 25.5-27.3%): the measure's other
+  grid edges are their 16-bit pictures' small steps, drawn for each PSP pixel. In accurate mode their finishes go from
+  7,200 to 450 and from 6,737 to 422, their targets filled again from memory from 932 to 34 and 875 to 34 (fast mode
+  923 to 25, 864 to 25).
+- **Unchanged at 4x, byte for byte** (both modes, 7 frames each): WipEout and Army of Two (the controls), Colin McRae
+  Rally 2005, Kurohyou 2, Need for Speed: Most Wanted, Disaster Report 3, and MX vs. ATV Untamed's two scenes. IL-2's
+  frames change (its frame buffers' textures come from their targets, and accurate mode's finishes go from 5,540 to
+  4,060), still native: 15 frames of 900 from the GPU either way.
+- **At 1x**, all twelve scenes' 8 frames in both modes the same byte for byte as master's (192 of 192). In a run of an
+  earlier build one IL-2 frame came out another frame's picture, and in four runs after (master's and that build's,
+  two each) its picture was master's: run-to-run variation in the runner's capture (seen with master's code too).
+- **Against the software renderer at 1x**, each changed 4x frame averaged down to 480x272: the same content; where they
+  differ more than master's (native) frames did, it's at edges a 4x picture resolves (thin details, glyphs' smoothed
+  edges), as Armored Core's fast mode, real 4x on master too, already differed (0.90% of its pixels strongly at frame
+  120, the same as accurate mode's with the change).
+
+### Tests and checks
+
+- **"gpu above 1x: a frame buffer read as a taller texture by a 3D quad over its picture holds the picture's rows
+  alone…"** (`gpuPictureRowsHeld`): a frame buffer sampled as a 64x128 texture (another frame buffer, 48 wide, below its
+  48 rows) by two triangles or a 3D sprite over its picture from its first row, nearest and repeating, or filtered and
+  held; the frame buffer below drawn after, then another frame buffer's refused PRIM finishes every target. Above 1x
+  it's shown from its target, the picture it showed before; at 1x, memory's, and in accurate mode, nearest, every
+  byte the software renderer's. And above 1x what the 3D PRIM drew from it shows its last row, which differs from the
+  row before: nearest, the picture texel for texel; filtered, its last row nearer the picture's last than the one
+  before at every pixel (at 3x a filtered 3D sprite's interpolated coordinates can fall a hair below a copy texel's
+  middle, and the filter, which places them in 256ths of a texel, then gives the texel before a sixteenth: up to 13
+  per channel at edges inside the PSP's pixels). In both modes at 1x-3x. Without the change, and on master's code, 16
+  checks fail (every 2x and 3x case: not shown, stale); holding one row fewer than `reached` gives (the review's
+  mutant), or `texelsReached()` reaching a row short (a scratch mutant), 16 (every 2x and 3x case: the copy's last row
+  the one before it); one row more (a scratch mutant), the 16 stale ones.
+- **"gpu above 1x: a frame buffer none has drawn in since a finish, sampled as a texture…"** (`gpuFreshTarget`): a
+  frame buffer with detail inside the PSP's pixels above 1x (`farFloor()`), every target finished, then copied texel for
+  texel by a 2D sprite or a 3D quad: the copy is its picture as its target shows it, at 1x-3x in both modes. With the
+  first change alone, and on master's code, 8 checks fail (every 2x and 3x case: the copy one colour for each of the
+  PSP's pixels); taking the fresh target only above 2x (a scratch mutant), the 4 at 2x.
+- **"gpu above 1x: a texture two targets none has drawn in since a finish both fit…"** (`gpuTwoFreshTargets`): that
+  frame buffer drawn and finished, then the one above it drawn and read as a texture of 96 rows by a 2D sprite, its
+  rows past its picture filled from memory over the first, and every target finished again; a texture at the first is
+  then copied texel for texel by a 2D sprite or a 3D quad. Two targets fit it, so neither is taken: the copy is
+  memory's picture, one colour for each of the PSP's pixels, at 1x-3x in both modes. Taking the first of the two (the
+  review's mutant), or only a target starting where the texture does (a scratch mutant), 8 checks fail (every 2x and
+  3x case); master's code passes it. Taking the last of the two (a scratch mutant) passes too: its rows past its
+  picture were filled from memory, so they're memory's picture.
+- **The suites**, CI's four PSP steps as `.github/workflows/psp-core.yml` runs them, on lavapipe alone, on
+  `c9c7d2d2` (GCC 16.2.1; CI has GCC 13): sanitized (ASan and UBSan) 668 groups, 0 failures, 1 skipped; release 668,
+  0, 1 skipped; the GE thread's tests with the thread on 151, 0, 1 skipped (85 of them the GPU's); the kernel's GE
+  tests with the PSP's GE timing 126, 0. Master's, as #306's last merge records them (#309 changes nothing they build
+  or run): 665, 665, 148 and 126, the same group skipped. The skipped one is the barriers without rasterization order
+  (lavapipe reads in order). The three groups pass in each step that runs them, and the GPU's 85 alone with the GE
+  thread off and on. No shader changed (`compile.sh --check` passes, glslang 16.6.0); `git diff --check` clean.
+
+### Left
+
+- **IL-2**: its 3D draws' scissor is 481x273, so its frame buffer at VRAM 0 draws into the first row of the one at
+  0x88000 (and an HLE store writes that row again in the frames it's shown); every finish's read-back then makes that
+  one stale (`finish()`): 883 of 900 frames refused, none for a page another target owns. A change for the latter
+  (moving such pixels in when the frame is shown) has nothing to act on, so none is made; the former is
+  `finish()`'s rule for overlapping read-backs, kept out of this part (a trial of read-backs leaving the bytes beside
+  instead of the stale mark, with a finish's beside and dead bytes kept, drew Kurohyou 2's fighter's feet over its
+  bottom panel, which the software renderer hides).
+- **MX vs. ATV Untamed**: its 3D frame buffer (8888, 512 wide) and a 16-bit view of the same bytes (5650, 1024 wide)
+  make each other stale at every finish, and the view owns the pages when other passes take the picture: the same
+  rule. Its pass of 3D sprites over the picture now holds rows 0-271 (it held 512).
+- **Filtered, repeating 3D quads from a texture's first row**: the GE steps the first row's coordinate a hair below
+  its texels' middle, so a filter takes the texture's last row too, at 1x: held whole as before.
+- **A texture two fresh targets fit** is memory's (`gpuTwoFreshTargets`). Both hold memory's picture there, the one
+  that drew it at its own resolution and the other's rows filled from memory at the PSP's, so taking the one that drew
+  it would keep its detail; left as it is.
+- **Filtered 3D copies of a target at 3x**: where a 3D primitive copies a target texel for texel, an interpolated
+  coordinate can land a hair below a copy texel's middle, and the filter then takes a sixteenth of the texel before
+  (`gpuPictureRowsHeld`'s filtered 3x case: up to 13 per channel at edges inside the PSP's pixels; exact at 2x). Any
+  scale whose step isn't a binary fraction can do it, and `draw.frag`, unchanged here, does it the same on master. A
+  bias in its filter would avoid it but changes every filtered sample's rounding: a part of its own.
+- **Sonic Rivals and Death Jr. II** stay "partly native" by the survey's measure for their low-contrast steps, as
+  Disaster Report 3: the dither drawn for each PSP pixel above 1x (`dithered()`) is the owner's call to change.
+- **Cost** not timed (a shared GPU): `texelsReached()` runs only for a 3D PRIM taking a target's texture above 1x,
+  and transforms its corners a second time.
+- **The RP6** not run: Android takes textures through the same `holds()`.
+
+### Scratch
+
+Kept outside the repository: the probe's and this part's notes, the runs' frames and reports, the probes, the mutants
+and the suites' logs.
