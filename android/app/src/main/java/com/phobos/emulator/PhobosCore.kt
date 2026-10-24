@@ -1,11 +1,22 @@
 package com.phobos.emulator
 
+import android.graphics.Bitmap
 import android.view.Surface
 
 object PhobosCore {
     init {
         System.loadLibrary("phobos_android")
     }
+
+    /**
+     * The intro's canvas for a view of [width] x [height] pixels: its width, its height, and its scale up to the view.
+     */
+    external fun introCanvas(width: Int, height: Int): IntArray
+    /**
+     * Draws the intro at [ms] into [bitmap] (ARGB_8888, the canvas's size), skipped at [skippedAt] (negative: not):
+     * false once it's over.
+     */
+    external fun renderIntro(bitmap: Bitmap, ms: Int, skippedAt: Int): Boolean
 
     external fun stringFromJNI(): String
     external fun enumerateSystems(): List<String>
@@ -19,6 +30,7 @@ object PhobosCore {
     external fun setPause(paused: Boolean)
     external fun setFastForward(enabled: Boolean)
     external fun setFastForwardSpeed(speed: Float)
+    external fun setSlowMotion(speed: Float)
     external fun setNgcdLoadSpeed(speed: Int)
     external fun setZxLoadSpeed(speed: Int)
     external fun setMsxLoadSpeed(speed: Int)

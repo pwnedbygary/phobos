@@ -3,7 +3,9 @@ name: Desktop Build
 # Builds the desktop program from CMakeLists.txt for master, version tags and pull requests: a
 # Linux x86-64 AppImage with its .zsync, a Windows x64 Phobos.exe and a universal macOS
 # Phobos.app. A version tag attaches them to that tag's GitHub Release, where the AppImage's
-# update information looks for the .zsync. The Android APKs stay on android.yml.
+# update information looks for the .zsync. The Android APKs stay on android.yml. Each job also
+# builds and runs the desktop's host test (tests/desktop, CMake's PHOBOS_DESKTOP_TESTS), which
+# leaves the packaged program as it is.
 #
 # Each carries FFmpeg's libavcodec and libavutil for the PSP's music and movies, built by CMake
 # with thirdparty/ffmpeg/build.sh from FFmpeg's release, which is kept (the build named by its
@@ -66,8 +68,17 @@ jobs:
 
       - name: Build
         run: |
-          cmake --preset linux-x64
+          cmake --preset linux-x64 -DPHOBOS_DESKTOP_TESTS=ON
           cmake --build build/linux-x64
+
+      # The intro's renderer, which the Android app and the program share, against its host tests (tests/intro), with
+      # its own warnings as errors and the sanitizers: seconds.
+      - name: Intro renderer
+        shell: bash
+        run: |
+          cmake --build build/linux-x64 --target intro-tests
+          build/linux-x64/intro-tests | tee "$RUNNER_TEMP/intro-tests.log"
+          echo "- tests/intro: $(tail -1 "$RUNNER_TEMP/intro-tests.log")" >> "$GITHUB_STEP_SUMMARY"
 
       # ares's dialect (CMakeLists.txt) on every N64 source and not on the PSP core's, then the N64 RSP's recompiler
       # against its interpreter (tests/rsp-recompiler) on the objects just built: seconds.
@@ -118,6 +129,9 @@ jobs:
           cmake --build build/linux-x64 --target rsp-recompiler
           build/linux-x64/rsp-recompiler | tee "$RUNNER_TEMP/rsp-recompiler.log"
           echo "- tests/rsp-recompiler: $(tail -1 "$RUNNER_TEMP/rsp-recompiler.log")" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test
+        run: ctest --test-dir build/linux-x64 --output-on-failure
 
       - name: Package AppImage and zsync
         run: bash scripts/package-linux-appimage.sh build/linux-x64
@@ -187,8 +201,11 @@ jobs:
 
       - name: Build
         run: |
-          cmake --preset windows-x64
+          cmake --preset windows-x64 -DPHOBOS_DESKTOP_TESTS=ON
           cmake --build build/windows-x64
+
+      - name: Test
+        run: ctest --test-dir build/windows-x64 --output-on-failure
 
       - name: Package Phobos.exe
         run: bash scripts/package-windows.sh build/windows-x64
@@ -233,8 +250,11 @@ jobs:
 
       - name: Build
         run: |
-          cmake --preset macos-universal
+          cmake --preset macos-universal -DPHOBOS_DESKTOP_TESTS=ON
           cmake --build build/macos-universal
+
+      - name: Test
+        run: ctest --test-dir build/macos-universal --output-on-failure
 
       # Developer ID signing and notarization run only when the repository has these secrets.
       - name: Import signing certificate

@@ -149,7 +149,7 @@ private val FULL_SCREEN_ROUTES = setOf("system/{name}", EMULATOR_ROUTE, TOUCH_ED
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun MainScaffold(viewModel: MainViewModel) {
+fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false }) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
@@ -175,10 +175,12 @@ fun MainScaffold(viewModel: MainViewModel) {
         }
     }
 
-    // Check for newer GPU driver releases on launch and surface as a toast.
+    // Check for newer GPU driver releases on launch and surface as a toast, once the intro (IntroSplash) is
+    // over: a toast is drawn over the app's window, the intro too.
     LaunchedEffect(Unit) {
         viewModel.checkForDriverUpdates()
         viewModel.driverUpdateEvent.collect { msg ->
+            snapshotFlow(introPlaying).first { !it }
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
     }
@@ -186,6 +188,7 @@ fun MainScaffold(viewModel: MainViewModel) {
     LaunchedEffect(Unit) {
         viewModel.checkForAppUpdate(automatic = true)
         viewModel.appUpdateEvent.collect { msg ->
+            snapshotFlow(introPlaying).first { !it }
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
     }

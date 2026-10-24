@@ -121,6 +121,7 @@ set(OTHER_SOURCES
     thirdparty/volk/volk.c
     thirdparty/GLFW/glfw_stub.cpp
     android/app/src/main/cpp/PhobosRunner.cpp
+    android/app/src/main/cpp/PhobosIntro.cpp
     ares/ares/android_globals.cpp
     ares/pce/vdp-performance/vdp.cpp
     thirdparty/libchdr/src/libchdr_bitstream.c
@@ -337,6 +338,7 @@ if(ANDROID)
   add_library(phobos_android SHARED
       android/app/src/main/cpp/PhobosJNI.cpp
       android/app/src/main/cpp/PhobosHostAndroid.cpp
+      android/app/src/main/cpp/PhobosIntroJNI.cpp
   )
 
   find_library(log-lib log)
@@ -347,8 +349,9 @@ if(ANDROID)
   find_library(gles-lib GLESv3)
   find_library(z-lib z)
   find_library(dl-lib dl)
+  find_library(jnigraphics-lib jnigraphics)
 
-  target_link_libraries(phobos_android PRIVATE phobos_core ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
+  target_link_libraries(phobos_android PRIVATE phobos_core ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} ${jnigraphics-lib} adrenotools)
 
   # FFmpeg (above), for arm64-v8a with the NDK: libavcodec.so and libavutil.so, which the APK carries beside Phobos's
   # own library.
@@ -396,13 +399,19 @@ else()
       desktop/main.cpp
       desktop/PhobosHostDesktop.cpp
       desktop/Firmware.cpp
+      desktop/Hotkeys.cpp
       desktop/Input.cpp
       desktop/Library.cpp
       desktop/PspDiscInfo.cpp
+      desktop/ReducedMotion.cpp
       desktop/Settings.cpp
   )
   find_package(Threads REQUIRED)
   target_link_libraries(phobos PRIVATE phobos_core SDL3::SDL3-static Threads::Threads ${CMAKE_DL_LIBS})
+  if(APPLE)
+    # desktop/ReducedMotion.cpp calls the Objective-C runtime from C++.
+    target_link_libraries(phobos PRIVATE objc)
+  endif()
   # The boot ROMs and game databases the Android app ships as assets, beside the program; it
   # copies them into its data folder at start, as the app's extractAssets() does.
   add_custom_command(TARGET phobos POST_BUILD
@@ -413,6 +422,24 @@ else()
   add_executable(rsp-recompiler EXCLUDE_FROM_ALL tests/rsp-recompiler/rsp-recompiler.cpp)
   target_link_libraries(rsp-recompiler PRIVATE phobos_core Threads::Threads ${CMAKE_DL_LIBS})
   set_property(SOURCE tests/rsp-recompiler/rsp-recompiler.cpp APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
+  # tests/intro: the intro's renderer, which the Android app and the program share (PhobosIntro.cpp), and the program's
+  # reading of the system's motion settings (desktop/ReducedMotion.cpp), checked on the host with their own warnings as
+  # errors (the program builds with -w) and the sanitizers, undefined behaviour failing it too. Built on demand
+  # (desktop.yml's Linux job builds and runs it).
+  add_executable(intro-tests EXCLUDE_FROM_ALL tests/intro/intro.cpp android/app/src/main/cpp/PhobosIntro.cpp
+                 desktop/ReducedMotion.cpp)
+  set_target_properties(intro-tests PROPERTIES
+    COMPILE_OPTIONS "-Wall;-Wextra;-Werror"
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp;${CMAKE_CURRENT_SOURCE_DIR}/desktop")
+  target_link_libraries(intro-tests PRIVATE ${CMAKE_DL_LIBS})
+  if(APPLE)
+    target_link_libraries(intro-tests PRIVATE objc)
+  endif()
+  if(NOT WIN32)
+    target_compile_options(intro-tests PRIVATE -fsanitize=address,undefined -fno-sanitize-recover=undefined
+                           -fno-omit-frame-pointer)
+    target_link_options(intro-tests PRIVATE -fsanitize=address,undefined)
+  endif()
   if(WIN32)
     # The icon is made from the PNG at configure time when Python is around; without it the
     # executable just has no icon.
@@ -515,5 +542,28 @@ else()
     elseif(NOT WIN32)
       set_target_properties(phobos PROPERTIES BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN")
     endif()
+  endif()
+
+  # The desktop's host tests (tests/desktop: the hotkeys' rules, and settings.ini reading their keys back), built only
+  # when asked for with -DPHOBOS_DESKTOP_TESTS=ON; then `cmake --build <folder> --target phobos-desktop-tests` and
+  # `ctest --test-dir <folder>`.
+  option(PHOBOS_DESKTOP_TESTS "Build the desktop's host tests (tests/desktop)" OFF)
+  if(PHOBOS_DESKTOP_TESTS)
+    enable_testing()
+    add_executable(phobos-desktop-tests tests/desktop/hotkeys.cpp desktop/Hotkeys.cpp desktop/Input.cpp
+      desktop/Settings.cpp)
+    # Their own warnings, as errors, and their own include paths (the program builds with -w, and with the core's
+    # paths), with SDL's headers as the system's, and SDL itself for what desktop/Input.cpp calls.
+    set_target_properties(phobos-desktop-tests PROPERTIES
+      COMPILE_OPTIONS "-Wall;-Wextra;-Werror"
+      INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(phobos-desktop-tests SYSTEM PRIVATE
+      $<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_link_libraries(phobos-desktop-tests PRIVATE SDL3::SDL3-static)
+    if(NOT WIN32)
+      target_compile_options(phobos-desktop-tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+      target_link_options(phobos-desktop-tests PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_test(NAME desktop-hotkeys COMMAND phobos-desktop-tests)
   endif()
 endif()

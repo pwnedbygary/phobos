@@ -58,7 +58,9 @@ struct GPU : GE::Renderer {
     }
     //A 2D sprite's texture coordinates as the GE steps them (draw.cpp's rectangle()): across x from columnFirst at
     //sixteenth columnStart, by columnStep a pixel; down y likewise. The coordinate across x is v when turned.
-    //Held (a 2D triangle above 1x: triangle()): u kept from columnFirst to columnStep, v from rowFirst to rowStep.
+    //Held (a 2D triangle above 1x: triangle()): u kept from columnFirst to columnStep, v from rowFirst to rowStep;
+    //a 2D sprite (above 1x: sprite()), its pixels kept inside its first and last, its right and bottom edges in u
+    //and v (sixteenths).
     float columnFirst, columnStep, rowFirst, rowStep;
     s32 columnStart, rowStart;
   };
@@ -552,11 +554,17 @@ struct GPU : GE::Renderer {
   auto presents() const -> bool { return ready() && backend->presents(); }
   auto presented() const -> bool { return ready() && backend->presented; }
   auto window(void* window) -> void { if(backend) backend->window(window); }
+  //Presenting ended by the GPU no longer answering: the window let go of (no window for the backend, which drops its
+  //surface, with its swapchain, once the GPU's runs all end: a disconnect), so that the host can draw on it again.
+  auto letGo() -> void { if(backend && backend->lost) backend->window(nullptr); }
   auto show(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool;
   auto show(const std::vector<u32>& pixels, u32 width, u32 height) -> void;
   auto shot(std::vector<u32>& pixels, u32& width, u32& height, u32& format) -> bool {
     return backend && backend->shot(pixels, width, height, format);
   }
+  //Everything handed to the GPU waited for, so shot() has the picture show() presented last at once rather than a
+  //frame or two later: for a screenshot, between frames, the GE drawn out (GE::drawer()) and nothing else on the GPU.
+  auto settle() -> void;
   //A late frame, for a host that shows frames read back but takes them late (System's "Late Frames": the runner
   //timing the GPU as the app presents, which reads nothing back): the frame buffer as picture() would read it, a
   //shot of it taken on the GPU at the PSP's size, as show() takes one, with nothing waited for; shot() has it once

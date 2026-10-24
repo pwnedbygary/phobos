@@ -48,8 +48,11 @@ auto movie(const std::vector<std::vector<u8>>& units, u32 soundFrames = 0) -> st
     time += 3003;
   }
   for(u32 n = 0; n < soundFrames; n++) {
-    std::vector<u8> data = {0, 0, 0, 0, 0x0f, 0xd0, 0x28, 0x2e, 0, 0, 0, 0};  //376-byte stereo frames
-    data.resize(12 + 376, 0x40 + n);
+    //376-byte stereo frames after their header; made at their full size, as GCC 16 at -O3 takes the fill of a vector
+    //grown from the header for a write past its end (-Warray-bounds)
+    std::vector<u8> data(12 + 376, 0x40 + n);
+    const u8 header[] = {0, 0, 0, 0, 0x0f, 0xd0, 0x28, 0x2e, 0, 0, 0, 0};
+    std::copy(std::begin(header), std::end(header), data.begin());
     pack(0xbd, data, 90000 + n * 4180);
   }
   u32 size = out.size() - 2048;

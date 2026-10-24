@@ -246,9 +246,13 @@ jobs:
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
       # The GE thread's tests again with every test machine's GE on its thread (PHOBOS_TESTS_GE_THREAD=On, as the
-      # option "GE Thread" On): the thread's own groups, the GPU's with it, the GE's times (the PSP's timing's with
-      # the thread among them) and the measured rounds' GE time, the CPU beside the GE (measured rounds 10, 10b and
-      # 10c's among them), the versions, the GE's looks polled. The objects the run above built, linked again.
+      # option "GE Thread" On): the thread's own groups, every one of the GPU's (a GPU test can fail only with the
+      # thread on, as part 117's first one did in its review), the GE's times (the PSP's timing's with the thread among
+      # them) and the measured rounds' GE time, the CPU beside the GE (measured rounds 10, 10b and 10c's among them),
+      # the versions, the GE's looks polled. Required as in the first run: the GPU's capabilities with the rest, so a
+      # GPU group skipped here for want of one of them fails; the barriers without rasterization order skip, as in the
+      # first run (lavapipe reads in order: vulkan-unordered-reads can't be required). The objects the run above built,
+      # linked again.
       - name: Run the GE thread's tests with the thread on
         if: ${{ !cancelled() }}
         shell: bash
@@ -258,9 +262,12 @@ jobs:
           PSP_GPU_ON_CPU: 1
           PHOBOS_TESTS_GE_THREAD: "On"
           PHOBOS_TESTS_ONLY: >-
-            ge on its own thread|with the GE on its thread|ge time|GE time|ge versions|looks polled|the CPU beside the
-            GE
-          PHOBOS_TESTS_REQUIRE: vulkan, programs, ge-round6, ge-round8, ge-round9, ge-round10, ge-round10b, ge-round10c
+            gpu |ge on its own thread|with the GE on its thread|ge time|GE time|ge versions|looks polled|the CPU beside
+            the GE
+          PHOBOS_TESTS_REQUIRE: >-
+            vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
+            vulkan-stencil-export, vulkan-depth-clamp, programs, ge-round6, ge-round8, ge-round9, ge-round10,
+            ge-round10b, ge-round10c
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-on.log"
 
       # The kernel's GE tests again with every test machine that doesn't choose its GE timing on the PSP's

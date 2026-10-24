@@ -548,9 +548,19 @@ images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
   the vertex's "held" flag; `draw.frag` clamps them), which is as far as its pixels' middles reach at 1x. The GPU's
   pixels within half a PSP pixel of an edge sampled up to half a texel beyond it before: Ridge
   Racer 2's menu draws its picture as two quads meeting at x = 240, the right one mirroring the left, and the filter
-  blended the texel past the picture into a one-pixel line down the middle (`gpuSeams`). At 1x nothing changes. A
-  2D sprite's stepped coordinates aren't held, but since part 52 every fetch is held inside the picture on the GPU,
-  so a sprite's edge pixels above 1x that step past the rows or columns copied read the last of them.
+  blended the texel past the picture into a one-pixel line down the middle (`gpuSeams`). At 1x nothing changes.
+- **2D sprites' edges** (part 119): above 1x a 2D sprite's pixels are held between the middles of its first and last
+  pixels, where the PSP's pixels sample (`sprite()` sets the vertex's "held" flag and puts the sprite's right and
+  bottom edges in its u and v, which a stepped sprite doesn't use; `draw.frag` finds its first and last pixels from
+  its edges as `spriteJob()` does and holds the GPU's pixel's middle between theirs before stepping). Its other
+  pixels step as before; a held one takes the coordinates the PSP's pixel at that edge takes. Before, the GPU's
+  pixels in the outer half of a sprite's edge pixels stepped up to half a pixel past them: Burnout Legends' top
+  banner (480x64 pixels from a 512x64 texture, CLUT8 in RAM, filtered, repeating) blended its texture's first row,
+  dark, into the lower half of its last at 4x (`gpuSpriteSeams`). Not where the texture is a copy of a target at its
+  resolution, which has the texels between the PSP's: the GPU's pixels at a texel-for-texel sprite's edges sample
+  inside the texel the PSP's pixel takes, so render to texture keeps its detail there; and since part 52 every fetch
+  is held inside the picture on the GPU, so such a sprite's edge pixels that step past the rows or columns copied read
+  the last of them. At 1x nothing changes.
 
 The shown picture, read back (where it isn't presented): the screen is made `MostShown` (4) times the PSP's size
 at most, and the picture is read back at the renderer's scale and copied (nearest) into it. That's the desktop's
@@ -582,10 +592,23 @@ them. The host's `video()` then neither locks nor draws on the window.
 - **Synchronisation**: each slot has its own `acquired` semaphore, each swapchain image its own `rendered` one, so
   nothing waits on the CPU except the acquire (100 ms at most, then the frame isn't presented).
 - **Screenshots**: a presented frame is also blitted (nearest) to the PSP's size into the slot's own buffer and kept
-  when the slot is next waited for (`GPU::shot()`), so the host's screenshot still has the picture.
+  when the slot is next waited for (`GPU::shot()`), so the host's screenshot still has the picture; since the PSP
+  follow-ups of 2026-10-21 (the handoff) a screenshot keeps it at once (`PlayStationPortable::settle()`, below).
 - **Falling back**: a surface or swapchain that can't be made gives presenting up (`failed`): the surface is let go
   so the host can lock the window again, and frames are read back as before. `presents()` doesn't depend on the
-  window being there, so the host never locks a window the GPU is about to present on.
+  window being there, so the host never locks a window the GPU is about to present on. A GPU that stops answering
+  (`lost`) gives presenting up too; since the follow-up of 2026-10-21 (the handoff) its window is let go of at the next
+  frame as well (`GPU::letGo()`, called by `System::present()`), the surface, with its swapchain, dropped from it where
+  the GPU's runs all ended, where before it stayed on the window and the host's draws on it were refused. After a wait
+  that timed out (a run that never ended, the GPU perhaps still using them) they were left as they were, the screen
+  frozen; since the follow-up of 2026-10-23 they're held, and dropped a frame or more later, once every run has ended,
+  its fence signalled or the device lost (`releaseHeld()`). Dropping the surface disconnects it from the window (the
+  swapchain alone wouldn't), which puts the window's format and scaling back to their defaults (on the RP6, 16-bit
+  buffers, dropped unless the window's size), maybe between the host's request for its frames' size, format and scaling
+  and its lock, on another thread; so the host (`PhobosHostAndroid.cpp`'s `lockFrame`) asks again at the lock after the
+  first that succeeds on a window it may not have had, and posts a buffer in neither format it writes (`RGBA_8888`,
+  `RGBX_8888`) undrawn. After such a loss the window stays the CPU's, so a game loaded again on it can't make its
+  surface: it gives presenting up and reads its frames back until the window is made again (derived, not run).
 - **The desktop** reads back (SDL owns its window, and its renderer isn't Vulkan's); MoltenVK on the M1 has no
   surface for it.
 
@@ -594,8 +617,11 @@ render resolution multiplier) informed the design here as before; none of its co
 
 Presenting reports itself: `Backend::presented` is set only when this frame's `vkQueuePresentKHR` succeeded (or was
 suboptimal), and `System::present` returns false otherwise (no window, as in the background, or an acquire that
-timed out), so that frame is read back and the host draws it. A screenshot taken just after a presented frame may be
-the frame before's: the shrunk copy is kept when its slot is next waited for, a frame or two later.
+timed out), so that frame is read back and the host draws it. The shrunk copy is kept when its slot is next waited for,
+a frame or two later, so a screenshot taken just after a presented frame was the frame before's; since the PSP
+follow-ups of 2026-10-21 the host's screenshot has it kept at once (`settle()`: between frames, the host holding the
+core, the GE thread drained first where it's on (merged from master on 2026-10-21), then the GPU's runs waited for and
+each one's copy kept), so it has the frame presented last.
 
 ## Shader blending (part 45)
 

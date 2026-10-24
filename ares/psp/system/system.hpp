@@ -94,7 +94,8 @@ struct System {
   auto unserialize(serializer& s) -> bool;
   u64 frames = 0;            //run so far (never reset: frame pictures are told apart by them)
   bool exactFrame = false;   //the screen given this frame's own picture at its end, the GE thread waited for (a
-                             //front end's capture: the runner's PNGs); else the newest it has taken, a frame behind
+                             //front end's capture: the runner's PNGs; the app's frame-advance step); else the newest
+                             //it has taken, a frame behind
 
 private:
   std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)
@@ -140,7 +141,8 @@ private:
   //Presenting (window()): the host's window, as handed over (a reference held: windowMutex's), and the one the GPU
   //was last given (by the thread whose the GPU is: the emulation thread, or the GE thread at frames' ends); whether
   //the GPU presents the frames (the host's to read); the picture presented last, for shot() (shotMutex's: its pixels
-  //as they were in the target, and its GE format).
+  //as they were in the target, and its GE format), and whether it came from a target, its shot the GPU's to keep
+  //(settle()).
   std::mutex windowMutex;
   void* hostWindow = nullptr;
   void* gpuWindow = nullptr;
@@ -148,12 +150,14 @@ private:
   std::mutex shotMutex;
   std::vector<u32> shotPixels;
   u32 shotWidth = 0, shotHeight = 0, shotFormat = 3;
+  bool presentedFromTarget = false;
   auto present(const Kernel::Shown& showing, GE& drawing, std::vector<u32>& pixels,
                const std::function<auto (std::vector<u32>&) -> void>& memoryPicture) -> bool;
   auto handWindow() -> void;
   static auto hold(void* window, bool held) -> void;
   friend auto window(void* window) -> void;
   friend auto presenting() -> bool;
+  friend auto settle() -> void;
   friend auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool;
   //(unload()) A GE thread left stuck, kept till it has come back (unwedge()); the machine under it left as it was
   std::unique_ptr<GeThread> stuckGE;
