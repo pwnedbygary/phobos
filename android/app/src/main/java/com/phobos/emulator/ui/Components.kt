@@ -426,12 +426,18 @@ fun ProgressBar(progress: (() -> Float)?, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun SettingsClickableItem(title: String, description: String, onClick: () -> Unit, icon: ImageVector? = null) {
+fun SettingsClickableItem(
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+    icon: ImageVector? = null,
+    trailingIcon: ImageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+) {
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = if (description.isNotEmpty()) { { Text(description) } } else null,
         leadingContent = if (icon != null) { { IconBadge(icon) } } else null,
-        trailingContent = { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null) },
+        trailingContent = { Icon(trailingIcon, contentDescription = null) },
         colors = transparentListItemColors(),
         modifier = Modifier.fillMaxWidth().focusRing(MaterialTheme.colorScheme.primary).clickable(onClick = onClick),
     )

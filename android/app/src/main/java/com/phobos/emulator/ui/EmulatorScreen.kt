@@ -227,6 +227,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             HotkeyAction.QUIT -> askToQuit()
             HotkeyAction.KEYBOARD -> if (hasKeyboard) showKeyboard = !showKeyboard else return false
             HotkeyAction.LIBRARY -> viewModel.swapToLibrary()
+            // Never over a game: the window runs it on the Library's and the menus' pages (WindowKeys).
+            HotkeyAction.SHOW_SCREENSAVER -> return false
             HotkeyAction.PS1_ANALOG_TOGGLE -> if (systemName == "PlayStation") viewModel.togglePs1AnalogMode() else return false
             else -> {
                 val saveSlot = action.removePrefix(HotkeyAction.SAVE_SLOT_PREFIX).toIntOrNull()
