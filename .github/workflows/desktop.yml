@@ -4,8 +4,8 @@ name: Desktop Build
 # Linux x86-64 AppImage with its .zsync, a Windows x64 Phobos.exe and a universal macOS
 # Phobos.app. A version tag attaches them to that tag's GitHub Release, where the AppImage's
 # update information looks for the .zsync. The Android APKs stay on android.yml. Each job also
-# builds and runs the desktop's host tests (tests/desktop and tests/gb-boot-rom, CMake's
-# PHOBOS_DESKTOP_TESTS), which leave the packaged program as it is.
+# builds and runs the desktop's host tests (tests/desktop, tests/gb-boot-rom and
+# tests/sgb-scheduler, CMake's PHOBOS_DESKTOP_TESTS), which leave the packaged program as it is.
 #
 # Each carries FFmpeg's libavcodec and libavutil for the PSP's music and movies, built by CMake
 # with thirdparty/ffmpeg/build.sh from FFmpeg's release, which is kept (the build named by its
