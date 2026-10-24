@@ -5076,6 +5076,75 @@ static auto gpuSeams() -> void {
   gpu->resolution(1);
 }
 
+//Above 1x, 2D sprites texel for texel, filtered, across, mirrored and turned, from a texture whose texels past the
+//picture, across and down, are black, repeating (the texel before its first is the black at its far end) or held at
+//its edges, in each mode: each of the GPU's pixels at a sprite's edges keeps to the picture's texels, as the PSP's
+//pixels' middles do (white, none of the black blended in: sprite()'s held pixels; Burnout Legends' banner, repeating,
+//showed its dark top row along its bottom), and memory's bytes are the software renderer's. The texture in RAM, in
+//VRAM where the CPU wrote it, and a frame buffer drawn first (a copy at its resolution, not held: white too).
+static auto gpuSpriteSeams() -> void {
+  if(!renderer()) return;
+  //(across, mirrored, and turned: its bottom-left corner first)
+  const Corners sprites[3] = {{{{0, 0, 4, 4}, {16, 16, 20, 20}}, 0xffff'ffff},
+                              {{{16, 0, 28, 4}, {0, 16, 44, 20}}, 0xffff'ffff},
+                              {{{0, 0, 4, 44}, {16, 16, 20, 28}}, 0xffff'ffff}};
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    for(u32 scale : {1u, 2u, 3u}) {
+      if(!scaleTaken(gpu, scale)) continue;
+      gpu->resolution(scale);
+      for(u32 source : {0u, 1u, 2u}) {  //(RAM, VRAM the CPU wrote, a frame buffer)
+        for(bool held : {false, true}) {
+          System software, hardware;
+          hardware.ge.setRenderer(gpu);
+          u32 address = source == 0 ? GPUTexture : Memory::VRAMBase + (source == 1 ? 0x8'0000 : 0);
+          for(System* s : {&software, &hardware}) {
+            //(the picture white, 16x16, in a texture of 32x32; past it, across and down, black)
+            if(source < 2) {
+              for(u32 n = 0; n < 32 * 32; n++) {
+                s->memory.write(4, address + n * 4, n % 32 < 16 && n / 32 < 16 ? 0xffff'ffff : 0xff00'0000);
+              }
+            } else {
+              prepare(*s, 0, 3);
+              sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff00'0000});
+              sprite(*s, {{{0, 0, 0, 0}, {0, 0, 16, 16}}, 0xffff'ffff});
+            }
+            prepare(*s, 0x2'0000, 3);
+            sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});  //(all the picture's rows the GPU's)
+            texture(*s, address, 32, 32, source < 2 ? 32 : 64);
+            s->ge.commands[GE::TextureFilter] = 1 | 1 << 8;
+            s->ge.commands[GE::TextureWrap] = held ? 0x101 : 0;
+            for(auto& one : sprites) sprite(*s, one);
+          }
+          std::vector<u32> pixels;
+          drainThreads();  //(before the picture: with the GE on its thread, the GPU is that thread's till it's done)
+          CHECK(gpu->picture(0x2'0000, 64, 3, 64, 48, pixels, scale), true);
+          CHECK(pixels.size(), 64u * 48 * scale * scale);
+          u32 blended = 0;
+          for(auto& one : sprites) {
+            u32 left = u32(std::min(one.at[0][2], one.at[1][2])), right = u32(std::max(one.at[0][2], one.at[1][2]));
+            u32 top = u32(std::min(one.at[0][3], one.at[1][3])), bottom = u32(std::max(one.at[0][3], one.at[1][3]));
+            for(u32 y = top * scale; y < bottom * scale && pixels.size() == 64u * 48 * scale * scale; y++) {
+              for(u32 x = left * scale; x < right * scale; x++) {
+                blended += (pixels[y * 64 * scale + x] & 0xff'ffff) != 0xff'ffff;
+              }
+            }
+          }
+          if(blended) {
+            std::printf("  %s, %ux, the texture from %s, %s: %u of the GPU's pixels not the picture's white\n",
+                        gpu->fast ? "fast" : "accurate", scale, source == 0 ? "RAM" : source == 1 ? "VRAM" : "a copy",
+                        held ? "held" : "repeating", blended);
+          }
+          CHECK(blended, 0u);
+          CHECK(apart(software, hardware), 0u);
+          hardware.ge.setRenderer(nullptr);
+        }
+      }
+    }
+    gpu->resolution(1);
+  }
+}
+
 //Shader blending (docs/psp-gpu-renderers.md, "Shader blending"), where the GPU reads the frame buffer: overlapping
 //sprites blended with random factors (fixed ones too) and operations, dithered or not, with random logic operations
 //and write masks that keep part of a channel, over a frame buffer cleared to random colors and stencils, in each
@@ -5812,8 +5881,8 @@ static auto gpuShownBelowTexture() -> void {
 
 //gpuShownBelowTexture's texture, taken in two parts with its rows not known, against the software renderer at 1x: the
 //strip, its v from 0, repeating, samples the frame buffer texel for texel as a texture of 128 rows, its rows 48-95
-//the frame buffer below, both drawn with sprites (exact in either renderer); every byte of VRAM the same, nothing
-//moved.
+//the frame buffer below, both drawn with sprites (exact in either renderer); taken so, from copies, nothing moved or
+//finished (else this would pass by decoding memory's texels after a finish); every byte of VRAM the same.
 static auto gpuBelowTextureTexels() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -5843,7 +5912,9 @@ static auto gpuBelowTextureTexels() -> void {
     s->ge.vertexAddress = GPUVertices;
     s->ge.primitive(GE::TriangleStrip, 4);
   }
+  CHECK(stats(gpu).copies > was.copies, true);
   CHECK(stats(gpu).moves, was.moves);
+  CHECK(stats(gpu).finishes, was.finishes);
   CHECK(apart(software, hardware), 0u);
   hardware.ge.setRenderer(nullptr);
 }
@@ -5954,6 +6025,7 @@ auto gpuTests() -> Tests {
     {"gpu that texture taken in two parts, rows not known, at 1x: the software renderer's texels",
      gpuBelowTextureTexels},
     {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
+    {"gpu above 1x: 2D sprites keep to their texels at their edges, the texture repeating or held", gpuSpriteSeams},
     {"gpu pipelines kept between sessions", gpuPipelineCache},
     {"gpu render to texture through palettes: looked up on the GPU, or decoded, the box where the whole would wait",
      gpuGlowParts},

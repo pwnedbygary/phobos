@@ -35,6 +35,47 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: 2D sprites' edges held where the PSP's pixels sample above 1x, and #298's other follow-ups — 2026-10-23
+
+Branch `cursor/psp-298-followups-cachy` (pull request #305), made on master `ac0ad694` (#302) and measured on
+`7986aef5b` (#298), between which nothing touches the code, the tests or the runner; master merged in since, with
+#294's GPU changes (the PSP suites pass on the combination) and #300's intro, which touches no PSP code.
+ares/psp/ge/gpu/gpu.cpp, gpu.hpp, shaders/draw.frag,
+draw.vert and shaders.hpp (made again), ares/psp/ge/ge.hpp (a comment), tests/psp/gpu.cpp,
+.github/workflows/psp-core.yml, docs/psp-core.md (part 119; part 117's Left), docs/psp-gpu-renderers.md
+("Upscaling": 2D sprites' edges), docs/implementation-plan.md (package 10's row) and this file (and #298's entry's
+banner size). The three items #298's reviews left, which the owner chose to do now.
+- **What** (part 119):
+  - `GPU::sprite()` and `draw.frag`: above 1x a 2D sprite's pixels are held between the middles of its first and
+    last pixels, where the PSP's pixels sample, as part 49 holds 2D triangles'; not where its texture is a copy of a
+    target at its resolution (render to texture), which has the texels between the PSP's. Burnout Legends' top
+    banner (filtered, repeating) blended its first row, dark, along the bottom of its last at 4x. At 1x the same.
+  - `gpuSpriteSeams` (new): filtered sprites across, mirrored and turned, the texture repeating or held, from RAM, VRAM
+    and a frame buffer drawn first, both modes, 1x-3x: every pixel of each the picture's white, and memory's bytes the
+    software renderer's. `gpuBelowTextureTexels` also asserts a copy made and no finish.
+  - CI's run with the GE on its thread runs every GPU group, the GPU's capabilities required.
+- **Measured** (the desktop runner, RADV): Burnout at 4x, the banner's rows 254-255 now 1x's row 63 byte for byte
+  (the dark line gone), its top rows 1x's row 0 in 3,408 of 3,840 pixels; in its frames only sprites' edges changed
+  (glyphs, panels), in both Vulkan modes, the GPU's counters the same. At 4x the eight other games of #298's review
+  the same byte for byte; at 1x all nine the same (compared by content within three frames, and Burnout's one odd
+  capture by a dense run).
+- **Checks** (GCC 16.2.1, RADV; CI has GCC 13 and lavapipe): the new test and the texel test pass three runs each with
+  the GE on either thread; scratch mutants fail them (the hold never set: 28 checks; `holds()` refusing: the two new
+  ones). The GPU group: 82 and 0 each way and on lavapipe (one skipped); master 81 and 0 likewise. Sanitized, master
+  659 groups and 0 failures, with the change 660 and 0; release with `-Wno-error=array-bounds` (GCC 16's false
+  positives), master 659 and 0, with the change 660 and 0. CI's GE-thread step as changed, run as the workflow runs it
+  on lavapipe: 146 and 0, one skipped, in 5 min 14 s (2 min 20 s before it took the GPU group); master 145 and 0; its
+  PSP-timing step 121 and 0 both. `tools/psp-runner/build-android.sh` (NDK r28, the app's release flags) builds it;
+  `compile.sh --check`, actionlint and `git diff --check` clean; no added line over 120 columns.
+- **Left**: sprites from copies of targets aren't held (they have the texels between the PSP's); 2D triangles still
+  are, whatever their texture (part 49): each wants a game measured first. Two tests the review suggested (the copy
+  exception; a sprite with edges at fractions of a pixel) are in part 119's Left. The RP6 not run.
+- Independent review: its first round (NEEDS CHANGES, two Low points) found the CI step's comment and part 119
+  saying a GPU group skipped there fails (the barriers without rasterization order always skip on lavapipe), part
+  117's Left giving the banner's sprite its texture's size, and this entry claiming the whole of the top rows; fixed
+  here, after the rebase onto `ac0ad694`, with its suggestion for gpu.cpp's comment. The delta review's verdict goes
+  in the commit message.
+
 ## An intro as Phobos opens: pixel-art Mars and its moon, coming into focus as the logo, on Android and the desktop — 2026-10-23
 
 Branch `intro-splash`, from master `7986aef5b` (#298), master merged in since: `ac0ad694c` (#301's AppImage pins, whose
@@ -2773,9 +2814,9 @@ outside the repository.
   (the same one); release with `-Wno-error=array-bounds` (GCC 16's false positives in movies.cpp), master 650, 0, with
   the change 653, 0. `tools/psp-runner/build-android.sh` (NDK r28, the app's release flags) builds it.
   `git diff --check` clean; no added line over 120 columns.
-- **Left**: Burnout's top banner at 4x has a dark line at the bottom of native row 63 (a 512x64 sprite filtered over
-  its texture's last row into its first, which repeats): in the 4x target before this change too, shown now; a
-  follow-up. The RP6 not run (the same functions present there).
+- **Left**: Burnout's top banner at 4x has a dark line at the bottom of native row 63 (a sprite covering 480x64 pixels,
+  filtered over its 512x64 texture's last row into its first, which repeats): in the 4x target before this change too,
+  shown now; a follow-up. The RP6 not run (the same functions present there).
 - Independent review: its first round (NEEDS CHANGES) found `gpuShownAfterFinish` failing with the GE on its thread;
   fixed here, with a texel oracle for the two-part take and the docs' nits. The delta review's verdict is in the commit
   message; the look at master's merge into this branch (#297's and #299's docs beside these), in the message of the
