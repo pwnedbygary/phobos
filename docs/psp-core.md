@@ -20335,6 +20335,8 @@ the commit merging this branch into master.
 - The library check and the RP6 (the coordinator's).
 - F3, after this; F2 and F4 later (F4's hole test reads Y on the fourth turn and X on the fifth, as #295's handoff
   records); Dante's Inferno's loop, a design of its own.
+  Done since for Dante's Inferno's loop: part 118, whose group "spins of the clock polled as Dante's Inferno paces its
+  frames, skipped as run" skips the loop's turns as run.
 - The calm probe's count of W2's context path (the design review's round one, its suggestion 6): not done.
 
 ### Scratch
@@ -20439,6 +20441,256 @@ Midnight Club 3's 3D title had detail inside 70% of its 4x4 blocks: the core's, 
   frames). Android presents the target with no read-back; the RP6 not timed.
 - **The RP6** not run: Android presents through the same `shownTarget()`.
 - The investigation's notes, frames, scripts and logs are kept outside the repository.
+
+## Part 118: Dante's Inferno's frame pacing skipped — its turns worked out from the clock's ticks and the float's sums
+
+Dante's Inferno (ULUS10469) paces its frames with a loop that asks the real-time clock for its tick, 72,417 turns a
+frame under the PSP's GE timing (75,184 under "Fast"): 79.9% of the instructions its compiled blocks run (80.6%).
+Part 91's skip can't take it: each turn adds the microseconds since the tick it kept to a float, so no turn leaves
+everything as it was, and the general proof fails at the clock's call, which has no `Function::spin`. The owner
+allowed the core's first recogniser of one game's code (21 Oct: "Yes, once its reviews and frame-by-frame exactness
+checks pass"). The design's third round, which its review's second round passed, its prototype's runs and this part's
+notes are kept outside the repository. Clean room: Phobos's own code, and the game's code as a probe read it from the
+running game; nothing of PPSSPP or JPCSP. Save states are unchanged: nothing new is kept.
+
+### The loop
+
+A turn is 55 instructions through three functions (the names are the design's):
+- the timer's `update()` calls `sceRtcGetCurrentTick` into its frame, takes the difference from the tick it kept
+  (64 bits, `sltu` and `subu`), keeps the new tick, and adds the difference's low word as a float (`cvt.s.w`), over
+  1,000,000 (`div.s`), to the timer's float (`add.s`); a difference with its low word's top bit set takes another way
+  (`bltz`), which no skip runs;
+- its `elapsed()`, the timer's vtable's slot 4 (`update()` is its slot 3), returns the float;
+- the wait, in their caller, goes round while the float is below a threshold (`c.lt.s`, `bc1tl`; 0.025 s in the
+  game, read from the owner at + 100), its likely branch's delay slot loading the timer's vtable again.
+
+A turn is 55 cycles and a microsecond 333, so the tick changes every 6.05 turns. Between changes a turn adds +0; at a
+change it adds 1e-6 as single precision has it (`0x358637bd` to the nearest). Everything else a turn reads never moves
+in a go: its code, the vtable, the threshold, and what it stores itself. So the turns that come back to the anchor,
+and what the last of them leaves, follow from the ticks its calls write and the float's additions at the changes; the
+rounding decides the exit (in real numbers the wait would leave 18 to 24 turns later).
+
+### What changed
+
+- **system.cpp**: `rtcTick()`, the tick at given cycles: `sceRtcGetCurrentTick`'s, and the skip's.
+- **spins.cpp, `spinSkip()`**: the guard, the GE thread's exact limits, the room, a FINISH or SIGNAL due, the steady
+  check and the fold as before; then, where the anchor's syscall is `sceRtcGetCurrentTick`'s (`spinClockAnchor()`):
+  - `spinTicking()`, the template, matched at every try wherever it is (from the anchor's return and the pointers the
+    turn holds): the period (55), the stub's `jr ra`, the 33 words of `update()` that run (word 4 the `jal` to the
+    stub), the 12 of `elapsed()` and the vtable's slots 3 and 4, the wait's 8 (its delay slot's among them), the
+    registers the turn holds at its call, the frames' saved timer and returns, every address the turn loads or stores
+    aligned and in main RAM, its stores on pages where they do no more than store (`spinStorable()`) and over nothing
+    the turn reads, and the call's tick where the call wrote it. Anything else is not this loop: on as any spin, whose
+    proof fails at the clock's call.
+  - the turns: at most the room's, and with the PSP's GE timing and the GE busy, at most those that end before it's
+    done (the GE done within the next turn: no skip, nothing failed). The turn that takes the GE past its end runs,
+    and the next try finds it done (this loop's alone: the general path's part-way refusal stays, and here it's a
+    backstop no try reaches).
+  - `spinTickTurns()`: turn 1's addition (the anchor's tick against the one kept, refused with its top bit set: the
+    other way), then one addition of the step at each tick change, with the CPU's own `FCVTSW`, `FDIV`, `FADD` and
+    `FCOMPARE` under its FCSR (`TickMath`, on a shadow of its own), till the first float not below the threshold
+    (those turns come back; the next leaves) or the bound.
+  - `spinTickProve()`: one turn on the shadow, the clock answered there alone (`SpinShadow::ticking`), back at the
+    anchor in 55 instructions, against `spinTickLast()`'s state for one turn: every register, FCSR, the VFPU,
+    coprocessor 0, the interrupts and every stored byte; a semaphore's count changed, a byte the time decides or a
+    rotation fails it. Not that state: no skip, and the next try waits longer, as after a proof that fails.
+  - `spinTickLast()`, the one place the last turn's state is worked out, for the skip, the shadow's turn and the tests:
+    the float and the kept tick (the timer's + 4 to + 15), the difference and the last call's tick (`update()`'s
+    frame's + 16 to + 31), and a1, a2, v1 and f0 (the tick the last turn kept, the difference's borrow, the float).
+  - the skip as any: the clock and the counts; then `spinTickSkip()`, which writes `spinTickLast()`'s registers and
+    bytes (through `memory.write()`, on the pages `spinTicking()` checked); then the caches' counts and the GE's one
+    stretch.
+  - a try at this loop that the GE busy block refuses (part way, several calls, the window's kind, the cap) waits
+    longer, as after a proof that fails: each has replayed its turns, and a binding cap would otherwise repeat that
+    every four turns. The general path's refusals keep their wait (`spinsGeCapped()` counts on it).
+  - `Kernel::spinTickAdditions` counts the replay's additions (for tests; not saved, power-on clears it).
+- **The general proof is untouched**: the clock has no `Function::spin`, so a loop that calls it and ignores its
+  answer is never skipped (a skip would leave the answer's bytes stale).
+
+### Why it's exact
+
+Part 91's argument and part 116's, for this loop's turns:
+- **Nothing else runs in the turns, and the go's limit stands.** The skip is made in a go with no call into the
+  program waiting, no blank pending, not interrupting; the turns' blocks end before the go's limit, the margin's two
+  turns left; the clock's call is quiet, and none of `untilNextEvent()`'s inputs moves earlier within a go (part 116).
+  A list's FINISH or SIGNAL can't fall due within the turns (checked before the branch). No thread takes the CPU: the
+  call never reschedules, and the template holds no instruction that touches coprocessor 0.
+- **Every turn runs the same instructions the same way.** The words are matched at the try, the turn's stores touch
+  none of them nor anything else it reads, and its return addresses are the ones it stores itself. `bltz` isn't taken
+  for a difference of 0 or 1 (turn 1's is checked), and `bc1tl` is taken in every turn that comes back, by the
+  definition of the turns skipped.
+- **The ticks are the clock's.** Call j is made 55j cycles after the anchor's (each instruction a cycle; `syscall()`
+  brings the clock to the call; nothing else moves `cycles` in the go), and writes `rtcTick()` of that, the function
+  the skip uses.
+- **The float is the CPU's.** A turn without a tick change adds +0, which changes only -0 (but rounding down, where it
+  stays), a NaN that signals, and with FCSR's flush bit a subnormal. The floats the turns pass through are the CPU's
+  sums of a float and something positive or +0: never a NaN that signals (`pickNaN()` quiets it), never subnormal
+  with the flush bit set (`setF()` flushes it), and -0 only from a zero sum rounding down (a negative subnormal sum
+  would need a float below minus the step, both multiples of 2^-43, as the step is). Each change is the same
+  `FCVTSW`, `FDIV` and `FADD` by the interpreter's own functions under the CPU's FCSR, in the turns' order; the exit
+  is the same `FCOMPARE`; FCSR itself stays (Phobos sets no flags; bit 23 is 1 before and after).
+- **What the turns leave** is `spinTickLast()`'s: the four registers and the 28 bytes; every other register and byte
+  the turn writes gets the value it holds. The caches, the clock, the counts and the GE's window take one stretch as
+  any skip's (part 113): the turns make the same accesses in the same order, one call each, and the GE busy
+  throughout (the bound) or idle throughout.
+- **The shadow's turn** checks the model's one turn at every try, against the interpreter from the real registers;
+  what shows only over several turns (where the changes fall, the replay) is the tests' and the runs'.
+- **With the GE on its thread** the limits are exact and the fold comes first, as part 111 has it. **Save states**:
+  nothing of the skip is kept; after a load the loop is found again and skipped the same way.
+
+### Tests
+
+tests/psp/spins.cpp, five groups, each assembling the loop from the harness's encoders (not the kernel's table of
+words) where a test puts it. Their names begin "spins" or "a spin", so that CI's PSP-timing step runs them; the two
+beside the GE also hold "the CPU beside the GE", so that its GE-thread step runs them with the thread on.
+- "spins of the clock polled as Dante's Inferno paces its frames, skipped as run" (`spinsClock`): eight waits of
+  0.025 s with a ticker ending the CPU's goes every millisecond, waits of 0.040 s (past a frame's end), the tick's low
+  word wrapping 5 ms into the third wait (the clock's start moved, the program's course the same), FCSR's rounding
+  toward zero, up and down, and its flush bit: on both engines under "Fast" and the PSP's timing, every step's state
+  the same with the skip on and off, thousands of turns skipped. The template's loop with its frames on the stubs'
+  page, skipped as run on both engines: the clock call's own write at S + 24 (into `update()`'s frame at S) drops that
+  page's compiled code right before each try. With its frames from S + 8 to S + 23 on the stubs' page and S + 24 on
+  the next, or its timer on the stubs' page, the page keeps its code: none skipped on the recompiler (a turn's store
+  there would drop it), skipped as run on the interpreter, every step's state the same. Not skipped: a wait reading
+  its threshold at the owner's + 96 (one word other), the vtable's slot 3 at another function, `update()` called by
+  the wait itself, and the idle loop asking the clock each turn, its answer unread.
+- "a spin of the clock skipped directly" (`spinsClockDirect`): a skip made at the anchor's call in a go of its own
+  (as `spinsDirect`), against the same turns run, right after it; both machines placed alike (the tick kept the call
+  before's, the float 0.005, markers in a1, a2, v1, f0 and the stack's difference). Each case placed from the anchor's
+  own cycles and checked to be the case meant: the last turn seeing a tick change that wraps the tick's low word (the
+  borrow 1), or that doesn't (the difference 1); the last call's tick new; the last call on a microsecond's first
+  cycle, and on its last; the exit within the room (the skip stops at the turn before, and one more turn leaves); the
+  float -0.0 at the try; the float +0 with FCSR rounding up, which the first tick change leaves the step as FCSR has
+  it (1e-6 rounded up, not to the nearest); room for one turn and the margin, the margin alone, outside a go. The
+  threshold put in memory alone at the try (f1 still the one the turn before loaded): the shadow's turn isn't the
+  model's, nothing skipped, the next try waiting longer. And `spinTicking()` itself: the template found as the
+  anchor's call leaves the CPU, and not with any one thing changed (words of each piece, the stub, the vtable's slot,
+  the frames' saved timer and return, the clock's answer, the vtable's slots read from where the turn stores, a
+  register, the period, the timer's page watched by the GE, and, the timer's apart, the frames' page alone).
+- "a spin of the clock polled with the CPU beside the GE, its list done part way" (`spinsClockBesideGe`): 2,000
+  one-pixel sprites read from RAM, stalled at their FINISH, and 4,096 lines read just before a wait of 0.010 s, so that
+  every turn run pushes the GE's end on; three rounds. On the recompiler with the PSP's timing, every step's state the
+  same with the skip on and off, and more than 99% of the waits' turns skipped (with a skip one turn past the GE's end
+  refused at the part-way check, under 97%); on the interpreter the same states. And directly, at a call of the first
+  wait where the GE's end falls inside a turn and no blank comes before: the GE's bound decides the turns, the state
+  right after the skip the same as with them run.
+- "a spin of the clock polled with the CPU beside the GE held at the cap: a refused try waits longer"
+  (`spinsClockCapped`): `spinsGeCapped()`'s list and lines with the clock's wait for its poll: every step's state the
+  same with the skip on and off on both engines; on the recompiler tries refused by the cap, then skips. Directly: a
+  try refused by the cap leaves the next wait 4 turns longer, so that no try comes till 8 turns on, and refused there
+  too, 12 (16 on).
+- "a spin of the clock, its state saved mid-wait" (`spinsClockSaved`): the state loads into a fresh machine, the
+  same state; both run on alike, the loaded one finding the loop again and skipping it.
+
+### Mutations
+
+Each one change to this part's code or to the code it relies on (the design's list, B's "early" column as one of its
+own, and two for the cases the independent review asked for), kept with its logs outside the repository, built as the
+debug suite is, without the sanitizers (`BUILD_DEBUG`, -O1), and run through the five groups; failed checks. Every one
+fails, the step's constant only once group B had its case rounding up:
+- the replay in binary64: 43 (A's states and counts 32, B's direct cases 6, C 3, C(cap) 2);
+- each tick change a call late: 45 (A 32; B's last turn seeing a change that wraps the tick's low word and one that
+  doesn't, the last call's tick new, and on a microsecond's first cycle; the exit case 18 turns for 17, its state and
+  pc; rounding up's state; C 3, C(cap) 2); a call early: 45, the same with the last call on a microsecond's last
+  cycle too and C 2, the exit case 16 turns for 17;
+- the borrow left at 0: 1, the change that wraps;
+- the difference not written: 9, the state after each direct skip;
+- a1 and a2 from the last call's tick: 3, the last call's tick new, on a microsecond's first cycle, and the exit case;
+- the step the constant `0x358637bd`, 1e-6 to the nearest: 1, rounding up's state. Before that case it passed every
+  test: `0x358637bd` is an odd multiple of 2^-43, and added to a float of 2^-19 or more, rounding up, it gives the sum
+  `0x358637be` gives; A's waits rounding up start far above that;
+- the exit bound dropped: 39 (A 32; the exit case's turns, state and pc; C 2, C(cap) 2);
+- the GE's bound a turn longer, past the GE's end, the part-way check kept: 2, C1's share under 99% and C2's try
+  refused there (none of its 1,259 turns), every state the same; with that check passed by too: 3, C2 skipping 1,260,
+  its state and C1's differing; the GE's bound dropped: 2, as the first;
+- the clock given a `Function::spin`: 14, the idle loop skipped (36,914 and 36,930 turns for none) and six of A's
+  programs near the template that must be refused (their states and counts);
+- the borrow always 1, the shadow's check kept: 58, every count in the five groups and the state of the two direct
+  cases compared right after the try (the exit case and rounding up's), and no state of A, C or D: the shadow's turn
+  refuses every try;
+- the replay in the host's arithmetic: 13, 12 of A's 24 states and rounding up's;
+- the threshold's offset not checked: 3, the wait reading it at + 96 skipped (its counts) and `spinTicking()` true
+  with the offset changed;
+- the wait not grown after a GE refusal: 5, the direct test's wait 0 after each refused try (for 4 and 12) and each
+  next try early, and the group's run adding more than 75,132 floats;
+- a page holding compiled code taken as storable (`spinStorable()` without its recompiler check, so that a turn's
+  stores there pass both the recogniser's checks and the shadow's turn): 2, A's loops with the frames from S + 8 to
+  S + 23 and with the timer on the stubs' page skipped on the recompiler (151,039 turns each, for none), every state
+  the same;
+- the recogniser's two frame checks dropped, the timer's kept: 1, `spinTicking()` true with the frames' page watched
+  alone. On a running program the shadow's turn refuses what they would: with the frames from S + 8 to S + 23 on the
+  stubs' page, still none skipped on the recompiler.
+
+### Checks
+
+On `ac0ad694` with this part's changes (GCC 16.2.1, RADV; CI has GCC 13 and lavapipe); each log kept outside the
+repository. Master's counts are `7986aef5b`'s: the commits since change no file these suites build or run.
+- the sanitized suite (the debug build, ASan and UBSan): master 659 groups, 0 failures; with the change 664, 0;
+- the release suite: master 659, 0; with the change 664, 0;
+- CI's PSP-timing step: master 121, 0; with the change 126, 0; its GE-thread step: master 76, 0; with the change
+  78, 0 (`spinsClockBesideGe` and `spinsClockCapped` are in its filter);
+- the spin tests (21 of tests/psp/spins.cpp's 25 groups) in the release build, three times with the GE thread off and
+  three times on: 21, 0 each time;
+- the runner built for Android as the app's release build compiles the core (`tools/psp-runner/build-android.sh`,
+  NDK r28) builds, for master and with the change;
+- `git diff --check` clean; no added line over 120 columns.
+
+### The game
+
+Master against this part's code, each runner built by tools/psp-runner/build.sh with part 116's scratch patch (never
+committed: each frame's state hashed, the turns skipped, the frame the state was saved at), this part's copy also
+printing the replay's additions. Master's runner was built from `7986aef5b`: the commits since, to `ac0ad694`, change
+none of the code it builds. Dante's Inferno's runs were made with this part's first revision, on `7986aef5b`, and the
+other seven games' with this one (the two differ in one initialiser, `TickLast last{}`); run as for the host cost
+under both timings, this one's runner leaves Dante's Inferno at frame 3,600 in the same states, with the same turns
+skipped and additions.
+
+**Exactness.** Dante's Inferno from boot, 3,600 frames (Start at 120, Cross at 1,800, the clock at 1700000000), the
+Software renderer with two drawing threads, the recompiler, under the PSP's GE timing and "Fast", with the GE thread
+off and on: in all four every frame's hash is master's, and so is the state saved at the top of the last frame, whose
+own hash is each run's last. Every other line of the runners' reports is master's, the turns skipped aside: master
+skips none of the loop's; this code 260,480,442 under the PSP's timing and 270,437,185 under "Fast", the same with the
+GE thread on. Without the hashing (the PSP's timing, the thread off) the last state is the same. On the interpreter,
+the skip off against on, 1,200 frames, the thread off: every frame's hash the same under both timings (80,564,231 and
+89,822,159 turns skipped).
+
+**Host cost.** From boot, 3,600 frames (the same presses and clock), Vulkan (fast) with late frames, the GE thread
+off, under both timings: each runner twice, taking turns, one run at a time. The figure is the emulation thread's
+user-mode host instructions a frame in the headless runner as tools/psp-runner/build.sh builds it (-O1, `BUILD_DEBUG`,
+GCC 16), on one x86-64 desktop; the Android app builds at -O3 with LTO, and neither it, the RP6 nor the Mac was
+measured. Under the PSP's timing master 150.69 M a frame, this code 27.61 (−81.7%); under "Fast" 122.01 and 23.78
+(−80.5%). Each side's two rounds agree within 0.08%, and master's agree with part 116's within 0.02%. One round with
+the GE thread on: 191.32 against 62.70 (−67.2%), 158.63 against 58.89 (−62.9%). In every run the state at the top of
+frame 3,600 is the same on both sides.
+
+**The replay against the turns run.** A third runner, this part's code with a probe's scratch patch (never committed),
+works out each try's turns (at most 13) and the state the last one leaves, skips nothing, and checks the CPU when those
+turns have run: the cycle, the call's site and return, the four registers the skip writes (v1, a1, a2 and f0), the
+timer's 12 bytes and the frame's 16. From boot, 3,600 frames as for the host cost, the GE thread off: under the PSP's
+timing 15,335,592 tries, every one right (199,203,747 turns), and under "Fast" 15,921,337 (206,816,124 turns), none
+left unchecked; the last state master's.
+
+**The other seven games.** Burnout Dominator, Burnout Legends, Dragon Ball Z: Shin Budokai - Another Road, Midnight
+Club: L.A. Remix, Need for Speed: Shift, Shepherd's Crossing and Super Stardust Portable, each from boot for 3,600
+frames as for the host cost (the GE thread off), under both timings: in all 14 runs the state at the top of frame
+3,600 is master's, and so are the turns part 91's skip takes (none in three of the games); the replay added nothing in
+any.
+
+### Left
+
+- The other seven games frame by frame, and their host cost: only their states at frame 3,600 were compared (above).
+  The RP6, the Mac and the app's own build not measured.
+- The frames' page on the game: on the test machine the clock call's own write at S + 24 drops that page's compiled
+  code right before each try, so A's loop with its frames on the stubs' page is skipped as run on the recompiler too
+  (151,039 turns, every step's state the same), and with S + 24 on another page, the stubs' keeping its code, the try
+  is refused. Dante's Inferno's call writes into its frame the same way; its pages weren't watched at the tries.
+- The runner's report doesn't print the replay's additions (`Kernel::spinTickAdditions`); the tests read it.
+
+### Scratch
+
+Kept outside the repository: the design's three rounds, its reviews, the prototype and its runs, and this part's
+notes (the suites' logs, the mutations' script, diffs and logs, the runners' scratch patches, the probe, the runs and
+their tables).
 
 ## Part 119: Vulkan above 1x — 2D sprites' edges held where the PSP's pixels sample; part 117's other two follow-ups
 

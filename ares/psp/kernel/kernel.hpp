@@ -408,6 +408,31 @@ struct Kernel {
   auto spinGetVcount(SpinShadow& shadow, u64 time) -> bool;
   auto spinGeListSync(SpinShadow& shadow, u64 time) -> bool;
   auto spinGeDrawSync(SpinShadow& shadow, u64 time) -> bool;
+  //spins.cpp: Dante's Inferno's frame pacing, the clock polled till a float of seconds its turns add up reaches a
+  //threshold, its turns worked out from the clock's ticks (spinTickTurns()) and skipped where its code is the
+  //template's. Each lives within one try: nothing of it is saved.
+  struct SpinTick {
+    u32 update = 0, elapsed = 0, wait = 0;  //the template's three pieces: the timer's update() and elapsed(), the wait
+    u32 stack = 0, timer = 0;               //update()'s frame (sp at the anchor) and the timer (s0)
+    u32 acc = 0, threshold = 0;             //the timer's float and the wait's threshold, their bits
+    u64 kept = 0;                           //the tick the timer kept
+    u64 tick = 0, cycles = 0;               //the anchor's call's tick, and the cycles it was made at
+  };
+  struct TickLast {  //what the last of a number of turns leaves (spinTickLast())
+    u32 v1, a1, a2, f0;
+    u32 timer[3];  //its float, and the tick it keeps (low word first)
+    u32 stack[4];  //update()'s frame + 16: the tick's difference, then the last call's tick
+  };
+  struct TickMath;
+  u64 spinTickAdditions = 0;  //the float's additions the turns were worked out with (not saved: tests count them)
+  auto rtcTick(u64 at) const -> u64;
+  auto spinClockAnchor() -> bool;
+  auto spinGetCurrentTick(SpinShadow& shadow, u64 time) -> bool;
+  auto spinTicking(SpinTick& tick) -> bool;
+  auto spinTickTurns(const SpinTick& tick, TickMath& math, u64 most, u32& acc) -> u64;
+  auto spinTickLast(const SpinTick& tick, u64 turns, u32 acc) const -> TickLast;
+  auto spinTickProve(const SpinTick& tick, SpinShadow& shadow, TickMath& math) -> bool;
+  auto spinTickSkip(const SpinTick& tick, const TickLast& last) -> void;
   static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
                        FontReturnCode = 5, MpegReturnCode = 6, ExtendReturnCode = 7;
   static constexpr u32 FirstImportCode = 0x1000;
