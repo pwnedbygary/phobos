@@ -158,10 +158,13 @@ fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = M
     }
 }
 
-/** A terminal's block cursor after a title in [style], blinking; hidden from accessibility services. */
+/**
+ * A terminal's block cursor after a title in [style], blinking; hidden from accessibility services. Not [shown], it
+ * keeps its place but draws nothing.
+ */
 @Composable
-fun TitleCursor(style: TextStyle, color: Color, modifier: Modifier = Modifier) {
-    val on = rememberCursorBlink(enabled = true)
+fun TitleCursor(style: TextStyle, color: Color, modifier: Modifier = Modifier, shown: Boolean = true) {
+    val on = rememberCursorBlink(enabled = shown)
     val density = LocalDensity.current
     val width = with(density) { (style.fontSize * 0.5f).toDp() }
     val height = with(density) { (style.fontSize * 0.62f).toDp() }
@@ -169,7 +172,7 @@ fun TitleCursor(style: TextStyle, color: Color, modifier: Modifier = Modifier) {
         modifier
             .padding(start = width / 3)
             .size(width, height)
-            .drawBehind { if (on.value) drawRect(color) },
+            .drawBehind { if (shown && on.value) drawRect(color) },
     )
 }
 

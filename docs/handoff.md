@@ -35,6 +35,70 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## The CRT terminal style's Library: the blinking cursor on the focused platform alone, every cursor on one clock — 2026-10-23
+
+Branch `crt-cursor`, from master `c15d902ba` (begun on `ae9d73f6e`, and moved onto `e79e31732`, #300's merge, before
+its first review, then onto `c15d902ba`, #305's, before its second), master's `919c238ba` (#306: the PSP kernel's
+frame-pacing skip for Dante's Inferno, no Kotlin) merged in since. The owner asked on 2026-10-23 (verbatim): "One fix
+I would like is to make ONLY the selected platform on the library page have the flashing cursor, not ALL of the
+consoles at once." It's the first of the UI changes he listed that day. Changed: `ui/LibraryScreen.kt`
+(`CrtPanelSystemCard`), `ui/PhobosScaffold.kt` (`TitleCursor`), `ui/theme/UiStyle.kt` (`rememberCursorBlink` and the
+new `CursorBlinks`), the new `ui/theme/CursorBlinkTest.kt`, this file and the Library cards' row of
+`docs/implementation-plan.md`.
+- **Before**: in the CRT terminal style each of the Library's platform panels ended its name in a blinking block
+  cursor, all of them at once, and each cursor kept its own time from when it appeared, so panels that came into view
+  as the Library scrolled blinked out of step with the rest and with LIBRARY's cursor.
+- **The change**: a panel shows its cursor only while it has the focus (`onFocusChanged` on the panel): one cursor
+  among the panels, moving as a controller's D-pad moves the focus. With no panel focused (after a touch, Android's
+  touch mode) none shows one. The cursor keeps its place unshown, so a name doesn't shift as the focus comes and goes.
+  And every blinking cursor, a panel's, a page title's such as LIBRARY's, and the top bar's, now shows one state
+  (`CursorBlinks`) kept to the uptime clock (`cursorOnAt`, `untilCursorBlink`): each cursor's loop sets it from the
+  clock at every turn, the first cursor to start after none sets it as it starts (before it's first drawn), and one
+  that starts while others blink shows what they show. So they turn on and off together whenever each appeared: still
+  about twice a second, and steadily on when Android's animations are off. A cursor that appears in an off half stays
+  hidden until the next turn, up to 530 ms, as the shared clock has it.
+- **Found in review**: in the first version reviewed each cursor kept a state of its own, and an unshown cursor's
+  state stayed on. A panel taking the focus in the clock's off half could then draw its cursor for one frame before its
+  loop first ran, and two cursors' loops waking a few milliseconds apart at a turn could show different states for a
+  frame. On the RP6, read at every frame, that version did both (Checks, below). One state for all the cursors rules
+  both out (derived from the code), and the same runs with it show neither.
+- **Tests**: `CursorBlinkTest` (6 tests), on the clock's two functions and on a real `CursorBlinks` driven as a
+  cursor's loop drives it, each wait as long as asked: waiting as long as the blink asks lands on its next turn and
+  misses none, over moments from just after boot and a day of uptime later; each on or off lasts between 0.4 s and
+  0.7 s; two cursors whose blinks start at different moments show the same, the clock's state, at every millisecond
+  once both have started; one that starts a millisecond after a turn its loop hasn't woken for yet shows what the
+  first shows, and both turn as the loop wakes; one that starts so after a second cursor has stopped shows what the
+  first shows too; and the first cursor after none shows the clock's state, not the one left. Seven mutants each fail
+  one or two of them: every cursor setting the state as it starts, none setting it, a cursor that stops not counted
+  out, one that stops counting every cursor out, a loop's pass leaving the state alone or setting the opposite of the
+  clock's, and the old timing (a fixed wait from each cursor's start). The composable's effects, and which panel shows
+  its cursor, have no host test (the project has no Compose UI tests): the RP6 runs below check them.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358): on master `c15d902ba`, both flavours' JVM tests (484
+  each, 0 failures) and `assembleLegacyDebug` (32,715,095 bytes, SHA-256 `db4b07fb…`, its native library rebuilt
+  with #305's changes; the same file before and after the last changes, to a comment and the tests). On the RP6,
+  over Wi-Fi, test builds beside the owner's apps (`com.phobos.emulator.crt`, made on `e79e31732`: the move to
+  `c15d902ba` brought only #305's changes, to the PSP's GPU code, its tests, CI and docs), with the CRT terminal
+  style. Each recording began 8 s after the app's start (past the intro's 5.6 s), and every one of its frames
+  (screenrecord writes one each time the screen changes) was read for LIBRARY's cursor and the panels'. With this
+  change's code (2.4.0-385-ge79e31732-crt, 32,713,403 bytes, SHA-256 `fc5b313a…`): two tours of 12 D-pad presses
+  about a second apart (right, right, right, down, left, left, up, right, down, right, up, left), then right, right
+  and down. In each of the 27 moves the newly focused panel's cursor came on at once in an on half (10) or at the
+  next turn in the frame LIBRARY's did (17), and in none of the 834 frames did a focused panel's cursor differ from
+  LIBRARY's. Before the first press no panel had a cursor: the app was in touch mode (the input dispatcher logged
+  its request to leave it as rejected, and the focus moved all the same). With the system's animations off (animator
+  duration scale 0), LIBRARY's cursor and the focused panel's were drawn in every frame, steady (frames read four a
+  second), and no panel's before the first press. No crash; the test app was uninstalled afterwards. The same tours
+  with the first version reviewed (`21c43e44…`): in 14 of the 24 moves the newly focused panel's cursor was drawn
+  for one frame (7 to 18 ms) while LIBRARY's was off, and at two turns one cursor turned a frame (6 and 9 ms) after
+  another; that version had flashed in 2 of 3 moves on `ae9d73f6e` (`3d59feca…`) and in none of 3 in another run on
+  `e79e31732`.
+- **Limits**: checked on the RP6 alone, in its landscape Library, and with the D-pad alone: no run scrolled the grid
+  (panels coming into view) or touched the screen after the D-pad, and none watched the top bar's cursor or another
+  page's title cursor. The first cursor to blink after none (as the Library appears when the app starts or a game
+  ends) isn't in any recording, each of which began with LIBRARY's cursor blinking: that rule rests on the host tests.
+  Touch mode shows no panel cursor at all, by design (nothing is selected then). The desktop program has no CRT style.
+- **Next**: the pull request's CI.
+
 ## PSP kernel: Dante's Inferno's frame pacing skipped, its turns worked out from the clock's ticks — 2026-10-23
 
 Branch `cursor/psp-dante-skip-cachy` (pull request #306), made on master `ac0ad694` (#302); master merged in since
