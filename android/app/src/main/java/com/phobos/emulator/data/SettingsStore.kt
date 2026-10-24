@@ -7,9 +7,11 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.input.ControlOverrides
 import com.phobos.emulator.input.DEFAULT_HOTKEYS
+import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.HotkeyBindings
 import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.input.ScopedKeys
+import com.phobos.emulator.input.showScreensaverDefault
 import com.phobos.emulator.ui.hud.HudConfig
 import com.phobos.emulator.ui.theme.ThemeRegistry
 import com.phobos.emulator.ui.touch.AnalogMode
@@ -521,6 +523,12 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         hotkeys.forEach { (action, bindings) ->
             if (bindings.isEmpty()) finalHotkeys.remove(action)
             else finalHotkeys[action] = bindings
+        }
+        // Show Screensaver came after a button could take Back's place: its default goes there too.
+        if (HotkeyAction.SHOW_SCREENSAVER !in hotkeys) {
+            val show = showScreensaverDefault(finalHotkeys)
+            if (show.isEmpty()) finalHotkeys.remove(HotkeyAction.SHOW_SCREENSAVER)
+            else finalHotkeys[HotkeyAction.SHOW_SCREENSAVER] = show
         }
 
         val rawMap = preferences.asMap()

@@ -15,8 +15,11 @@ import org.junit.Test
  * them, and a keyboard's second bindings; and on a set led by Mode, as the defaults once were, taps, the hold actions
  * driven from the hat, from a trigger reported only as an axis and from a key that also leads a longer binding of the
  * same hold, a key bound alone beside a longer binding it leads, a button reported both ways, keys let go of while the
- * game is closed or away, and the Library's way back; and a PSP system dialog over the game: its keys, those a Reload
- * from it leaves to the window included, and its hat D-pad, a direction held as it closes too.
+ * game is closed or away, and the Library's way back; Show screensaver from the pages (the Library's and the menus'),
+ * the keys the window holds, and a binding's first key pressed alone there given back to them, but for a Back that
+ * would leave the app with a game behind them, or once the game screen is up; and a PSP system dialog over the game:
+ * its keys, those a Reload from it leaves to the window included, and its hat D-pad, a direction held as it closes
+ * too.
  */
 class HotkeyRoutingTest {
     private val run = mutableListOf<String>()
@@ -24,6 +27,8 @@ class HotkeyRoutingTest {
     private var hotkeys: Map<String, List<List<Int>>> = MODE_LED
     private var onScreen = true
     private var loaded = true
+    /** The page on show takes a Back (it has one to go back to); not on the Library's own. */
+    private var pageTakesBack = true
     private lateinit var coreInput: GameInputState.CoreInput
     /** A test's own list of the taps waiting their moment (GameKeys.Screen.later), run by hand; null: at once. */
     private var waiting: MutableList<() -> Unit>? = null
@@ -61,12 +66,17 @@ class HotkeyRoutingTest {
         override fun gameKeys(): KeyHandler? = gameKeys.takeIf { onScreen && loaded }
         override fun gameKeysHolding(keyCode: Int): KeyHandler? = gameKeys.takeIf { onScreen && it.holdsKey(keyCode) }
         override fun swappedAway() = loaded && !onScreen
+        override fun gameScreenShown() = onScreen
         override fun hotkeys() = hotkeys
         override fun heldAxes(): Set<Int> = GameInputState.hotkeyKeys
         override fun swapBackToGame() {
             events += "back to the game"
             onScreen = true
         }
+        override fun showScreensaver() {
+            events += "screensaver shown"
+        }
+        override fun pagesTakeBack() = pageTakesBack
     })
 
     @Before
@@ -616,6 +626,221 @@ class HotkeyRoutingTest {
         assertEquals(listOf("back to the game"), events)
     }
 
+    @Test
+    fun showScreensaverFromThePagesTakesItsKeysTheirReleasesIncluded() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false
+        loaded = false
+        assertTrue("Back, which starts it, is held back from the pages", key(BACK, down = true))
+        assertTrue("Start completes it", key(START, down = true))
+        assertEquals(listOf("screensaver shown"), events)
+        assertTrue("its repeats are taken", key(START, down = true, repeat = 1))
+        assertTrue("and its release", key(START, down = false))
+        assertEquals(null, window.takeReplay())
+        assertTrue("and Back's", key(BACK, down = false))
+        assertEquals("Back, which started a hotkey that ran, isn't given back to the pages", null, window.takeReplay())
+        assertEquals("once", listOf("screensaver shown"), events)
+        assertTrue("nothing ran as a game hotkey: ran $run", run.isEmpty())
+    }
+
+    @Test
+    fun aBindingsFirstKeyPressedAloneOnThePagesIsGivenBackToThemAsItsLetGoOf() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false
+        loaded = false
+        assertTrue(key(BACK, down = true))
+        assertTrue("its repeats wait with it", key(BACK, down = true, repeat = 1))
+        assertEquals(null, window.takeReplay())
+        assertTrue("its release is taken", key(BACK, down = false))
+        assertEquals("and Back given back to the pages, its press and release together", BACK, window.takeReplay())
+        assertEquals("once", null, window.takeReplay())
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun aBindingsFirstKeyPressedWithAnotherIsntGivenBack() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false
+        loaded = false
+        assertTrue(key(BACK, down = true))
+        assertFalse("Down, completing nothing that runs here, goes on to the pages", key(DPAD_DOWN, down = true))
+        assertFalse(key(DPAD_DOWN, down = false))
+        assertTrue(key(BACK, down = false))
+        assertEquals("Back, not pressed alone, isn't given back", null, window.takeReplay())
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun showScreensaversKeysOnTheGameScreenAreTheGamesOrThePages() {
+        hotkeys = DEFAULT_HOTKEYS
+        assertTrue(key(BACK, down = true))
+        assertTrue(key(START, down = true))
+        assertEquals("over the game the game screen's hotkeys have them", listOf(HotkeyAction.SHOW_SCREENSAVER), run)
+        key(START, down = false)
+        key(BACK, down = false)
+        // While a game loads, its screen is up and nothing runs from the window.
+        loaded = false
+        assertFalse(key(BACK, down = true))
+        assertFalse(key(START, down = true))
+        assertFalse(key(START, down = false))
+        assertFalse(key(BACK, down = false))
+        assertTrue("no screensaver from the window: $events", events.isEmpty())
+    }
+
+    @Test
+    fun behindTheLibraryBothHotkeysRunAndBackAloneStillGoesBack() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false // the game loaded, paused behind the Library
+        assertTrue(key(BACK, down = true))
+        assertTrue(key(START, down = true))
+        assertEquals(listOf("screensaver shown"), events)
+        key(START, down = false)
+        key(BACK, down = false)
+        assertTrue(key(BACK, down = true))
+        assertTrue(key(BACK, down = false))
+        assertEquals("Back alone goes back here too", BACK, window.takeReplay())
+        assertTrue(key(BACK, down = true))
+        assertTrue("Y brings the game back", key(BUTTON_Y, down = true))
+        assertEquals(listOf("screensaver shown", "back to the game"), events)
+        assertTrue(key(BUTTON_Y, down = false))
+        assertTrue(key(BACK, down = false))
+        assertEquals(null, window.takeReplay())
+    }
+
+    @Test
+    fun behindTheLibraryAKeyWhoseTapRunsOnlyInAGameIsGivenBackPressedAlone() {
+        onScreen = false // the Mode-led set: Mode tapped pauses a game, and Mode leads the Library hotkey
+        assertTrue(key(MODE, down = true))
+        assertTrue(key(MODE, down = false))
+        assertEquals("Pause doesn't run behind the Library, so Mode goes to the pages", MODE, window.takeReplay())
+        assertTrue(events.isEmpty())
+        assertTrue(run.isEmpty())
+    }
+
+    @Test
+    fun aKeyBoundAloneToShowScreensaverShowsItAsItsPressedAndIsntGivenBack() {
+        hotkeys = hotkeysOf(HotkeyAction.SHOW_SCREENSAVER to listOf(F2))
+        onScreen = false
+        loaded = false
+        assertTrue(key(F2, down = true))
+        assertEquals(listOf("screensaver shown"), events)
+        assertTrue(key(F2, down = false))
+        assertEquals("it ran as it was pressed", null, window.takeReplay())
+    }
+
+    @Test
+    fun aShowScreensaverTapShowsItAsItsKeyIsLetGoOf() {
+        hotkeys = hotkeysOf(
+            HotkeyAction.SHOW_SCREENSAVER to listOf(SELECT),
+            HotkeyAction.SAVE_STATE to listOf(SELECT, R1),
+        )
+        onScreen = false
+        loaded = false
+        assertTrue("Select is held back from the pages", key(SELECT, down = true))
+        assertTrue(events.isEmpty())
+        assertTrue("its release is the tap", key(SELECT, down = false))
+        assertEquals(listOf("screensaver shown"), events)
+        assertEquals(null, window.takeReplay())
+    }
+
+    @Test
+    fun aLoneBackNoPageTakesIsGivenBackOnlyWithNoGameBehindThePages() {
+        hotkeys = DEFAULT_HOTKEYS
+        pageTakesBack = false // the Library's own page: nothing to go back to
+        onScreen = false // the game loaded, paused behind the Library
+        assertTrue(key(BACK, down = true))
+        assertTrue(key(BACK, down = false))
+        assertEquals("Back would leave the app and close the game behind: not given back", null, window.takeReplay())
+        loaded = false
+        assertTrue(key(BACK, down = true))
+        assertTrue(key(BACK, down = false))
+        assertEquals("with no game behind, it leaves the app as it always did", BACK, window.takeReplay())
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun onTheLibrarysOwnPageWithAGameBehindOnlyBackIsKeptFromThePages() {
+        pageTakesBack = false
+        onScreen = false // the Mode-led set: Mode leads the Library hotkey
+        assertTrue(key(MODE, down = true))
+        assertTrue(key(MODE, down = false))
+        assertEquals("Mode, which leaves nothing there, is given back", MODE, window.takeReplay())
+    }
+
+    @Test
+    fun aBindingsFirstKeyLetGoOfOnceTheGameScreenIsUpIsntGivenBack() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false
+        loaded = false
+        assertTrue(key(BACK, down = true))
+        onScreen = true // a game started meanwhile, by a touch or a frontend: its screen is up, the game loading
+        assertTrue("Back's release is still the window's", key(BACK, down = false))
+        assertEquals("but not given back: there Back would ask to quit the game loading", null, window.takeReplay())
+        assertTrue(events.isEmpty())
+        assertTrue(run.isEmpty())
+    }
+
+    @Test
+    fun aBindingsFirstKeyWithAKeyTheWindowDoesntSeePressedMeanwhileIsntGivenBack() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false
+        loaded = false
+        assertTrue(key(BACK, down = true))
+        window.pressedBeside() // the D-pad key Android makes from a hat, a fallback, which goes to the pages
+        assertTrue(key(BACK, down = false))
+        assertEquals("Back with the hat's direction pressed meanwhile isn't given back", null, window.takeReplay())
+        assertTrue(key(BACK, down = true))
+        assertTrue(key(BACK, down = false))
+        assertEquals("pressed alone again, it is", BACK, window.takeReplay())
+    }
+
+    @Test
+    fun theWindowHoldsTheKeysItTookUntilTheyreLetGoOf() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false
+        loaded = false
+        assertFalse(window.holds(BACK))
+        key(BACK, down = true)
+        assertTrue("a binding's first key, waiting", window.holds(BACK))
+        key(START, down = true)
+        assertTrue("the key completing one", window.holds(START))
+        key(START, down = false)
+        assertFalse(window.holds(START))
+        assertTrue(window.holds(BACK))
+        key(BACK, down = false)
+        assertFalse(window.holds(BACK))
+        key(DPAD_DOWN, down = true)
+        assertFalse("a key the pages have", window.holds(DPAD_DOWN))
+        key(DPAD_DOWN, down = false)
+    }
+
+    @Test
+    fun theLibraryHotkeyIsWatchedOnlyWithAGameBehindThePages() {
+        hotkeys = DEFAULT_HOTKEYS
+        onScreen = false
+        loaded = false // no game: Back + Y is nothing on the pages
+        assertTrue(key(BACK, down = true))
+        assertFalse("Y goes on to the pages", key(BUTTON_Y, down = true))
+        assertFalse(key(BUTTON_Y, down = false))
+        assertTrue(key(BACK, down = false))
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun aKeyOnlyHotkeysThatDontRunOnThePagesUseGoesStraightToThem() {
+        hotkeys = hotkeysOf(
+            HotkeyAction.SHOW_SCREENSAVER to listOf(BACK, START),
+            HotkeyAction.PAUSE to listOf(SELECT), // a tap: Select also leads Save
+            HotkeyAction.SAVE_STATE to listOf(SELECT, R1),
+        )
+        onScreen = false
+        loaded = false
+        assertFalse("Select, a game's tap and first key, is the pages' as it's pressed", key(SELECT, down = true))
+        assertFalse(key(SELECT, down = false))
+        assertEquals(null, window.takeReplay())
+        assertTrue(events.isEmpty())
+    }
+
     companion object {
         // KeyEvent and MotionEvent constants (android.view).
         const val BACK = 4
@@ -633,6 +858,7 @@ class HotkeyRoutingTest {
         const val SELECT = 109
         const val MODE = 110
         const val TAB = 61
+        const val F2 = 132
         const val F5 = 135
         const val F8 = 138
         const val F9 = 139

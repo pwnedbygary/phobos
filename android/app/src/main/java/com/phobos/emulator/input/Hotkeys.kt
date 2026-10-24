@@ -23,6 +23,8 @@ object HotkeyAction {
     const val PS1_ANALOG_TOGGLE = "analog_toggle"
     const val KEYBOARD = "keyboard"
     const val LIBRARY = "library"
+    /** The screensaver at once, on the Library's and the menus' pages alone, never over a game ([WindowKeys]). */
+    const val SHOW_SCREENSAVER = "show_screensaver"
 
     const val SAVE_SLOT_PREFIX = "save_slot_"
     const val LOAD_SLOT_PREFIX = "load_slot_"
@@ -59,11 +61,12 @@ object HotkeyBindings {
 /**
  * The hotkeys a player who never bound one has. Back (the button a handheld such as the Retroid Pocket has beside Home)
  * leads every controller one, held with one other button, so each button stays the game's when pressed alone: Back
- * with A pauses, with R1 saves, with L1 loads (Quit's asks first). A controller with no Back button, most of them,
- * sending theirs as Select, gets the Hotkeys page's offer of another button in Back's place, at every level at once
- * ([Controls.replaceHotkeyLeadEverywhere]). A keyboard's keys are second bindings: F5 saves, F9 loads, F8 takes a
- * screenshot, F12 pauses and Tab holds fast forward. The actions left out (Reset, Frame Advance, the fast-forward
- * toggle, the direct slots) are unbound: the pause menu has Reset, and a player can bind them on purpose.
+ * with A pauses, with R1 saves, with L1 loads (Quit's asks first), and with Start, outside a game, shows the
+ * screensaver. A controller with no Back button, most of them, sending theirs as Select, gets the Hotkeys page's offer
+ * of another button in Back's place, at every level at once ([Controls.replaceHotkeyLeadEverywhere]). A keyboard's keys
+ * are second bindings: F5 saves, F9 loads, F8 takes a screenshot, F12 pauses and Tab holds fast forward. The actions
+ * left out (Reset, Frame Advance, the fast-forward toggle, the direct slots) are unbound: the pause menu has Reset, and
+ * a player can bind them on purpose.
  */
 val DEFAULT_HOTKEYS: Map<String, List<List<Int>>> = KeyEvent.KEYCODE_BACK.let { back ->
     mapOf(
@@ -82,6 +85,7 @@ val DEFAULT_HOTKEYS: Map<String, List<List<Int>>> = KeyEvent.KEYCODE_BACK.let { 
         HotkeyAction.PS1_ANALOG_TOGGLE to listOf(listOf(back, KeyEvent.KEYCODE_DPAD_UP)),
         HotkeyAction.KEYBOARD to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_THUMBL)),
         HotkeyAction.LIBRARY to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_Y)),
+        HotkeyAction.SHOW_SCREENSAVER to listOf(listOf(back, KeyEvent.KEYCODE_BUTTON_START)),
     )
 }
 
@@ -184,6 +188,14 @@ class HotkeyTracker {
         return take
     }
 
+    /**
+     * A key went down that no key event here reports (a D-pad direction Android makes from a hat, say): the key held is
+     * no longer pressed alone, so its release is no tap ([taps], [letGoAlone]).
+     */
+    fun pressedBeside() {
+        tapCandidate = null
+    }
+
     /** A key event went up. Returns true when its down was taken from the game. */
     fun release(token: Int): Boolean {
         keyTokens -= token
@@ -253,6 +265,12 @@ class HotkeyTracker {
             if (positions.first() == positions.min()) action else null
         }.distinct()
     }
+
+    /**
+     * Whether the last release let go of [token] pressed alone, nothing else pressed while it was held, as a tap's key
+     * is: ask before [taps], which forgets it.
+     */
+    fun letGoAlone(token: Int): Boolean = tapped == token
 
     /** The actions a tap binding of the last release completed; each tap is reported once. */
     fun taps(hotkeys: Map<String, List<List<Int>>>): List<String> {
@@ -365,6 +383,30 @@ fun leadReplacement(hotkeys: Map<String, List<List<Int>>>, from: Int, to: Int): 
         }
     }.map { it.action }
     return LeadReplacement(led.mapValues { (_, bindings) -> bindings.map(::replaced) }, (losing + colliding).distinct())
+}
+
+/**
+ * Show Screensaver's bindings where none are stored for it, [hotkeys] being all consoles' hotkeys as the defaults and
+ * what's stored make them: Back + Start, unless no other binding starts with Back. A button chosen for Back's place
+ * before Show Screensaver came ([Controls.replaceHotkeyLeadEverywhere]) took it in every binding Back started, and Show
+ * Screensaver moves to it too, as the choice would have moved it then; with the bindings Back led by default not
+ * started by one same button now, or something in the way ([leadReplacement]), it's unbound.
+ */
+fun showScreensaverDefault(hotkeys: Map<String, List<List<Int>>>): List<List<Int>> {
+    val back = KeyEvent.KEYCODE_BACK
+    val default = DEFAULT_HOTKEYS.getValue(HotkeyAction.SHOW_SCREENSAVER)
+    val others = hotkeys - HotkeyAction.SHOW_SCREENSAVER
+    if (others.values.any { bindings -> bindings.any { it.firstOrNull() == back } }) return default
+    // The keys in Back's place now in the bindings it led by default, the rest of each combo as it was.
+    val leads = (DEFAULT_HOTKEYS - HotkeyAction.SHOW_SCREENSAVER).flatMap { (action, defaults) ->
+        defaults.mapIndexedNotNull { slot, combo ->
+            val now = others[action]?.getOrNull(slot).orEmpty()
+            now.firstOrNull()?.takeIf { combo.firstOrNull() == back && now.drop(1) == combo.drop(1) }
+        }
+    }.toSet()
+    val lead = leads.singleOrNull() ?: return emptyList()
+    val moved = leadReplacement(others + (HotkeyAction.SHOW_SCREENSAVER to default), back, lead)
+    return if (moved.blockers.isEmpty()) moved.changes.getValue(HotkeyAction.SHOW_SCREENSAVER) else emptyList()
 }
 
 /**

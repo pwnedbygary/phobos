@@ -215,6 +215,40 @@ class HotkeyComboTest {
     }
 
     @Test
+    fun aKeyLetGoOfWithNothingElsePressedMeanwhileWasLetGoOfAloneTapBindingOrNot() {
+        val hotkeys = hotkeysOf(save to listOf(BACK, R1))
+        val tracker = HotkeyTracker()
+        tracker.press(hotkeys, BACK)
+        tracker.release(BACK)
+        assertTrue("Back, which only leads a combo, let go of alone", tracker.letGoAlone(BACK))
+        assertFalse("another key wasn't", tracker.letGoAlone(R1))
+        tracker.press(hotkeys, BACK)
+        tracker.press(hotkeys, A)
+        tracker.release(A)
+        tracker.release(BACK)
+        assertFalse("Back with A pressed meanwhile wasn't", tracker.letGoAlone(BACK))
+        assertFalse("nor A, pressed with Back held", tracker.letGoAlone(A))
+        tracker.press(hotkeys, BACK)
+        tracker.press(hotkeys, BACK) // a repeat
+        tracker.release(BACK)
+        assertTrue("a repeat is no other key", tracker.letGoAlone(BACK))
+    }
+
+    @Test
+    fun aKeyNoKeyEventReportsPressedMeanwhileMakesAKeyLetGoOfNoTapAndNotAlone() {
+        val hotkeys = hotkeysOf(pause to listOf(MODE), save to listOf(MODE, R1))
+        val tracker = HotkeyTracker()
+        tracker.press(hotkeys, MODE)
+        tracker.pressedBeside() // a D-pad direction Android makes from a hat, say
+        tracker.release(MODE)
+        assertFalse("Mode wasn't let go of alone", tracker.letGoAlone(MODE))
+        assertTrue("so it's no tap", tracker.taps(hotkeys).isEmpty())
+        tracker.press(hotkeys, MODE)
+        tracker.release(MODE)
+        assertEquals("pressed alone again, it is", listOf(pause), tracker.taps(hotkeys))
+    }
+
+    @Test
     fun aTapIsOffWhenAnotherKeyIsPressedMeanwhileOrWasAlreadyHeld() {
         val hotkeys = hotkeysOf(pause to listOf(MODE), save to listOf(MODE, R1))
         val tracker = HotkeyTracker()
@@ -372,8 +406,9 @@ class HotkeyComboTest {
     @Test
     fun theDefaultsAreTheOwnersSetWithR3AndSelectInPlaceOfZAndCBesideAKeyboardsSecondBindings() {
         // The owner's set as the RP6's test copy stored it (hotkey_combo_pause "4,96" and so on), but for its Back + Z
-        // (a screenshot) and Back + C (mute), and with a keyboard's keys as second bindings: the owner's choices. Every
-        // other action (Reset, Frame Advance, the fast-forward toggle, the direct slots) is unbound, as in that set.
+        // (a screenshot) and Back + C (mute), with a keyboard's keys as second bindings, and with Back + Start showing
+        // the screensaver: the owner's choices. Every other action (Reset, Frame Advance, the fast-forward toggle, the
+        // direct slots) is unbound, as in that set.
         val expected = mapOf(
             "pause" to listOf(listOf(BACK, A), listOf(F12)),
             "save" to listOf(listOf(BACK, R1), listOf(F5)),
@@ -390,11 +425,36 @@ class HotkeyComboTest {
             "analog_toggle" to listOf(listOf(BACK, DPAD_UP)),
             "keyboard" to listOf(listOf(BACK, L3)),
             "library" to listOf(listOf(BACK, Y)),
+            "show_screensaver" to listOf(listOf(BACK, START)),
         )
         assertEquals(expected, DEFAULT_HOTKEYS)
         assertTrue("none needs C or Z, which most controllers lack", DEFAULT_HOTKEYS.values.flatten().none { C in it || Z in it })
         assertTrue("slow motion is a hold", "slow_motion" in HotkeyAction.HOLDS)
         assertTrue(existingHotkeyConflicts(DEFAULT_HOTKEYS).isEmpty())
+    }
+
+    @Test
+    fun showScreensaversDefaultTakesTheButtonChosenForBacksPlaceBeforeItCame() {
+        val show = HotkeyAction.SHOW_SCREENSAVER
+        val backStart = listOf(listOf(BACK, START))
+        assertEquals("nothing chosen: Back + Start", backStart, showScreensaverDefault(DEFAULT_HOTKEYS))
+        // Mode chosen for Back's place, as the builds before Show Screensaver stored it: every action Back led.
+        val modeLed = DEFAULT_HOTKEYS + leadReplacement(DEFAULT_HOTKEYS - show, BACK, MODE).changes
+        assertEquals(listOf(listOf(MODE, START)), showScreensaverDefault(modeLed))
+        assertTrue(existingHotkeyConflicts(modeLed + (show to listOf(listOf(MODE, START)))).isEmpty())
+        // A binding Back led by default changed in more than its first key, or unbound, says nothing of the lead.
+        val otherTail = modeLed + (pause to listOf(listOf(C, B), listOf(F12)))
+        assertEquals(listOf(listOf(MODE, START)), showScreensaverDefault(otherTail))
+        assertEquals(listOf(listOf(MODE, START)), showScreensaverDefault(modeLed - pause))
+        // Start chosen (a game button, after the page's question): Show Screensaver would lose a key, so it's unbound.
+        val startLed = DEFAULT_HOTKEYS + leadReplacement(DEFAULT_HOTKEYS - show, BACK, START).changes
+        assertTrue(showScreensaverDefault(startLed).isEmpty())
+        // Back still leading a binding: Back + Start as ever.
+        val oneMoved = DEFAULT_HOTKEYS + (pause to listOf(listOf(MODE, A), listOf(F12)))
+        assertEquals(backStart, showScreensaverDefault(oneMoved))
+        // The bindings Back led started by two buttons now: no one choice to follow, so it's unbound.
+        val twoLeads = modeLed + (pause to listOf(listOf(C, A), listOf(F12)))
+        assertTrue(showScreensaverDefault(twoLeads).isEmpty())
     }
 
     @Test
