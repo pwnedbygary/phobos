@@ -35,6 +35,40 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: setup-gradle on v6, with its open-source basic cache — 2026-10-24
+
+Made on master `d968337f0` (#312) and reviewed independently before it was committed. .github/workflows/android.yml
+(its two Set up Gradle steps) and this file. The owner asked which major was best; the evidence (at tag v6.4.0, commit
+`3f5f9ad`: setup-gradle/action.yml, docs/setup-gradle.md, DISTRIBUTION.md and sources/src/cache-service-basic.ts;
+the v6.0.0 and v6.1.0 release notes) is kept outside the repository.
+- **What**: gradle/actions/setup-gradle v4 to v6 in the build and unit-test jobs, each with `cache-provider: basic`,
+  the unit-test job's also with `cache-read-only: true`. It was the last action the workflows ran on Node 20 (#310's
+  entry below left it).
+- **Why v6 with basic**: v6 is the major that still gets releases (v6.4.0 on 28 Sep; v5's last was v5.0.2 on 23 Feb,
+  before v6.0.0), and it says `using: node24`. Its default cache provider, `enhanced`, runs `gradle-actions-caching`,
+  "a proprietary commercial component that is not covered by the MIT License", and "By upgrading to v6, you accept the
+  Terms of Use" for it (v6.0.0's notes): the owner's call, not CI's. `basic` (since v6.1.0) is MIT, built on
+  `@actions/cache`, and the proprietary component "is not loaded or used with basic caching" (DISTRIBUTION.md, whose
+  section 4 gives basic as the way to opt out of the proprietary code and its terms). Every input v4 has keeps its
+  default in v6.4.0; `cache-provider` is the only new one.
+- **What changes**: basic caching stores Gradle User Home's `caches` and `wrapper` as one entry, with no restore keys,
+  cleanup or deduplication, keyed on a hash of the files its patterns find from the checkout's root: here android/'s
+  three Gradle scripts and `gradle-wrapper.properties`. Its `gradle/*.versions.toml` misses
+  android/gradle/libs.versions.toml, where AGP's and every library's version is set (the Kotlin plugins' version,
+  2.2.10, which the catalog repeats, and the foojay resolver's, 1.0.0, are written in the Gradle scripts). So the first
+  build after a Gradle script or the wrapper changes starts with an empty cache, while a version bump in the catalog
+  alone (as `ccd827c07`'s) keeps the old entry, and the new dependencies download on every run until a Gradle script or
+  the wrapper next changes. A pull request that changes a Gradle script runs cold on every push, since other branches
+  only read the cache. Both jobs get the same key, so the unit-test job only reads it and the build job, the longer
+  one, writes it on master. The configuration cache (`android/gradle.properties` turns it on) is unaffected: v4 saved
+  it only with a `cache-encryption-key`, which the workflows never passed, and v6.0.0 removed that support.
+- **Checks**: actionlint 1.7.12 on android.yml before and after, no finding either way (on all eight workflows only
+  master's two, desktop.yml:269 SC2046 and desktop.yml:329 SC2034); every `with:` key and value against v6.4.0's
+  setup-gradle/action.yml; `git diff --check` clean; no `setup-gradle@v4` left; the privacy check, clean. No build
+  here: CI runs both jobs on the pull request, where the cache is read-only and no v4 entry has basic's key, so a
+  restore is seen on master's second run after the merge at the earliest.
+- Independent review: its verdict goes in the commit message.
+
 ## Super Game Boy: the Game Boy on a scheduler of its own, which the ICD runs inside the Super Famicom's — 2026-10-24
 
 Made on master `1024054c4` (#310), moved onto `8d20e4af8` (#311, which touches only the PSP's graphics code, its tests
