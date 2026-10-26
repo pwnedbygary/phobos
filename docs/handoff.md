@@ -35,6 +35,89 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Thirteen themes kept: Phobos, the default, in the website's colors, and System and Light / Dark / Auto gone — 2026-10-24
+
+Branch `ui-themes`, from master `9c977079f` (begun on `919c238ba`, #306's merge, and moved onto `9c977079f`, #313's,
+before its first review). Slice 3 of the owner's UI redesign, as its plan records his choices (2026-10-23): Phobos
+becomes the default, redone in the project website's colors; System (Material You) and the Light / Dark / Auto choice
+go; 13 themes stay, Rosé Pine Dawn picked like any other. Shown mockups of Phobos and Synthwave '84, he answered
+(2026-10-24, verbatim) "A · Mars leads for sure" and "Make Laserwave into Synthwave 84 today, and Synthwave 84 change to
+coral leads. The neon colors sound better as Laserwave tbh"; asked again, he picked "A · Mars orange leads (the site's
+orange buttons, violet pills, gold)" for Phobos and "2 · Coral leads (its sunset coral first, cyan pills)" for Synthwave
+'84.
+Changed: `ui/theme/ThemeRegistry.kt`, `Palettes.kt`, `Color.kt`, `SchemeBuilder.kt` and `Theme.kt` (one palette per
+theme), `UiStyle.kt` (two comments), `data/SettingsStore.kt` (the stored theme read and rewritten), `MainActivity.kt`
+and `ui/MainViewModel.kt` (the mode and follow-system settings gone, the rewrite at start),
+`ui/AppearanceSettingsScreen.kt` and `ui/ThemeGallery.kt` (the Light / Dark / Auto control gone), nine test files,
+`README.md`, this file, and six rows of `docs/implementation-plan.md`.
+
+- **The change**: Settings › Appearance's gallery has 13 themes in four groups: Phobos; Dark (Dracula, Monokai, Gruvbox
+  Dark, Ayu Dark, Night Owl, Rosé Pine, Everforest Dark and Kanagawa); Light (Rosé Pine Dawn); and Retrowave (Synthwave
+  '84, LaserWave and Shades of Purple). Each has one palette, so the theme card at the top has no Light / Dark / Auto
+  control any more, and nothing follows the system's dark mode or wallpaper. Gone: System (Material You's wallpaper
+  colors on Android 12 and later, the default until now) and 23 other themes: One Dark and One Light; Nord; Tokyo Night,
+  Tokyo Night Storm and Tokyo Night Day; Catppuccin's four; GitHub's and VS Code's dark and light; Solarized's two; Ayu
+  Mirage and Ayu Light; Rosé Pine Moon; Material Palenight; Gruvbox Light; Everforest Light; and Kanagawa Lotus.
+- **Phobos** (`Palettes.Phobos`), the default for a new install, is the website's colors and dark only: its deep-space
+  background `#07050F`, text `#EFEAFF` and muted text `#B4A9D8`; Mars orange `#FF5A1F` leading (filled buttons,
+  switches, the selected tab), then violet `#8B6CF0` (the selection pills) and gold `#F2B84B`; panels in `#1C1633`, a
+  raised tone of its violet that the site doesn't have. Its tagline reads "Mars orange and violet on deep space". The
+  old Phobos (gold on deep space, with a light palette) and its brand colors in `Color.kt` are gone.
+- **Synthwave '84** leads with its own sunset coral `#F97E72` instead of its pink `#FF7EDB`, its cyan `#36F9F6` still
+  second and every other color its own. **LaserWave** takes those neon colors with that pink leading
+  (`Palettes.LaserWave` is `Synthwave84` with its lead changed) in place of its own published ones (pink `#EB64B9` on
+  `#27212E`), as the owner's first answer asks, so the two differ in their lead alone. The question asked after it
+  wrongly said LaserWave would keep its own colors, and his first answer stands.
+- **A theme since removed**, stored (System, the old default, among them), reads as Phobos at once, and is rewritten as
+  Phobos as the app starts (`SettingsStore.rewriteRemovedTheme`, from `MainViewModel`'s start, after the first-run
+  defaults), so that a theme added later under the same ID can't take it over. The Light / Dark / Auto and follow-system
+  values are no longer read; they stay in the settings file, unused.
+- **Tests**: `ThemeRegistryTest` rewritten: the 13 themes, each under the ID settings have stored it by (master's), and
+  no others; Rosé Pine Dawn the one light theme; Phobos the default and what a removed or unknown ID shows; Phobos in
+  the website's colors, Mars orange leading; LaserWave in every one of Synthwave '84's published colors, its pink
+  leading, and Synthwave '84 in the same but led by its coral. Their expected values are the website stylesheet's, the
+  colorways' published ones, master's IDs and the owner's picks. `AppearanceSettingsTest`, one new: a removed theme read
+  as Phobos and rewritten as it, a kept one left alone, and nothing written with no theme stored. The contrast and
+  console-art tests (`ThemeContrastTest`, `GlassContrastTest`, the six style tests through `StyleTestSupport`, and
+  `ConsoleArtTest`) now check each theme's one palette; their Material You schemes from 24 seed hues, which no theme
+  makes now, are gone. `NightCityTest`'s light theme and two of `ConsoleTreatmentTest`'s five, light themes since
+  removed, are now Rosé Pine Dawn and Phobos. Thirteen mutants each fail one or two of the new tests.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, AGP 9.3.2): on `9c977079f`, both flavours' JVM tests (479 each, 0 failures)
+  and `assembleLegacyDebug` (33,085,144 bytes, SHA-256 `8702da8d…`). The thirteen mutants each failed the tests meant
+  for them: the fallback for an unknown ID, a removed theme kept, the default, the stored ID read as it is, the rewrite
+  doing nothing, rewriting a kept theme or writing with nothing stored, Phobos led by violet, Synthwave '84 by its pink,
+  LaserWave in its own published colors, led by the coral or with a color of its own beside its lead, and a kept theme's
+  ID renamed. Phobos's six website colors are those of the site's published stylesheet (`static/css/site.css` in
+  `pwnedbygary/phobos-site` at `f472d2385`). On the RP6, a test build of this change made before three comments were
+  reworded (two in `UiStyle.kt`, one in `Palettes.kt`), installed beside the owner's app (`com.phobos.emulator.thm`,
+  2.4.0-402-g9c977079f-thm, 32,703,635 bytes, SHA-256 `bb23edf4…`): each of the 13 themes, stored before a fresh start
+  with the intro off, drew the Library in its colors (Rosé Pine Dawn light, the rest dark; Synthwave '84's cards tinted
+  toward its coral and LaserWave's toward its pink); a stored `system` (the old default) and `nord` each drew the
+  Library as Phobos does, every pixel within 2 levels a channel of Phobos's screenshot but in the status bar (its clock
+  and network readout), and were `phobos` in the settings file after the start; Settings showed Phobos's Mars-orange
+  section titles and selected tab, and Appearance its card and palette strip, then the gallery's Dark group (its 8
+  cards) and the Light group's heading (the Phobos and Retrowave groups weren't in a counted screenshot). Every start
+  reported success, and each theme's screenshot, 4 s after its start with the test app in front, showed the Library (Ayu
+  Dark's at a second start, the first having found the test app not in front at the check's one look); of the device's
+  log only 02:20:01 to 02:21:13 was kept, after the starts, and it has no crash.
+- **Limits**: a player on System or on a removed theme sees Phobos's new colors after updating; one who chose Phobos in
+  Light sees it dark, there being no light Phobos now; and one who let a theme follow the system (Rosé Pine turning to
+  Rosé Pine Dawn, say) keeps the theme chosen, whatever the system's dark mode. The six style tests no longer try
+  schemes beyond the 13 themes', so custom color schemes (a later slice) will need their own range of palettes there. No
+  host test checks that the app's start calls the rewrite (the view model has none); the RP6's settings files show it
+  does. A build from before this change, run on settings this one rewrote, shows its own Phobos, gold. On the RP6 only
+  the Library, Settings and Appearance were looked at, with the default style and backdrop, in landscape; a test build's
+  update notice covered part of the Library's second row; no step of the run chose a theme in the gallery by tap; and
+  its screenshots, in Display P3 (the palette strip's `#FF5A1F` reads `#EC6636`), show hue and layout, not the palettes'
+  exact values. The RP6 was handled by hand during the run: between 02:19:40 and 02:20:02, as the run swiped its
+  Appearance page three times, Shades of Purple was chosen; by 02:20:24, when the run read the settings file, the app
+  had been started again from the launcher (at 02:20:22), the style had become XMB with its Deep backdrop and the intro
+  was on. None of those changes was the run's, whose same steps repeated at 02:22 changed no setting, and those screens
+  aren't counted.
+- **Next**: the pull request's CI; then slice 4, the screensavers (Match app and four animated scenes, CRT and XMB in
+  the theme's colors); and, with the website's look (slice 11), a dark window before the app's first frame, where
+  `res/values/themes.xml` now takes the system's light or dark.
+
 ## CI: setup-gradle on v6, with its open-source basic cache — 2026-10-24
 
 Made on master `d968337f0` (#312) and reviewed independently before it was committed. .github/workflows/android.yml

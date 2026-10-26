@@ -11,7 +11,7 @@ import kotlin.math.min
 
 /**
  * The outline drawn around text and icons over backgrounds the theme doesn't control, and the Library
- * tiles' tinted fill, for every palette of every registered theme plus Material You schemes.
+ * tiles' tinted fill, for every registered theme's palette.
  */
 class LegibilityTest {
 
@@ -79,7 +79,7 @@ class LegibilityTest {
                 primary.chroma < GREY_CHROMA -> null
                 // A grey card is the case the tint is for.
                 card.chroma < GREY_CHROMA && distance(tile) >= distance(card) -> "$where is no closer to the primary than the grey card ${hexOf(s.surfaceContainer.toArgb())}"
-                // A card already in the primary's hue (Material You's) may be as colorful as its lightness allows.
+                // A card already in the primary's hue may be as colorful as its lightness allows.
                 distance(tile) > distance(card) + HUE_ROUNDING -> "$where is further from the primary than the card ${hexOf(s.surfaceContainer.toArgb())}"
                 else -> null
             }

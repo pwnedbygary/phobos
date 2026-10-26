@@ -25,10 +25,6 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 private inline fun <reified T : Enum<T>> enumOrDefault(name: String, default: T): T =
     enumValues<T>().firstOrNull { it.name == name } ?: default
 
-enum class ThemeMode {
-    LIGHT, DARK, AUTO
-}
-
 /** How strongly cards and the backdrop take the glass look. */
 enum class GlassEffects(val label: String, val description: String) {
     FULL("Full", "See-through cards over soft color glows, with gloss and shading"),
@@ -154,11 +150,7 @@ enum class AspectRatioMode(val label: String) {
 }
 
 data class EmulatorSettings(
-    // Light/Dark/Auto for the adaptive themes (System, Phobos).
-    val themeMode: ThemeMode = ThemeMode.AUTO,
-    val themeId: String = ThemeRegistry.SYSTEM_ID,
-    // Paired themes (One Dark / One Light, ...) switch to their sibling to match the system.
-    val themeFollowSystem: Boolean = false,
+    val themeId: String = ThemeRegistry.DEFAULT_ID,
     val uiEffects: UiEffects = UiEffects.NONE,
     val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
     val mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
@@ -310,9 +302,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     constructor(context: Context) : this(context.dataStore)
 
     companion object {
-        val THEME_MODE = stringPreferencesKey("theme_mode")
         val UI_THEME = stringPreferencesKey("ui_theme")
-        val UI_THEME_FOLLOW_SYSTEM = booleanPreferencesKey("ui_theme_follow_system")
         // Read only when UI_EFFECTS was never written (settings from before the style choice); kept in step for older builds.
         val RETROWAVE_EFFECTS = booleanPreferencesKey("retrowave_effects")
         val UI_EFFECTS = stringPreferencesKey("ui_effects")
@@ -540,9 +530,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         }
 
         EmulatorSettings(
-            themeMode = enumOrDefault(safeGetString(THEME_MODE, ThemeMode.AUTO.name), ThemeMode.AUTO),
-            themeId = safeGetString(UI_THEME, ThemeRegistry.SYSTEM_ID),
-            themeFollowSystem = safeGet(UI_THEME_FOLLOW_SYSTEM, false),
+            // System and the other themes since removed read as Phobos.
+            themeId = ThemeRegistry.find(safeGetString(UI_THEME, ThemeRegistry.DEFAULT_ID)).id,
             uiEffects = enumOrDefault(
                 safeGetString(UI_EFFECTS, ""),
                 if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
@@ -706,11 +695,11 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         p[HAS_DEFAULTS_INITIALIZED] = true
     }
 
-    suspend fun setThemeMode(mode: ThemeMode) = dataStore.edit { it[THEME_MODE] = mode.name }
-    /** Both keys in one edit, so the UI never renders an id with the previous follow-system flag. */
-    suspend fun setTheme(id: String, followSystem: Boolean) = dataStore.edit {
-        it[UI_THEME] = id
-        it[UI_THEME_FOLLOW_SYSTEM] = followSystem
+    suspend fun setTheme(id: String) = dataStore.edit { it[UI_THEME] = id }
+    /** Rewrites a stored theme since removed (System among them) as Phobos, which it already reads as. */
+    suspend fun rewriteRemovedTheme() = dataStore.edit { p ->
+        val stored = p[UI_THEME] ?: return@edit
+        if (ThemeRegistry.find(stored).id != stored) p[UI_THEME] = ThemeRegistry.DEFAULT_ID
     }
     suspend fun setUiEffects(effects: UiEffects) = dataStore.edit {
         it[UI_EFFECTS] = effects.name

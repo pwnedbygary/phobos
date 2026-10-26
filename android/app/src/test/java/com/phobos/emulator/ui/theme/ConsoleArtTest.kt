@@ -32,12 +32,7 @@ class ConsoleArtTest {
 
     private class Parts(val text: List<String>, val values: List<String>)
 
-    private val variants: List<Variant> = ThemeRegistry.all.flatMap { theme ->
-        listOfNotNull(
-            theme.dark?.let { Variant("${theme.name} (dark)", theme.colors(dark = true), isDark = true) },
-            theme.light?.let { Variant("${theme.name} (light)", theme.colors(dark = false), isDark = false) },
-        )
-    }
+    private val variants: List<Variant> = ThemeRegistry.all.map { Variant(it.name, it.colors, it.isDark) }
 
     private val art: Map<String, String> = File("src/main/assets/platforms")
         .listFiles { file -> file.extension == "svg" }.orEmpty()

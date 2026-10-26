@@ -118,15 +118,6 @@ internal object SchemeBuilder {
         return ThemeColors(scheme, success = text(Color(p.success), cardSurfaces), warning = text(Color(p.warning), cardSurfaces))
     }
 
-    /** Adds readable success/warning colors to a scheme that wasn't built from a palette (Material You). */
-    fun withStatusColors(scheme: ColorScheme, isDark: Boolean): ThemeColors {
-        val away = if (isDark) Color.White else Color.Black
-        val on = listOf(scheme.background, scheme.surfaceContainerLow, scheme.surfaceContainer, scheme.surfaceContainerHigh)
-        val success = Color(if (isDark) 0xFF7BD88F else 0xFF1E7B34).withContrast(on, TEXT_CONTRAST, away)
-        val warning = Color(if (isDark) 0xFFFFB454 else 0xFF8A5A00).withContrast(on, TEXT_CONTRAST, away)
-        return ThemeColors(scheme, success, warning)
-    }
-
     private fun mix(from: Color, to: Color, fraction: Float) = lerp(from, to, fraction).quantized()
 
     private fun Color.quantized() = Color(toArgb())

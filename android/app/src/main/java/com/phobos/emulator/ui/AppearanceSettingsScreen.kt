@@ -1,6 +1,5 @@
 package com.phobos.emulator.ui
 
-import android.os.Build
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -24,7 +23,6 @@ import com.phobos.emulator.data.PlatformIconPack
 import com.phobos.emulator.data.RetrowaveBackdropScene
 import com.phobos.emulator.data.RpgBackdropScene
 import com.phobos.emulator.data.ScreensaverDelay
-import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
@@ -38,9 +36,6 @@ import com.phobos.emulator.ui.theme.style
 fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val shown = LocalPhobosTheme.current
-    val dynamicAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    // The System card previews the live scheme when it is the one showing (wallpaper colors).
-    val liveScheme = MaterialTheme.colorScheme
 
     PhobosScaffold(title = "Appearance", onBack = onBack) { innerPadding ->
         LazyVerticalGrid(
@@ -51,7 +46,7 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             fullWidth {
-                CurrentThemeCard(settings, viewModel, dynamicAvailable)
+                CurrentThemeCard()
             }
             fullWidth {
                 SettingsCategory("Effects") {
@@ -126,11 +121,9 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     )
                 }
                 items(themes, key = { it.id }) { theme ->
-                    val scheme = if (theme.id == shown.theme.id && theme.dynamic && dynamicAvailable) liveScheme
-                    else theme.colors(if (theme.adaptive) shown.isDark else theme.isDark).scheme
                     ThemeSwatchCard(
                         theme = theme,
-                        scheme = scheme,
+                        scheme = theme.colors.scheme,
                         selected = theme.id == shown.theme.id,
                         onClick = { viewModel.setTheme(theme.id) },
                     )
@@ -206,19 +199,11 @@ private fun LazyGridScope.fullWidth(content: @Composable () -> Unit) {
     item(span = { GridItemSpan(maxLineSpan) }) { content() }
 }
 
-/** The active theme with its palette and the Light / Dark / Auto control where the theme has both. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** The active theme with its palette. */
 @Composable
-private fun CurrentThemeCard(settings: EmulatorSettings, viewModel: MainViewModel, dynamicAvailable: Boolean) {
+private fun CurrentThemeCard() {
     val info = LocalPhobosTheme.current
-    val selected = ThemeRegistry.find(settings.themeId)
-    val sibling = ThemeRegistry.sibling(selected)
-    val subtitle = when {
-        selected.dynamic && !dynamicAvailable -> "Material You needs Android 12; showing Phobos colors"
-        selected.tagline != null -> selected.tagline
-        info.theme.id != selected.id -> "Following the system: showing ${info.theme.name}"
-        else -> if (info.isDark) "Dark theme" else "Light theme"
-    }
+    val subtitle = info.theme.tagline ?: if (info.isDark) "Dark theme" else "Light theme"
     Column {
         SectionHeader("Theme")
         SettingsCard {
@@ -228,55 +213,6 @@ private fun CurrentThemeCard(settings: EmulatorSettings, viewModel: MainViewMode
                     Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 PaletteStrip(MaterialTheme.colorScheme, info.success, info.warning)
-                when {
-                    selected.adaptive -> ModeSelector(
-                        selectedIndex = settings.themeMode.ordinalForSelector(),
-                        labels = listOf("Light", "Dark", "Auto"),
-                        onSelect = { viewModel.setThemeMode(listOf(ThemeMode.LIGHT, ThemeMode.DARK, ThemeMode.AUTO)[it]) },
-                    )
-                    sibling != null -> {
-                        val light = if (selected.isDark) sibling else selected
-                        val dark = if (selected.isDark) selected else sibling
-                        ModeSelector(
-                            selectedIndex = if (settings.themeFollowSystem) 2 else if (selected.isDark) 1 else 0,
-                            labels = listOf(light.name, dark.name, "Auto"),
-                            onSelect = { index ->
-                                when (index) {
-                                    0 -> viewModel.setTheme(light.id)
-                                    1 -> viewModel.setTheme(dark.id)
-                                    else -> viewModel.setTheme(selected.id, followSystem = true)
-                                }
-                            },
-                        )
-                    }
-                    else -> Text(
-                        "${selected.name} has a single ${if (selected.isDark) "dark" else "light"} variant.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-private fun ThemeMode.ordinalForSelector() = when (this) {
-    ThemeMode.LIGHT -> 0
-    ThemeMode.DARK -> 1
-    ThemeMode.AUTO -> 2
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModeSelector(selectedIndex: Int, labels: List<String>, onSelect: (Int) -> Unit) {
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-        labels.forEachIndexed { index, label ->
-            SegmentedButton(
-                selected = index == selectedIndex,
-                onClick = { onSelect(index) },
-                shape = SegmentedButtonDefaults.itemShape(index, labels.size, pillShape()),
-            ) {
-                Text(label, maxLines = 1)
             }
         }
     }

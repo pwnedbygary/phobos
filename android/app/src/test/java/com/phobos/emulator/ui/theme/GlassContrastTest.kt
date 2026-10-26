@@ -1,15 +1,10 @@
 package com.phobos.emulator.ui.theme
 
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import com.google.android.material.color.utilities.Hct
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.XmbBackdropScene
-import com.google.android.material.color.utilities.SchemeTonalSpot
-import com.google.android.material.color.utilities.TonalPalette
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Locale
@@ -20,9 +15,7 @@ import kotlin.math.roundToInt
 
 /**
  * WCAG checks for the glass look, measured on the composited 8-bit colors the screen shows rather
- * than on opaque roles. Covers every palette of every registered theme plus Material You schemes
- * built the way Android 12 and 13 build them (Material's tonal-spot palettes from 24 seed hues,
- * mapped to roles at the tones Compose Material 3 1.2.1 uses), each over every scene (the glows, the
+ * than on opaque roles. Covers every registered theme's palette, each over every scene (the glows, the
  * aurora and the mesh, Retrowave's sunset and night city, and the XMB waves and deep waves), at each Glass effects level.
  * Backdrops are sampled more finely than the app's own search: every glow at every tenth of its strength in every
  * combination, and the drawn scenes across their gradients. The dock, which pages scroll under, is checked over greys and
@@ -36,17 +29,8 @@ class GlassContrastTest {
 
     private class Check(val label: String, val foreground: Int, val background: Int, val minimum: Double)
 
-    private val variants: List<Variant> = ThemeRegistry.all.flatMap { theme ->
-        listOfNotNull(
-            theme.dark?.let { theme.colors(dark = true).let { c -> Variant("${theme.name} (dark)", c.scheme, c.success, c.warning, true) } },
-            theme.light?.let { theme.colors(dark = false).let { c -> Variant("${theme.name} (light)", c.scheme, c.success, c.warning, false) } },
-        )
-    } + (0 until 360 step 15).flatMap { hue ->
-        val seed = Hct.from(hue.toDouble(), 48.0, 50.0).toInt()
-        listOf(true, false).map { dark ->
-            val colors = SchemeBuilder.withStatusColors(materialYou(seed, dark), dark)
-            Variant("Material You, seed hue $hue (${if (dark) "dark" else "light"})", colors.scheme, colors.success, colors.warning, dark)
-        }
+    private val variants: List<Variant> = ThemeRegistry.all.map { theme ->
+        theme.colors.let { c -> Variant(theme.name, c.scheme, c.success, c.warning, theme.isDark) }
     }
 
     @Test
@@ -368,30 +352,6 @@ class GlassContrastTest {
             }
         }
         assertTrue("${failures.size} failures\n" + failures.take(25).joinToString("\n"), failures.isEmpty())
-    }
-
-    /** A Material You scheme as Compose Material 3 1.2.1 builds it on Android 12 and 13, from Material's tonal-spot palettes. */
-    private fun materialYou(seed: Int, dark: Boolean): ColorScheme {
-        val palettes = SchemeTonalSpot(Hct.fromInt(seed), dark, 0.0)
-        fun TonalPalette.at(tone: Int) = Color(tone(tone))
-        val nv = palettes.neutralVariantPalette
-        return if (dark) {
-            darkColorScheme(
-                primary = palettes.primaryPalette.at(80), secondary = palettes.secondaryPalette.at(80), tertiary = palettes.tertiaryPalette.at(80),
-                background = nv.at(6), onBackground = nv.at(90), surface = nv.at(6), onSurface = nv.at(90),
-                surfaceVariant = nv.at(30), onSurfaceVariant = nv.at(80), outline = nv.at(60), outlineVariant = nv.at(30),
-                surfaceBright = nv.at(24), surfaceDim = nv.at(6), surfaceContainerLowest = nv.at(4), surfaceContainerLow = nv.at(10),
-                surfaceContainer = nv.at(12), surfaceContainerHigh = nv.at(17), surfaceContainerHighest = nv.at(22),
-            )
-        } else {
-            lightColorScheme(
-                primary = palettes.primaryPalette.at(40), secondary = palettes.secondaryPalette.at(40), tertiary = palettes.tertiaryPalette.at(40),
-                background = nv.at(98), onBackground = nv.at(10), surface = nv.at(98), onSurface = nv.at(10),
-                surfaceVariant = nv.at(90), onSurfaceVariant = nv.at(30), outline = nv.at(50), outlineVariant = nv.at(80),
-                surfaceBright = nv.at(98), surfaceDim = nv.at(87), surfaceContainerLowest = nv.at(100), surfaceContainerLow = nv.at(96),
-                surfaceContainer = nv.at(94), surfaceContainerHigh = nv.at(92), surfaceContainerHighest = nv.at(90),
-            )
-        }
     }
 
     /** [foreground] at [alpha] over opaque [background], blended per 8-bit channel as the screen does. */

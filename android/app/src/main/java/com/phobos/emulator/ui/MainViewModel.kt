@@ -43,7 +43,6 @@ import com.phobos.emulator.data.RetrowaveBackdropScene
 import com.phobos.emulator.data.RpgBackdropScene
 import com.phobos.emulator.data.ScreensaverDelay
 import com.phobos.emulator.data.SettingsStore
-import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.launch.LaunchRequest
@@ -347,8 +346,7 @@ class MainViewModel(
         }
     }
 
-    fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsStore.setThemeMode(mode) }
-    fun setTheme(id: String, followSystem: Boolean = false) = viewModelScope.launch { settingsStore.setTheme(id, followSystem) }
+    fun setTheme(id: String) = viewModelScope.launch { settingsStore.setTheme(id) }
     fun setUiEffects(effects: UiEffects) = viewModelScope.launch { settingsStore.setUiEffects(effects) }
     fun setPixelBackdrop(scene: PixelBackdropScene) = viewModelScope.launch { settingsStore.setPixelBackdrop(scene) }
     fun setMangaBackdrop(scene: MangaBackdropScene) = viewModelScope.launch { settingsStore.setMangaBackdrop(scene) }
@@ -2054,6 +2052,7 @@ class MainViewModel(
             
             withContext(Dispatchers.IO) {
                 settingsStore.initializeDefaults()
+                settingsStore.rewriteRemovedTheme()
                 extractAssets()
                 // Initialize systems list in background
                 _systems.value = PhobosCore.enumerateSystems().sorted()

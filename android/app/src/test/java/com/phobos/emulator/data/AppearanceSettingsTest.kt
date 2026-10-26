@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -128,6 +129,31 @@ class AppearanceSettingsTest {
         for (backdrop in CatalogBackdrop.entries) {
             withStore { store, _ -> store.setScreensaverBackdrop(backdrop) }
             withStore { store, _ -> assertEquals(backdrop, store.settings.first().screensaverBackdrop) }
+        }
+    }
+
+    @Test
+    fun aRemovedThemeReadsAsPhobosAndIsRewrittenAsIt() {
+        // Under the name the settings file has kept the theme by: a rename would lose everyone's choice.
+        val theme = stringPreferencesKey("ui_theme")
+        val expected = mapOf(
+            "system" to "phobos",
+            "catppuccin_mocha" to "phobos",
+            "one_light" to "phobos",
+            "phobos" to "phobos",
+            "dracula" to "dracula",
+            "rose_pine_dawn" to "rose_pine_dawn",
+        )
+        withStore { store, dataStore ->
+            assertEquals("the default", "phobos", store.settings.first().themeId)
+            store.rewriteRemovedTheme()
+            assertEquals("nothing stored, nothing written", null, dataStore.data.first()[theme])
+            for ((stored, shown) in expected) {
+                dataStore.edit { it[theme] = stored }
+                assertEquals(stored, shown, store.settings.first().themeId)
+                store.rewriteRemovedTheme()
+                assertEquals(stored, shown, dataStore.data.first()[theme])
+            }
         }
     }
 

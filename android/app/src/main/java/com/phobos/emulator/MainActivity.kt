@@ -39,7 +39,6 @@ import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.RetrowaveBackdropScene
 import com.phobos.emulator.data.RpgBackdropScene
 import com.phobos.emulator.data.SettingsStore
-import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.input.FallbackKeys
@@ -72,8 +71,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private data class ThemeSelection(
     val id: String,
-    val mode: ThemeMode,
-    val followSystem: Boolean,
     val effects: UiEffects,
     val glass: GlassEffects,
     val pixelBackdrop: PixelBackdropScene,
@@ -86,7 +83,7 @@ private data class ThemeSelection(
 )
 
 private fun EmulatorSettings.themeSelection() = ThemeSelection(
-    themeId, themeMode, themeFollowSystem, uiEffects, glassEffects,
+    themeId, uiEffects, glassEffects,
     pixelBackdrop, mangaBackdrop, rpgBackdrop, retrowaveBackdrop, crtBackdrop, glassBackdrop, xmbBackdrop,
 )
 
@@ -188,8 +185,6 @@ class MainActivity : ComponentActivity() {
                 theme?.let {
                     PhobosTheme(
                         themeId = it.id,
-                        themeMode = it.mode,
-                        followSystem = it.followSystem,
                         effects = it.effects,
                         glassEffects = it.glass,
                         pixelBackdrop = it.pixelBackdrop,

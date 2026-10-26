@@ -9,7 +9,7 @@ import kotlin.math.abs
 class NightCityTest {
     private fun colors(id: String): CityColors {
         val theme = ThemeRegistry.all.first { it.id == id }
-        return CityColors(theme.colors(theme.isDark).scheme, theme.isDark)
+        return CityColors(theme.colors.scheme, theme.isDark)
     }
 
     private val synthwave = colors("synthwave_84")
@@ -47,10 +47,10 @@ class NightCityTest {
     }
 
     @Test fun lightThemesGetThePaleCity() {
-        val latte = colors("catppuccin_latte")
-        val background = latte.background
-        val reach = (1 - latte.lift) * 255 + 1
-        for (pixel in NightCity.render(320, 180, latte)) {
+        val dawn = colors("rose_pine_dawn")
+        val background = dawn.background
+        val reach = (1 - dawn.lift) * 255 + 1
+        for (pixel in NightCity.render(320, 180, dawn)) {
             for (shift in listOf(16, 8, 0)) assertTrue(abs((pixel shr shift and 0xFF) - (background shr shift and 0xFF)) <= reach)
         }
     }
