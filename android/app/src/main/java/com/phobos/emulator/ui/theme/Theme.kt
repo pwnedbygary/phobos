@@ -1,17 +1,12 @@
 package com.phobos.emulator.ui.theme
 
 import android.app.Activity
-import android.content.Context
 import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -25,7 +20,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.phobos.emulator.data.CrtBackdropScene
@@ -35,14 +29,13 @@ import com.phobos.emulator.data.MangaBackdropScene
 import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.RetrowaveBackdropScene
 import com.phobos.emulator.data.RpgBackdropScene
-import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
 
 /** What screens need to know about the active theme beyond [MaterialTheme]. */
 @Immutable
 data class PhobosThemeInfo(
-    /** The theme being shown (the sibling when Auto switched to it). */
+    /** The theme being shown. */
     val theme: AppTheme,
     val isDark: Boolean,
     /** The style layered over the theme's colors (Settings → Appearance → Style effects). */
@@ -72,19 +65,17 @@ data class PhobosThemeInfo(
 }
 
 val LocalPhobosTheme = compositionLocalOf {
-    val fallback = ThemeRegistry.resolve(ThemeRegistry.SYSTEM_ID, ThemeMode.DARK, followSystem = false, systemDark = true)
+    val fallback = ThemeRegistry.find(ThemeRegistry.DEFAULT_ID)
     val colors = fallback.colors
     PhobosThemeInfo(
-        fallback.theme, fallback.isDark, UiEffects.NONE, colors.success, colors.warning, colors.scheme,
+        fallback, fallback.isDark, UiEffects.NONE, colors.success, colors.warning, colors.scheme,
         GlassStyle.of(colors.scheme, colors.success, colors.warning, fallback.isDark, GlassScene.GLOWS),
     )
 }
 
 @Composable
 fun PhobosTheme(
-    themeId: String = ThemeRegistry.SYSTEM_ID,
-    themeMode: ThemeMode = ThemeMode.AUTO,
-    followSystem: Boolean = false,
+    themeId: String = ThemeRegistry.DEFAULT_ID,
     effects: UiEffects = UiEffects.NONE,
     glassEffects: GlassEffects = GlassEffects.FULL,
     pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
@@ -97,20 +88,16 @@ fun PhobosTheme(
     content: @Composable () -> Unit,
 ) {
     val scene = glassScene(effects, glassBackdrop, retrowaveBackdrop, xmbBackdrop)
-    val resolved = ThemeRegistry.resolve(themeId, themeMode, followSystem, isSystemInDarkTheme())
-    val context = LocalContext.current
-    val useDynamic = resolved.theme.dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val colors = remember(resolved, useDynamic) {
-        if (useDynamic) dynamicColors(context, resolved.isDark) else resolved.colors
-    }
+    val theme = ThemeRegistry.find(themeId)
+    val colors = theme.colors
     val colorScheme = animateColorScheme(colors.scheme)
-    SystemBarsEffect(colorScheme, resolved.isDark)
-    val glass = remember(colors, resolved.isDark, scene, glassEffects) {
-        GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, scene, glassEffects)
+    SystemBarsEffect(colorScheme, theme.isDark)
+    val glass = remember(colors, theme.isDark, scene, glassEffects) {
+        GlassStyle.of(colors.scheme, colors.success, colors.warning, theme.isDark, scene, glassEffects)
     }
 
     val info = PhobosThemeInfo(
-        resolved.theme, resolved.isDark, effects, colors.success, colors.warning, colors.scheme, glass,
+        theme, theme.isDark, effects, colors.success, colors.warning, colors.scheme, glass,
         pixelBackdrop, mangaBackdrop, rpgBackdrop, retrowaveBackdrop, crtBackdrop, glassBackdrop, xmbBackdrop,
     )
     CompositionLocalProvider(LocalPhobosTheme provides info) {
@@ -121,12 +108,6 @@ fun PhobosTheme(
             content = content,
         )
     }
-}
-
-@RequiresApi(Build.VERSION_CODES.S)
-private fun dynamicColors(context: Context, dark: Boolean): ThemeColors {
-    val scheme = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-    return SchemeBuilder.withStatusColors(scheme, dark)
 }
 
 /** Cross-fades every color role when [target] changes; the first scheme is shown without animating. */

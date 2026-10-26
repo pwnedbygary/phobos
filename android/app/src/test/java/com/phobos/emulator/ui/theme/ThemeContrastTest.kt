@@ -16,12 +16,7 @@ import kotlin.math.pow
  */
 class ThemeContrastTest {
 
-    private val variants: List<Pair<String, ThemeColors>> = ThemeRegistry.all.flatMap { theme ->
-        listOfNotNull(
-            theme.dark?.let { "${theme.name} (dark)" to theme.colors(dark = true) },
-            theme.light?.let { "${theme.name} (light)" to theme.colors(dark = false) },
-        )
-    }
+    private val variants: List<Pair<String, ThemeColors>> = ThemeRegistry.all.map { it.name to it.colors }
 
     @Test
     fun onColorsReachAaOnTheirContainers() = assertAll { s, _ ->

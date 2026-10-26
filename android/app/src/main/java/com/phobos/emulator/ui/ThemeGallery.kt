@@ -6,7 +6,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.BrightnessAuto
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.LightMode
@@ -29,12 +28,9 @@ import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
 
-/** Label and icon for a theme's appearance: adaptive themes follow the mode, others are fixed. */
-fun AppTheme.appearanceLabel(): Pair<String, ImageVector> = when {
-    adaptive -> "Auto" to Icons.Rounded.BrightnessAuto
-    isDark -> "Dark" to Icons.Rounded.DarkMode
-    else -> "Light" to Icons.Rounded.LightMode
-}
+/** Label and icon for a theme's appearance: dark or light. */
+fun AppTheme.appearanceLabel(): Pair<String, ImageVector> =
+    if (isDark) "Dark" to Icons.Rounded.DarkMode else "Light" to Icons.Rounded.LightMode
 
 /**
  * Gallery card drawn entirely in [scheme], the theme's own colors, so it previews the theme: its

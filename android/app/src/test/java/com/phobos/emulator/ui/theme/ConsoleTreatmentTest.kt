@@ -20,12 +20,12 @@ class ConsoleTreatmentTest {
 
     private fun colors(id: String): ConsoleColors {
         val theme = ThemeRegistry.all.first { it.id == id }
-        val c = theme.colors(theme.isDark)
+        val c = theme.colors
         val tile = libraryTileFill(c.scheme, theme.isDark).compositeOver(c.scheme.background)
         return ConsoleColors(ConsoleArtPalette(c.scheme, c.success, c.warning, tile), c.scheme, theme.isDark, tile, crtBloomColor(c.scheme, CrtBackdropScene.GREEN))
     }
 
-    private val themes = listOf("gruvbox_dark", "synthwave_84", "dracula", "catppuccin_latte", "github_light").map(::colors)
+    private val themes = listOf("gruvbox_dark", "synthwave_84", "dracula", "rose_pine_dawn", "phobos").map(::colors)
 
     /** A stand-in for the SVG drawn at a tile's size: the picture's cells, six pixels each, in its own colors. */
     private fun raster(picture: ConsolePixels.Picture): Triple<IntArray, Int, Int> {

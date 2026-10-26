@@ -46,7 +46,7 @@ abstract class UiStyle {
     open val typography: Typography get() = PhobosTypography
     open val shapes: Shapes get() = PhobosShapes
 
-    /** Material's fully rounded pill, which [Shapes] doesn't cover: buttons, value pills, segmented buttons. */
+    /** Material's fully rounded pill, which [Shapes] doesn't cover: buttons, value pills, theme previews. */
     open val pill: CornerBasedShape get() = CircleShape
 
     /** Whether [Backdrop] replaces the glass glows (and Retrowave's sunset) behind the pages. */
@@ -169,7 +169,7 @@ private fun Density.insetOutline(shape: Shape, size: Size, layoutDirection: Layo
 internal fun Density.ring(shape: Shape, size: Size, layoutDirection: LayoutDirection, from: Float, to: Float): Path =
     Path.combine(PathOperation.Difference, insetOutline(shape, size, layoutDirection, from), insetOutline(shape, size, layoutDirection, to))
 
-/** The pill of buttons, value pills and segmented buttons in the current style ([UiStyle.pill]). */
+/** The pill of buttons, value pills and theme previews in the current style ([UiStyle.pill]). */
 @Composable
 @ReadOnlyComposable
 fun pillShape(): CornerBasedShape = LocalPhobosTheme.current.style.pill
