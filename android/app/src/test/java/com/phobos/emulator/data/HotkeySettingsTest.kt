@@ -25,9 +25,9 @@ import org.junit.rules.TemporaryFolder
 
 /**
  * Hotkeys in the settings file: the values builds from before several bindings wrote, every action the Hotkeys page
- * binds read from its name, the bindings written now, a key in Back's place written at every level, and the controllers
- * seen sending Back. The keys are written out as the file holds them, so a renamed prefix, scope or action, which would
- * lose what players stored, fails here.
+ * binds read from its name, the bindings written now, a key in Back's place written at every level and leading Show
+ * Screensaver's default when stored before it came, and the controllers seen sending Back. The keys are written out as
+ * the file holds them, so a renamed prefix, scope or action, which would lose what players stored, fails here.
  */
 class HotkeySettingsTest {
     @get:Rule
@@ -81,6 +81,7 @@ class HotkeySettingsTest {
         val names = listOf(
             "ff_hold", "ff_toggle", "slow_motion", "save", "load", "inc_slot", "dec_slot", "pause", "reset", "reload",
             "quit", "screenshot", "mute", "frame_advance", "n64_pak", "analog_toggle", "keyboard", "library",
+            "show_screensaver",
             "save_slot_1", "load_slot_1", "save_slot_2", "load_slot_2", "save_slot_3", "load_slot_3",
             "save_slot_4", "load_slot_4", "save_slot_5", "load_slot_5", "save_slot_6", "load_slot_6",
             "save_slot_7", "load_slot_7", "save_slot_8", "load_slot_8", "save_slot_9", "load_slot_9",
@@ -146,6 +147,30 @@ class HotkeySettingsTest {
     }
 
     @Test
+    fun showScreensaverIsLedByTheKeyStoredInBacksPlaceUntilItsOwnBindingIsStored() {
+        // Mode chosen for Back's place by a build from before Show Screensaver: every action Back led, stored whole.
+        val modeLed = mapOf(
+            "pause" to "110,96;142", "save" to "110,103;135", "load" to "110,102;139", "inc_slot" to "110,22",
+            "dec_slot" to "110,21", "reload" to "110,99", "quit" to "110,97", "screenshot" to "110,107;138",
+            "mute" to "110,109", "ff_hold" to "110,105;61", "slow_motion" to "110,104", "n64_pak" to "110,20",
+            "analog_toggle" to "110,19", "keyboard" to "110,106", "library" to "110,100",
+        )
+        withStore { store, dataStore ->
+            val show = HotkeyAction.SHOW_SCREENSAVER
+            assertEquals(listOf(listOf(BACK, START)), store.settings.first().hotkeys[show])
+            dataStore.edit { p -> modeLed.forEach { (action, value) -> p[key("hotkey_combo_$action")] = value } }
+            assertEquals(listOf(listOf(MODE, START)), store.settings.first().hotkeys[show])
+            // Start chosen instead: Show Screensaver would lose a key, so it's unbound.
+            val startLed = modeLed.mapValues { it.value.replace("110,", "108,") }
+            dataStore.edit { p -> startLed.forEach { (action, value) -> p[key("hotkey_combo_$action")] = value } }
+            assertFalse(show in store.settings.first().hotkeys)
+            dataStore.edit { it[key("hotkey_combo_show_screensaver")] = "4,108" }
+            val stored = store.settings.first().hotkeys[show]
+            assertEquals("its own binding stored, as it is", listOf(listOf(BACK, START)), stored)
+        }
+    }
+
+    @Test
     fun theControllersSeenSendingBackAreKeptForTheNextStartThroughAResetOfTheHotkeys() {
         withStore { store, _ ->
             assertEquals(emptySet<String>(), store.settings.first().backSeenPads)
@@ -166,6 +191,7 @@ class HotkeySettingsTest {
         const val B = 97
         const val L1 = 102
         const val R1 = 103
+        const val START = 108
         const val SELECT = 109
         const val MODE = 110
         const val F5 = 135

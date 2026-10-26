@@ -216,6 +216,8 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
     val settings by viewModel.settings.collectAsState()
     val capturing by viewModel.controlCapture.target.collectAsState()
     var screensaverVisible by remember { mutableStateOf(false) }
+    // Asked for at once (MainViewModel.showScreensaver): up until dismissed, whatever the idle timer does meanwhile.
+    var screensaverRequested by remember { mutableStateOf(false) }
     var idleGeneration by remember { mutableIntStateOf(0) }
     val screensaverHold = remember { ScreensaverHold() }
     // Each idle reset recomposes this scaffold, so input resets it only while the screensaver could
@@ -224,21 +226,24 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
         screensaverHold.count == 0
     val canArm by rememberUpdatedState(screensaverCanArm)
 
+    fun screensaverShown() = screensaverVisible || screensaverRequested
+
     fun setScreensaverVisible(visible: Boolean) {
         screensaverVisible = visible
         // Keep the activity key/motion gate in lockstep with the overlay (not a later effect).
-        viewModel.setScreensaverActive(visible)
+        viewModel.setScreensaverActive(visible || screensaverRequested)
     }
 
     fun noteIdleActivity() {
-        if (!screensaverVisible) {
+        if (!screensaverShown()) {
             idleGeneration++
             viewModel.noteUserActivity()
         }
     }
 
     fun dismissScreensaver() {
-        if (screensaverVisible) {
+        if (screensaverShown()) {
+            screensaverRequested = false
             setScreensaverVisible(false)
             idleGeneration++
             viewModel.noteUserActivity()
@@ -250,15 +255,32 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
             // Keys / external activity: dismiss if showing, else reset the idle timer.
             // Read the ViewModel flag (not the Compose state) so this collector is not stale.
             if (viewModel.screensaverActive.value) {
+                screensaverRequested = false
                 setScreensaverVisible(false)
             }
             if (canArm) idleGeneration++
         }
     }
 
+    // Shown at once when asked for, where the idle one could show, the delay Off included.
+    LaunchedEffect(Unit) {
+        viewModel.screensaverRequests.collect {
+            if (navController.currentDestination?.route !in NO_SCREENSAVER_ROUTES &&
+                viewModel.controlCapture.target.value == null && screensaverHold.count == 0
+            ) {
+                screensaverRequested = true
+                viewModel.setScreensaverActive(true)
+            }
+        }
+    }
+
     // Arm the screensaver after idle; never over the game, bind screens, an in-progress capture, or an open dialog or menu.
     LaunchedEffect(settings.screensaverDelay, idleGeneration, route, capturing, screensaverHold.count) {
         val idle = settings.screensaverDelay.millis
+        // Nor one asked for: a game, a binding screen, a capture or a dialog puts it away.
+        if (route in NO_SCREENSAVER_ROUTES || capturing != null || screensaverHold.count > 0) {
+            screensaverRequested = false
+        }
         if (idle == null || route in NO_SCREENSAVER_ROUTES || capturing != null || screensaverHold.count > 0) {
             setScreensaverVisible(false)
             return@LaunchedEffect
@@ -286,7 +308,7 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
     // Faded rather than removed so leaving for the game doesn't pop mid-transition; nothing is
     // drawn behind the running game, nor behind the screensaver, whose own scene covers the pages.
     val backdropFade = animateFloatAsState(
-        targetValue = if (route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE && !screensaverVisible) 1f else 0f,
+        targetValue = if (route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE && !screensaverShown()) 1f else 0f,
         animationSpec = tween(500),
         label = "backdrop",
     )
@@ -306,8 +328,8 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
             .background(MaterialTheme.colorScheme.background)
             // Idle tracking only while the screensaver is off and could arm. Dismissing from Initial
             // here would tear the overlay down before the same tap is consumed, clicking through.
-            .pointerInput(screensaverVisible, screensaverCanArm) {
-                if (screensaverVisible || !screensaverCanArm) return@pointerInput
+            .pointerInput(screensaverShown(), screensaverCanArm) {
+                if (screensaverShown() || !screensaverCanArm) return@pointerInput
                 awaitPointerEventScope {
                     while (true) {
                         awaitPointerEvent(PointerEventPass.Initial)
@@ -518,7 +540,7 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
             }
         }
 
-        if (screensaverVisible) {
+        if (screensaverShown()) {
             // Predictive back skips the window callback's key handling, so Back would otherwise leave the page.
             BackHandler { dismissScreensaver() }
             val dismissInteraction = remember { MutableInteractionSource() }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -81,16 +82,20 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         label = { it.label },
                         onSelect = { viewModel.setScreensaverDelay(it) },
                     )
-                    if (settings.screensaverDelay != ScreensaverDelay.OFF) {
-                        SettingsDropdownItem(
-                            title = "Screensaver backdrop",
-                            description = settings.screensaverBackdrop.description,
-                            current = settings.screensaverBackdrop,
-                            options = CatalogBackdrop.screensaverChoices,
-                            label = { it.menuLabel },
-                            onSelect = { viewModel.setScreensaverBackdrop(it) },
-                        )
-                    }
+                    SettingsDropdownItem(
+                        title = "Screensaver backdrop",
+                        description = settings.screensaverBackdrop.description,
+                        current = settings.screensaverBackdrop,
+                        options = CatalogBackdrop.screensaverChoices,
+                        label = { it.menuLabel },
+                        onSelect = { viewModel.setScreensaverBackdrop(it) },
+                    )
+                    SettingsClickableItem(
+                        title = "Preview screensaver",
+                        description = "Shows it now. Any button or a tap ends it.",
+                        onClick = { viewModel.showScreensaver() },
+                        trailingIcon = Icons.Rounded.PlayArrow,
+                    )
                     val solidStyle = settings.uiEffects.style is SolidUi
                     SettingsDropdownItem(
                         title = "Glass effects",

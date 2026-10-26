@@ -46,6 +46,7 @@ import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.input.KeyHandler
+import com.phobos.emulator.input.ScreensaverKeys
 import com.phobos.emulator.input.WindowKeys
 import com.phobos.emulator.input.isSystemBack
 import com.phobos.emulator.launch.launchRequestOf
@@ -103,11 +104,15 @@ class MainActivity : ComponentActivity() {
         override fun gameKeysHolding(keyCode: Int): KeyHandler? = viewModel.gameKeys?.takeIf { it.holdsKey(keyCode) }
         override fun swappedAway() =
             viewModel.isLoaded.value && viewModel.isPaused.value && !viewModel.emulatorScreenVisible.value
+        override fun gameScreenShown() = viewModel.emulatorScreenVisible.value
         override fun hotkeys() = viewModel.activeControls.value.hotkeys
         override fun heldAxes(): Set<Int> = GameInputState.hotkeyKeys
         override fun swapBackToGame() = viewModel.swapBackToGame()
+        override fun showScreensaver() = viewModel.showScreensaver()
+        override fun pagesTakeBack() = onBackPressedDispatcher.hasEnabledCallbacks()
     })
     private val fallbackKeys = FallbackKeys()
+    private val screensaverKeys = ScreensaverKeys()
 
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) {}
@@ -115,6 +120,7 @@ class MainActivity : ComponentActivity() {
         override fun onInputDeviceRemoved(deviceId: Int) {
             InputLog.note { "device $deviceId removed" }
             windowKeys.reset()
+            screensaverKeys.reset()
             viewModel.gameKeys?.forgetPressedKeys()
             GameInputState.releaseAllButtons()
         }
@@ -214,14 +220,13 @@ class MainActivity : ComponentActivity() {
 
         // Every key event of the window, before any view sees it: ViewRootImpl consults Window.Callback before
         // dispatching to the focused view, so the wrapper below gets each one whichever view has focus. While a game
-        // is on screen, WindowKeys hands them all to its GameKeys; behind the Library it watches for the Library
-        // hotkey that brings the game back. (ComponentActivity restricts overriding dispatchKeyEvent itself, hence
-        // the callback wrapper.)
+        // is on screen, WindowKeys hands them all to its GameKeys; away from it, it watches for the hotkeys that run
+        // there: Show screensaver's, and the Library hotkey that brings a game back from behind the Library.
+        // (ComponentActivity restricts overriding dispatchKeyEvent itself, hence the callback wrapper.)
         val originalCallback = window.callback
         window.callback = object : android.view.Window.Callback by originalCallback {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 InputLog.key("window", event)
-                viewModel.noteUserActivity()
                 // Two keys Android makes up aren't a controller's. A fallback (the Back an unhandled B gives, say,
                 // marked or not: FallbackKeys) follows a key the capture and the hotkeys have had already, and goes to
                 // neither; the navigation bar's or gesture's Back cancels a capture and goes to no hotkey. With no
@@ -233,6 +238,23 @@ class MainActivity : ComponentActivity() {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN && !fallback && !systemBack) {
                     event.device?.descriptor?.let(viewModel::noteBackPress)
                 }
+                // The repeats and release of a key the window's hotkeys took are theirs (WindowKeys), the screensaver
+                // up or not: the keys that brought it up don't put it down, and WindowKeys sees them let go of. One it
+                // gives back, a binding's first key pressed alone, goes to the pages now, its press and release
+                // together.
+                val down = event.action == KeyEvent.ACTION_DOWN
+                val repeatOrRelease = event.action == KeyEvent.ACTION_UP || (down && event.repeatCount > 0)
+                if (repeatOrRelease && !fallback && !systemBack && windowKeys.holds(event.keyCode)) {
+                    windowKeys.onKey(event.keyCode, down, event.repeatCount)
+                    val replay = windowKeys.takeReplay() == event.keyCode && !event.isCanceled
+                    if (replay && !viewModel.screensaverActive.value) {
+                        InputLog.note { "window gives back ${event.keyCode}" }
+                        toPages(KeyEvent.changeAction(event, KeyEvent.ACTION_DOWN))
+                        toPages(event)
+                    }
+                    return true
+                }
+                viewModel.noteUserActivity()
                 // While the intro plays every key is its own and skips it (IntroKeys), the volume keys aside.
                 if (event.action != KeyEvent.ACTION_MULTIPLE &&
                     introKeys.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount,
@@ -242,12 +264,29 @@ class MainActivity : ComponentActivity() {
                 if (event.action != KeyEvent.ACTION_MULTIPLE && !fallback &&
                     viewModel.controlCapture.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, systemBack)
                 ) return true
-                if (viewModel.consumeScreensaverInput()) return true
+                // While the screensaver shows, every key puts it away and goes nowhere else, and so does every key
+                // pressed while one of those is still held, each until it's let go of (ScreensaverKeys): the rest of a
+                // combo pressed to put it away reaches neither the pages nor, as a fallback, the focused item.
+                val showing = viewModel.screensaverActive.value
+                if (event.action == KeyEvent.ACTION_MULTIPLE) {
+                    if (showing) return true
+                } else if (screensaverKeys.onKey(event.keyCode, down, event.repeatCount, showing)) {
+                    // A key the window's hotkeys hold isn't pressed alone any more either.
+                    if (down && event.repeatCount == 0) windowKeys.pressedBeside()
+                    return true
+                }
+                // A key the hotkeys here don't see (a D-pad direction Android makes from a hat, a fallback, the
+                // navigation bar's Back): a key they took and hold isn't pressed alone.
+                if ((fallback || systemBack) && down && event.repeatCount == 0) windowKeys.pressedBeside()
                 if (event.action != KeyEvent.ACTION_MULTIPLE && !fallback && !systemBack &&
                     windowKeys.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount)
                 ) return true
-                // L1/R1 outside the game step through the Library, Console and Settings tabs (MainScaffold),
-                // unless the Library hotkey uses them.
+                return toPages(event)
+            }
+
+            // A key for the pages: L1/R1 outside the game step through the Library, Console and Settings tabs
+            // (MainScaffold), unless the Library hotkey uses them; every other key goes to the views.
+            private fun toPages(event: KeyEvent): Boolean {
                 val libraryKeys = viewModel.activeControls.value.hotkeys[HotkeyAction.LIBRARY].orEmpty().flatten()
                 val shoulder = event.keyCode == KeyEvent.KEYCODE_BUTTON_L1 || event.keyCode == KeyEvent.KEYCODE_BUTTON_R1
                 if (!viewModel.emulatorScreenVisible.value && shoulder && event.keyCode !in libraryKeys) {
@@ -260,13 +299,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // After a touch, Android keeps the first D-pad press to leave touch mode, so the window never has it: touch
-        // mode ending is that press (IntroKeys). Not as the window gains focus, when Android brings it into line with
-        // the rest of the screen (hasWindowFocus is true only after that).
+        // In touch mode (after a touch, say), Android keeps the first D-pad press, a hat's included, to leave it,
+        // so the window never has it: touch mode ending is that press. The intro's keys count it (IntroKeys), and a
+        // key the window's hotkeys hold isn't pressed alone any more (WindowKeys). Not as the window gains focus,
+        // when Android brings it into line with the rest of the screen (hasWindowFocus is true only after that).
         window.decorView.viewTreeObserver.addOnTouchModeChangeListener { inTouchMode ->
             if (!inTouchMode && window.decorView.hasWindowFocus()) {
                 introKeys.onUnseenPress(introPlaying, SystemClock.uptimeMillis(),
                     ViewConfiguration.getKeyRepeatTimeout().toLong()) { introSkipped = true }
+                windowKeys.pressedBeside()
             }
         }
 

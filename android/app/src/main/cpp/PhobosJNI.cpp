@@ -389,6 +389,11 @@ Java_com_phobos_emulator_PhobosCore_setKeyboardKey(JNIEnv* env, jobject, jstring
     }
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_clearOnScreenKeys(JNIEnv* env, jobject) {
+    ares::clearOnScreenKeys();
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_phobos_emulator_PhobosCore_playTape(JNIEnv* env, jobject) {
     return ares::playTape() ? JNI_TRUE : JNI_FALSE;
