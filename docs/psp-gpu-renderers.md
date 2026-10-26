@@ -561,6 +561,18 @@ images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
   inside the texel the PSP's pixel takes, so render to texture keeps its detail there; and since part 52 every fetch
   is held inside the picture on the GPU, so such a sprite's edge pixels that step past the rows or columns copied read
   the last of them. At 1x nothing changes.
+- **3D draws' texture rows** (part 120): above 1x a 3D PRIM mapped by UV holds the rows of a target's texture that the
+  PSP's pixels take (`GE::texelsReached()`: each triangle set up as the GE draws it and its texels found by
+  `texelSpan()`, each 3D sprite's by `spriteSpan()`, a filter's second texel only where it weighs something), not the
+  texture's height: a 272-row picture sampled as a 512x512 texture was held whole, its target filled from memory past
+  the picture over the targets games keep there, and their finish then made it stale (Armored Core's and Sonic
+  Rivals' bloom). The GPU's pixels between the PSP's take any rows past those held at the last (part 52). Where the
+  PSP's pixels can't be told apart from the corners (clipped, q changing, a reach repeating round) the rows are as
+  before. At 1x nothing changes.
+- **Textures from targets none drew in since a finish** (part 120): above 1x such a texture comes from the one target
+  whose texels it fits and whose filled rows it starts in (`freshTarget()`), not from memory at the PSP's resolution,
+  on the grounds the shown picture is taken from such a target (below): memory's changes since are heard and taken
+  into it first. Where two fit, neither is taken. At 1x nothing changes.
 
 The shown picture, read back (where it isn't presented): the screen is made `MostShown` (4) times the PSP's size
 at most, and the picture is read back at the renderer's scale and copied (nearest) into it. That's the desktop's

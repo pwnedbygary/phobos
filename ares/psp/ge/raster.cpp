@@ -207,8 +207,10 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
 //pixels; a pixel's coordinate is that value floored, times one factor (the unit and R(q)), and texelSpot() takes the
 //texel from it, each step never going back. So the coordinates, and the texels (the next one too, filtered), lie
 //between those of the least and greatest values both allow. False for any other job, and for one whose q is 0 or
-//below, whose every pixel holds its coordinates (HeldCoordinate) instead.
-auto GE::texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool {
+//below, whose every pixel holds its coordinates (HeldCoordinate) instead. weighed: a filter's second texel only where
+//its weight isn't 0 (spriteReach()'s): the greatest coordinate's, where its fraction isn't 0, as every pixel's fraction
+//there is at most that.
+auto GE::texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2], bool weighed) const -> bool {
   if(job.kind != Job::Kind::Triangle) return false;
   auto& r = job.triangle;
   if(!job.look->textured || !r.perspective || r.texQ.across || r.texQ.down) return false;
@@ -232,10 +234,38 @@ auto GE::texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> b
     float least = trunc24(f64(s64(low) >> 14) * unit * reciprocal);
     float greatest = trunc24(f64(s64(high) >> 14) * unit * reciprocal);
     if(least > greatest) std::swap(least, greatest);
-    out[0] = texelSpot(least, job.linear).first, out[1] = texelSpot(greatest, job.linear).first + (job.linear ? 1 : 0);
+    auto last = texelSpot(greatest, job.linear);
+    out[0] = texelSpot(least, job.linear).first, out[1] = last.first + (job.linear && (!weighed || last.fraction));
     return true;
   };
   return span(r.texS, r.sUnit, columns) && span(r.texT, r.tUnit, rows);
+}
+
+//texelSpan()'s for a 3D sprite whose q is the same at both corners (spriteRows()): each column's R(q) the same, its
+//coordinate across x s times that, each row's down y t times it, s and t floored at the column's or row's middle,
+//each running one way from the job's first column (row) to its last; so a coordinate's texels lie between those at
+//the job's ends, a filter's second texel only where its weight isn't 0 (texelSpan()'s weighed). False for any other
+//job, and where q is 0 or below.
+auto GE::spriteSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool {
+  auto& s = job.sprite;
+  if(job.kind != Job::Kind::Sprite || !job.look->textured || !s.divided || s.leftQ != s.rightQ || s.leftQ <= 0) {
+    return false;
+  }
+  float reciprocal = geReciprocal(float(s.leftQ) * s.qUnit);
+  auto ends = [&](s32 first, s32 second, s32 start, s32 end, float unit, s32 from, s32 to, s32 (&out)[2]) {
+    float least = trunc24(f64(spriteAt(first, second, from, start, end)) * unit * reciprocal);
+    float greatest = trunc24(f64(spriteAt(first, second, to, start, end)) * unit * reciprocal);
+    if(!std::isfinite(least) || !std::isfinite(greatest)) return false;
+    if(least > greatest) std::swap(least, greatest);
+    auto last = texelSpot(greatest, job.linear);
+    out[0] = texelSpot(least, job.linear).first, out[1] = last.first + (job.linear && last.fraction);
+    return true;
+  };
+  s32 across[2], down[2];
+  if(!ends(s.leftS, s.rightS, s.left, s.right, s.sUnit, job.firstX, job.lastX, across)) return false;
+  if(!ends(s.topT, s.bottomT, s.top, s.bottom, s.tUnit, job.firstY, job.lastY, down)) return false;
+  for(u32 n : range(2)) rows[n] = s.turned ? across[n] : down[n], columns[n] = s.turned ? down[n] : across[n];
+  return true;
 }
 
 //The texels inside a texture of size texels (each side at most 512) that texelAxis() puts span's texels at: held at

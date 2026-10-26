@@ -544,10 +544,14 @@ else()
     endif()
   endif()
 
-  # The desktop's host tests (tests/desktop: the hotkeys' rules, and settings.ini reading their keys back), built only
-  # when asked for with -DPHOBOS_DESKTOP_TESTS=ON; then `cmake --build <folder> --target phobos-desktop-tests` and
+  # The desktop's host tests (tests/desktop: the hotkeys' rules, and settings.ini reading their keys back;
+  # tests/gb-boot-rom: the Game Boy Color's boot ROM as the core loads and maps it; tests/sgb-scheduler: the cores'
+  # schedulers, the Game Boy's its own, and the Super Game Boy), built only when asked for with
+  # -DPHOBOS_DESKTOP_TESTS=ON; then `cmake --build <folder> --target phobos-desktop-tests gb-boot-rom scheduler-threads
+  # sgb-cores phobos` (on Windows, phobos's build copies FFmpeg's DLLs, which sgb-cores needs) and
   # `ctest --test-dir <folder>`.
-  option(PHOBOS_DESKTOP_TESTS "Build the desktop's host tests (tests/desktop)" OFF)
+  option(PHOBOS_DESKTOP_TESTS
+    "Build the desktop's host tests (tests/desktop, tests/gb-boot-rom, tests/sgb-scheduler)" OFF)
   if(PHOBOS_DESKTOP_TESTS)
     enable_testing()
     add_executable(phobos-desktop-tests tests/desktop/hotkeys.cpp desktop/Hotkeys.cpp desktop/Input.cpp
@@ -565,5 +569,38 @@ else()
       target_link_options(phobos-desktop-tests PRIVATE -fsanitize=address,undefined)
     endif()
     add_test(NAME desktop-hotkeys COMMAND phobos-desktop-tests)
+    # On phobos_core's own objects (the cores as the program links them), their own sources in ares's dialect too:
+    # gb-boot-rom given the boot ROMs the app ships; sgb-owner-files skipped unless given the owner's files (cores.cpp).
+    add_executable(gb-boot-rom tests/gb-boot-rom/gb-boot-rom.cpp)
+    add_executable(scheduler-threads tests/sgb-scheduler/threads.cpp)
+    add_executable(sgb-cores tests/sgb-scheduler/cores.cpp)
+    foreach(core_test gb-boot-rom scheduler-threads sgb-cores)
+      target_link_libraries(${core_test} PRIVATE phobos_core Threads::Threads ${CMAKE_DL_LIBS})
+      # nall needs shlwapi and Winsock on Windows, as the program does, and CoreFoundation on macOS, as tests/ngcd does
+      # (the program and phobos-desktop-tests get Apple's frameworks through SDL)
+      if(WIN32)
+        target_link_libraries(${core_test} PRIVATE shlwapi ws2_32)
+      elseif(APPLE)
+        target_link_libraries(${core_test} PRIVATE "-framework CoreFoundation")
+      endif()
+    endforeach()
+    # sgb-cores loads a Game Boy game through mia, as the runner does, and mia's objects reach the PSP core's, which
+    # decode with FFmpeg's two libraries: linked as the program links them (on Windows it finds their DLLs where the
+    # program's build copies them, the folder they share)
+    if(PHOBOS_FFMPEG)
+      target_link_libraries(sgb-cores PRIVATE avcodec avutil)
+    endif()
+    set_property(SOURCE tests/gb-boot-rom/gb-boot-rom.cpp tests/sgb-scheduler/threads.cpp tests/sgb-scheduler/cores.cpp
+      APPEND PROPERTY COMPILE_OPTIONS ${ARES_DIALECT_OPTIONS})
+    set(GB_BOOT_ROMS "${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/System/Game Boy Color")
+    add_test(NAME gb-boot-rom COMMAND gb-boot-rom "${GB_BOOT_ROMS}/boot.cgb-0.rom" "${GB_BOOT_ROMS}/boot.cgb-1.rom")
+    add_test(NAME scheduler-threads COMMAND scheduler-threads)
+    add_test(NAME gb-save-state COMMAND sgb-cores gb-save-state
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/sgb-scheduler/gb-state-v144.bst")
+    add_test(NAME sgb-smoke COMMAND sgb-cores sgb-smoke)
+    add_test(NAME sgb-owner-files
+      COMMAND sgb-cores sgb-owner-files "${CMAKE_CURRENT_SOURCE_DIR}/ares/System/Super Famicom")
+    set_tests_properties(gb-boot-rom scheduler-threads gb-save-state sgb-smoke sgb-owner-files PROPERTIES TIMEOUT 120)
+    set_tests_properties(sgb-owner-files PROPERTIES SKIP_RETURN_CODE 77)
   endif()
 endif()

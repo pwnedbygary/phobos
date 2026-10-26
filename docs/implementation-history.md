@@ -112,7 +112,8 @@ threaded video refresh and reported restoring threaded operation.
 #### <a id="task-22"></a>Task 22 — GBC white screen (FIXED 2026-08-09)
 
 Historical evidence: the former plan reported scheduler reset cleanup, threaded
-operation, and the corrected boot-ROM offset.
+operation, and the corrected boot-ROM offset. Corrected 2026-10-24: the offset was
+still wrong until then (Task 22's entry below).
 
 #### <a id="task-23"></a>Task 23 — Mega Drive/Mega CD audio garbled (FIXED 2026-08-14)
 
@@ -990,6 +991,14 @@ refresh synchronously, desynchronizing audio buffer timing. Reverted to `Threade
 Episode 1: stale coroutine entries (`Thread::EntryPoints().clear()` in
 `Scheduler::reset()`). Episode 2: `Threaded = false` + wrong boot ROM offset.
 Final: `bootROM.allocate(2048)`, `read(address)`, `Threaded = true` (matches upstream).
+
+Correction (2026-10-24): `read(address)` did not match upstream, which reads the boot
+ROM's $0200-$08ff part with `read(address - 0x100)`; the 2,048-byte image holds
+$0000-$00ff, then $0200-$08ff (Pan Docs: "256 + 1792" bytes, the cartridge's header
+between them). With the bundled 2,048-byte boot ROMs every Game Boy Color game stayed
+white; a 2,304-byte dump, which also holds $0100-$01ff, read right except at
+$0800-$08ff. Both fixed that day (handoff.md, "Game Boy Color: the boot ROM read 256
+bytes off").
 
 #### Task 23 — Mega Drive/Mega CD audio garbled (FIXED 2026-08-14, on-device verified)
 
