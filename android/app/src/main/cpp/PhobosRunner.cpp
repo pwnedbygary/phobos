@@ -586,7 +586,7 @@ namespace ares {
            systemName == "ColecoVision";
   }
 
-  static auto clearOnScreenKeys() -> void {
+  auto clearOnScreenKeys() -> void {
     std::lock_guard<std::mutex> lock(keyboardMutex);
     keyboardKeysPressed.clear();
     zxSchemeKeysPressed.clear();

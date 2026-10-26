@@ -179,6 +179,8 @@ namespace ares {
   auto isFirstFrameRendered() -> bool;
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void;
   auto setKeyboardKey(const char* label, bool pressed) -> void;
+  // Lets go of every key setKeyboardKey() holds and every ZX gamepad scheme key, as unloading a game does.
+  auto clearOnScreenKeys() -> void;
   auto playTape() -> bool;
   // The ZX Spectrum tape: {in, playing, position ms, length ms}.
   auto getZxTapeState() -> std::array<s32, 4>;
