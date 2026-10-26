@@ -13,6 +13,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
@@ -362,7 +363,10 @@ private fun RpgWindowSystemCard(
     }
 }
 
-/** A CRT terminal panel: boxed window with the console name and a blinking block cursor, like LIBRARY. */
+/**
+ * A CRT terminal panel: boxed window with the console name, and a blinking block cursor after it, like LIBRARY's,
+ * while the panel has the focus (one cursor among the panels, not one in each).
+ */
 @Composable
 private fun CrtPanelSystemCard(
     system: String,
@@ -372,8 +376,9 @@ private fun CrtPanelSystemCard(
 ) {
     val nameStyle = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
     val nameColor = MaterialTheme.colorScheme.primary
+    var focused by remember { mutableStateOf(false) }
     ThemedCard(
-        modifier = Modifier.fillMaxWidth().height(160.dp),
+        modifier = Modifier.fillMaxWidth().height(160.dp).onFocusChanged { focused = it.hasFocus },
         shape = MaterialTheme.shapes.small,
         onClick = onClick,
         fill = fill,
@@ -400,7 +405,7 @@ private fun CrtPanelSystemCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                TitleCursor(nameStyle, nameColor)
+                TitleCursor(nameStyle, nameColor, shown = focused)
             }
             ExperimentalBadge(system, Modifier.padding(top = 4.dp))
         }
