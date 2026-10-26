@@ -35,6 +35,64 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## ZX Spectrum keyboard: a key lets go however its press ends, and LOAD "" lets go of held keys first — 2026-10-26
+
+Made on master `9c977079f` (#313) and reviewed independently before it was committed.
+android/app/src/main/java/com/phobos/emulator/ui/ZXKeyboard.kt, ui/ZxKeyPresses.kt (new), PhobosCore.kt,
+android/app/src/main/cpp/PhobosJNI.cpp, PhobosRunner.cpp and PhobosRunner.hpp, the app's unit tests'
+ui/ZxKeyPressesTest.kt (new), docs/implementation-plan.md (a row) and this file. It writes the fix the investigation of
+a freeze planned: on the RP6 Manic Miner seemed to freeze as the owner set the tape loading speed to 8x during its
+load. The investigation's report, its host replay of the game's tape and the logs are kept outside the repository.
+- **Why**: the speed change froze nothing. Phobos's log shows the emulation at 50.1 FPS, and the UI, audio and screen
+  threads answering, through the 12 s at 8x, with no frame boosted: the boost runs only while a loader reads the tape,
+  and the load had stopped about 14 s before. In the replay, on the same core, the load runs on with nothing pressed,
+  and the log is reproduced with SPACE (BREAK to the 48K's tape loader) pressed in the gap after the game's BASIC block
+  and still held through the first `LOAD ""` retry, which played the tape but typed nothing. What pressed SPACE is
+  unknown. Found in the code: a way a key stays held, and a `LOAD ""` that types nothing while one is. `Key` and
+  `ChordKey` pressed a key, waited for the finger and let go of it with nothing in a `finally`, so a key under a finger
+  as the keyboard goes away (hidden by a hotkey, its gesture cancelled) stayed pressed in the core until pressed again
+  or the game unloaded; the MSX keyboard, a copy of this one, already lets go of its keys in a `finally`, and of its
+  latches as it leaves the composition. And `LOAD ""` cleared only the shift latches before typing, while the ROM
+  refuses a key typed with another held: a held key, the keyboard's or the touch controls' (their ZX layout has ENTER
+  and SPACE keys of its own, ui/touch/TouchLayouts.kt), made it type nothing.
+- **What**: ZxKeyPresses (no Compose and no core in it) keeps what one keyboard holds down and drives the core through
+  an interface, ZxKeyboardCore. `hold()` presses a key or a chord and lets go of it in a `finally`, however its gesture
+  ends. `releaseHeld()` lets go of every key a press still holds; the keyboard calls it as it leaves the composition
+  (a `DisposableEffect`). The SYMBOL SHIFT and CAPS SHIFT latches, set through `latch()`, aren't held keys and stay
+  set, as EmulatorScreen keeps their state while the keyboard is hidden. `type()` is `LOAD ""`'s order of calls: every
+  key held on screen let go of, the shifts cleared, then J, SYMBOL SHIFT + P twice and ENTER with master's timings.
+  ZXKeyboard.kt's Key, ChordKey and MacroKey go through it.
+- **Letting go before `LOAD ""` types**: the runner's `clearOnScreenKeys()`, which unloading a game already calls,
+  made non-static, declared in PhobosRunner.hpp and reached through a new JNI function and
+  `PhobosCore.clearOnScreenKeys()`, rather than the keyboard letting go of the keys it holds one by one: it lets go of
+  keys pressed from outside the keyboard too (the touch controls' ENTER and SPACE), which the keyboard can't see. It
+  also clears a ZX gamepad scheme's keys, which the next input event sets again (`GameInputState.push()` sends every
+  change).
+- **Tests** (ZxKeyPressesTest, 7, in the app's JVM unit tests for both flavours, against a fake core): a press lets go
+  when the finger lifts, when its gesture is cancelled with the finger still down, and when it throws (a chord);
+  `LOAD ""` cancelled mid-step lets go of that step's keys; going away lets go of held keys but not the latches, and
+  the cancelled gesture's own ending after it changes nothing; `LOAD ""` lets go of a held SPACE (the keyboard's) and a
+  held ENTER (from outside it) before J goes down, clearing the shifts before J; `LOAD ""` types each character as a
+  press of its own. With the helper first written to do exactly what master's code does, the five tests of letting go
+  fail, each with the key master leaves held, and the other two pass.
+- **Checks**: `./gradlew --no-daemon --max-workers=4 -Pkotlin.compiler.execution.strategy=in-process
+  :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue` (Gradle 9.6.0, JDK 17): 485 tests in each
+  flavour, 0 failures, 0 skipped. PhobosRunner.cpp and PhobosJNI.cpp compile with NDK 28.2's clang (19.0.1) for both
+  flavours by the commands CMake wrote for them in an arm64 configure of 10 Oct (at `055029692`), each flavour's
+  `-march` set. What CMakeLists.txt has changed since doesn't reach those two files' commands: ares's dialect options
+  for sources under ares/ but ares/ares and ares/psp, the intro's two new source files and the jnigraphics library,
+  tests and desktop targets. The libadrenotools submodule isn't checked out, and neither file uses it. The commands
+  build ThinLTO bitcode, so this checks the compile, not code generation or the link; llvm-nm finds
+  `ares::clearOnScreenKeys()` defined in the runner's object and used by the JNI function in the other.
+  `git diff --check` clean; no added line over 120 columns but the plan's table row; the privacy check, clean.
+- **Left**: the app's build and the desktop program's, which compiles the runner too (CI builds both on the pull
+  request), and the RP6: a finger on a key as the keyboard is hidden, `LOAD ""` with SPACE held on the keyboard and on
+  the touch controls, the latches across hiding and showing. No host test of the native path: it adds a JNI function
+  and linkage to an unchanged one that unloading already runs, and a host build of the runner wasn't part of this
+  round. Unchanged from master: a chord that presses a latched CAPS SHIFT (DELETE, BREAK) lets go of it in the core
+  while the latch shows set, and BREAK sits beside the TAPE key (moving it is the owner's call).
+- Independent review: its verdict goes in the commit message.
+
 ## The CRT terminal style's Library: the blinking cursor on the focused platform alone, every cursor on one clock — 2026-10-23
 
 Branch `crt-cursor`, from master `c15d902ba` (begun on `ae9d73f6e`, and moved onto `e79e31732`, #300's merge, before

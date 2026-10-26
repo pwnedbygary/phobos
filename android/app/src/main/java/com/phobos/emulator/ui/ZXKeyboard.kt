@@ -122,7 +122,7 @@ private val ZXKeywords = mapOf(
     "N" to "NEXT", "M" to "PAUSE", SPACE to "BREAK",
 )
 
-// What every key on the keyboard shares: its size, the shift latches and the CUSTOM rebinding.
+// What every key on the keyboard shares: its size, the shift latches, the CUSTOM rebinding and what it holds down.
 private class KeyboardState(
     val keyHeight: Dp,
     val symLatched: Boolean,
@@ -130,7 +130,14 @@ private class KeyboardState(
     val rebindTarget: String?,
     val boundKeys: Set<String>,
     val onLongPressRebind: ((String) -> Unit)?,
+    val presses: ZxKeyPresses,
 )
+
+// The core's keyboard matrix, as ZxKeyPresses drives it.
+private object CoreKeyboard : ZxKeyboardCore {
+    override fun setKey(label: String, pressed: Boolean) = PhobosCore.setKeyboardKey(label, pressed)
+    override fun releaseAll() = PhobosCore.clearOnScreenKeys()
+}
 
 @Composable
 fun ZXKeyboardOverlay(
@@ -166,6 +173,10 @@ fun ZXKeyboardOverlay(
     val longPressRebind: ((String) -> Unit)? = if (rebindEnabled) { label ->
         onRebindTarget(label)
     } else null
+    // A key still held as the keyboard goes away (a finger on it as it's hidden) is let go of; the shift latches stay
+    // set, as their state outlives the keyboard.
+    val presses = remember { ZxKeyPresses(CoreKeyboard) }
+    DisposableEffect(presses) { onDispose { presses.releaseHeld() } }
     // Landscape leaves the game little height above the keyboard, so the keys are shorter there.
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val state = KeyboardState(
@@ -175,11 +186,12 @@ fun ZXKeyboardOverlay(
         rebindTarget = rebindTarget,
         boundKeys = boundKeys,
         onLongPressRebind = longPressRebind,
+        presses = presses,
     )
     val macroHeight = if (landscape) 32.dp else 40.dp
     val clearShifts = {
-        PhobosCore.setKeyboardKey(SHIFT, false)
-        PhobosCore.setKeyboardKey(CAPS, false)
+        presses.latch(SHIFT, false)
+        presses.latch(CAPS, false)
         onSymLatched(false)
         onCapsLatched(false)
     }
@@ -259,7 +271,8 @@ fun ZXKeyboardOverlay(
                     // then ENTER. The quotes are REQUIRED — LOAD + ENTER alone
                     // re-prompts "Program:" and waits.
                     // MUST clear any latched shift first: if SYM/CAPS is stuck on,
-                    // J types "-" (SYM+J) instead of LOAD.
+                    // J types "-" (SYM+J) instead of LOAD. Every other key held on
+                    // screen is let go of first too (ZxKeyPresses.type()).
                     steps = listOf(
                         listOf("J"),
                         listOf(SHIFT, "P"),
@@ -269,11 +282,12 @@ fun ZXKeyboardOverlay(
                     // After ENTER, the ROM waits for the tape signal until it comes
                     // (or BREAK), so the tape may start a moment later.
                     onAfterSteps = onTapeLoad,
-                    onClearShifts = clearShifts
+                    onClearShifts = clearShifts,
+                    presses = presses,
                 )
                 // DELETE = CAPS SHIFT + 0 and BREAK = CAPS SHIFT + SPACE, as on the real keyboard.
-                ChordKey(listOf(CAPS, "0"), weight = 1.5f, height = macroHeight, label = "DELETE")
-                ChordKey(listOf(CAPS, SPACE), weight = 1.5f, height = macroHeight, label = "BREAK")
+                ChordKey(listOf(CAPS, "0"), weight = 1.5f, height = macroHeight, label = "DELETE", presses = presses)
+                ChordKey(listOf(CAPS, SPACE), weight = 1.5f, height = macroHeight, label = "BREAK", presses = presses)
                 // How fast tapes load: the game runs up to this many times real time while one plays.
                 PickerKey(
                     label = "TAPE ${loadSpeed}x",
@@ -351,7 +365,8 @@ private fun RowScope.ChordKey(
     keys: List<String>,
     weight: Float,
     height: Dp,
-    label: String
+    label: String,
+    presses: ZxKeyPresses,
 ) {
     val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
@@ -379,10 +394,10 @@ private fun RowScope.ChordKey(
                         pressed = true
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         // Press all chord keys down, hold, then release together.
-                        keys.forEach { PhobosCore.setKeyboardKey(it, true) }
-                        tryAwaitRelease()
-                        delay(60)
-                        keys.forEach { PhobosCore.setKeyboardKey(it, false) }
+                        presses.hold(keys) {
+                            tryAwaitRelease()
+                            delay(60)
+                        }
                         pressed = false
                         flash = true
                         delay(130)
@@ -456,7 +471,8 @@ private fun RowScope.MacroKey(
     height: Dp,
     steps: List<List<String>>,
     onAfterSteps: () -> Unit = {},
-    onClearShifts: () -> Unit = {}
+    onClearShifts: () -> Unit = {},
+    presses: ZxKeyPresses,
 ) {
     val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
@@ -489,21 +505,10 @@ private fun RowScope.MacroKey(
                     onPress = {
                         pressed = true
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        // Clear any latched shift so a stuck SYM/CAPS doesn't
-                        // turn J into "-" or other shifted chars.
-                        currentOnClearShifts()
-                        delay(40)
-                        // Fire each step as a quick blip (press all keys in the
-                        // step, short hold, release) WITHOUT waiting for
-                        // finger-up — holding a key on the ZX ROM triggers
-                        // key-repeat, which can type a neighbor (J held -> 'L').
-                        // A 90ms gap between steps keeps chords distinct.
-                        steps.forEach { stepKeys ->
-                            stepKeys.forEach { PhobosCore.setKeyboardKey(it, true) }
-                            delay(40)
-                            stepKeys.forEach { PhobosCore.setKeyboardKey(it, false) }
-                            delay(90)
-                        }
+                        // Let go of every held key, clear any latched shift so a
+                        // stuck SYM/CAPS doesn't turn J into "-" or other shifted
+                        // chars, then type the steps (ZxKeyPresses.type()).
+                        presses.type(steps, currentOnClearShifts)
                         currentOnAfterSteps()
                         tryAwaitRelease()
                         pressed = false
@@ -632,7 +637,7 @@ private fun RowScope.Key(
                             val newLatched = !currentLatched
                             onLatchChange(newLatched)
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            PhobosCore.setKeyboardKey(label, newLatched)
+                            state.presses.latch(label, newLatched)
                             pressed = true
                             tryAwaitRelease()
                             pressed = false
@@ -642,10 +647,10 @@ private fun RowScope.Key(
                         } else {
                             pressed = true
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            PhobosCore.setKeyboardKey(label, true)
-                            tryAwaitRelease()
-                            delay(60)
-                            PhobosCore.setKeyboardKey(label, false)
+                            state.presses.hold(listOf(label)) {
+                                tryAwaitRelease()
+                                delay(60)
+                            }
                             pressed = false
                             flash = true
                             delay(130)

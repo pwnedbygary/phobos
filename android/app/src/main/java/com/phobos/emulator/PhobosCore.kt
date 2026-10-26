@@ -171,6 +171,8 @@ object PhobosCore {
     external fun getNewLogs(): List<LogEntry>
     external fun setInput(lx: Float, ly: Float, rx: Float, ry: Float, buttons: Int)
     external fun setKeyboardKey(label: String, pressed: Boolean)
+    /** Lets go of every key the on-screen keyboards and touch controls hold in the core, and a ZX gamepad scheme's. */
+    external fun clearOnScreenKeys()
     external fun playTape(): Boolean
     external fun setZxControlScheme(scheme: Int)
     external fun setZxStickToKeys(enabled: Boolean)
