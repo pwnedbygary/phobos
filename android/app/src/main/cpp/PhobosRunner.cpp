@@ -2903,7 +2903,11 @@ namespace ares {
         // Its threads leave the scheduler with it, not at the next load: at exit a core's threads take themselves out
         // of the scheduler's list as they're destroyed, and the scheduler (android_globals.cpp) may be destroyed
         // first, as the order of globals across files allows: with libstdc++ its list is freed without being emptied.
+        // The Game Boy's threads (the Super Game Boy's too) are on its own scheduler (gb.hpp): that one is reset too.
         scheduler.reset();
+        #if defined(CORE_GB)
+        ::ares::GameBoy::scheduler.reset();
+        #endif
 
         // No more audio() callbacks can arrive once the core is unloaded
         // (unloadSystem() set isPausedAtomic=true first). Drop the stream
@@ -3169,6 +3173,9 @@ else if (port->type() == "Keyboard") {
     firstFrameRendered = false;
 
     scheduler.reset();
+    #if defined(CORE_GB)
+    ::ares::GameBoy::scheduler.reset();
+    #endif
 
     LOGI("Initializing system: %s, uri: %s", (const char*)systemName, (const char*)uri);
 

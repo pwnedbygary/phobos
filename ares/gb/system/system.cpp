@@ -16,6 +16,7 @@ auto load(Node::System& node, string name) -> bool {
   return system.load(node, name);
 }
 
+Scheduler scheduler;
 System system;
 SuperGameBoyInterface* superGameBoy = nullptr;
 #include "controls.cpp"
@@ -132,7 +133,18 @@ auto System::power(bool reset) -> void {
   }
 
   if(auto fp = pak->read(!GameBoy::Model::SuperGameBoy() ? "boot.rom" : "sm83.boot.rom")) {
-    bootROM.load(fp);
+    if(GameBoy::Model::GameBoyColor() && fp->size() >= 0x900) {
+      //bootROM holds $0000-$00ff then $0200-$08ff (cartridge/memory.cpp). An image of 2,304 bytes or more is taken
+      //as a full dump, $0100-$01ff included, and read to $08ff, so a dump with bytes after it boots; a 2,048-byte
+      //image padded to that size would be misread.
+      for(u32 offset : range(0x900)) {
+        u8 data = fp->read();
+        if(offset <= 0x00ff) bootROM.program(offset, data);
+        if(offset >= 0x0200) bootROM.program(offset - 0x100, data);
+      }
+    } else {
+      bootROM.load(fp);
+    }
     __android_log_print(ANDROID_LOG_INFO, "AresGB", "Boot ROM loaded successfully: %zu bytes", fp->size());
 
     if(fastBoot->latch()) {

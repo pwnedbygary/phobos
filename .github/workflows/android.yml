@@ -47,13 +47,13 @@ jobs:
           filter: blob:none
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
@@ -76,8 +76,12 @@ jobs:
             "ndk;28.2.13676358" \
             "cmake;3.22.1"
 
+      # cache-provider basic: v6's default (enhanced) runs Gradle's proprietary gradle-actions-caching under its
+      # Terms of Use, which are the owner's to accept; basic is the MIT cache on actions/cache and doesn't load it.
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       # FFmpeg's decoders for the PSP (thirdparty/ffmpeg/build.sh, run by CMake): built from FFmpeg's release
       # once, then kept, as is the release's tarball. Keyed on the build's own name (the script and the NDK's
@@ -87,7 +91,7 @@ jobs:
         run: echo "name=$(thirdparty/ffmpeg/build.sh --name android "$ANDROID_SDK_ROOT/ndk/28.2.13676358" 26)" >> "$GITHUB_OUTPUT"
 
       - name: Cache FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
@@ -115,7 +119,7 @@ jobs:
         run: cp .cache/ffmpeg/ffmpeg-*.tar.xz android/dist/
 
       - name: Upload release APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phobos-apks
           path: android/dist/*
@@ -140,13 +144,13 @@ jobs:
           filter: blob:none
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
@@ -160,8 +164,13 @@ jobs:
             "ndk;28.2.13676358" \
             "cmake;3.22.1"
 
+      # basic, as in the build job. Read only: basic keys its one cache entry on the Gradle scripts and the wrapper's
+      # properties alone, so on master both jobs would save the same key; the build job, the longer one, writes it.
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
 
       - name: Run the unit tests
         working-directory: android
@@ -169,7 +178,7 @@ jobs:
 
       - name: Upload the test reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-reports
           path: |
@@ -188,13 +197,13 @@ jobs:
       contents: write
     steps:
       - name: Download release APKs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: phobos-apks
           path: apks
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: apks/*
           generate_release_notes: true
@@ -211,7 +220,7 @@ jobs:
       contents: write
     steps:
       - name: Download release APKs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: phobos-apks
           path: apks

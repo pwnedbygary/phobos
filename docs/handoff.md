@@ -39,7 +39,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 Branch `crt-cursor`, from master `c15d902ba` (begun on `ae9d73f6e`, and moved onto `e79e31732`, #300's merge, before
 its first review, then onto `c15d902ba`, #305's, before its second), master's `919c238ba` (#306: the PSP kernel's
-frame-pacing skip for Dante's Inferno, no Kotlin) merged in since. The owner asked on 2026-10-23 (verbatim): "One fix
+frame-pacing skip for Dante's Inferno, no Kotlin) and `9c977079f` (#309 to #313: the Game Boy Color's boot ROM, the
+Game Boy's own scheduler, the PSP's pictures above 1x, CI's actions; no Kotlin either) merged in since. The owner
+asked on 2026-10-23 (verbatim): "One fix
 I would like is to make ONLY the selected platform on the library page have the flashing cursor, not ALL of the
 consoles at once." It's the first of the UI changes he listed that day. Changed: `ui/LibraryScreen.kt`
 (`CrtPanelSystemCard`), `ui/PhobosScaffold.kt` (`TitleCursor`), `ui/theme/UiStyle.kt` (`rememberCursorBlink` and the
@@ -98,6 +100,295 @@ new `CursorBlinks`), the new `ui/theme/CursorBlinkTest.kt`, this file and the Li
   ends) isn't in any recording, each of which began with LIBRARY's cursor blinking: that rule rests on the host tests.
   Touch mode shows no panel cursor at all, by design (nothing is selected then). The desktop program has no CRT style.
 - **Next**: the pull request's CI.
+
+## CI: setup-gradle on v6, with its open-source basic cache — 2026-10-24
+
+Made on master `d968337f0` (#312) and reviewed independently before it was committed. .github/workflows/android.yml
+(its two Set up Gradle steps) and this file. The owner asked which major was best; the evidence (at tag v6.4.0, commit
+`3f5f9ad`: setup-gradle/action.yml, docs/setup-gradle.md, DISTRIBUTION.md and sources/src/cache-service-basic.ts;
+the v6.0.0 and v6.1.0 release notes) is kept outside the repository.
+- **What**: gradle/actions/setup-gradle v4 to v6 in the build and unit-test jobs, each with `cache-provider: basic`,
+  the unit-test job's also with `cache-read-only: true`. It was the last action the workflows ran on Node 20 (#310's
+  entry below left it).
+- **Why v6 with basic**: v6 is the major that still gets releases (v6.4.0 on 28 Sep; v5's last was v5.0.2 on 23 Feb,
+  before v6.0.0), and it says `using: node24`. Its default cache provider, `enhanced`, runs `gradle-actions-caching`,
+  "a proprietary commercial component that is not covered by the MIT License", and "By upgrading to v6, you accept the
+  Terms of Use" for it (v6.0.0's notes): the owner's call, not CI's. `basic` (since v6.1.0) is MIT, built on
+  `@actions/cache`, and the proprietary component "is not loaded or used with basic caching" (DISTRIBUTION.md, whose
+  section 4 gives basic as the way to opt out of the proprietary code and its terms). Every input v4 has keeps its
+  default in v6.4.0; `cache-provider` is the only new one.
+- **What changes**: basic caching stores Gradle User Home's `caches` and `wrapper` as one entry, with no restore keys,
+  cleanup or deduplication, keyed on a hash of the files its patterns find from the checkout's root: here android/'s
+  three Gradle scripts and `gradle-wrapper.properties`. Its `gradle/*.versions.toml` misses
+  android/gradle/libs.versions.toml, where AGP's and every library's version is set (the Kotlin plugins' version,
+  2.2.10, which the catalog repeats, and the foojay resolver's, 1.0.0, are written in the Gradle scripts). So the first
+  build after a Gradle script or the wrapper changes starts with an empty cache, while a version bump in the catalog
+  alone (as `ccd827c07`'s) keeps the old entry, and the new dependencies download on every run until a Gradle script or
+  the wrapper next changes. A pull request that changes a Gradle script runs cold on every push, since other branches
+  only read the cache. Both jobs get the same key, so the unit-test job only reads it and the build job, the longer
+  one, writes it on master. The configuration cache (`android/gradle.properties` turns it on) is unaffected: v4 saved
+  it only with a `cache-encryption-key`, which the workflows never passed, and v6.0.0 removed that support.
+- **Checks**: actionlint 1.7.12 on android.yml before and after, no finding either way (on all eight workflows only
+  master's two, desktop.yml:269 SC2046 and desktop.yml:329 SC2034); every `with:` key and value against v6.4.0's
+  setup-gradle/action.yml; `git diff --check` clean; no `setup-gradle@v4` left; the privacy check, clean. No build
+  here: CI runs both jobs on the pull request, where the cache is read-only and no v4 entry has basic's key, so a
+  restore is seen on master's second run after the merge at the earliest.
+- Independent review: its verdict goes in the commit message.
+
+## Super Game Boy: the Game Boy on a scheduler of its own, which the ICD runs inside the Super Famicom's — 2026-10-24
+
+Made on master `1024054c4` (#310), moved onto `8d20e4af8` (#311, which touches only the PSP's graphics code, its tests
+and docs; the checks below ran on `1024054c4`) and reviewed independently before it was committed.
+ares/ares/scheduler/thread.hpp, thread.cpp and scheduler.cpp, ares/gb/gb.hpp, ares/gb/system/system.cpp,
+android/app/src/main/cpp/PhobosRunner.cpp, tests/sgb-scheduler (new: two programs, their header and a Game Boy state),
+tests/gb-boot-rom/gb-boot-rom.cpp (its unload), CMakeLists.txt, .github/workflows/desktop.yml (its opening comment),
+docs/implementation-plan.md (a row) and this file. It builds the scheduler design of the investigation's report as its
+independent review amended it; the report, the reviews, the runs and the logs are kept outside the repository.
+- **What**: a `Thread` runs on one scheduler for its whole life: `ares::scheduler`, or the one it's made with
+  (`Thread(Scheduler&)`), kept in `_scheduler`. Each use a thread makes of a scheduler goes to its own: the safe point
+  in `Thread::Enter`'s loop, `create()` and `restart()`, `destroy()`, both `synchronize()`s (the list a thread catches
+  up with, and the check that stops an auxiliary thread in a save's pass) and `serialize()` (the synchronize flag, and
+  the thread a state resumes). The entry points of threads not yet started stay one list, each marked with its
+  thread's scheduler: `Scheduler::reset()` erases only its own, and `destroy()` leaves the list alone (a function's
+  static made at the first `create()`, it's destroyed before the cores' global threads at exit). The Game Boy has a
+  scheduler of its own, `GameBoy::scheduler`, as upstream ares has (its master at `c76aaffa6e69`), declared at the top
+  of gb.hpp's namespace, ahead of all the core's code, so that the core's 10 uses of `scheduler` name it, and the
+  core's threads are made on it by their type (`GameBoy::Thread`), wherever they're made: five places, ppu/io.cpp's
+  among them, which makes the PPU's thread again as the LCD is turned on or off. It's defined in
+  gb/system/system.cpp, the first file gb.cpp includes, so it's made before the core's components and destroyed after
+  them. The runner resets it with `ares::scheduler` as a game unloads and before each load (`#if defined(CORE_GB)`).
+  Save states keep their format: master's Game Boy state loads and goes on as master went on, and the Game Boy's, the
+  Game Boy Color's and the Super Famicom's come out the size master's do (below).
+- **Why**: a Super Game Boy game stayed on its border around a black screen, the picture frozen (on the RP6, in the
+  investigation). Phobos ran every core's threads on one scheduler, `ares::scheduler`, while the Super Game Boy's ICD
+  runs the Game Boy from inside the Super Famicom's (`ICD::main()`, `GameBoy::system.run()`, the Game Boy's
+  `scheduler.enter()`). On one scheduler that enter took it over, by the investigation's report, each point checked
+  against the code by its review: the Game Boy's `power()`, at the BIOS's `$6003` write from inside the Super
+  Famicom's CPU, made the Game Boy's CPU the scheduler's primary and resume thread and reset every clock; each nested
+  `enter()` made the ICD the scheduler's host; the Game Boy's CPU caught up every thread on it at each clock, the Super
+  Famicom's too; and with the Game Boy's threads idle until the BIOS starts it, the clocks overflowed about 2 emulated
+  seconds after the last `power()`. Which of these froze the device is unknown. On a scheduler of their own, the Game
+  Boy's five exits (`cpu/cpu.cpp:95`; `cpu/memory.cpp:4` and `:12`, the Super Game Boy's stop and halt;
+  `ppu/ppu.cpp:86` and `:134`, its frames) return to the ICD. The review found that the design as first written left
+  two uses on `ares::scheduler`, the safe point in `Thread::Enter` and the check in `synchronize()`, and that loop is
+  the Game Boy's only safe point: a Game Boy save never finished that way (the tests below stall on it). Synchronized
+  states, the only ones the runner makes, hold no thread's stack (`thread.cpp`'s `serialize()`).
+- **Tests** (tests/sgb-scheduler, under PHOBOS_DESKTOP_TESTS, so desktop.yml's Test step runs them on Linux, Windows
+  and macOS; no Nintendo code or data: a boot stub, a cartridge, an IPL and a 65816 program the tests write):
+  - `scheduler-threads` (T1, T2): stand-ins shaped like the Super Famicom's CPU and PPU and the ICD on one scheduler,
+    and like the Game Boy's CPU and PPU on a second, which the ICD enters from inside the first. Frames come back with
+    the Game Boy never started (5 emulated seconds, past the 2 a thread's clock lasts beside an idle thread), started
+    mid-run, inside the Super Famicom with that scheduler's save passes (whose auxiliary threads mustn't run the
+    primary), and alone with a pass every 30 frames, its PPU's thread made again or not; a destroyed thread leaves its
+    own scheduler; a synchronized state holds a thread's clocks and no stack. Then the Game Boy core: after `power()`
+    and after an LCD off and on, its four threads are on `GameBoy::scheduler` and none on `ares::scheduler`, each
+    with its entry point marked as the Game Boy's; resetting either scheduler leaves the other's threads able to
+    start.
+  - `gb-save-state` (T3): a Game Boy state saved at frame 60, loaded and run 60 frames, as it was without the load and
+    as master ran it; then the state master's build saved there (gb-state-v144.bst, 17,774 bytes, "v144") loads and
+    goes on as master went on.
+  - `sgb-smoke` (T4): a Super Famicom with the Super Game Boy's board (SGB-R-10) and the test's own IPL, boot stub,
+    65816 program and cartridge: 300 frames come back, the Game Boy runs the cartridge, LY changes, the cartridge's
+    tile reaches the 65816 program through the ICD's VRAM port (640 rows of 640), and the state saves.
+  - `sgb-owner-files` (T5): the same with a Super Game Boy cartridge, its boot ROM and a game named by
+    PHOBOS_SGB_CART, PHOBOS_SGB_BOOT and PHOBOS_GB_GAME, never in the repository: 20 emulated seconds past the boot
+    ROM's hand-over to the game, the picture in the ICD's output, and a state saved 10 s on and loaded twice, the same
+    120 frames after each load. Without the three it reports itself skipped, as in CI.
+  - On master's code T4 and T5 stall as the Super Famicom starts (no frame for 10 s, the tests' watchdog), and T1 and
+    T2 don't build (they name the new constructor and `GameBoy::scheduler`); T3 passes there, as it must. With the
+    design as first written, T1 and T3 stall in the first save and T4 passes. Each binding point put back on
+    `ares::scheduler`, or as master had it, fails a test: `Thread::Enter`'s safe point, the entry point's mark at
+    `create()` and at `restart()`, `create()`'s join, `synchronize()`'s list and its check, `destroy()`,
+    `serialize()`'s flag, `reset()` emptying the whole list, and the Game Boy's threads made as plain `ares::Thread`s.
+    `serialize()`'s resume is the one untested: it applies to a state saved from inside a thread, which the runner
+    never makes.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; CI's Linux job has Ubuntu 22.04's GCC and CMake 3.31.6):
+  `cmake --preset linux-x64 -DPHOBOS_DESKTOP_TESTS=ON`, `cmake --build --target phobos-desktop-tests gb-boot-rom
+  scheduler-threads sgb-cores phobos` and `ctest --output-on-failure`: five tests pass and `sgb-owner-files` reports
+  itself skipped; master's two pass. With the owner's files, T5 passes: an SGB1 cartridge with Donkey Kong (SGB
+  Enhanced) reaches the game at frame 457 and an SGB2 with Kirby's Dream Land 2 at frame 379, each 20 s on with a
+  picture, its state saved and loaded twice. The desktop program as built, under Xvfb with SDL's software renderer,
+  dummy audio and lavapipe: that Super Game Boy and game at the runner's 60.2 FPS, the game as a Game Boy game at
+  59.8, each quit with SIGTERM to "System unloaded" and status 0. The 23 Oct exit check (desktop/main.cpp, the runner
+  and the Game Boy core, here the Super Famicom core too, compiled again with AddressSanitizer by the build's own
+  commands and linked ahead of libphobos_core.a): after the Game Boy game and after the Super Game Boy session, no
+  report and status 0. Super Famicom states (a LoROM loop, its entropy fixed) and Game Boy Color ones (the cartridge
+  with the boot ROM's own logo, booted by boot.cgb-0.rom), saved by master's build (265,953 and 50,542 bytes), load
+  with this change and go on as on master, its own come out the same size, and its runs are master's. ares/gb/gb.cpp,
+  ares/sfc/sfc.cpp and the runner compile with NDK 28.2's clang for the app's legacy flavour (round one's flags,
+  copied by hand, FFmpeg's left out). CI's four PSP suite steps as psp-core.yml runs them, on lavapipe: sanitized
+  (AddressSanitizer and UndefinedBehaviorSanitizer) 665 groups, 0 failures, 1 skipped, with no sanitizer report;
+  release 665, 0, 1; the GE-thread step 148, 0, 1; the PSP-timing step 126, 0; group for group as on master.
+  In the review, tests/ngcd (which ngcd.yml runs for any change under ares/ares): 2,835 checks, 0 failures. No N64
+  Transfer Pak game: nothing gives the Transfer Pak a Game Boy game (the desktop offers no Transfer Pak, and the
+  runner hands a Game Boy cartridge the main game's pak outside the Super Game Boy), and with one the Game Boy's
+  cartridge makes no thread (gb/cartridge/cartridge.cpp:62, :76). `git diff --check` clean; no added line over 120
+  columns but the plan's table row, one line like the table's others.
+- **Left**: the app's build and the RP6 (a Super Game Boy game past the BIOS into the game, a state saved and loaded in
+  it; a Game Boy and a Game Boy Color game and their states; an N64 Transfer Pak game). A Super Game Boy state saved
+  mid-game loads, the same way each time, but the run after it isn't the run without it: the ICD saves the Game Boy's
+  threads without their stacks wherever the Game Boy's scheduler left them (`ICD::serialize()`, the Game Boy's
+  `System::serialize(serializer&, bool)`), as upstream's same code does. Running the Game Boy's own pass in the ICD's
+  save would likely make them match (not tried): a change beyond this one. a52, the Atari 5200 core, isn't built, but
+  it binds split, as the design review found: `antic/timing.cpp:62` and `system/serialization.cpp:4` and `:43` name
+  `ares::scheduler`, and `system/system.cpp:30`, `:67` and `:110` the core's own, defined at `:21` after the others:
+  whoever builds it should declare that scheduler in a52.hpp first, as gb.hpp does. The design review's optional
+  assertion in `Scheduler::exit()` that no clock has wrapped isn't added. The app, the desktop program and the
+  desktop's ctest are built with nall's `BUILD_RELEASE`, and so with `NDEBUG`, which compiles an `assert` out; the host
+  suites built without `NDEBUG`, tests/ngcd and the PSP suites' default mode, would keep the assertion, though by a
+  search of their code (not a run) neither reaches `Scheduler::exit()`. A check kept in Release would change what every
+  core does on a wrap, and T1's never-started Game Boy covers the case here.
+- Independent review: its first round (NEEDS CHANGES for the diff `924abfa4`) found the change and its tests as
+  described and asked for two sentences to be corrected: the commit message's claim that every binding point fails a
+  test, and this entry's reason for leaving out the overflow assertion. Both are corrected in this commit, and the
+  change is moved onto `8d20e4af8`. The delta reviews' verdicts go in the commit message.
+
+## PSP Vulkan above 1x: 3D draws' texture rows from their vertices, textures from fresh targets — 2026-10-24
+
+Branch `cursor/psp4x-fix-cachy`, made on master `919c238b` (#306), moved onto `1024054c` (#309 and #310, neither of
+which touches PSP code) and reviewed independently before it was committed. ares/psp/ge (draw.cpp, raster.cpp, ge.hpp,
+gpu/gpu.cpp, gpu/gpu.hpp), tests/psp/gpu.cpp, tests/psp/draw3d.cpp, docs/psp-core.md (part 120),
+docs/psp-gpu-renderers.md ("Upscaling") and this file. The probe's and the rounds' notes, frames, scripts and logs are
+kept outside the repository.
+- **What** (part 120): above 1x only. `GE::texelsReached()` works out the texels a 3D PRIM mapped by UV takes at the
+  PSP's pixels (its triangles' jobs and `texelSpan()`, now with `weighed`; its 3D sprites' `spriteSpan()`, new), and
+  `GPU::holds()` holds those rows of a target's texture, not the texture's height (`Renderer::holds()` takes it as a
+  second callback, `reached`). `GPU::take()` takes a texture no target drew in since the last finish from the one
+  target whose texels it fits (`freshTarget()`, with `take()`'s rule moved into `fitsTexture()`; where two fit,
+  neither). At 1x nothing new is asked.
+- **Why**: a 272-row frame buffer sampled as a 512x512 texture by 3D quads was held whole and its target filled from
+  memory past the picture, over the targets kept there (bloom, the other frame buffer), whose finish then made it
+  stale: refused when shown, filled again at the PSP's resolution. And a texture from a target none drew in since a
+  finish was decoded from memory at 1x.
+- **Measured** (on `919c238b`; desktop runner, RADV, each scene's saved state, 900 frames): Armored Core: Formula
+  Front real 4x in both modes (899 frames of 900 from the GPU, from 536 and 894); Sonic Rivals and Death Jr. II with
+  detail in 90-95% of their 4x4 blocks (5-32% on master), their strong edges (across and down pooled) 25-31% on the
+  4-pixel grid (87-100%); the controls (WipEout, Army of Two) and six other scenes the same byte for byte at 4x; IL-2
+  and MX vs. ATV Untamed still native; every scene's 1x frames the same byte for byte in both modes (192 of 192).
+- **Tests**: `gpuPictureRowsHeld` (also what the 3D PRIM draws from the frame buffer: its last row, not the one
+  before it), `gpuFreshTarget` and `gpuTwoFreshTargets` (new: a texture two fresh targets fit, decoded from memory)
+  (tests/psp/gpu.cpp), both modes at 1x-3x; without the change the first two fail 16 and 8 checks (the second with
+  the first change alone), every case above 1x, and the same on master's code, which passes the third.
+- **Mutations**: one row fewer than `reached` held (the review's) or `texelsReached()` a row short, 16 checks fail;
+  one row more, 16; the first of two fitting targets taken (the review's) or only one starting at the texture, 8; the
+  fresh target taken only above 2x, 4; the last of two taken passes (its rows are memory's picture).
+- **Checks** (on `c9c7d2d2`; GCC 16.2.1, lavapipe alone, as psp-core.yml runs them; CI has GCC 13): the sanitized
+  suite 668 groups, 0 failures, 1 skipped (master 665, as #306's last merge records it), the release suite 668, 0, 1
+  skipped (665), CI's GE-thread step 151, 0, 1 skipped (148) and its PSP-timing step 126, 0 (126); the GPU's 85
+  groups alone with the GE thread off and on, 0 failures, the same one skipped; the skip is the barriers without
+  rasterization order (lavapipe reads in order); no shader changed; `git diff --check` clean, no added line over 120
+  columns.
+- **Left**: IL-2 (its scissor's row past the picture makes the other frame buffer stale at each finish) and MX vs. ATV
+  Untamed (its 3D frame buffer and a 16-bit view of the same bytes make each other stale) need `finish()`'s rule for
+  overlapping read-backs, kept out of this change; filtered, repeating 3D quads from a texture's first row are held
+  whole as before; Sonic Rivals and Death Jr. II keep their dither's steps on the PSP's grid; a texture two fresh
+  targets fit is memory's; a filtered 3D copy of a target at 3x can take a sixteenth of the texel before (a rounding
+  in the GPU's interpolation, the same on master); the RP6 not run; cost not timed.
+- Independent review: its first round (NEEDS CHANGES for the diff `d84f6291`) found the code right and every figure
+  reproduced, but its own mutant of each cause passing every GPU test (a 3D PRIM holding one row too few;
+  `freshTarget()` taking the first of two fitting targets), and part 120 giving the IL-2 one-off a cause its evidence
+  doesn't show; it asked for tests that catch both and that sentence reworded: done here, with its suggestions for
+  part 120 (strong edges pooled; at 1x nothing new is asked; the counts on master's code). Its second round (NEEDS
+  CHANGES for `ef7ec326`) found the tests catch both mutants and asked only that part 120 and the test's comment give
+  the filtered 3D sprite's sixteenth at 3x its real cause (an interpolated coordinate a hair below a copy texel's
+  middle, not the PSP's sixteenths): done here too. The delta reviews' verdicts go in the commit message.
+
+## CI: the workflows' actions off Node 20, setup-gradle aside — 2026-10-24
+
+Made on master `c9c7d2d2a` (#309) and reviewed independently before it was committed. .github/workflows/android.yml,
+desktop.yml and psp-core.yml (their `uses:` lines alone) and this file. The inventory and its evidence (each action's
+action.yml at the old and new tags, the notes of every release between them, the sources compared) are kept outside
+the repository; the pull request carries the inputs table.
+- **What**: 27 `uses:` lines move to the newest major that runs on Node 24, pinned by major tag as before: actions/cache
+  v4 to v6 (9), actions/upload-artifact v4 to v7 (9), actions/download-artifact v4 to v8 (3), actions/setup-java v4 to
+  v6 (2), android-actions/setup-android v3 to v4 (3), softprops/action-gh-release v2 to v3 (1). No `with:` input
+  changes: none of the new majors renamed or removed one the workflows pass.
+- **Why**: the old majors' action.yml files say `using: node20`, and master's runs at `c9c7d2d2a` warn that the ones
+  they ran "target Node.js 20 but are being forced to run on Node.js 24". #286 moved actions/checkout to v7 on 20 Oct.
+- **Versions**: the new tags point at cache v6.1.0, upload-artifact v7.0.2, download-artifact v8.0.2, setup-java
+  v6.1.0, setup-android v4.0.4 and action-gh-release v3.0.3, each `using: node24`, which GitHub's runners already run
+  (actions/checkout v7 does in every job that checks out). What changes here: download-artifact v8 fails on a digest
+  mismatch where v4 warned, and unzips a download only when it's served as a zip, as upload-artifact v7 serves its
+  own; setup-android v4's default command-line tools are 22.0, not 16.0 (sdkmanager's main class is built for Java 11
+  in 22.0 and for Java 17 in 16.0, which the jobs run today); upload-artifact v7's new `archive` input defaults to
+  zipping, as before. Artifact names, paths, retention, overwrite and hidden files, the download paths, cache keys and
+  paths, temurin 17 with no caching, and the release's files and notes keep their meaning.
+- **Left**: gradle/actions/setup-gradle@v4 (2, android.yml) stays on node20: v6, its newest major, puts caching in a
+  proprietary component whose Terms of Use upgrading accepts (v6.0.0's notes), which is the owner's decision; v5 runs
+  on Node 24 and its action.yml is v4's otherwise; v6.1.0 and later also offer an MIT `cache-provider: basic` (an
+  added input). msys2/setup-msys2@v2 needs nothing: v2 is v2.33.0, on node24 since v2.31.0.
+- **Publish jobs** (skipped on pull requests; nothing was dispatched or tagged): Publish nightly build and Attach to
+  the GitHub Release use download-artifact, Publish GitHub Release download-artifact and action-gh-release. A download
+  left zipped or put in a folder fails the nightly at `apks/update.json` before it publishes or deletes anything, but
+  on a tag the release would get the zip or no files. The nightly's download is the release job's (same artifact,
+  path and version), so the first nightly after the merge tests it; Attach's merge-multiple download and
+  action-gh-release v3 first run at the next tag: check that android.yml made that release (its APKs and update.json)
+  and that its assets match the previous release's; if android.yml's release job fails, desktop.yml creates the
+  release after 20 minutes with the desktop packages only.
+- **Checks**: actionlint 1.7.12 (ShellCheck 0.11.0) on the eight workflows: master's two findings, desktop.yml:269
+  SC2046 and desktop.yml:329 SC2034, and nothing new (it knows upload-artifact v7's and download-artifact v8's inputs;
+  every `with:` key was also checked against each new action.yml). `git diff --check` clean; a grep for each old ref,
+  empty; the privacy check, clean. No build or CI run here.
+- Independent review: its verdict goes in the commit message.
+
+## Game Boy Color: the boot ROM read 256 bytes off, every game white — 2026-10-24
+
+Branch `cursor/gbc-boot-rom-cachy`, made on master `919c238ba` (#306) and reviewed independently before it was
+committed. ares/gb/cartridge/memory.cpp, ares/gb/system/system.cpp, tests/gb-boot-rom/gb-boot-rom.cpp (new),
+CMakeLists.txt, .github/workflows/desktop.yml (its opening comment), docs/implementation-history.md (Task 22's
+correction), docs/implementation-plan.md (a row) and this file. The investigation's report, runs and logs are kept
+outside the repository.
+- **What**: `Cartridge::read()` reads the boot ROM's $0200-$08ff part at `address - 0x100`, upstream ares's line (its
+  master at `c76aaffa6e69`, 22 Oct 2026; the file last changed upstream in `ea688c77`, 2023-08-10). The core keeps the
+  2,048-byte layout (Pan Docs: 256 + 1792 bytes, $0000-$00ff then $0200-$08ff, the cartridge's header between them),
+  which both of the app's boot ROMs are in. `System::power()` takes an image of 2,304 bytes or more as a full dump
+  ($0100-$01ff included) and drops those 256 bytes as it loads it, leaving out anything after its first 2,304: such a
+  dump with bytes after it booted on master, while a 2,048-byte image padded that long never did. A smaller image
+  loads as before. Both changes apply to the Game Boy Color alone: the Game Boy's and the Super Game Boy's 256-byte
+  boot ROMs load and map as before.
+- **Why**: every game launched as Game Boy Color stayed on a white screen (Pokémon Crystal on the RP6, nightly 216052,
+  `7986aef5b`: the core ran at 59.8 fps, and the boot ROM was unmapped 17 ms after the start). Read 256 bytes off, the
+  boot ROM ran the wrong code from its first call ($0082 to $0275) and unmapped itself with a push in an `rst` loop
+  that ran the stack down to $ff50. Task 22 (2026-08-09) recorded `read(address)` as matching upstream, which it
+  didn't. A full dump reaches the core from the desktop program, which maps a file named `cgb_boot.bin` or
+  `gbc_bios.bin`, whatever its size, or one by its CRC32, to `fw_gbc_boot` (desktop/Firmware.cpp:51-52, 81, 139-146);
+  with upstream's line alone such a dump never booted. The app fills `fw_gbc_boot` only from its folder scan, with the
+  two bundled 2,048-byte images (MainViewModel.kt:2656-2696, FirmwareIds.kt:74-77), and Settings → Firmware has no row
+  for it (FirmwareSettingsScreen.kt:74-125). With no file in the slot, both use the APK's boot.cgb-0.rom.
+- **Tests** (tests/gb-boot-rom, a ctest test under PHOBOS_DESKTOP_TESTS, so desktop.yml's Test step runs it on Linux,
+  Windows and macOS; on macOS it links CoreFoundation, which nall needs, as tests/ngcd does): synthetic images, no
+  Nintendo code, whose bytes tell their offsets apart, in the 2,048-byte and 2,304-byte layouts, full ones of 2,305
+  and 4,096 bytes and a 256-byte Game Boy one, read through the bus at every address of $0000-$0fff with the boot ROM
+  mapped and after the write to $ff50, each byte against the offset Pan Docs' layout gives; then the app's
+  boot.cgb-0.rom and boot.cgb-1.rom, each as 2,048 and 2,304 bytes and as full images of 2,305 and 4,096 bytes, boot a
+  cartridge as a Game Boy Color game and as a Game Boy one, whose first instructions store the registers they were
+  handed, against Pan Docs' table (A=11 F=80 B=00 C=00 D=ff E=56 H=00 L=0d SP=fffe, and D=00 E=08 H=00 L=7c in DMG
+  mode): 26 checks. On master's core 8 fail (the 2,048-byte image wrong at all 1,792 bytes of $0200-$08ff, the full
+  ones at $0800-$08ff, and every boot of the 2,048-byte layout unmapped in frame 1 without reaching the cartridge's
+  code); with the conversion for exactly 2,304 bytes, 10 (the 2,305- and 4,096-byte images wrong at $0200-$08ff, and
+  their eight boots still mapped after 600 frames); with `> 0x900` for `>= 0x900`, 5 (the 2,304-byte image and its
+  four boots); with this change, none: every boot hands over in frame 186 with Pan Docs' registers.
+- **Checks** (GCC 16.2.1, CMake 4.4.4, Ninja 1.13.2; CI's Linux job has Ubuntu 22.04's GCC and CMake 3.31.6):
+  `cmake --preset linux-x64 -DPHOBOS_DESKTOP_TESTS=ON` (gb-boot-rom's link line in build.ninja is the same with and
+  without the CoreFoundation lines, which apply on Apple alone), `cmake --build --target gb-boot-rom
+  phobos-desktop-tests` (the two targets ctest runs, 511 steps; CI builds every target; FFmpeg 9.0.2 built without
+  nasm, which CI installs) and `ctest --output-on-failure`: with this change both tests pass, and each variant above
+  fails gb-boot-rom. The changed unit (ares/gb/gb.cpp) compiles with NDK 28.2's clang for the app's legacy flavour,
+  its flags copied by hand from CMakeLists.txt's Android branch (CMake's own Android configuration needs the
+  libadrenotools submodule, not checked out here). No Mac or Windows machine here: CI's jobs decide those links.
+  `git diff --check` clean; no added line over 120 columns but the plan's table row, one line like the table's others.
+- **Left**: the app's build and the RP6: a Game Boy Color game from the card should show the logo animation, then the
+  game. With Auto-Load State on (off by default), a game whose auto state was written in a white-screen session comes
+  back white, so start the check with no auto state, with Auto-Load off, or with Reset System. The Windows and macOS
+  test runs are CI's; macOS's decides the CoreFoundation link. Follow-ups, not changed here: the app's scan could match
+  the 2,304-byte dumps, or a Firmware row could take one; the desktop's CRC32s for `fw_gb_boot` and `fw_gbc_boot`
+  (desktop/Firmware.cpp:81) match none of the bundled boot ROMs, and nothing reads its `fw_sgb_boot` (the Super Game
+  Boy's boot ROM goes to the core with its cartridge, `fw_sgb1` or `fw_sgb2`: the dump's own 256 bytes when it carries
+  them, else the copy mia bundles). The Super Game Boy's stall (its scheduler) is a later round.
+- Independent review: its first round (NEEDS CHANGES for the diff `12f5a2af`) found the core's line right, asked for
+  CoreFoundation for the test on macOS and for the docs' claim that the app uses a boot ROM picked by hand to be taken
+  out (Settings → Firmware has no row for one), and noted that full dumps longer than 2,304 bytes, which boot on master,
+  would have stopped booting: all three are dealt with here. The delta reviews' verdicts go in the commit message.
 
 ## PSP kernel: Dante's Inferno's frame pacing skipped, its turns worked out from the clock's ticks — 2026-10-23
 

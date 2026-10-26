@@ -511,7 +511,8 @@ struct GPU : GE::Renderer {
   auto written(GE& ge, u32 page) -> void override;
   auto forget(GE& ge) -> void override;
   auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
-             const std::function<auto () -> GE::Region>& takes) -> bool override;
+             const std::function<auto () -> GE::Region>& takes,
+             const std::function<auto () -> GE::Region>& reached) -> bool override;
   auto memoryRows(GE& ge, const GE::Sampler& texture, const std::function<auto () -> GE::Region>& takes)
     -> u32 override;
   auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
@@ -626,6 +627,10 @@ private:
     s32 takes[4] = {};
   };
   std::optional<Held> held;
+  //(a texture's texels a target's own: take())
+  static auto fitsTexture(const Target* t, const GE::Sampler& texture) -> bool;
+  //(above 1x, the target a texture none has drawn in since the last finish is taken from: take())
+  auto freshTarget(const GE::Sampler& texture, u32 offset, u32 rows) const -> Target*;
   auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct, bool exact,
             const std::function<auto () -> GE::Region>& takes) -> bool;
   //(whether rows past a texture's first kept may be held at the last kept one: in fast mode, or where the PRIM takes

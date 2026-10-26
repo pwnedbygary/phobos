@@ -616,6 +616,81 @@ auto GE::reachedBy(bool through, const std::vector<Vertex>& vertices, const Tran
            std::min(region.bottom, box.bottom)}, 0, 65535};
 }
 
+//The texels a 3D PRIM mapped by UV takes at the PSP's pixels, columns and rows first to last (a hardware renderer's
+//holds(), above 1x): its corners placed on the screen as the GE places them (transform()), each triangle it draws set
+//up as placedTriangle() sets it up (triangleJob()) and its texels found by texelSpan(), each sprite's by spriteSpan(),
+//a filter's second texel only where its weight isn't 0; inside the texture, held at its edges, or not past them where
+//it repeats. A frame buffer read as a texture 512 rows tall by a quad over its picture takes only the picture's rows
+//so, where its corners' coordinates alone may reach a row past each end. None (left past right) where any primitive
+//can't tell: a corner off the screen, past the depths, behind the camera or cut (as reachedBy() gives up), q changing
+//across one, a reach repeating round; and for a PRIM of more than 1,024 corners.
+auto GE::texelsReached(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
+                       const std::vector<Vertex>& vertices) -> Region {
+  Region none{0, 0, -1, -1};
+  bool triangles = kind == Triangles || kind == TriangleStrip || kind == TriangleFan;
+  u32 count = vertices.size();
+  if(!look.textured || t.mapMode != 0 || (!triangles && kind != Sprites) || !count || count > 1024) return none;
+  std::vector<Vertex> corners = vertices;
+  for(auto& vertex : corners) {
+    transform(vertex, t);
+    bool cut = !(vertex.clip[3] > 0) || !(vertex.clip[2] + vertex.clip[3] >= 0);
+    if(vertex.outside || vertex.far || vertex.near || cut) return none;
+  }
+  s32 rows[2] = {std::numeric_limits<s32>::max(), std::numeric_limits<s32>::min()};
+  s32 columns[2] = {rows[0], rows[1]};
+  bool known = true;
+  auto add = [&](const s32 (&r)[2], const s32 (&c)[2]) {
+    rows[0] = std::min(rows[0], r[0]), rows[1] = std::max(rows[1], r[1]);
+    columns[0] = std::min(columns[0], c[0]), columns[1] = std::max(columns[1], c[1]);
+  };
+  auto triangle = [&](u32 a, u32 b, u32 c, s32 facing) {
+    auto &va = corners[a], &vb = corners[b], &vc = corners[c];
+    s64 x[3] = {fixed(va.x), fixed(vb.x), fixed(vc.x)}, y[3] = {fixed(va.y), fixed(vb.y), fixed(vc.y)};
+    s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
+    if(!known || area == 0 || (facing && (area > 0) != (facing > 0))) return;  //(not drawn: placedTriangle())
+    Job job{};
+    triangleJob(job, look, va, vb, vc, x, y, area, true);
+    if(job.firstX > job.lastX || job.firstY > job.lastY) return;
+    s32 down[2], across[2];
+    if(!texelSpan(job, down, across, true)) return void(known = false);
+    add(down, across);
+  };
+  strip = std::max(strip, 1u);
+  switch(kind) {
+  case Triangles:
+    for(u32 n = 0; n + 2 < count; n += 3) triangle(n, n + 1, n + 2, facing);
+    break;
+  case TriangleStrip:
+    for(u32 first = 0; first < count; first += strip) {
+      u32 end = std::min(first + strip, count);
+      for(u32 n = first; n + 2 < end; n++) triangle(n, n + 1, n + 2, (n - first) & 1 ? -facing : facing);
+    }
+    break;
+  case TriangleFan:
+    for(u32 n = 1; n + 1 < count; n++) triangle(0, n, n + 1, facing);
+    break;
+  case Sprites:
+    for(u32 n = 0; n + 1 < count && known; n += 2) {
+      Job job;
+      if(!spriteJob(look, corners[n], corners[n + 1], true, job)) continue;
+      if(job.firstX > job.lastX || job.firstY > job.lastY) continue;
+      s32 down[2], across[2];
+      if(!spriteSpan(job, down, across)) known = false;
+      else add(down, across);
+    }
+    break;
+  }
+  if(!known || rows[0] > rows[1] || columns[0] > columns[1]) return none;
+  auto inside = [](s32 (&span)[2], u32 size, bool held) {
+    s32 last = std::min<s32>(size, 512) - 1;
+    if(held) span[0] = std::clamp(span[0], 0, last), span[1] = std::clamp(span[1], 0, last);
+    return held || (span[0] >= 0 && span[1] <= last);
+  };
+  auto& texture = look.texture;
+  if(!inside(rows, texture.height, texture.clampV) || !inside(columns, texture.width, texture.clampU)) return none;
+  return {columns[0], rows[0], columns[1], rows[1]};
+}
+
 auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void {
   u32 count = vertices.size();
   strip = std::max(strip, 1u);
@@ -805,6 +880,15 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     texelsInside(takes, a.texture, a.filtered, lowU, highU, lowV, highV, 0);
     return takes;
   };
+  //(and those the PSP's pixels take, for a renderer above 1x where it holds the texture: texelsReached())
+  struct Reaching { GE& ge; const Look& look; const Transform& t; u32 kind, strip; s32 facing;
+                    const std::vector<Vertex>& vertices; bool through; };
+  Reaching reaching{*this, look, t, kind, strip, facing, vertices, format.through};
+  auto texelsReached = [&reaching]() -> Region {
+    auto& a = reaching;
+    if(a.through) return {0, 0, -1, -1};
+    return a.ge.texelsReached(a.look, a.t, a.kind, a.strip, a.facing, a.vertices);
+  };
   //Without a renderer to hand them to (which may transform its own), 3D vertices are transformed before the texture
   //is decoded: whether a primitive drawing over its own texture draws the same from a copy goes by where they land.
   bool transformed = !format.through && !hardware;
@@ -821,7 +905,8 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     if(a.sprites) return a.ge.readsAhead(a.look, a.vertices, a.count);
     return a.triangles && a.ge.readsApart(a.look, a.t, a.vertices, a.kind, a.strip, a.facing);
   };
-  if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns, texelsTaken))) {
+  if(textured && !skipping &&
+     !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns, texelsTaken, texelsReached))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it. It takes texels only
     //inside its box, where that's known (texelBox()): of a texture in VRAM, where the GPU may have drawn it.
     if(hardware && rows == ~0u) drawnRows = renderer->memoryRows(*this, look.texture, texelsTaken);
