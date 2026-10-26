@@ -35,6 +35,140 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## A screensaver preview: a Preview row in Settings and a Show Screensaver hotkey on the pages — 2026-10-23
+
+Branch `screensaver-preview`, from master `919c238ba` (begun on `c15d902ba`, #305's merge, and moved onto `919c238ba`,
+#306's, before its third review), master's `9c977079f` (#309 to #313: the Game Boy Color's boot ROM, the Game Boy's
+own scheduler, the PSP's pictures above 1x, CI's actions; no Kotlin) and `83d2dfb28` (#307 and #315: the CRT terminal
+style's cursor on the focused platform alone, and the ZX keyboard's keys let go however a press ends) merged in since.
+The owner asked on 2026-10-23 (verbatim): "Can you add a key that previews the screensaver as well rather than having
+to wait 1min every time I want to see it?" Asked how a hotkey led
+by Back should treat Back pressed alone, he chose (verbatim) "Still go back, as Back is let go of; only the full combo
+shows the screensaver", and Back + Start as its default binding. Changed: `input/Hotkeys.kt` (the action, its default
+and that default after a key chosen for Back's place, the tracker's lone release and a key it doesn't see),
+`data/SettingsStore.kt` (that default as the settings are read), `input/WindowKeys.kt`, `input/ScreensaverKeys.kt`
+(new) and `MainActivity.kt` (the window's keys), `ui/MainViewModel.kt` and `ui/MainScaffold.kt` (the screensaver asked
+for), `ui/AppearanceSettingsScreen.kt` and `ui/Components.kt` (the Preview row), `ui/ControllerPages.kt` (the Hotkeys
+page's name for it), `ui/EmulatorScreen.kt` (nothing over a game), four test files (one new), this file, and two rows
+of `docs/implementation-plan.md`.
+- **The change**: Settings › Appearance shows the screensaver's backdrop choice with the delay Off too, and under it a
+  Preview screensaver row. The Hotkeys page has Show Screensaver, Back + Start by default, which runs on the Library's
+  and the menus' pages and never over a game: on the game screen its keys are the game's hotkeys', for which it does
+  nothing, and Start is held back from the game while Back is down, as every Back combo's other button is. Either
+  shows the chosen screensaver at once, the delay Off included; neither shows it where the idle one can't show: over
+  the game or the pages that bind controls, during a capture, or with a dialog open. The screensaver asked for is kept
+  apart from the idle one (`MainScaffold`), so the idle timer's restarts, which the asking key's or tap's own input
+  causes, don't put it away.
+- **Putting it away** (`ScreensaverKeys`): any button or a tap puts it away, as after the idle delay, and goes nowhere
+  else; so does every button pressed while that one is still held, each until it's let go of. Back + Start pressed again
+  puts it away and does nothing more. The volume keys stay the system's, changing the volume as they put it away; once
+  the screensaver's gone a key's new press decides afresh, should an earlier release have been lost; and a press it
+  takes keeps a key the window's hotkeys hold from counting as pressed alone.
+- **A key chosen for Back's place**: for a player who chose another button to start every hotkey in Back's place (the
+  Hotkeys page's offer for a controller with no Back) before Show Screensaver came, it's led by that button (Mode +
+  Start for Mode, say), as the choice would have moved it then: `showScreensaverDefault`, worked out afresh as the
+  settings are read while Show Screensaver has no binding of its own stored, so a later change to the other bindings
+  can change it. While any other binding starts with Back, it's Back + Start. Otherwise the lead comes from the
+  bindings Back led by default that now differ from their default in the first key alone (others, changed further or
+  unbound, don't count): with none, with two first keys among them, or with something in the way (Start chosen, which
+  Show Screensaver's binding has already), it's unbound. Only nightly builds since #294's merge (2026-10-23) could
+  store such a choice: v2.4.0 came before it.
+- **Keys on the pages** (`WindowKeys`): away from the game screen the window now watches Show Screensaver's bindings,
+  and the Library hotkey's as before, with a game behind the pages. It takes their keys as it took the Library
+  hotkey's: the one completing one, a binding's first key, and a tap's key. The repeats and release of a key it took go
+  to it ahead of the screensaver's own keys (`MainActivity`), so the keys that brought the screensaver up don't put it
+  down. A binding's first key let go of with nothing pressed meanwhile goes to the pages after all, its press and
+  release together, as it's let go of, and the input log (`PhobosInput`) notes it: Back still goes back (Android's
+  Back acts on its release anyway), behind the Library too, where a lone Back did nothing before, being the Library
+  hotkey's first key. A key the window doesn't see counts as pressed meanwhile: a D-pad key Android makes from a hat or
+  the left stick, another key's fallback, the navigation bar's Back, and the first D-pad press in touch mode (as the app
+  starts on the RP6, and after a touch), which Android keeps to leave it, so that touch mode ending stands for it. Not
+  given back: a Back no page takes (the Library's own page) with a game behind the pages, which would leave the app,
+  closing the game when a frontend started Phobos (from the home screen it goes to the background); and any key once the
+  game screen is up (a game started while it was held), where Back would ask to quit the game loading. Another first key
+  is given back there, and does nothing.
+- **Found in review and on the RP6**: round 1 found three things the first version did. Back + Start pressed again put
+  the screensaver away with Back's press, then Start reached the page, and its fallback (Android's `Generic.kcm` gives
+  an unhandled Start the D-pad's centre) clicked the item in focus. The new default brought back the Hotkeys page's
+  warning that no controller has sent Back for a player who had chosen another button in Back's place, and with Start
+  chosen collided with every other hotkey. A lone Back on the Library's own page with a game behind it left the app,
+  closing the game when a frontend had started Phobos. The fixes are above, with a hat's direction counted as pressed
+  and the tests below. Round 2 passed them; its suggestions were taken: a new press deciding afresh, the volume keys
+  left to the system, a press `ScreensaverKeys` takes counted as another key for the window, and tests for two
+  behaviours left unpinned. The RP6 runs then found Back held with the first D-pad press in touch mode, a hat's or a
+  key's, given back (Settings went back to the Library), Android having kept that press from the window: touch mode
+  ending now counts as it (`MainActivity`).
+- **Tests**: `HotkeyRoutingTest`, 15 new: Back + Start from the pages shows it, its keys taken, the releases too, and
+  nothing given back; Back alone given back; Back with Down not; over a loaded game the game's hotkeys have the keys,
+  and while a game loads nothing runs from the window; behind the Library both hotkeys run and Back alone goes back; a
+  Mode tap that runs only in a game leaves Mode to be given back; a key bound alone shows it as it's pressed and isn't
+  given back; a tap shows it as its key is let go of; a lone Back no page takes given back only with no game behind;
+  on the Library's own page with a game behind, only Back kept from the pages; nothing given back once the game screen
+  is up, nor with a key the window doesn't see pressed meanwhile; the keys the window holds until they're let go of;
+  the Library hotkey watched only with a game behind; a key that only hotkeys not run on the pages use goes straight
+  to them. `ScreensaverKeysTest` (new, 7): a key pressed while it shows is its own, its repeats and release too; one
+  let go of while it shows leaves nothing held; the rest of a combo pressed to put it away; a key held from before it
+  showed; a new press once it's gone, the last release lost; the volume keys; a controller gone. `HotkeyComboTest`:
+  the tracker's lone release, a key it doesn't see, the defaults with Back + Start, and Show Screensaver's default
+  after a key in Back's place (Mode, Start, Back still leading something, a binding changed further or unbound, two
+  buttons). `HotkeySettingsTest`: the action's stored name, and that default read from the values the earlier builds
+  stored, until its own binding is stored. 28 mutants each fail one or more of them: a first key given back with
+  another pressed meanwhile, after it ran a hotkey as it was pressed, never, once the game screen is up, or as a Back
+  no page takes with a game behind, or kept from the pages with none; every key kept from the Library's own page with
+  a game behind; Show Screensaver watched only with a game behind the pages, or on the game screen too; the Library
+  hotkey watched with no game; a tap of an action that doesn't run there keeping its key; a tap key of any action
+  taken; the window holding only the keys still waiting; a key it doesn't see changing nothing in the window, or in
+  the tracker; the tracker calling every release lone; `ScreensaverKeys` letting the rest of a combo through,
+  forgetting a key once the screensaver's gone, keeping one let go of while it shows, keeping a key's new press taken
+  once it's gone, taking the volume keys, or keeping its keys when a controller goes; Show Screensaver's default left
+  at Back + Start whatever leads the rest, led by one of several buttons, led by a binding changed further, moved with
+  something in the way, left as it is by the settings read, or moved over its own binding stored.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, NDK 28.2.13676358): on the final code, both flavours' JVM tests (504 each, 0
+  failures) and `assembleLegacyDebug` (32,725,819 bytes, SHA-256 `c865078e…`). On the RP6 (Android 13, over Wi-Fi), test
+  builds of this change installed beside the app (`com.phobos.emulator.ssp`, 2.4.0-392-g919c238ba-ssp), with the intro
+  off and Pixel art Sakura as the screensaver, driven by a virtual pad (Android's `uinput`: a D-pad as keys, and a hat)
+  and recorded, read four frames a second. The scenarios that pressed the D-pad, the app started afresh for each, began
+  in touch mode: InputDispatcher logged the app's request to switch out of it at each one's first D-pad press.
+  - With the final code (`0c8f750a…`): Back + Start on the Library showed the screensaver at once, with the delay Off
+    and with 1 minute, and it stayed through Start's and Back's releases; A put it away and opened nothing. With a tile
+    focused, Back + Start pressed again put it away, and the tile didn't open. In touch mode the first D-pad press put
+    it away, and the next moved the focus. On Settings, Back alone went back, and Back held with a D-pad press didn't:
+    the pad's D-pad down, as the first D-pad press in touch mode and as a later one, and the hat's down as the first.
+    Over Link's Awakening's opening, Back + Start showed nothing, and the opening played on. With the game behind the
+    Library (Back + Y), a lone Back on the Library's own page did nothing, and on Settings went back to the Library;
+    Back + Y brought the game back. With the input log on (it's read as a game starts), Back held on Settings with the
+    hat's down stayed there, and the lone Back after it was the only key the log has given back. The Preview row showed
+    the screensaver by a tap and by A, its own press not putting it away, and a tap or A then put it away, the row not
+    pressed again. On the Hotkeys page Show Screensaver reads Back + Start; Back + Start there does nothing, and Back
+    alone goes back. Settings with Mode in Back's place, as the earlier builds stored it, showed Mode + Start, without
+    the warning that no controller has sent Back. No crash; the test app was uninstalled after, and the input log's
+    level put back.
+  - With the code round 2 passed, moved onto `919c238ba` (`7529f70d…`): Back held on Settings with the first D-pad press
+    in touch mode, the pad's D-pad key or the hat's, went back to the Library, and in the hat's run the lone Back after
+    it left the app from the Library's own page (as it should, with no game behind); with the input log on, the hat's
+    press never reached the window, only its release, and the Back held with it was given back.
+- **Limits**: none of the screensaver's own code (the overlay, the Preview row, the request's handling) has a host test
+  (the project has no Compose UI tests), and neither has `MainActivity`'s window callback, which routes each key between
+  the screensaver's keys, the window's hotkeys and the pages, gives a key back and asks whether a page takes Back, nor
+  its touch-mode listener: the RP6 runs check them, a virtual pad with a hat, as the RP6's own D-pad is, standing in for
+  its controls. A key given back goes to the pages from the app itself, so Android adds no fallback key for it (an
+  unhandled A's centre, B's Back, Mode's Home): only keys the pages take themselves, Back and the D-pad, do their own
+  thing then. Every key pressed while the one that put the screensaver away is held goes nowhere until let go of, the
+  D-pad's included. Android keeps the first D-pad press in touch mode from `ScreensaverKeys` too: the screensaver goes
+  as that key repeats or is let go of, the focus Android gives for it lands on the page beneath, and held, its later
+  repeats move the focus once the screensaver's gone. A D-pad centre or an Enter key (a remote's, a keyboard's) held so
+  would also press the item focused as it's let go of; the RP6's own keys can't, A making no centre while the
+  screensaver takes it. With Back + Start bound, the Hotkeys page won't put Start in Back's place for a controller
+  without Back until Show Screensaver is bound to something else (it names the binding in the way). The window runs a
+  tap of its hotkeys (a key bound alone that leads longer bindings) as its key is let go of, a cancelled release
+  included, where the game screen's hotkeys wait 100 ms so that a controller going away drops it; the defaults have no
+  tap. Over a game, Start stays held back while Back is down, though Show Screensaver does nothing there; leaving it to
+  the game would be the owner's call. On the Library's own page with a game behind it, B's fallback (Back) and the
+  navigation bar's Back still reach Android's Back, as before this change: started from a frontend, that closes the
+  game. The desktop program has no screensaver yet; the shared UI will bring it both.
+- **Next**: the pull request's CI. Outside this change: whether Android keeps the first D-pad press in touch mode over
+  the game screen too (it depends on that screen's focus), whose hotkeys aren't told of it; one RP6 check would say.
+
 ## ZX Spectrum keyboard: a key lets go however its press ends, and LOAD "" lets go of held keys first — 2026-10-26
 
 Made on master `9c977079f` (#313) and reviewed independently before it was committed.

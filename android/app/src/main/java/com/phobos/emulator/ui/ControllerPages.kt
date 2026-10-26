@@ -122,6 +122,7 @@ val HOTKEY_ACTIONS = listOf(
     "Toggle PS1 Analog" to HotkeyAction.PS1_ANALOG_TOGGLE,
     "Toggle On-Screen Keyboard" to HotkeyAction.KEYBOARD,
     "Swap to Library" to HotkeyAction.LIBRARY,
+    "Show Screensaver" to HotkeyAction.SHOW_SCREENSAVER,
 )
 
 /** Direct slot bindings, hidden until the page's toggle is on. */

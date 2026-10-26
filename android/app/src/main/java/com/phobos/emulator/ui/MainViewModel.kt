@@ -379,7 +379,7 @@ class MainViewModel(
         viewModelScope.launch { settingsStore.addBackSeenPad(descriptor) }
     }
 
-    /** True while the idle screensaver overlay is covering the menus. */
+    /** True while the screensaver covers the menus, the idle one or one asked for ([showScreensaver]). */
     private val _screensaverActive = MutableStateFlow(false)
     val screensaverActive: StateFlow<Boolean> = _screensaverActive.asStateFlow()
 
@@ -387,14 +387,16 @@ class MainViewModel(
         _screensaverActive.value = active
     }
 
+    private val _screensaverRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    /** The screensaver asked for now ([showScreensaver]), for MainScaffold, which shows it where the idle one may. */
+    val screensaverRequests: SharedFlow<Unit> = _screensaverRequests.asSharedFlow()
+
     /**
-     * When the screensaver is showing, consumes a key/button so Library/Settings and shoulder-tab
-     * navigation do not also fire, and wakes the screensaver.
+     * Shows the chosen screensaver now (Settings' Preview, the Show Screensaver hotkey), until a button or a tap ends
+     * it as after the idle delay; not over a game, a binding capture or the pages that keep it off (MainScaffold).
      */
-    fun consumeScreensaverInput(): Boolean {
-        if (!_screensaverActive.value) return false
-        noteUserActivity()
-        return true
+    fun showScreensaver() {
+        _screensaverRequests.tryEmit(Unit)
     }
 
     fun setRegionPreference(pref: RegionPreference) = viewModelScope.launch { settingsStore.setRegionPreference(pref) }
