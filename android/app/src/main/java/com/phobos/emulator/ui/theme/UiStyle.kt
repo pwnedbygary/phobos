@@ -1,6 +1,7 @@
 package com.phobos.emulator.ui.theme
 
 import android.animation.ValueAnimator
+import android.os.SystemClock
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerBasedShape
@@ -9,12 +10,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -202,21 +203,64 @@ fun glassScene(effects: UiEffects, glass: GlassBackdropScene, retrowave: Retrowa
     }
 
 /**
- * A terminal cursor's blink while [enabled]: on and off about twice a second, and steadily on when
- * Android's animations are off.
+ * A terminal cursor's blink while [enabled]: on and off about twice a second, every cursor on the
+ * screen together (one state for all of them, kept to the uptime clock, not to when each appeared),
+ * and steadily on when Android's animations are off.
  */
 @Composable
 fun rememberCursorBlink(enabled: Boolean): State<Boolean> {
-    val on = remember { mutableStateOf(true) }
-    LaunchedEffect(enabled) {
-        on.value = true
-        if (!enabled || !ValueAnimator.areAnimatorsEnabled()) return@LaunchedEffect
-        while (true) {
-            delay(CURSOR_BLINK_MS)
-            on.value = !on.value
+    val blinks = enabled && ValueAnimator.areAnimatorsEnabled()
+    if (blinks) {
+        // An effect started as the cursor appears runs before it's first drawn; the loop's first pass may come after.
+        DisposableEffect(Unit) {
+            cursorBlinks.start(SystemClock.uptimeMillis())
+            onDispose { cursorBlinks.stop() }
+        }
+        LaunchedEffect(Unit) {
+            while (true) delay(cursorBlinks.pass(SystemClock.uptimeMillis()))
         }
     }
-    return on
+    return if (blinks) cursorBlinks.on else steadilyOn
 }
 
+/** Whether a blinking cursor is on at [uptimeMillis]. */
+internal fun cursorOnAt(uptimeMillis: Long): Boolean = uptimeMillis / CURSOR_BLINK_MS % 2 == 0L
+
+/** How long from [uptimeMillis] until the cursors next turn on or off. */
+internal fun untilCursorBlink(uptimeMillis: Long): Long = CURSOR_BLINK_MS - uptimeMillis % CURSOR_BLINK_MS
+
 private const val CURSOR_BLINK_MS = 530L
+
+/**
+ * The blinking cursors' one state, which they all show, so that the cursors drawn in a frame agree. Each cursor's loop
+ * keeps it to the clock; the loops wake a little apart at a turn, and the first turns it. Used on the main thread only.
+ */
+internal class CursorBlinks {
+    private val state = mutableStateOf(true)
+    private var cursors = 0
+
+    val on: State<Boolean> get() = state
+
+    /**
+     * A cursor starts blinking at [now], before it's first drawn. The first after none sets the state from the clock,
+     * as no loop has kept it meanwhile. Any other shows what the cursors already blinking show, even just after a turn
+     * their loops haven't woken for yet: a change made here can reach the screen in the new cursor a frame before them.
+     */
+    fun start(now: Long) {
+        if (cursors++ == 0) state.value = cursorOnAt(now)
+    }
+
+    /** A cursor stops blinking. */
+    fun stop() {
+        cursors--
+    }
+
+    /** A loop's pass at [now]: sets the state from the clock, and returns how long to wait for the next turn. */
+    fun pass(now: Long): Long {
+        state.value = cursorOnAt(now)
+        return untilCursorBlink(now)
+    }
+}
+
+private val cursorBlinks = CursorBlinks()
+private val steadilyOn: State<Boolean> = mutableStateOf(true)
