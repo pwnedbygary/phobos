@@ -35,6 +35,77 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Game records: each game's plays, play time and last start in `files/games.json`, for the Library rows — 2026-10-27
+
+Branch `game-store`, from master `1b32520cc` (#314's merge). The first pull request of the Cartridge integration: the
+owner asked (2026-10-26, verbatim) "I would like to incorporate this frontend's cartridge library into my Phobos
+eemulator's Library showing", and chose as its scope "Carts with real labels and box art in each system's game list,
+plus Continue Playing and Favourites rows on the Library". The Phobos coordinator's plan check (2026-10-26) set the
+order: this store first, with no screen and no network, then the Library's rows and game menu, then the art, then the
+carts. Nothing changes on screen.
+Changed: `data/GameStore.kt` (new), `ui/MainViewModel.kt` (the hooks below), `GameStoreTest.kt` (new), this file, and
+one row of `docs/implementation-plan.md`.
+
+- **The change**: every game Phobos starts now has a record in `files/games.json`: its system and ROM name (the pair
+  its saves, states, control overrides and last disc already go by, so a record follows the game rather than its URI),
+  the URI it was last started from or found at, how many times it was started, its total play time and when it was
+  last played. Two more fields, `favourite` and `hiddenFromHistory`, have no controls yet; they are there so the next
+  pull request's rows need no new format.
+- **When it's written** (`MainViewModel`): a record is made or updated when a load succeeds (`loadLocked`), wherever
+  the game was started from: the Library, a frontend, the Reload hotkey, the PSP restart or the N64 save import. A
+  reload of the running game isn't another play, and a load that fails writes nothing. The play time so far is saved
+  whenever the game pauses (`setPause`: the pause menu, the Library, the app leaving the screen), so a game the system
+  kills while it's away keeps it, and when the game stops (`closeSessionLocked`: Quit, another game, the activity
+  finishing). A system's scan (`scanRoms`, after its first list) moves a played game's URI to where its file is now.
+- **Play time** is the HUD's clock, `PerformanceStats.playTimeMs`: unpaused time since the emulation thread started.
+  The store adds what the clock gained since its last reading. Each reading carries the emulation thread's id
+  (`PerformanceStats.emuTid`); another thread, or a reading below the last, is a clock started again from 0, all of
+  which counts. A 64DD disk is that case: it starts another emulation thread and clock, so the time so far is read just
+  before it goes in. The first reading is taken as the load succeeds: until the load's emulation thread starts, the core
+  still shows the last thread's id and clock (unloading resets neither), and a reading from then adds nothing. The
+  total is the HUD's clock summed over its stretches: fast-forward counts at wall-clock speed, pauses and the app in
+  the background not at all.
+- **Bounds and missing games**: past 1,000 records the one played longest ago goes, never a favourite. Until then a
+  deleted game's record stays: a scan can't tell a deleted file from a folder that is only out of reach (an SD card
+  taken out, a permission lost).
+- **The file**: one JSON object, `{"version": 1, "games": [...]}`, written whole on each change, on the store's own
+  thread and in order: written beside it, synced, then renamed over it. A missing file is an empty store; one that
+  can't be parsed is moved to `games.json.corrupt` and the store starts empty; one from a newer format, or one that
+  can't be read, is left as it is, and nothing is written over it until the app starts again. A failure on the store's
+  thread is logged, never thrown.
+- **Backup**: `files/` is backed up and moved to a new device (the rules exclude only `firmware/`), so the records go
+  along, favourites and history included once they have controls, as the coordinator thought right. A restored
+  record's URI is the old device's until the first scan of its system finds the file.
+- **Not affected**: the desktop build, which shares no Kotlin or data with the app, and every existing setting and
+  file. No Cartridge code, data or asset is in this change, so its notices start with the first pull request that
+  carries one.
+- **Tests**: `GameStoreTest`, 19, on a temporary folder, with the store's calls run in order on the test's thread: a
+  missing file stays unwritten until a start; a start's record; one ROM name under two systems is two games; a reload
+  isn't a play but its time counts; checkpoints count each stretch once; a new emulation thread's clock counts from 0,
+  even past the old reading; a reading below the last counts as a clock started again; the last thread's clock, read
+  as the next game starts and at a pause before its thread has started, not counted again; play time over sessions,
+  and an unread clock adding nothing; the stop moving the last-played time, and another game's stop ignored; a scan
+  moving a known game's URI and making no records; a scan keeping the URI when the same name is in two folders;
+  records surviving the app starting again; a version-1 file read and every field rewritten; an unparsable file moved
+  aside; a record without a name; a newer format never written over; a part file left by a crash; past the cap, the
+  game played longest ago going but never a favourite. Each expected value is worked out from the scenario's readings
+  and times.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, AGP 9.3.2): on the final code, both flavours' JVM tests, 537 each, 0
+  failures, 19 of them `GameStoreTest`'s (`./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest
+  --continue --no-daemon --offline --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process`, the home folder
+  and the SDK read-only); a first run, on the code before the clock's readings carried the thread, passed with 535
+  each. `git diff --check` clean; no added line over 120 columns but the plan's table row. CI builds the APKs on the
+  pull request.
+- **Limits**: no device run, as nothing is visible yet (the rows come next); the hooks in `MainViewModel` have no host
+  test (the view model has none). A game is one record per system and ROM name, as for its saves, so two files of the
+  same name in two folders of one system share it. Frontends' launches start every ZX Spectrum game, 48K or 128K, as
+  "ZX Spectrum", as the Library does; only the adb debug load intent can start one as "ZX Spectrum 128", and its record
+  then goes by that name, as its save states do. The time since the last pause is lost if the app is killed while a game
+  runs. A reading taken in the instant between a new emulation thread setting its id and resetting its clock, a few
+  stores apart in its first lines, would count the old reading again. No mutation run.
+- **Next**: the pull request's CI; then the Library's Continue Playing and Favourites rows and the game menu
+  (Favourite, Hide from Continue Playing), the integration's next pull request.
+
 ## Thirteen themes kept: Phobos, the default, in the website's colors, and System and Light / Dark / Auto gone — 2026-10-24
 
 Branch `ui-themes`, from master `9c977079f` (begun on `919c238ba`, #306's merge, and moved onto `9c977079f`, #313's,

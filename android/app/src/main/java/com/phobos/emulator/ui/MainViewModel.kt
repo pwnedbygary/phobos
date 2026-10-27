@@ -33,11 +33,14 @@ import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.CatalogBackdrop
 import com.phobos.emulator.data.CrtBackdropScene
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GameKey
+import com.phobos.emulator.data.GameStore
 import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.MangaBackdropScene
 import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.PlatformIconPack
+import com.phobos.emulator.data.PlayClock
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.RetrowaveBackdropScene
 import com.phobos.emulator.data.RpgBackdropScene
@@ -226,6 +229,9 @@ class MainViewModel(
 ) : ViewModel(), DefaultLifecycleObserver {
     val settings: StateFlow<EmulatorSettings> = settingsStore.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), initialSettings)
+
+    // The games played, with their plays, play time and when last played: one store for the whole app.
+    private val gameStore = GameStore.get(context)
 
     // The loaded game, as the level its controls resolve at; null with none loaded.
     private val _loadedGame = MutableStateFlow<ControlLevel.Game?>(null)
@@ -698,6 +704,9 @@ class MainViewModel(
         _frameStepping.value = false
         _isPaused.value = paused
         PhobosCore.setPause(paused)
+        // Pausing (the menu, the Library, the app leaving the screen) saves the play time so far, so a game the
+        // system kills while it's away keeps it.
+        if (paused && _isLoaded.value) gameStore.checkpoint(playClock())
         // Controller input goes to the menus while paused, so a button held now would stay down for the game.
         if (paused) GameInputState.releaseAllButtons()
         // Back in the game, a stick or trigger still held from a binding is the game's again.
@@ -803,6 +812,10 @@ class MainViewModel(
         }
     }
 
+    /** The core's play clock, the HUD's, with the emulation thread counting it; null when it can't be read. */
+    private fun playClock(): PlayClock? =
+        runCatching { PhobosCore.getPerformanceStats().let { PlayClock(it.emuTid, it.playTimeMs) } }.getOrNull()
+
     /**
      * Unloads the game the core holds, whichever instance loaded it, snapshotting it first when [autoSave] and
      * Auto-Save State (Task 17) are on. Call with [CoreSession.lock] held.
@@ -811,6 +824,8 @@ class MainViewModel(
         val sysName = CoreSession.system
         val romName = CoreSession.rom
         if (sysName.isEmpty()) return
+        // Read before anything is torn down; the play clock only counted while the game ran unpaused.
+        gameStore.gameEnded(GameKey(sysName, romName), playClock())
         // The snapshot comes BEFORE any teardown, while the core is still alive.
         if (autoSave && settings.value.autoSaveState && romName.isNotEmpty()) {
             try {
@@ -2770,6 +2785,8 @@ class MainViewModel(
             }
             ensureActive()
             _roms.value = foundRoms
+            // A played game's record follows its file to a new URI (a folder added again from another level).
+            gameStore.refreshUris(systemName, foundRoms.map { it.name to it.uri.toString() })
             // Plain list first; titles and icons filled in on the same job so a superseded scan can't clobber
             // another system's list after a late finish.
             if (systemName == LaunchSystems.PSP) {
@@ -2928,12 +2945,16 @@ class MainViewModel(
                 val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName && CoreSession.rom == rom.name
                 closeSessionLocked(autoSave = !reload)
                 beforeLoad?.invoke()
-                loadLocked(context, systemName, rom, disc, autoLoad)
+                loadLocked(context, systemName, rom, disc, autoLoad, reload)
             }
         }
     }
 
-    private suspend fun loadLocked(context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true) {
+    /** [reload] is the running game started over, which isn't another play of it. */
+    private suspend fun loadLocked(
+        context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true,
+        reload: Boolean = false,
+    ) {
         withContext(Dispatchers.IO) {
             // For the merged "ZX Spectrum" entry, native detects 48K vs 128K by
             // CONTENT (TAP header block scan) — see PhobosRunner initialize().
@@ -3249,6 +3270,10 @@ class MainViewModel(
                         CoreSession.system = effectiveSystem
                         CoreSession.rom = rom.name
                         CoreSession.owner = sessionToken
+                        gameStore.gameStarted(
+                            GameKey(effectiveSystem, rom.name), rom.uri.toString(), newPlay = !reload,
+                            clock = playClock(),
+                        )
                         loadedRom = rom
                         _isLoaded.value = true
                         currentSystemName = effectiveSystem
@@ -3368,6 +3393,8 @@ class MainViewModel(
                     } else {
                         PhobosCore.setSecondaryRomFd(descriptor!!.detachFd())
                     }
+                    // A 64DD disk starts another emulation thread and play clock: the time so far is counted first.
+                    gameStore.checkpoint(playClock())
                     PhobosCore.loadSecondaryRom(systemName, file.uri.toString()).also { success ->
                         if (!success) Log.e("Phobos", "Native loadSecondaryRom failed for $systemName")
                     }
