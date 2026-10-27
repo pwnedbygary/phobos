@@ -492,7 +492,9 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
   factors; factors from the pixel's own color or alpha, doubled alphas and BLEND_FIXED_A applied in the shader to the
   source; the destination's factor from the pixel (its color, alpha, doubled) carried in the shader's second output
   (dual-source blending), and without that, the GPU's own source factors where they're the same; BLEND_FIXED_B as the
-  blend constant. Minimum and maximum are the GPU's; the absolute difference is approximated by the maximum. The
+  blend constant. A pipeline that writes no color is made without blending and without a dual-source factor, which
+  changes no pixel. In Midnight Club: L.A. Remix, Qualcomm's own driver (the RP6's) lost the GPU drawing one made
+  with both. Minimum and maximum are the GPU's; the absolute difference is approximated by the maximum. The
   difference from the PSP: the PSP multiplies each term in whole numbers and truncates it (`(2s+1)(2f+1) >> 10`),
   then adds, while the GPU rounds the sum, so blended pixels were often a level apart; since part 49 the shader
   gives the GPU the source term as the PSP makes it, nudged a quarter of a step (`TERM`), and most of them are the

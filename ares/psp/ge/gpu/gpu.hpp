@@ -593,6 +593,11 @@ struct GPU : GE::Renderer {
   //vulkan.cpp: a SPIR-V module (size in bytes) without its DepthLess execution mode (draw.frag's DEPTHS build
   //undeclared, as the pipelines whose depth isn't declared take it: Backend::depthBuild())
   static auto undeclared(const u32* words, size_t size) -> std::vector<u32>;
+  //vulkan.cpp: k with its blending (blend and the color factors) as its pipeline is made with it. A pipeline that
+  //writes no color (colorMask 0) blends nothing and takes no factor from draw.frag's second output (Source1Color,
+  //OneMinusSource1Color: Zero), which changes no pixel, as Vulkan writes no color there whatever the blending.
+  //Qualcomm's own driver (the RP6's) lost the GPU drawing one that did (Midnight Club: L.A. Remix's).
+  static auto blendFor(const Pipeline& k) -> Pipeline;
 
 private:
   static constexpr u32 SubmitEvery = 128;  //commands recorded, handed to the GPU without waiting for the list's end

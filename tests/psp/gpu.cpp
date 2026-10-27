@@ -3150,6 +3150,49 @@ static auto gpuDepthBuilds() -> void {
   }
 }
 
+//How the pipelines blend (GPU::blendFor()): one that writes no color blends nothing and takes no factor from
+//draw.frag's second output (dual-source), whatever its key's blending, as nothing it could blend is written; one that
+//writes any channel blends as its key says, a dual-source factor and all. The key is the one Qualcomm's own driver (the
+//RP6's) lost the GPU drawing, Midnight Club: L.A. Remix's: One and Source1Color under Add, no color written. No GPU
+//needed.
+static auto gpuBlendUnwritten() -> void {
+  GPU::Pipeline k{};
+  k.textured = 1, k.function = 8, k.alphaTest = 1, k.colorTest = 4, k.fog = 1, k.depthRange = 1, k.source = 2;
+  k.destination = 2, k.quantize = 4, k.logic = 3, k.blend = 1, k.sourceFactor = GPU::One;
+  k.destinationFactor = GPU::Source1Color, k.operation = GPU::Add, k.colorMask = 0, k.depthTest = 1;
+  k.depthCompare = 7, k.depthWrite = 1, k.texels = 4, k.term = 1, k.transformed = 1;
+  //(the color mask; the key's blending and factors; the pipeline's)
+  struct Case { u8 colorMask, blend, source, destination, blends, sourceMade, destinationMade; };
+  const Case cases[] = {
+    {0, 1, GPU::One, GPU::Source1Color, 0, GPU::One, GPU::Zero},  //(the game's)
+    {0, 1, GPU::OneMinusSource1Color, GPU::Source1Color, 0, GPU::Zero, GPU::Zero},
+    {0, 1, GPU::Source1Color, GPU::OneMinusSource1Color, 0, GPU::Zero, GPU::Zero},
+    {0, 1, GPU::OneMinusDestinationColor, GPU::Zero, 0, GPU::OneMinusDestinationColor, GPU::Zero},
+    {0, 0, GPU::One, GPU::Source1Color, 0, GPU::One, GPU::Zero},  //(blending off already)
+    {7, 1, GPU::One, GPU::Source1Color, 1, GPU::One, GPU::Source1Color},  //(the game's too, writing color)
+    {1, 1, GPU::One, GPU::Source1Color, 1, GPU::One, GPU::Source1Color},
+    {2, 1, GPU::One, GPU::Source1Color, 1, GPU::One, GPU::Source1Color},
+    {4, 1, GPU::One, GPU::Source1Color, 1, GPU::One, GPU::Source1Color},
+    {8, 1, GPU::One, GPU::Source1Color, 1, GPU::One, GPU::Source1Color},
+    {15, 1, GPU::OneMinusSource1Color, GPU::Source1Color, 1, GPU::OneMinusSource1Color, GPU::Source1Color},
+  };
+  u32 wrong = 0;
+  for(auto& one : cases) {
+    GPU::Pipeline given = k, expected = k;
+    given.colorMask = expected.colorMask = one.colorMask;
+    given.blend = one.blend, given.sourceFactor = one.source, given.destinationFactor = one.destination;
+    expected.blend = one.blends, expected.sourceFactor = one.sourceMade;
+    expected.destinationFactor = one.destinationMade;
+    GPU::Pipeline made = GPU::blendFor(given);
+    if(!(made == expected) && wrong++ < 4) {
+      std::printf("  color mask %u, blending %u, factors %u and %u: made blending %u, factors %u and %u\n",
+                  one.colorMask, one.blend, one.source, one.destination, made.blend, made.sourceFactor,
+                  made.destinationFactor);
+    }
+  }
+  CHECK(wrong, 0u);
+}
+
 //Loads through VRAM's second and fourth copies, the views the GE keeps its depth buffer in, of pixels the GPU drew
 //(WipEout reads its depth buffer where its bloom's buffers are): memory's bytes, without waiting, as the GPU's depth
 //isn't memory's to finish for; through the first copy another of the sprite's pixels finishes and finds the GPU's
@@ -6234,6 +6277,8 @@ auto gpuTests() -> Tests {
      gpuDepthOutside},
     {"gpu depth's pipelines: declared with the margin where the depth clamps and is in range, else undeclared",
      gpuDepthBuilds},
+    {"gpu blending where no color is written: none, and no dual-source factor; where any is, as the key has it",
+     gpuBlendUnwritten},
     {"gpu memory's changes to depth kept past PRIMs that don't use it, for the next that does", gpuDepthUnused},
     {"gpu loads through the depth buffer's views: memory's, without waiting", gpuDepthViewLoads},
     {"gpu a depth buffer two frame buffers draw with: the depth either drew taken by the other", gpuSharedDepth},
