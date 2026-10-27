@@ -7,8 +7,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -143,7 +146,10 @@ fun BackdropText(
  * contrast allows; set [accentText] where the card shows secondary, tertiary, error, success or
  * warning text. A click ripple stays inside [shape], and a clickable card dips slightly when pressed.
  * With glass effects off it is the opaque surface with a faint outline (or the neon edge).
+ * A clickable card can take a long press too ([onLongClick]), and the caller's [interactionSource], to show presses of
+ * its own (a held controller button) as the card's.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ThemedCard(
     modifier: Modifier = Modifier,
@@ -151,6 +157,8 @@ fun ThemedCard(
     onClick: (() -> Unit)? = null,
     accentText: Boolean = false,
     fill: Color = MaterialTheme.colorScheme.surfaceContainer,
+    onLongClick: (() -> Unit)? = null,
+    interactionSource: MutableInteractionSource? = null,
     content: @Composable () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -174,18 +182,38 @@ fun ThemedCard(
     }
     val edge = if (theme.retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier
     if (onClick != null) {
-        val interactionSource = remember { MutableInteractionSource() }
-        val pressed by interactionSource.collectIsPressedAsState()
+        val ownSource = remember { MutableInteractionSource() }
+        val source = interactionSource ?: ownSource
+        val pressed by source.collectIsPressedAsState()
         val scale by animateFloatAsState(if (pressed && (solid != null || !glassOff)) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
-        Surface(
-            onClick = onClick,
-            modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel).focusRing(scheme.primary, shape),
-            shape = shape,
-            color = Color.Transparent,
-            contentColor = scheme.onSurface,
-            interactionSource = interactionSource,
-            content = content,
-        )
+        val card = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel)
+            .focusRing(scheme.primary, shape)
+        if (onLongClick == null) {
+            Surface(
+                onClick = onClick,
+                modifier = card,
+                shape = shape,
+                color = Color.Transparent,
+                contentColor = scheme.onSurface,
+                interactionSource = source,
+                content = content,
+            )
+        } else {
+            // Surface's own click has no long press, so this card's is clipped to the card, as Surface clips its own.
+            Surface(
+                modifier = card.clip(shape).combinedClickable(
+                    interactionSource = source,
+                    indication = LocalIndication.current,
+                    role = Role.Button,
+                    onLongClick = onLongClick,
+                    onClick = onClick,
+                ),
+                shape = shape,
+                color = Color.Transparent,
+                contentColor = scheme.onSurface,
+                content = content,
+            )
+        }
     } else {
         Surface(modifier = modifier.then(edge).then(panel), shape = shape, color = Color.Transparent, contentColor = scheme.onSurface, content = content)
     }
