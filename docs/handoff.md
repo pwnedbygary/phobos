@@ -84,11 +84,22 @@ Changed: `data/GameStore.kt`, `ui/MainViewModel.kt`, `ui/LibraryScreen.kt`, `ui/
   whose grant can end with the frontend. Now a start keeps the stored URI when that still opens and the start's isn't
   a lasting one: a file path, or a document under a folder Phobos holds a lasting grant for (`ContentGameUris`).
 - **Focus**: the rows come first, so the first D-pad press lands on Continue Playing's first card, or with both rows
-  empty on the first system tile, since the empty lines can't take the focus. A card leaving its row (X on a Favorites
-  card, Hide from the menu) hands the focus to the card in its place; one whose change didn't take keeps it. Cards are
-  `ThemedCard`s, with each style's panel and focus ring and the theme's colors; a CRT card blinks the cursor after its
-  title while it has the focus.
+  empty on the first system tile, since the empty lines can't take the focus. D-pad down from the Running card goes to
+  the first card under it (found on the RP6, below). A card leaving its row (X on a Favorites card, Hide from the
+  menu) hands the focus to the card in its place; one whose change didn't take keeps it. Cards are `ThemedCard`s, with
+  each style's panel and focus ring and the theme's colors; a CRT card blinks the cursor after its title while it has
+  the focus.
   `ThemedCard` takes an optional long press and interaction source; cards that pass neither are unchanged.
+- **Found on the RP6**: the check (Checks, below) found D-pad down from the Running card going to the Continue Playing
+  card nearest the card's middle, not the first, so down then A started that game and closed the running one. On
+  master, which has no rows, the same two presses would open the page of the system whose tile is nearest the Running
+  card's middle (derived from master's code and Compose 1.7.6's bytecode; not run on master). The owner chose to fix
+  it before the merge (2026-10-27). Down from the Running card now goes to Continue Playing's first card (as a rule the
+  running game's own, which A resumes), or with that row empty to Favorites' first, or with both empty to the first
+  system's tile (`cardBelowRunning`). The card takes the press itself and asks that card for the focus, as a row does
+  when a card leaves it, rather than naming it with `focusProperties`: in Compose 1.7.6 both throw when the card isn't
+  composed (`FocusRequester.findFocusTargetNode`), as one scrolled out of view isn't, there's no public way to ask
+  first, and only the request's throw can be caught. When it throws, the press is left to Compose's own search.
 - **Cartridge (G3)**: the rows follow Cartridge's rules without its code. Continue Playing is
   `src/main.js:420-423` of the reconstruction (played, not hidden, newest first, 24); Favorites is `:424`, sorted as
   Phobos's list sorts; the menu's hide item is `:10407-10414`, and a start un-hides a game as `electron/main.js:763`
@@ -99,28 +110,43 @@ Changed: `data/GameStore.kt`, `ui/MainViewModel.kt`, `ui/LibraryScreen.kt`, `ui/
   records are published once read and after each change; a favorite never played has a record with no plays; hidden
   until played again (a reload isn't); missing undone by a start or by a scan that lists the game; a missing game not
   the first to go past the cap; a start keeping a stored file that opens over one that might not last, replacing it
-  with a lasting one, replacing one that no longer opens, and recording a first start's file. `LibraryRowsTest`, 17:
+  with a lasting one, replacing one that no longer opens, and recording a first start's file. `LibraryRowsTest`, 20:
   Continue Playing's 24 newest, without hidden games, unplayed favorites or hidden systems; Favorites in a system
   list's order; a missing game keeping its place in both; which records need their system's page, and a #317
   multi-disc record needing it once, until a scan records its discs; the menu's items; a quick press, a hold, repeats,
   a timer after the release, a release without its press, a fresh press after a release that went elsewhere; the menu
   dropping the held A until A goes down again, a fresh press in it, and a menu opened by touch; the focus passing on
-  from a card that leaves its row, and staying with one whose change didn't take. Each expected value is written out
-  from the scenario.
-- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, AGP 9.3.2): on the final code, both flavours' JVM tests, 566 each, 0
-  failures, 31 of them `GameStoreTest`'s and 17 `LibraryRowsTest`'s (`./gradlew :app:testLegacyDebugUnitTest
+  from a card that leaves its row, and staying with one whose change didn't take; and where D-pad down from the
+  Running card goes: Continue Playing's first card, Favorites' first with that row empty, and the first system with
+  both empty or not read yet. Each expected value is written out from the scenario.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, AGP 9.3.2): on the final code, both flavours' JVM tests, 569 each, 0
+  failures, 31 of them `GameStoreTest`'s and 20 `LibraryRowsTest`'s (`./gradlew :app:testLegacyDebugUnitTest
   :app:testModernDebugUnitTest --continue --no-daemon --offline --max-workers=1
   -Pkotlin.compiler.execution.strategy=in-process`, the home folder and the SDK read-only). The run hashed this
-  change's 11 files as it started and as it ended, the same both times; only this bullet and the plan row's status
-  were written after it. A first run, before the review's fixes, passed with 562 each (30 and 14). No new compiler
-  warning. `git diff --check` clean; no added line over 120 columns but the plan's table rows. CI builds the APKs
-  on the pull request.
-- **Limits**: no device run yet; before the merge an RP6 check covers the hold, X, the long press, the menu, "Game Not
-  Found" (with a game running too), the focus, and the Library and menu in all 13 themes. A system's game list isn't
-  tried on a device (the test build has no ROM folder): its X, held A, long press and star. Its rows share the cards'
-  controller handling (`gameButtons`), and both take the long press from `combinedClickable`. The view model's row
-  start, the store's hooks, `ContentGameUris` (it needs Android's content resolver) and the composables have no host
-  test (the project has no Compose or Robolectric tests); their plain logic, in `LibraryRows.kt` and `GameStore`, has.
+  change's 11 files as it started and as it ended, the same both times; after it only the docs changed: this bullet's
+  counts, then wording after the review. Earlier runs passed with 562 each (30 and 14) before the review's fixes, and
+  566 (31 and 17) before the RP6's.
+  No new compiler warning. `git diff --check` clean; no added line over 120 columns but the plan's table rows. CI was
+  green on `b1b41f20`, the change before the RP6's fix (Android Build's unit tests and both flavours' release APKs;
+  Desktop Build), and builds this one on the pull request. On the RP6 (Retroid Pocket 6, Android 13, 2026-10-27), a
+  side-by-side debug build of `b1b41f20` on that CI run's own native libraries, with three games that need no
+  firmware started through the debug load intent: both rows' empty lines, and the first D-pad press on the first
+  system tile; Continue Playing newest first, with plays and play time recorded; the first D-pad press on Continue
+  Playing's first card; X starring a game and adding it to Favorites; a 1 s hold of the controller's A opening the
+  menu, still open after the release with nothing picked, and Hide passing the ring to the card in its place; a long
+  press on touch opening it; a quick A starting a game; a running game's card, marked Running, resuming it on a tap;
+  "Game Not Found" with a game running (left running, resumed after Cancel, its play time still counting) and with
+  none; a hidden game played again coming back; and the Library and the menu in all 13 themes. The test build's log
+  had no "Game records:" warning and no crash, and it was uninstalled. That check found the Running card's down move
+  (above); its recheck on the RP6, after this fix, is in the pull request.
+- **Limits**: not tried on a device: a system's game list (the test build has no ROM folder), its X, held A, long
+  press and star, though its rows share the cards' controller handling (`gameButtons`) and both take the long press
+  from `combinedClickable`; a frontend's start and which URI a start keeps (`ContentGameUris` on real grants), as the
+  check started its games from file paths, which last; the disc chooser from a row; the screensaver chord over the
+  Library; the Modern flavour, styles other than the default, and portrait. The view model's row start, the store's
+  hooks, `ContentGameUris` (it needs Android's content resolver), the Running card's down and the composables have no
+  host test (the project has no Compose or Robolectric tests); their plain logic, in `LibraryRows.kt` and `GameStore`,
+  has.
   A frontend's game whose record has only the frontend's own URI (no Library start or scan ever gave it a lasting one)
   stops opening when that grant ends; its card then shows "Game Not Found", and its system's page finds it only in one
   of Phobos's folders. A record whose name has none of its system's extensions is taken for a disc set and always
@@ -130,9 +156,16 @@ Changed: `data/GameStore.kt`, `ui/MainViewModel.kt`, `ui/LibraryScreen.kt`, `ui/
   Library binding, that starts with A turns a held A into a quick press: the window takes A's press and hands it on
   with its release, together, only as it's let go of, so A then starts the game; a long press on touch still opens the
   menu. When an action takes a row's last card, the focus goes nowhere and the next D-pad press starts from the top.
-  With every system hidden, the Library shows "No systems found" and no rows, as before. No mutation run.
-- **Next**: CI and the RP6 check; then the art pull request: box art downloaded by default, and the Artwork settings
-  page.
+  Down from the Running card into a row scrolled so that its first card is out of view goes where Compose's own search
+  takes it. On the RP6, Up from the dock's Library tab didn't bring the focus back to the Library: docked pages run
+  under the dock to the bottom of the screen, and Compose's search can only enter the grid, a scrolling focus group, as
+  a whole, which it doesn't count as above a tab whose bottom is above the grid's. Master's Library would do the same
+  once it fills the page (the RP6's 34 systems do), and the two rows make a shorter one fill it too (this cause and
+  master's behaviour derived from master's code and Compose 1.7.6's bytecode; not run on master). The dock isn't
+  changed here. With every system hidden, the Library shows "No systems found" and no rows, as before. No mutation
+  run.
+- **Next**: CI, and the RP6 recheck of down from the Running card; then the art pull request: box art downloaded by
+  default, and the Artwork settings page.
 
 ## Game records: each game's plays, play time and last start in `files/games.json`, for the Library rows — 2026-10-27
 

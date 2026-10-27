@@ -1,6 +1,7 @@
 package com.phobos.emulator.ui
 
 import android.net.Uri
+import android.view.KeyEvent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,6 +27,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -76,6 +78,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     var starting by remember { mutableStateOf(false) }
     val continueFocus = remember { RowFocus() }
     val favoritesFocus = remember { RowFocus() }
+    val firstSystem = remember { FocusRequester() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val theme = LocalPhobosTheme.current
@@ -123,6 +126,20 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
         }
     }
 
+    // D-pad down from the Running card goes to the first card under it, where Compose's own search would take the one
+    // nearest the card's middle: Continue Playing's first, or with that row empty Favorites' first, or with both empty
+    // the first system's tile. One out of view isn't composed, and asking it for the focus throws: the press is then
+    // left to Compose.
+    fun focusBelowRunning(): Boolean {
+        val card = cardBelowRunning(rows)
+        val requester = when {
+            card == null -> firstSystem
+            card.inFavorites -> favoritesFocus.requester(card.key)
+            else -> continueFocus.requester(card.key)
+        }
+        return runCatching { requester.requestFocus() }.isSuccess
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (systems.isEmpty()) {
             // A game a frontend started can be running with no ROM folders set up here.
@@ -160,7 +177,10 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                 }
                 running?.let { game ->
                     item(key = "running", span = { GridItemSpan(maxLineSpan) }) {
-                        RunningGameCard(game, tileFill, onResume = { viewModel.swapBackToGame() }, onQuit = { confirmQuit = true })
+                        RunningGameCard(
+                            game, tileFill, onResume = { viewModel.swapBackToGame() }, onQuit = { confirmQuit = true },
+                            onDown = { focusBelowRunning() },
+                        )
                     }
                 }
                 // Both rows are always there, with a line when empty, so the grid doesn't shift as the records arrive.
@@ -198,12 +218,14 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                     )
                 }
                 items(systems, key = { "system/$it" }) { system ->
-                    SystemCard(
-                        system = system,
-                        art = art,
-                        fill = tileFill,
-                        onClick = { onSystemClick(Uri.encode(system)) },
-                    )
+                    Box(if (system == systems.first()) Modifier.focusRequester(firstSystem) else Modifier) {
+                        SystemCard(
+                            system = system,
+                            art = art,
+                            fill = tileFill,
+                            onClick = { onSystemClick(Uri.encode(system)) },
+                        )
+                    }
                 }
             }
         }
@@ -445,13 +467,30 @@ private fun GameCard(
 @Immutable
 class LibraryArt(val treatment: ConsoleTreatment, val palette: ConsoleArtPalette, val colors: ConsoleColors)
 
-/** The game paused behind the Library: its last frame, name and system, with Resume and Quit. Tapping it resumes too. */
+/**
+ * The game paused behind the Library: its last frame, name and system, with Resume and Quit. Tapping it resumes too.
+ * [onDown] takes D-pad down while the card itself has the focus, true when it moved the focus.
+ */
 @Composable
-private fun RunningGameCard(game: RunningGame, fill: Color, onResume: () -> Unit, onQuit: () -> Unit) {
+private fun RunningGameCard(
+    game: RunningGame,
+    fill: Color,
+    onResume: () -> Unit,
+    onQuit: () -> Unit,
+    onDown: () -> Boolean = { false },
+) {
     val frame = remember(game.frame) { game.frame?.asImageBitmap() }
     val frameAspect = game.frame?.let { it.width.toFloat() / it.height } ?: (4f / 3f)
+    // The card itself, not its Resume or Quit (which a keyboard's Tab reaches).
+    var focused by remember { mutableStateOf(false) }
     ThemedCard(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                val key = event.nativeKeyEvent
+                focused && key.keyCode == KeyEvent.KEYCODE_DPAD_DOWN && key.action == KeyEvent.ACTION_DOWN && onDown()
+            },
         shape = MaterialTheme.shapes.small,
         onClick = onResume,
         fill = fill,

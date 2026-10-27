@@ -142,3 +142,15 @@ class LeavingCard {
         return if (index < 0 || now.isEmpty()) null else now[minOf(index, now.lastIndex)]
     }
 }
+
+/** A card in one of the Library's rows: [key]'s, in Favorites when [inFavorites], else in Continue Playing. */
+data class RowCard(val key: GameKey, val inFavorites: Boolean)
+
+/**
+ * The card D-pad down from the Running card goes to: Continue Playing's first (as a rule the running game's own), or
+ * with that row empty, Favorites' first. None when both rows are empty or not read yet: then it's the first system's
+ * tile, as for the first D-pad press.
+ */
+fun cardBelowRunning(rows: LibraryRows?): RowCard? =
+    rows?.continuePlaying?.firstOrNull()?.let { RowCard(it.key, inFavorites = false) }
+        ?: rows?.favorites?.firstOrNull()?.let { RowCard(it.key, inFavorites = true) }

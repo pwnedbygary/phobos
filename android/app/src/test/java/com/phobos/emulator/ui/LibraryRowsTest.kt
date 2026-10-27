@@ -244,4 +244,38 @@ class LibraryRowsTest {
         // Leaving later, for another reason, it moves the focus nowhere.
         assertNull(card.shown(listOf(a, c, d)))
     }
+
+    @Test
+    fun downFromTheRunningCardGoesToContinuePlayingsFirstCard() {
+        val records = listOf(
+            played("Game Boy", "Running.gb", lastPlayed = 3_000).copy(favourite = true),
+            played("Super Famicom", "Earlier.sfc", lastPlayed = 2_000),
+            GameRecord(GameKey("Game Boy", "A favourite.gb"), favourite = true),
+        )
+        // The running game started last, so its card leads Continue Playing; in Favorites another comes first.
+        assertEquals(
+            RowCard(GameKey("Game Boy", "Running.gb"), inFavorites = false),
+            cardBelowRunning(libraryRowsOf(records, visible)),
+        )
+    }
+
+    @Test
+    fun withContinuePlayingEmptyDownGoesToFavoritesFirstCard() {
+        val records = listOf(
+            played("Game Boy", "Hidden.gb", lastPlayed = 3_000, hidden = true),
+            GameRecord(GameKey("Super Famicom", "Zelda.sfc"), favourite = true),
+            GameRecord(GameKey("Game Boy", "Metroid.gb"), favourite = true),
+        )
+        assertEquals(
+            RowCard(GameKey("Game Boy", "Metroid.gb"), inFavorites = true),
+            cardBelowRunning(libraryRowsOf(records, visible)),
+        )
+    }
+
+    @Test
+    fun withBothRowsEmptyOrNotReadDownGoesToTheFirstSystem() {
+        val onlyHidden = listOf(played("Game Boy", "Hidden.gb", lastPlayed = 1_000, hidden = true))
+        assertNull(cardBelowRunning(libraryRowsOf(onlyHidden, visible)))
+        assertNull(cardBelowRunning(null))
+    }
 }
