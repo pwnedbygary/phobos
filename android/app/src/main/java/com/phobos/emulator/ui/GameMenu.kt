@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -83,6 +84,7 @@ private val GameMenuItem.label: String
         GameMenuItem.ADD_TO_FAVORITES -> "Add to Favorites"
         GameMenuItem.REMOVE_FROM_FAVORITES -> "Remove from Favorites"
         GameMenuItem.HIDE_FROM_CONTINUE_PLAYING -> "Hide from Continue Playing"
+        GameMenuItem.REDOWNLOAD_ARTWORK -> "Re-download Artwork"
     }
 
 /** An item's icon: the star filled while the game is a favorite, as its card's is, and outlined while it isn't. */
@@ -91,6 +93,7 @@ private val GameMenuItem.icon: ImageVector
         GameMenuItem.ADD_TO_FAVORITES -> Icons.Rounded.StarBorder
         GameMenuItem.REMOVE_FROM_FAVORITES -> Icons.Rounded.Star
         GameMenuItem.HIDE_FROM_CONTINUE_PLAYING -> Icons.Rounded.VisibilityOff
+        GameMenuItem.REDOWNLOAD_ARTWORK -> Icons.Rounded.Refresh
     }
 
 /**

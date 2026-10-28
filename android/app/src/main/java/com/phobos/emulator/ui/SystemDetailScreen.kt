@@ -22,6 +22,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.phobos.emulator.art.hasArt
 import com.phobos.emulator.data.GameKey
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.romTitle
@@ -60,6 +63,7 @@ fun SystemDetailScreen(
 
     // This system's game records by ROM name, for the stars and the game menu.
     val records by viewModel.gameRecords.collectAsState()
+    val boxes by viewModel.artBoxes.collectAsState()
     val recorded = remember(records, systemName) {
         records.orEmpty().filter { it.key.system == systemName }.associateBy { it.key.name }
     }
@@ -71,7 +75,7 @@ fun SystemDetailScreen(
             title = if (game.discs.isNotEmpty()) romTitle(game.name)
                 else com.phobos.emulator.util.displayTitle(game.name, game.title),
             system = systemName,
-            items = gameMenuItems(recorded[game.name]),
+            items = gameMenuItems(recorded[game.name], artwork = settings.artDownload && hasArt(systemName)),
             openedByHeldA = heldA,
             fullScreen = settings.fullScreenMode,
             onPick = { item ->
@@ -80,6 +84,7 @@ fun SystemDetailScreen(
                     GameMenuItem.ADD_TO_FAVORITES -> viewModel.setFavourite(key, true, game)
                     GameMenuItem.REMOVE_FROM_FAVORITES -> viewModel.setFavourite(key, false, game)
                     GameMenuItem.HIDE_FROM_CONTINUE_PLAYING -> viewModel.hideFromContinuePlaying(key)
+                    GameMenuItem.REDOWNLOAD_ARTWORK -> viewModel.redownloadArt(key, game.title)
                 }
             },
             onDismiss = { menuFor = null },
@@ -178,6 +183,7 @@ fun SystemDetailScreen(
                                         }.getOrNull()?.asImageBitmap()
                                     }
                                 }
+                                val box = boxes[GameKey(systemName, rom.name)]
                                 val favourite = recorded[rom.name]?.favourite == true
                                 val source = remember { MutableInteractionSource() }
                                 val start: () -> Unit = {
@@ -198,7 +204,17 @@ fun SystemDetailScreen(
                                     } else if (rom.title != null) {
                                         { Text(rom.name) }
                                     } else null,
-                                    leadingContent = if (iconBitmap != null) {
+                                    // Its downloaded box art, else a PSP disc's own icon, else the play badge.
+                                    leadingContent = if (box != null) {
+                                        {
+                                            AsyncImage(
+                                                model = box,
+                                                contentDescription = displayTitle,
+                                                contentScale = ContentScale.Fit,
+                                                modifier = Modifier.size(48.dp),
+                                            )
+                                        }
+                                    } else if (iconBitmap != null) {
                                         {
                                             Image(
                                                 bitmap = iconBitmap,

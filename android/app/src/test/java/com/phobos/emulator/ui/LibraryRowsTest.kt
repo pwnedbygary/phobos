@@ -278,4 +278,32 @@ class LibraryRowsTest {
         assertNull(cardBelowRunning(libraryRowsOf(onlyHidden, visible)))
         assertNull(cardBelowRunning(null))
     }
+
+    @Test
+    fun theMenuOffersReDownloadArtworkLastWhenAsked() {
+        val key = GameKey("Game Boy", "Tetris (World).gb")
+        assertEquals(
+            listOf(
+                GameMenuItem.ADD_TO_FAVORITES, GameMenuItem.HIDE_FROM_CONTINUE_PLAYING, GameMenuItem.REDOWNLOAD_ARTWORK,
+            ),
+            gameMenuItems(GameRecord(key, plays = 1, lastPlayed = 5), artwork = true),
+        )
+        assertEquals(listOf(GameMenuItem.ADD_TO_FAVORITES, GameMenuItem.REDOWNLOAD_ARTWORK), gameMenuItems(null, true))
+    }
+
+    @Test
+    fun aRowGoesBackToItsStartWhenItsFirstCardIsAnother() {
+        val a = GameKey("Game Boy", "A.gb")
+        val b = GameKey("Game Boy", "B.gb")
+        val c = GameKey("Game Boy", "C.gb")
+        val first = FirstCard()
+        assertFalse("the first look keeps the row where it is", first.moved(listOf(a)))
+        // The recheck's arrival: the row first shows one game, then all of them with the newest first.
+        assertTrue(first.moved(listOf(c, b, a)))
+        assertFalse("the same first card", first.moved(listOf(c, b, a)))
+        assertFalse("a card leaving mid-row", first.moved(listOf(c, a)))
+        assertTrue("the first card leaving", first.moved(listOf(a)))
+        assertFalse("an emptied row", first.moved(emptyList()))
+        assertTrue("a game started into an emptied row", first.moved(listOf(b)))
+    }
 }

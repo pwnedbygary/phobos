@@ -35,6 +35,103 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Box art: downloaded from libretro's thumbnail server, on the Library's cards and a system's list — 2026-10-28
+
+Branch `library-art`, from master `ba2f65c0` (#318's merge). The third pull request of the Cartridge integration, in
+the order the Phobos coordinator set: after the game records and the Library rows, before the 3D carts. The owner's
+choices (2026-10-27 and 2026-10-28, question tool, verbatim): artwork downloads "should be enabled by default for all
+systems/games/etc..."; "Box art, screenshots and title logos, as Cartridge does"; "After each folder scan, on any
+network, paused while a game runs"; "Downloaded box art, with the disc's icon when there is none" (PSP); systems with no
+folder of their own "Look in the nearest system's folder". The coordinator checked the scope before any code and gave
+GO with points folded in below. Changed: `art/ArtMatch.kt`, `art/ArtSystems.kt`, `art/ArtStore.kt`,
+`art/ArtDownloader.kt`, `ui/ArtworkSettingsScreen.kt` (new), `data/SettingsStore.kt`, `ui/MainViewModel.kt`,
+`ui/LibraryScreen.kt`, `ui/SystemDetailScreen.kt`, `ui/LibraryRows.kt`, `ui/GameMenu.kt`, `ui/SettingsScreen.kt`,
+`ui/MainScaffold.kt`, `LICENSE`, `README.md`, `docs/third-party/cartridge.md` and `tools/art-fixtures/` (new), the
+tests `ArtMatchTest`, `ArtSystemsTest`, `ArtStoreTest`, `ArtDownloaderTest` (new), `LibraryRowsTest`,
+`LicenseNoticesTest` and their fixtures in `src/test/resources/art/` (new), this file, and one row of
+`docs/implementation-plan.md`.
+
+- **What users see**: a game's box art on its card in Continue Playing and Favorites, and as its picture in a system's
+  list, once downloaded; until then, and where none is found, the console art and the play badge (a PSP game: its
+  disc's icon). Settings → Controls & Library → Artwork: "Download Artwork" and "Screenshots and Logos Too" (both on;
+  nothing shows the screenshots and logos yet: the owner chose to keep them, as Cartridge does), "Download Missing
+  Artwork", "Re-download All Artwork" (asks first) with the count and size, and what's sent to whom. The game menu
+  gains "Re-download Artwork" while downloading is on and the game's system has pictures.
+- **Downloads**: from `https://thumbnails.libretro.com` only, with `HttpURLConnection` (user agent `Phobos/<version>`,
+  15 s to connect, 30 s to read), four at once, after each folder scan for that system's games and for the games in
+  the Library's rows, whatever was scanned. No new request starts from the moment a game starts loading until it
+  closes or its load fails (checked before each game, each kind and each request); requests going finish. Redirects
+  aren't followed, so every request goes to that server. A system's listing of each kind is fetched once and kept two
+  weeks (in the cache folder), so a picture request names only a matched game: names not on the server's list never
+  leave the device. A game not found is looked for again after a week, one whose download failed after an hour; a
+  listing page with no pictures on it is a failure, not "no art". Pictures over 4 MiB, over 4096 x 4096 pixels, with
+  one side over 16 times the other, or that don't decode (running out of memory included) count as not found; one is
+  decoded at most 2048 x 2048 before it's scaled. Box art is kept 520 pixels wide (JPEG), screenshots 640 (JPEG), logos
+  480 (PNG), as Cartridge keeps them.
+- **Matching** (`art/ArtMatch.kt`, ported from Cartridge): the file's name without its extension, then a PSP disc's own
+  title; exact (with the characters a file name can't hold as `_`), then by match key (letters and digits, no tags,
+  leading article put back), then loosely (Dice of letter pairs at least 0.84, about as long). Among several, the
+  region order is Settings → Emulation's (NTSC-U the USA's, NTSC-J Japan's, PAL Europe's, World second). Unlike
+  Cartridge's, a loose match must have the game's own numbers: on the server's listings Cartridge's takes "Metal Slug
+  3" for "Metal Slug" and "The King of Fighters '94" for "'98" (checked 2026-10-28). Folders: each system's own as the
+  server names them; the Super Game Boy looks in the Game Boy's, the Mega CD 32X in the Mega CD's, the Pocket Challenge
+  V2 in the WonderSwan Color's; a Famicom disk, a Satellaview or Sufami Turbo cart and a 64DD disk look in their own
+  first; Mega LD and PC Engine LD have none. An arcade game goes by its title in `assets/Database/Arcade.bml`, in the
+  MAME folder, never loosely; one the list doesn't know isn't looked for, and no listing is fetched for it.
+- **Where it's kept**: `noBackupFilesDir/art/` (kept, but never in a backup or a device transfer, so `games.json`'s
+  backup can't be pushed past Android's 25 MB): the pictures and `art.json` (version 1: per game, when it was last
+  seen, each kind's file or when to look again). A missing file is an empty store; an unreadable one is moved aside to
+  `art.json.corrupt` and its pictures deleted; one from a newer Phobos is left alone and nothing downloads. Past 256
+  MiB the pictures of the games seen longest ago go first, never those of the games in the Library's rows nor of the
+  games being downloaded (marked seen after the time that spares them is taken, so a ticking clock can't put them
+  among the oldest). Pictures go to Coil as files, so Coil never fetches from the network.
+- **Carried from #318**: the Library's focus requests catch `IllegalStateException` (Compose 1.7.6's for a card not
+  composed) instead of everything; and a row whose first card is another than at the last look (a game was started,
+  or the first card left) scrolls back to its start (`FirstCard`, `ui/LibraryRows.kt`), so Continue Playing arriving
+  with stale rows then fresh ones shows its start. Each row's first card at the last look is kept in the view model, so
+  the rule holds across the Library leaving for a game: back from one that loaded quickly, with the rows already fresh,
+  the row still goes back to its start (the review's L5; a row restored but not laid out yet scrolls once it is). Why
+  the rows arrive stale is still a hypothesis (#318's handoff).
+- **Cartridge (G3)**: `docs/third-party/cartridge.md` maps each file to its source and gives the artifacts' hashes and
+  the owner's report of Isaiah's permission; `LICENSE`'s "Cartridge (portions …)" notice carries the MIT text with its
+  reconstructed copyright line, and the next notice credits libretro-thumbnails, which publishes no license or terms.
+  Label scans (LaunchBox Games Database) come with the 3D carts, where they're shown; neither source publishes terms,
+  and downloading at run time is the owner's choice.
+- **Tests**: `ArtMatchTest` against Cartridge's own results (`tools/art-fixtures/make-fixtures.mjs` runs its
+  `titles.js` and `scraper.js` over a hand-written listing): the parsed listing, match keys, sanitized names, 20
+  look-ups (three where Phobos's numbers rule finds nothing and Cartridge takes another game), URLs as JavaScript
+  encodes them, the region orders. `ArtSystemsTest`: every system the native library lists has folders or is named as
+  having none; the nearest folders; a file kind's own folder first; arcade titles from the real `Arcade.bml`; the PSP
+  title. `ArtStoreTest`: a week after a miss, an hour after a failure; the file across a restart; eviction by last
+  seen, sparing the rows and the games being downloaded; corrupt and newer files; listings kept two weeks.
+  `ArtDownloaderTest`, against a server made of strings: a listing fetched once and only matched games asked for, an
+  empty page a failure, a missing folder a listing of nothing, gone and failed pictures, off, paused while a game is
+  loaded, no request started once a game starts loading (between a listing and its picture, and between kinds),
+  every kind, an arcade title, an arcade game the list doesn't know asking for nothing, the games being downloaded
+  not making room for each other with a clock that ticks between calls, the decode sizes and the pictures refused,
+  Re-download. `LibraryRowsTest`: the menu item, and the first-card rule. `LicenseNoticesTest`: the two new notices
+  and the files they name.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, AGP 9.3.2): both flavours' JVM tests, 611 each, 0 failures, 10 of them
+  `ArtMatchTest`'s, 5 `ArtSystemsTest`'s, 11 `ArtStoreTest`'s, 13 `ArtDownloaderTest`'s, 22 `LibraryRowsTest`'s
+  and 7 `LicenseNoticesTest`'s (`./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue
+  --no-daemon --offline --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process`, the home folder and the
+  SDK read-only). The run hashed this change's 31 files as it started and as it ended, the same both times; only
+  this bullet's counts were written after it. A first run, before the review's fixes, passed with 607 each. The
+  compiler gave no warnings for the new or changed code.
+- **Limits**: not run on a device yet (the RP6 check, with real downloads, comes before the merge). The fetching itself
+  (`HttpArtFetcher`: `HttpURLConnection`, `BitmapFactory`; its size rules are tested apart), the view model's hooks,
+  the Artwork page and the cards have no host test. Arcade: of `Arcade.bml`'s 18 games only Champion Boxing and
+  Champion Pro Wrestling are in the MAME folder by their titles (the server's listing, 2026-10-28); the others, and any
+  arcade game the list doesn't know, keep the console art. Neo Geo: only files named as the server's MAME descriptions
+  match (Garou - Mark of the Wolves); short or common titles (Metal Slug, The King of Fighters '98) and short names
+  (mslug) find nothing. A loose match needs the same digits, so "Street Fighter 2" doesn't find "Street Fighter II". A
+  system's pictures can't be told which game is which beyond the name: a wrong match has no fix but Re-download.
+  Re-download All asks the server again for every game ever seen. A library whose pictures need more than 256 MiB
+  downloads a system's evicted pictures again at each of its scans. The first-card rule, also across a game started
+  from a row, is shown only on a device.
+- **Next**: the RP6 check of a side-by-side build with real downloads; then the 3D carts and discs, with the label
+  scans.
+
 ## Library rows: Continue Playing and Favorites above the systems, and a game menu with Favorite and Hide — 2026-10-27
 
 Branch `library-rows`, from master `aa4cf731` (#317's merge). The second pull request of the Cartridge integration

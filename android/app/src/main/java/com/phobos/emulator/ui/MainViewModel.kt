@@ -29,6 +29,11 @@ import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.GameKeys
 import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.input.PspRightStick
+import com.phobos.emulator.art.ArtDownloader
+import com.phobos.emulator.art.ArtGame
+import com.phobos.emulator.art.ArtKind
+import com.phobos.emulator.art.ArtStats
+import com.phobos.emulator.art.artRegionOrder
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.CatalogBackdrop
 import com.phobos.emulator.data.CrtBackdropScene
@@ -1564,6 +1569,14 @@ class MainViewModel(
         if (games == null || systems.isEmpty()) null else libraryRowsOf(games, systems)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /**
+     * Each row's first card at the Library's last look, kept here so it outlives the Library while a game started from
+     * a row runs: back in the Library, a row whose first card changed goes back to its start, however soon the game
+     * loaded. Used on the main thread only.
+     */
+    val continuePlayingFirstCard = FirstCard()
+    val favoritesFirstCard = FirstCard()
+
     /** Makes [key] a favorite or not; a game with no record yet is found at [rom]. */
     fun setFavourite(key: GameKey, favourite: Boolean, rom: RomFile? = null) =
         gameStore.setFavourite(key, favourite, rom?.toGameFiles())
@@ -1705,6 +1718,66 @@ class MainViewModel(
     /** Whether [romName] on [systemName] is the game that's loaded. */
     fun isRunning(systemName: String, romName: String): Boolean =
         _isLoaded.value && currentSystemName == systemName && currentRomName == romName
+
+    // Games' pictures, downloaded from libretro's thumbnail server: one downloader for the whole app.
+    private val art = ArtDownloader.get(context)
+
+    /** Loads begun and not yet ended or failed: artwork waits while there's one, as it does while a game is loaded. */
+    private val _loadsStarting = MutableStateFlow(0)
+
+    /** Each game's downloaded box art, for the Library's cards and a system's list. */
+    val artBoxes: StateFlow<Map<GameKey, File>> = art.boxes
+
+    /** How many pictures are kept and what they take, for the Artwork page. */
+    val artStats: StateFlow<ArtStats> = art.stats
+
+    /** The most the pictures may take. */
+    val artCapBytes: Long get() = art.capBytes
+
+    init {
+        // No new request starts while a game is loading or loaded, so downloads never compete with it; those going
+        // finish.
+        viewModelScope.launch {
+            combine(_isLoaded, _loadsStarting) { loaded, starting -> loaded || starting > 0 }
+                .distinctUntilChanged()
+                .collect { art.setPaused(it) }
+        }
+        // What to download, and the games in the Library's rows: their pictures are looked for whatever system was
+        // scanned, again whenever downloading is switched on, and are the last to go when room is needed.
+        viewModelScope.launch {
+            val choices = settingsStore.settings
+                .map { Triple(it.artDownload, it.artExtras, it.regionPreference) }
+                .distinctUntilChanged()
+            val rows = combine(gameStore.games, visibleSystems) { games, systems ->
+                if (games == null || systems.isEmpty()) null else libraryRowsOf(games, systems)
+            }
+            combine(choices, rows) { choice, shown -> choice to shown }.collect { (choice, shown) ->
+                val (download, extras, region) = choice
+                val kinds = when {
+                    !download -> emptyList()
+                    extras -> ArtKind.entries
+                    else -> listOf(ArtKind.BOX)
+                }
+                art.configure(kinds, artRegionOrder(region))
+                shown ?: return@collect
+                val games = (shown.continuePlaying + shown.favorites).distinctBy { it.key }
+                art.setKeep(games.map { it.key }.toSet())
+                art.request(games.map { ArtGame(it.key, it.title) })
+            }
+        }
+    }
+
+    /** Downloads [key]'s pictures again (the game menu's Re-download Artwork); [discTitle] is a PSP disc's own. */
+    fun redownloadArt(key: GameKey, discTitle: String? = null) = art.redownload(ArtGame(key, discTitle))
+
+    /** Looks again now for the pictures of every game that has none, forgetting the misses (the Artwork page). */
+    fun downloadMissingArt() = art.retryMissing()
+
+    /** Deletes every picture and listing and downloads them all again (the Artwork page). */
+    fun redownloadAllArt() = art.redownloadAll()
+
+    fun setArtDownload(enabled: Boolean) = viewModelScope.launch { settingsStore.setArtDownload(enabled) }
+    fun setArtExtras(enabled: Boolean) = viewModelScope.launch { settingsStore.setArtExtras(enabled) }
 
     // The EmulatorScreen on show. When a frontend starts a game over the running one, the new game's screen
     // arrives before the old one leaves, so only the current screen's exit counts.
@@ -2845,6 +2918,10 @@ class MainViewModel(
                 ensureActive()
                 _roms.value = enriched
                 gameStore.refreshFiles(systemName, enriched.map { it.name to it.toGameFiles() })
+                // A PSP disc's own title is a second name to look its pictures up by, so they wait for it.
+                art.request(enriched.map { ArtGame(GameKey(systemName, it.name), it.title) })
+            } else {
+                art.request(foundRoms.map { ArtGame(GameKey(systemName, it.name)) })
             }
         }
     }
@@ -2990,14 +3067,20 @@ class MainViewModel(
         context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true,
         beforeLoad: (suspend () -> Unit)? = null,
     ) {
+        _loadsStarting.update { it + 1 }
         viewModelScope.launch(Dispatchers.IO) {
-            CoreSession.lock.withLock {
-                // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
-                // loaded; reloading the running game starts it over without saving it.
-                val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName && CoreSession.rom == rom.name
-                closeSessionLocked(autoSave = !reload)
-                beforeLoad?.invoke()
-                loadLocked(context, systemName, rom, disc, autoLoad, reload)
+            try {
+                CoreSession.lock.withLock {
+                    // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
+                    // loaded; reloading the running game starts it over without saving it.
+                    val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName &&
+                        CoreSession.rom == rom.name
+                    closeSessionLocked(autoSave = !reload)
+                    beforeLoad?.invoke()
+                    loadLocked(context, systemName, rom, disc, autoLoad, reload)
+                }
+            } finally {
+                _loadsStarting.update { it - 1 }
             }
         }
     }

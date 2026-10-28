@@ -41,16 +41,38 @@ fun needsSystemPage(record: GameRecord, extensions: Collection<String>): Boolean
 }
 
 /** What a game's menu offers. */
-enum class GameMenuItem { ADD_TO_FAVORITES, REMOVE_FROM_FAVORITES, HIDE_FROM_CONTINUE_PLAYING }
+enum class GameMenuItem { ADD_TO_FAVORITES, REMOVE_FROM_FAVORITES, HIDE_FROM_CONTINUE_PLAYING, REDOWNLOAD_ARTWORK }
 
 /**
  * The menu for the game [record] is about (null when it has none yet): Favorite or not, and Hide from Continue Playing
- * while the game is in it (played, and not hidden), as Cartridge offers its own.
+ * while the game is in it (played, and not hidden), as Cartridge offers its own; Re-download Artwork when [artwork]
+ * (its system has pictures on the server, and downloading is on).
  */
-fun gameMenuItems(record: GameRecord?): List<GameMenuItem> = buildList {
+fun gameMenuItems(record: GameRecord?, artwork: Boolean = false): List<GameMenuItem> = buildList {
     add(if (record?.favourite == true) GameMenuItem.REMOVE_FROM_FAVORITES else GameMenuItem.ADD_TO_FAVORITES)
     if (record != null && record.lastPlayed > 0 && !record.hiddenFromHistory) {
         add(GameMenuItem.HIDE_FROM_CONTINUE_PLAYING)
+    }
+    if (artwork) add(GameMenuItem.REDOWNLOAD_ARTWORK)
+}
+
+/**
+ * A row's first card, followed from one look at the row to the next: [moved] says when it's another card than at the
+ * last look (a game was started, or the first card left), when the row goes back to its start. The first look moves
+ * nothing. Kept from one showing of the Library to the next, so a row the Library comes back to with the same first
+ * card keeps its place.
+ */
+class FirstCard {
+    private var key: GameKey? = null
+    private var looked = false
+
+    /** The row now holds [now]: whether its first card is another than at the last look. */
+    fun moved(now: List<GameKey>): Boolean {
+        val first = now.firstOrNull()
+        val moved = looked && first != null && first != key
+        key = first
+        looked = true
+        return moved
     }
 }
 
