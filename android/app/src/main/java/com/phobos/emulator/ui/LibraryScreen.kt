@@ -6,9 +6,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -21,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -29,8 +32,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -78,6 +83,8 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     var starting by remember { mutableStateOf(false) }
     val continueFocus = remember { RowFocus() }
     val favoritesFocus = remember { RowFocus() }
+    val continueList = rememberLazyListState()
+    val favoritesList = rememberLazyListState()
     val firstSystem = remember { FocusRequester() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -128,16 +135,26 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
 
     // D-pad down from the Running card goes to the first card under it, where Compose's own search would take the one
     // nearest the card's middle: Continue Playing's first, or with that row empty Favorites' first, or with both empty
-    // the first system's tile. One out of view isn't composed, and asking it for the focus throws: the press is then
-    // left to Compose.
-    fun focusBelowRunning(): Boolean {
+    // the first system's tile. Its row is scrolled back to its start first: a card scrolled out of view isn't composed,
+    // and asking it for the focus throws. A row not laid out since the Library opened isn't scrolled, as its scroll
+    // would wait for that layout, and the card isn't asked once the Running card has lost the focus. False when the
+    // card can't take the focus or isn't asked.
+    suspend fun focusBelowRunning(stillFocused: () -> Boolean): Boolean {
         val card = cardBelowRunning(rows)
         val requester = when {
             card == null -> firstSystem
-            card.inFavorites -> favoritesFocus.requester(card.key)
-            else -> continueFocus.requester(card.key)
+            card.inFavorites -> {
+                if (!favoritesFocus.laidOut) return false
+                favoritesList.scrollToItem(0)
+                favoritesFocus.requester(card.key)
+            }
+            else -> {
+                if (!continueFocus.laidOut) return false
+                continueList.scrollToItem(0)
+                continueFocus.requester(card.key)
+            }
         }
-        return runCatching { requester.requestFocus() }.isSuccess
+        return stillFocused() && runCatching { requester.requestFocus() }.isSuccess
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -179,7 +196,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                     item(key = "running", span = { GridItemSpan(maxLineSpan) }) {
                         RunningGameCard(
                             game, tileFill, onResume = { viewModel.swapBackToGame() }, onQuit = { confirmQuit = true },
-                            onDown = { focusBelowRunning() },
+                            onDown = { stillFocused -> focusBelowRunning(stillFocused) },
                         )
                     }
                 }
@@ -190,6 +207,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         games = rows?.continuePlaying,
                         empty = "Games you play show up here.",
                         focus = continueFocus,
+                        list = continueList,
                         running = running,
                         art = art,
                         fill = tileFill,
@@ -205,6 +223,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         games = rows?.favorites,
                         empty = "Games you favorite show up here.",
                         focus = favoritesFocus,
+                        list = favoritesList,
                         running = running,
                         art = art,
                         fill = tileFill,
@@ -323,6 +342,7 @@ private fun GameRow(
     games: List<GameRecord>?,
     empty: String,
     focus: RowFocus,
+    list: LazyListState,
     running: RunningGame?,
     art: LibraryArt,
     fill: Color,
@@ -341,7 +361,11 @@ private fun GameRow(
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+            LazyRow(
+                state = list,
+                modifier = Modifier.onGloballyPositioned { focus.laidOut = true },
+                horizontalArrangement = Arrangement.spacedBy(spacing),
+            ) {
                 // A lazy list's keys have to fit in a Bundle, so the key is a string; a ROM name can't hold a newline.
                 items(games, key = { "${it.key.system}\n${it.key.name}" }) { record ->
                     GameCard(
@@ -362,12 +386,19 @@ private fun GameRow(
 }
 
 /**
- * The focus in one of the Library's rows: each card's requester, and where the focus goes when a card leaves the row
- * ([LeavingCard]).
+ * The focus in one of the Library's rows: each card's requester, where the focus goes when a card leaves the row
+ * ([LeavingCard]), and whether the row has been laid out.
  */
 private class RowFocus {
     private val requesters = HashMap<GameKey, FocusRequester>()
     private val leavingCard = LeavingCard()
+
+    /**
+     * Whether the row has been laid out since the Library opened: until then a scroll of it waits for that layout. Set
+     * by the row's position callback, which in Compose 1.7.6 runs in the same loop, on the same layout node, as the one
+     * the scroll waits on.
+     */
+    var laidOut = false
 
     fun requester(key: GameKey): FocusRequester = requesters.getOrPut(key) { FocusRequester() }
 
@@ -469,7 +500,9 @@ class LibraryArt(val treatment: ConsoleTreatment, val palette: ConsoleArtPalette
 
 /**
  * The game paused behind the Library: its last frame, name and system, with Resume and Quit. Tapping it resumes too.
- * [onDown] takes D-pad down while the card itself has the focus, true when it moved the focus.
+ * [onDown], when given, takes D-pad down while the card itself has the focus, true when it moved the focus, which it
+ * does only while the card still has it (the check it's given); when it didn't, and the card still has the focus,
+ * Compose's own search moves it, as on a card without one.
  */
 @Composable
 private fun RunningGameCard(
@@ -477,19 +510,29 @@ private fun RunningGameCard(
     fill: Color,
     onResume: () -> Unit,
     onQuit: () -> Unit,
-    onDown: () -> Boolean = { false },
+    onDown: (suspend (stillFocused: () -> Boolean) -> Boolean)? = null,
 ) {
     val frame = remember(game.frame) { game.frame?.asImageBitmap() }
     val frameAspect = game.frame?.let { it.width.toFloat() / it.height } ?: (4f / 3f)
     // The card itself, not its Resume or Quit (which a keyboard's Tab reaches).
     var focused by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
     ThemedCard(
         modifier = Modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { event ->
                 val key = event.nativeKeyEvent
-                focused && key.keyCode == KeyEvent.KEYCODE_DPAD_DOWN && key.action == KeyEvent.ACTION_DOWN && onDown()
+                val down = focused && key.keyCode == KeyEvent.KEYCODE_DPAD_DOWN && key.action == KeyEvent.ACTION_DOWN
+                if (down && onDown != null) {
+                    // onDown may scroll a row before it moves the focus, so the press is taken now; when it can't
+                    // move the focus, Compose's own search does, after it.
+                    scope.launch { if (!onDown { focused } && focused) focusManager.moveFocus(FocusDirection.Down) }
+                    true
+                } else {
+                    false
+                }
             },
         shape = MaterialTheme.shapes.small,
         onClick = onResume,
