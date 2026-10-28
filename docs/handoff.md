@@ -35,6 +35,173 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Library rows: Continue Playing and Favorites above the systems, and a game menu with Favorite and Hide — 2026-10-27
+
+Branch `library-rows`, from master `aa4cf731` (#317's merge). The second pull request of the Cartridge integration
+(the owner's request and scope are quoted in the entry below), in the order the Phobos coordinator set: after the game
+records, before the art and the carts. The owner chose the controls and the spelling (2026-10-27, verbatim): "X
+toggles Favourite, as in Cartridge, and holding A opens the menu", and "Favorites, matching the rest of Phobos". The
+coordinator checked the files and screens before any code and gave GO with points that are folded in below.
+Changed: `data/GameStore.kt`, `ui/MainViewModel.kt`, `ui/LibraryScreen.kt`, `ui/SystemDetailScreen.kt`,
+`ui/Components.kt` (`ThemedCard`), `ui/GameMenu.kt` and `ui/LibraryRows.kt` (new), `GameStoreTest.kt`,
+`LibraryRowsTest.kt` (new), this file, and two rows of `docs/implementation-plan.md`.
+
+- **What users see**: two rows on the Library, after the Running card when one shows and above the systems. Continue
+  Playing has the 24 games played most recently, newest first; Favorites has the favorite games by ROM name, as a
+  system's list sorts its games. Both leave out hidden systems' games. Each game is a card with its system's console
+  art (the PSP's too; box art comes with the art pull request), its title and its system. The running game's card says
+  Running and resumes it, a favorite's has a star, and a game whose file didn't open says Not found. An empty row says
+  "Games you play show up here." or "Games you favorite show up here." The header, the Running card, the systems grid
+  and the Quit dialog are as before.
+- **The game menu**: holding A on a card or on a game in a system's list (a long press on touch) opens it, with Add to
+  Favorites (an outlined star) or Remove from Favorites (a filled one, as on the card), and Hide from Continue Playing
+  while the game is in that row (played and not hidden). Playing a hidden game again brings it back. X toggles a game
+  as a favorite directly, on both pages. In a system's list a favorite has a star; starting a game, the disc chooser
+  and the folders are unchanged.
+- **Holding A**: Compose 1.7.6's clickables take no long press from keys, so the cards and list rows handle A
+  themselves. A timer starts on A's down event at the long-press timeout (`ViewConfiguration`) and A's up cancels it;
+  the repeats a held key may send do nothing, so the hold works whether or not a device repeats gamepad buttons. Let
+  go of sooner, A starts the game, with a touch's press feedback. The menu, a dialog window, then drops the held A's
+  repeats and release until A goes down again, so they can't pick an item. A fresh down of A always starts a press of
+  its own, so a release the card never got (it went to the menu's window) can't leave its next press waiting. X and A
+  are free on these pages: they watch only Show Screensaver and, with a game behind, the Library hotkey
+  (`WindowKeys.kt:150-156`). No text names a button, as the RP6's labels differ from Android's names.
+- **Starting from a row**: the running game resumes. Otherwise the stored files are checked to open, off the main
+  thread and before anything is unloaded, so a running game is left running when they don't (a failed start used to
+  close it first). Then the list's own path follows: a multi-disc game's disc chooser with its last disc picked,
+  `loadRom`, the game screen. When the files don't open, "Game Not Found" says the file may have moved or been deleted
+  or Phobos may no longer reach its folder, and offers its system's page, whose scan looks for it again; the record is
+  marked missing until a start or that scan finds it. A multi-disc game recorded by #317's build has no disc list, so
+  its card opens its system's page instead, once: that page's scan records the discs.
+- **The records** (`GameStore`): a record now keeps what a start needs to rebuild the list's game: the folder it's in
+  (the Neo Geo and Aleck64 BIOS and a `.cue` sheet's tracks are found there), a multi-disc game's discs and a PSP
+  disc's title. A start writes them, and a scan fills in what an older record lacks. Making a game never played a
+  favorite gives it a record with no plays, which Continue Playing leaves out. The file stays format version 1, as the
+  new fields are optional: #317's build still reads it (a test reads one with every new field through a frozen copy
+  of #317's reader), and drops them when it rewrites it (the next start or scan writes them again). The store
+  publishes its records after each change, for the rows.
+- **Which file a start keeps** (a coordinator's point): a frontend's start used to replace the stored URI with its own,
+  whose grant can end with the frontend. Now a start keeps the stored URI when that still opens and the start's isn't
+  a lasting one: a file path, or a document under a folder Phobos holds a lasting grant for (`ContentGameUris`).
+- **Focus**: the rows come first, so the first D-pad press lands on Continue Playing's first card, or with both rows
+  empty on the first system tile, since the empty lines can't take the focus. D-pad down from the Running card goes to
+  the first card under it, scrolling its row back to its start (found on the RP6, below). A card leaving its row (X
+  on a Favorites card, Hide from the menu) hands the focus to the card in its place; one whose change didn't take
+  keeps it. Cards are `ThemedCard`s, with each style's panel and focus ring and the theme's colors; a CRT card blinks
+  the cursor after its title while it has the focus.
+  `ThemedCard` takes an optional long press and interaction source; cards that pass neither are unchanged.
+- **Found on the RP6**: the check (Checks, below) found D-pad down from the Running card going to the Continue Playing
+  card nearest the card's middle, not the first, so down then A started that game and closed the running one. On
+  master, which has no rows, the same two presses would open the page of the system whose tile is nearest the Running
+  card's middle (derived from master's code and Compose 1.7.6's bytecode; not run on master). The owner chose to fix
+  it before the merge (2026-10-27). Down from the Running card now goes to Continue Playing's first card (as a rule the
+  running game's own, which A resumes), or with that row empty to Favorites' first, or with both empty to the first
+  system's tile (`cardBelowRunning`). The recheck of that fix (Checks) once found Continue Playing arriving scrolled to
+  its end, its first card out of view and so not composed, where the down fell back to Compose's search; the owner
+  chose to fix that before the merge too (2026-10-27). So the down now scrolls the card's row back to its start
+  (`LazyListState.scrollToItem(0)`, which in Compose 1.7.6 lays the row out again before it returns, composing its
+  first cards) and then asks the card for the focus, as a row does when a card leaves it, rather than naming it with
+  `focusProperties`: in Compose 1.7.6 both throw when the card isn't composed (`FocusRequester.findFocusTargetNode`),
+  and there's no public way to ask first. If the card's row was laid out before but isn't composed now, the request
+  throws and Compose's own search moves the focus from the Running card, after the scroll (derived from Compose
+  1.7.6's bytecode; not run). A row not laid out since the Library opened isn't scrolled, as its scroll would wait for
+  that layout: the down falls back to Compose's search then too, as the owner chose (2026-10-27; Limits). The test is
+  a flag set by the row's first layout, in the same callback loop on the same layout node as the flag the scroll waits
+  on, so the two can't differ (derived from Compose 1.7.6's bytecode). And the card is asked for the focus only while
+  the Running card still has it, so a down handled late can't take the focus from where the user has since moved it.
+  Where the down falls back, the card has already taken the press, so Compose's search runs from the coroutine the card
+  starts, one dispatch after the key; on master and `c338689c` the press goes on to Compose, whose search runs on the
+  key itself. The search starts from the same card and works the same way, and runs only while that card still has
+  the focus (derived from the code; not run).
+- **Cartridge (G3)**: the rows follow Cartridge's rules without its code. Continue Playing is
+  `src/main.js:420-423` of the reconstruction (played, not hidden, newest first, 24); Favorites is `:424`, sorted as
+  Phobos's list sorts; the menu's hide item is `:10407-10414`, and a start un-hides a game as `electron/main.js:763`
+  does; X for Favorite is its game list's buttons (`src/main.js:6764-6793`). No Cartridge code, data or asset is in
+  this change.
+- **Tests**: `GameStoreTest`, 31, with 12 new: a file as #317 wrote it loads unchanged; a file with every new field,
+  read by a frozen copy of #317's reader, gives #317's record; every new field survives the app starting again; the
+  records are published once read and after each change; a favorite never played has a record with no plays; hidden
+  until played again (a reload isn't); missing undone by a start or by a scan that lists the game; a missing game not
+  the first to go past the cap; a start keeping a stored file that opens over one that might not last, replacing it
+  with a lasting one, replacing one that no longer opens, and recording a first start's file. `LibraryRowsTest`, 20:
+  Continue Playing's 24 newest, without hidden games, unplayed favorites or hidden systems; Favorites in a system
+  list's order; a missing game keeping its place in both; which records need their system's page, and a #317
+  multi-disc record needing it once, until a scan records its discs; the menu's items; a quick press, a hold, repeats,
+  a timer after the release, a release without its press, a fresh press after a release that went elsewhere; the menu
+  dropping the held A until A goes down again, a fresh press in it, and a menu opened by touch; the focus passing on
+  from a card that leaves its row, and staying with one whose change didn't take; and where D-pad down from the
+  Running card goes: Continue Playing's first card, Favorites' first with that row empty, and the first system with
+  both empty or not read yet. Each expected value is written out from the scenario.
+- **Checks** (JDK 17.0.20.1, Gradle 9.6.0, AGP 9.3.2): on the final code, both flavours' JVM tests, 569 each, 0
+  failures, 31 of them `GameStoreTest`'s and 20 `LibraryRowsTest`'s (`./gradlew :app:testLegacyDebugUnitTest
+  :app:testModernDebugUnitTest --continue --no-daemon --offline --max-workers=1
+  -Pkotlin.compiler.execution.strategy=in-process`, the home folder and the SDK read-only). The run hashed this
+  change's 11 files as it started and as it ended, the same both times; only this bullet's counts were written after
+  it. Earlier runs passed with 562 each (30 and 14) before the review's fixes, 566 (31 and 17) before the RP6's, and
+  569 (31 and 20) before the recheck's and again before the guard.
+  No new compiler warning. `git diff --check` clean; no added line over 120 columns but the plan's table rows. CI was
+  green on `b1b41f20` and `c338689c` (Android Build's unit tests and both flavours' release APKs; Desktop Build),
+  and builds this one on the pull request. On the RP6 (Retroid Pocket 6, Android 13, 2026-10-27), a
+  side-by-side debug build of `b1b41f20` on that CI run's own native libraries, with three games that need no
+  firmware started through the debug load intent: both rows' empty lines, and the first D-pad press on the first
+  system tile; Continue Playing newest first, with plays and play time recorded; the first D-pad press on Continue
+  Playing's first card; X starring a game and adding it to Favorites; a 1 s hold of the controller's A opening the
+  menu, still open after the release with nothing picked, and Hide passing the ring to the card in its place; a long
+  press on touch opening it; a quick A starting a game; a running game's card, marked Running, resuming it on a tap;
+  "Game Not Found" with a game running (left running, resumed after Cancel, its play time still counting) and with
+  none; a hidden game played again coming back; and the Library and the menu in all 13 themes. The test build's log
+  had no "Game records:" warning and no crash, and it was uninstalled. That check found the Running card's down move
+  (above).
+  Observed in the recheck on the RP6 (2026-10-27, 20:30-20:37), on a side-by-side debug build of `c338689c`, the change
+  before the scroll back, with seven games that need no firmware started one after another through the debug load
+  intent, the last left running: arriving at the Library from the pause menu, before any key, Continue Playing showed
+  its end, the running game's card out of view, and the second D-pad down (the first rings the Running card) fell
+  back to Compose's search and rang the card nearest the middle, where A would have closed the running game (A wasn't
+  pressed). With the row scrolled back by hand, one down from the Running card rang Continue Playing's first card,
+  the running game's, and A resumed it (the same process, no record changed, no load). With the first card scrolled
+  out of view by six rights, one down rang the visible card nearest the middle, the press not lost and the game still
+  running. A keyboard's Tab moved the focus to Resume, from which down went to Quit. With Continue Playing emptied
+  through Hide, down rang Favorites' first card, and with both rows empty the first system tile. The test build's
+  log had no "Game records:" warning and no crash, and it was uninstalled. The scroll back is rechecked on the RP6 in
+  the pull request.
+- **Limits**: not tried on a device: a system's game list (the test build has no ROM folder), its X, held A, long
+  press and star, though its rows share the cards' controller handling (`gameButtons`) and both take the long press
+  from `combinedClickable`; a frontend's start and which URI a start keeps (`ContentGameUris` on real grants), as the
+  check started its games from file paths, which last; the disc chooser from a row; the screensaver chord over the
+  Library; the Modern flavour, styles other than the default, and portrait. The view model's row start, the store's
+  hooks, `ContentGameUris` (it needs Android's content resolver), the Running card's down with its row's scroll back
+  and its guard, and the composables have no host test (the project has no Compose or Robolectric tests); their
+  plain logic, in `LibraryRows.kt` and `GameStore`, has.
+  A frontend's game whose record has only the frontend's own URI (no Library start or scan ever gave it a lasting one)
+  stops opening when that grant ends; its card then shows "Game Not Found", and its system's page finds it only in one
+  of Phobos's folders. A record whose name has none of its system's extensions is taken for a disc set and always
+  opens its system's page (a file Phobos couldn't load anyway). A malformed disc entry (it would take a hand edit or a
+  damaged file) makes the whole file unreadable: it's moved aside to `games.json.corrupt` and the records start empty,
+  as #317 does for a record without its system or name. A Show Screensaver binding, or with a game behind the pages a
+  Library binding, that starts with A turns a held A into a quick press: the window takes A's press and hands it on
+  with its release, together, only as it's let go of, so A then starts the game; a long press on touch still opens the
+  menu. When an action took a row's last card, the recheck saw the ring go to the Running card, with a game running;
+  without one it wasn't tried. Continue Playing can still arrive scrolled away from its start, as the recheck saw; only
+  down from the Running card brings it back. Hypothesis (from the code, not tested): the rows' flow (`stateIn`,
+  `WhileSubscribed(5000)`) keeps its last value while the Library isn't shown, so the Library came back with that value,
+  holding only the first game started, then got all seven; and a lazy row keeps its first visible item by key when items
+  are added before it, so that game, now the row's last, stayed first, which shows the row's end. A row not laid out
+  since the Library opened (possible only when the header and the Running card fill the visible grid, as in a short
+  window) isn't scrolled back: down from the Running card then goes where Compose's own search takes it, as before
+  the scroll back, to the row's card nearest the Running card's middle wherever the row stands (derived from Compose
+  1.7.6's bytecode; not run).
+  On the RP6, Up from the dock's Library tab didn't bring the focus back to the Library: docked pages run
+  under the dock to the bottom of the screen, and Compose's search can only enter the grid, a scrolling focus group, as
+  a whole, which it doesn't count as above a tab whose bottom is above the grid's. Master's Library would do the same
+  once it fills the page (the RP6's 34 systems do), and the two rows make a shorter one fill it too (this cause and
+  master's behaviour derived from master's code and Compose 1.7.6's bytecode; not run on master). The dock isn't
+  changed here. With every system hidden, the Library shows "No systems found" and no rows, as before. No mutation
+  run.
+- **Next**: CI, and the RP6 recheck of down from the Running card into a row that arrived scrolled; then the art pull
+  request: box art downloaded by default, and the Artwork settings page. The review's suggestions for this change go
+  there too: catching only the focus request's `IllegalStateException`, and Continue Playing always opening at its
+  start.
+
 ## Game records: each game's plays, play time and last start in `files/games.json`, for the Library rows — 2026-10-27
 
 Branch `game-store`, from master `1b32520cc` (#314's merge). The first pull request of the Cartridge integration: the

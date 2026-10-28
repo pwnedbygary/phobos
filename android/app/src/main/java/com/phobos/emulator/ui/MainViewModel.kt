@@ -32,8 +32,12 @@ import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.CatalogBackdrop
 import com.phobos.emulator.data.CrtBackdropScene
+import com.phobos.emulator.data.ContentGameUris
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GameDisc
+import com.phobos.emulator.data.GameFiles
 import com.phobos.emulator.data.GameKey
+import com.phobos.emulator.data.GameRecord
 import com.phobos.emulator.data.GameStore
 import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
@@ -230,8 +234,10 @@ class MainViewModel(
     val settings: StateFlow<EmulatorSettings> = settingsStore.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), initialSettings)
 
-    // The games played, with their plays, play time and when last played: one store for the whole app.
-    private val gameStore = GameStore.get(context)
+    // The games played, with their plays, play time and when last played: one store for the whole app. Its file is
+    // read now, for the Library's rows.
+    private val gameStore = GameStore.get(context).also { it.load() }
+    private val gameUris = ContentGameUris(context.contentResolver)
 
     // The loaded game, as the level its controls resolve at; null with none loaded.
     private val _loadedGame = MutableStateFlow<ControlLevel.Game?>(null)
@@ -1547,6 +1553,50 @@ class MainViewModel(
         merged.filter { it !in s.hiddenSystems }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** Every game record, for a system's list (which games are favorites); null until the store has read its file. */
+    val gameRecords: StateFlow<List<GameRecord>?> = gameStore.games
+
+    /**
+     * The Library's Continue Playing and Favorites rows; null until the store has read its file and the systems are
+     * known.
+     */
+    val libraryRows: StateFlow<LibraryRows?> = combine(gameStore.games, visibleSystems) { games, systems ->
+        if (games == null || systems.isEmpty()) null else libraryRowsOf(games, systems)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Makes [key] a favorite or not; a game with no record yet is found at [rom]. */
+    fun setFavourite(key: GameKey, favourite: Boolean, rom: RomFile? = null) =
+        gameStore.setFavourite(key, favourite, rom?.toGameFiles())
+
+    /** Keeps [key] out of Continue Playing until it next starts. */
+    fun hideFromContinuePlaying(key: GameKey) = gameStore.hideFromHistory(key)
+
+    /**
+     * What a Library row's start of [record] comes to. A multi-disc game whose discs its record lacks goes to its
+     * system's page, whose scan records them. Otherwise its files must open first, checked off the main thread before
+     * anything is unloaded; a record whose files don't is marked missing.
+     */
+    suspend fun recordStart(record: GameRecord): RecordStart {
+        val key = record.key
+        if (isRunning(key.system, key.name)) return RecordStart.Running
+        if (needsSystemPage(record, PhobosCore.getSystemExtensions(key.system))) return RecordStart.SystemPage
+        val rom = record.toRomFile()
+        val opens = rom != null && withContext(Dispatchers.IO) {
+            (listOf(rom) + rom.discs).all { gameUris.opens(it.uri.toString()) }
+        }
+        if (rom == null || !opens) {
+            gameStore.setMissing(key, true)
+            return RecordStart.NotFound
+        }
+        return RecordStart.Ready(key.system, rom)
+    }
+
+    /** Starts [rom] on [system] from a Library row, from [disc] of a multi-disc game, as a system's list does. */
+    fun startFromRow(context: Context, system: String, rom: RomFile, disc: Int = 0) {
+        loadRom(context, system, rom, disc)
+        navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(rom.name)}")
+    }
+
     private val _roms = MutableStateFlow<List<RomFile>>(emptyList())
     val roms: StateFlow<List<RomFile>> = _roms
 
@@ -2785,14 +2835,16 @@ class MainViewModel(
             }
             ensureActive()
             _roms.value = foundRoms
-            // A played game's record follows its file to a new URI (a folder added again from another level).
-            gameStore.refreshUris(systemName, foundRoms.map { it.name to it.uri.toString() })
+            // A known game's record follows its file to a new URI (a folder added again from another level) and gets
+            // what it lacks, such as a multi-disc game's discs.
+            gameStore.refreshFiles(systemName, foundRoms.map { it.name to it.toGameFiles() })
             // Plain list first; titles and icons filled in on the same job so a superseded scan can't clobber
             // another system's list after a late finish.
             if (systemName == LaunchSystems.PSP) {
                 val enriched = withContext(Dispatchers.IO) { withPspDiscInfo(context, foundRoms) }
                 ensureActive()
                 _roms.value = enriched
+                gameStore.refreshFiles(systemName, enriched.map { it.name to it.toGameFiles() })
             }
         }
     }
@@ -3271,7 +3323,7 @@ class MainViewModel(
                         CoreSession.rom = rom.name
                         CoreSession.owner = sessionToken
                         gameStore.gameStarted(
-                            GameKey(effectiveSystem, rom.name), rom.uri.toString(), newPlay = !reload,
+                            GameKey(effectiveSystem, rom.name), rom.toGameFiles(), newPlay = !reload,
                             clock = playClock(),
                         )
                         loadedRom = rom
@@ -3598,3 +3650,38 @@ data class RomFile(
     /** The file's last modification time, for the icon cache key. */
     val mtime: Long = 0,
 )
+
+/** What a Library row's start of a game comes to (see [MainViewModel.recordStart]). */
+sealed interface RecordStart {
+    /** It's the game behind the Library: it resumes. */
+    data object Running : RecordStart
+
+    /** Its system's page starts it, the first time (a multi-disc game whose discs its record lacks). */
+    data object SystemPage : RecordStart
+
+    /** Its files didn't open. */
+    data object NotFound : RecordStart
+
+    /** [rom] on [system] can start. */
+    data class Ready(val system: String, val rom: RomFile) : RecordStart
+}
+
+/** Where [this] game's files are, for its record. */
+private fun RomFile.toGameFiles() = GameFiles(
+    uri = uri.toString(),
+    parentUri = parentUri?.toString(),
+    discs = discs.map { GameDisc(it.name, it.uri.toString(), it.parentUri?.toString()) },
+    title = title,
+)
+
+/** The game [this] record is, as a system's list has it; null for a record that has no file. */
+private fun GameRecord.toRomFile(): RomFile? {
+    val file = uri ?: return null
+    return RomFile(
+        name = key.name,
+        uri = Uri.parse(file),
+        parentUri = parentUri?.let(Uri::parse),
+        discs = discs.map { RomFile(it.name, Uri.parse(it.uri), it.parentUri?.let(Uri::parse)) },
+        title = title,
+    )
+}
