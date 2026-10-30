@@ -42,6 +42,7 @@ name its origin.
 | `art/ArtSystems.kt` | `electron/systems.js` (`thumbs`, `thumbsAlt`) | Some folder names; every one was checked against the server's own listing. |
 | `ui/LibraryRows.kt` | `src/main.js` (Continue Playing, Favorites, the game menu) | The rules only, read from the rebuilt source; no code. |
 | `tools/art-fixtures/cartridge/` | `electron/titles.js`, `scraper.js`, `labelcrop.js` | Copies, unchanged, to make the test fixtures (`tools/art-fixtures/README.md`). |
+| `tools/carts/cartridge/` | `src/carts/pipeline.js`, `src/shared/logo.js`, `src/assets/studio.hdr` | Copies, unchanged, for the build-time carts generator (`tools/carts/README.md`); not shipped in the app. |
 
 ## Not taken
 

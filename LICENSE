@@ -3873,7 +3873,8 @@ PSPs derived from it.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-Cartridge (portions: android/app/src/main/java/com/phobos/emulator/art/)
+Cartridge (portions: android/app/src/main/java/com/phobos/emulator/art/ and
+tools/carts/cartridge/)
 
 Phobos's artwork downloads are ported from Cartridge 0.4.9.3, Isaiah's
 game frontend, as read from its shipped application: ArtMatch.kt (the
@@ -3882,7 +3883,10 @@ and the choice among names) from electron/titles.js and
 electron/scraper.js; ArtDownloader.kt and ArtStore.kt (the order of the
 look-ups, what counts as a miss or a failure, and the times before
 another try) from electron/scraper.js; and ArtSystems.kt's folder names,
-in part, from electron/systems.js. docs/third-party/cartridge.md says
+in part, from electron/systems.js. tools/carts/cartridge/ holds verbatim
+copies of Cartridge's carts/pipeline.js, shared/logo.js and
+assets/studio.hdr for the build-time carts generator (not shipped in the
+app). docs/third-party/cartridge.md says
 which file comes from which and the permission Phobos's owner reports.
 Cartridge's application declares the MIT license and Isaiah as its
 author but ships no notice of its own: the copyright line below is

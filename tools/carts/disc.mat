@@ -1,0 +1,29 @@
+// The disc face material: a small lit material whose iridescence gives discs their sheen (Filament 1.77.3's
+// per-pixel iridescence inputs; see RELEASE_NOTES-v1.77.3.md line 25). Compiled by tools/carts/bake-carts.mjs with
+// matc from the pinned Filament linux archive (-a opengl -p mobile -S). Not compiled into the app here (PR 4b).
+material {
+    name : disc,
+    shadingModel : lit,
+    blending : opaque,
+    parameters : [
+        { type : sampler2d, name : baseColor },
+        { type : float, name : roughness },
+        { type : float, name : metallic },
+        { type : float, name : iridescence },
+        { type : float, name : iridescenceIor },
+        { type : float, name : iridescenceThickness }
+    ],
+    requires : [ uv0 ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = texture(materialParams_baseColor, getUV0());
+        material.roughness = materialParams.roughness;
+        material.metallic = materialParams.metallic;
+        material.iridescence = materialParams.iridescence;
+        material.iridescenceIor = materialParams.iridescenceIor;
+        material.iridescenceThickness = materialParams.iridescenceThickness;
+    }
+}

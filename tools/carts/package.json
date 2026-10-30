@@ -1,0 +1,17 @@
+{
+  "name": "phobos-carts-generator",
+  "private": true,
+  "type": "module",
+  "description": "Bakes Phobos's 3D cart and disc geometry, materials and IBL for tools use; nothing here is packaged by the app in 4a.",
+  "engines": {
+    "node": "26.11.1"
+  },
+  "scripts": {
+    "bake": "node bake-carts.mjs"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.8",
+    "pngjs": "7.0.0",
+    "three": "0.186.0"
+  }
+}
