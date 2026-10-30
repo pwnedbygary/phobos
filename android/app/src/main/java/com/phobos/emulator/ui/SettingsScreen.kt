@@ -13,6 +13,7 @@ import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -37,6 +38,7 @@ fun SettingsScreen(
     onNavigateToPaths: () -> Unit,
     onNavigateToVisibility: () -> Unit,
     onNavigateToArtwork: () -> Unit,
+    onNavigateToCarts: () -> Unit,
     onNavigateToAbout: () -> Unit
 ) {
     val themeName = LocalPhobosTheme.current.theme.name
@@ -67,6 +69,7 @@ fun SettingsScreen(
                 SettingsClickableItem(title = "Paths", description = "Firmware and save directories", onClick = onNavigateToPaths, icon = Icons.Rounded.Folder)
                 SettingsClickableItem(title = "Platform Visibility", description = "Choose which systems to show in your library", onClick = onNavigateToVisibility, icon = Icons.Rounded.Visibility)
                 SettingsClickableItem(title = "Artwork", description = "Box art downloads, and what they send", onClick = onNavigateToArtwork, icon = Icons.Rounded.Image)
+                SettingsClickableItem(title = "Carts", description = "3D cartridges, labels, shells and wear", onClick = onNavigateToCarts, icon = Icons.Rounded.ViewInAr)
             }
         }
         item {
