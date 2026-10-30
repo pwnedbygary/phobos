@@ -232,6 +232,9 @@ Phobos needs no account. It goes online for three things:
   games found on it: the server receives those systems' and games' names, your IP address, and "Phobos" with its
   version. Names not on the list never leave your device, and nothing starts while a game is loading or running.
   Settings → Artwork turns it off.
+- **Cart labels:** when Carts and real labels are on, label scans come from the LaunchBox Games Database,
+  `images.launchbox-app.com`; the bundled label index ships with the app and asks nothing. The same rule applies:
+  nothing starts while a game is loading or running. Settings → Carts turns the labels off.
 
 ## Building Phobos
 

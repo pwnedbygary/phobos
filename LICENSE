@@ -3873,8 +3873,53 @@ PSPs derived from it.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-Cartridge (portions: android/app/src/main/java/com/phobos/emulator/art/ and
-tools/carts/cartridge/)
+Filament (Apache License 2.0)
+
+android/app/build.gradle.kts links com.google.android.filament:filament-android,
+:gltfio-android and :filament-utils-android 1.77.3 from Maven Central under the
+Apache License 2.0, whose text appears above. The AARs carry no notices of their
+own.
+
+----------------------------------------------------------------------
+three.js (MIT; build tools only)
+
+tools/carts and tools/cart-fixtures use three.js 0.186.0 at build time; it is not
+shipped in the app.
+
+MIT License
+
+Copyright © 2010-2026 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------
+studio.hdr (origin unknown)
+
+The build-time carts generator turns a studio lighting probe, studio.hdr, into
+the environment maps (KTX) that ship in the app. Its origin and licence are
+unknown; the owner chose to use it.
+
+----------------------------------------------------------------------
+Cartridge (portions: android/app/src/main/java/com/phobos/emulator/art/,
+android/app/src/main/java/com/phobos/emulator/ui/carts/, tools/carts/cartridge/,
+tools/cart-fixtures/cartridge/ and the generated assets under
+android/app/src/main/assets/carts/)
 
 Phobos's artwork downloads are ported from Cartridge 0.4.9.3, Isaiah's
 game frontend, as read from its shipped application: ArtMatch.kt (the
@@ -3885,8 +3930,12 @@ look-ups, what counts as a miss or a failure, and the times before
 another try) from electron/scraper.js; and ArtSystems.kt's folder names,
 in part, from electron/systems.js. tools/carts/cartridge/ holds verbatim
 copies of Cartridge's carts/pipeline.js, shared/logo.js and
-assets/studio.hdr for the build-time carts generator (not shipped in the
-app). docs/third-party/cartridge.md says
+assets/studio.hdr for the build-time carts generator (the tools are build-time
+only; their outputs ship under android/app/src/main/assets/carts/).
+tools/cart-fixtures/cartridge/ holds the verbatim copies the label ports'
+fixtures are generated from. android/app/src/main/assets/carts/ also carries the
+LaunchBox label index, whose paragraph is in docs/third-party/cartridge.md.
+docs/third-party/cartridge.md says
 which file comes from which and the permission Phobos's owner reports.
 Cartridge's application declares the MIT license and Isaiah as its
 author but ships no notice of its own: the copyright line below is

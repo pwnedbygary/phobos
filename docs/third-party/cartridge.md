@@ -42,13 +42,37 @@ name its origin.
 | `art/ArtSystems.kt` | `electron/systems.js` (`thumbs`, `thumbsAlt`) | Some folder names; every one was checked against the server's own listing. |
 | `ui/LibraryRows.kt` | `src/main.js` (Continue Playing, Favorites, the game menu) | The rules only, read from the rebuilt source; no code. |
 | `tools/art-fixtures/cartridge/` | `electron/titles.js`, `scraper.js`, `labelcrop.js` | Copies, unchanged, to make the test fixtures (`tools/art-fixtures/README.md`). |
-| `tools/carts/cartridge/` | `src/carts/pipeline.js`, `src/shared/logo.js`, `src/assets/studio.hdr` | Copies, unchanged, for the build-time carts generator (`tools/carts/README.md`); not shipped in the app. |
+| `tools/carts/cartridge/` | `src/carts/pipeline.js`, `src/shared/logo.js`, `src/assets/studio.hdr` | Copies, unchanged, for the build-time carts generator (`tools/carts/README.md`); the tools are not shipped, but their outputs are. |
+| `tools/cart-fixtures/cartridge/` | `electron/titles.js`, `scraper.js`, `labelcrop.js` | Copies, unchanged, for the label ports' fixtures (`tools/cart-fixtures/README.md`); not shipped in the app. |
+| `android/app/src/main/assets/carts/` | `src/carts/pipeline.js`, `src/shared/logo.js`, `src/assets/studio.hdr`, via `tools/carts` | The generator's outputs (GLBs, IBL KTX, `disc.filamat`, the normal maps): generated, not copied, and pinned by `android/app/src/main/assets/carts/MANIFEST.json`. |
+| `android/app/src/main/assets/carts/labels.json.gz` | Cartridge 0.4.9.3's `data/labels.json.gz` | A copy, not a generated output: the LaunchBox index, bundled by the owner's 30 October decision. Its paragraph is below. |
+
+## Label scans and their index
+
+**Label scans (LaunchBox Games Database) and their index, `labels.json.gz`.** The index ships with Phobos in
+`android/app/src/main/assets/carts/labels.json.gz` (sha256
+`f7f1e8bba203e96b30ef1ecb4d3ee7ff6fe5555d6be8b8b371f354d5585cb089`); the scans themselves are downloaded at
+runtime from `https://images.launchbox-app.com/` only, through the art downloader's queue, pause rule and 256 MiB
+cap, when the user enables Carts and real labels. The right to redistribute the index has not been established: the
+reconstruction's PROVENANCE.md:14-18 records "The right to redistribute that LaunchBox-derived index has not been
+established", and THIRD_PARTY_NOTICES.md:25 records "Not pursued (owner, 2026-10-27)". No licence is recorded or
+implied. The owner chose to bundle it on 2026-10-30 for the 3D carts, accepting the risk; that is a product
+decision, not a licence. Neither the LaunchBox Games Database nor libretro-thumbnails publishes terms for its
+pictures; downloading them while Phobos runs is the owner's choice.
 
 ## Not taken
 
-- Label scans (LaunchBox Games Database) and their index, `labels.json.gz`: they come with the 3D carts, where they're
-  shown. Neither the LaunchBox Games Database nor libretro-thumbnails publishes terms for its pictures; downloading
-  them while Phobos runs is the owner's choice. Nothing from either ships with Phobos; the label index, whose
-  redistribution the owner waived (27 October 2026), comes with the carts.
 - Cartridge's arcade name list, fetched from GitHub: Phobos's arcade games go by their titles in its own
   `assets/Database/Arcade.bml`.
+
+## Filament libraries (build dependency)
+
+The 3D carts use Filament 1.77.3 from Maven Central (Android AARs, Apache-2.0; the LICENSE carries the license
+text). The exact artifacts, with their full SHA-256:
+
+- `filament-android-1.77.3.aar` sha256 587a73db65e7c1289af799b1a7e0d7debdbeb9bf8d4253adb203199811096490
+- `gltfio-android-1.77.3.aar` sha256 a258b4fdc52ded6c5313f1da6aa365f4da36c9c59eac789ef1399f8193099f33
+- `filament-utils-android-1.77.3.aar` sha256 53884f6abbe56ee05ce8d3e43c732d7fa921446debf838be15d0e72d02926bbc
+
+They are the only new dependency; the prebuilt native libraries are 16 KB-page aligned (verified with ELF LOAD
+`p_align` 0x4000 on every arm64 `.so`).
