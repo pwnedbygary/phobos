@@ -192,6 +192,11 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.documentfile)
 
+    // 3D carts: Filament 1.77.3, OpenGL ES backend only (three AARs, no other EGL user in the app)
+    implementation(libs.filament.android)
+    implementation(libs.filament.gltfio.android)
+    implementation(libs.filament.utils.android)
+
     testImplementation(libs.junit)
     // org.json's real implementation; android.jar only has throwing stubs off the device.
     testImplementation(libs.org.json)

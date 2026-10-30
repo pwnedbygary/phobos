@@ -36,7 +36,7 @@
     "cartridge/carts/pipeline.js": "a5cbbe9d288972781db3ef26ecf471221b76a16005eb7541155b699e66011967",
     "cartridge/shared/logo.js": "83ed228846aac6875002b074ff26515342e9c52e793bcfa235fef35cf795eaaf",
     "cartridge/assets/studio.hdr": "f6a989f89432eb4eee3191364a9c1ceed195c4ec3544173a3c04fd96cb91d0ba",
-    "bake-carts.mjs": "0ef94e0177c85c69c3f7ec070f9098351108c096d11bc077472d4cab32a89497",
+    "bake-carts.mjs": "c42b22f8ce7c89f45cdccd7424ae3f3431ae7878d7ec2bbfefd50f3a99d24080",
     "dom-shim.mjs": "1f5df57db68e4767d2cc76d9c3cfe0bc0c3d64f6b7fdb63d52983727b9774264",
     "gltf-shim.mjs": "6ecbe3fcc0ac4748bbfbdba0b73985716f6027d4069ad1f68dfacef93f529418",
     "hdr-url-loader.mjs": "e8c44e7f768409dd9f359cf94c1a8d3989fe02b7a33be0bfbeaf48cde051e78d",
