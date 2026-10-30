@@ -28,7 +28,8 @@ class LicenseNoticesTest {
         val expected = listOf(
             "MAME (portions)", "paraLLEl-RDP", "volk", "sse2neon", "miniz", "Zstandard", "libadrenotools",
             "Vulkan-Headers", "font-rs", "puff", "Systematic console icons", "ZX Spectrum", "Android and Kotlin libraries", "C-BIOS",
-            "FFmpeg", "MinGW-w64 runtime", "SDL 3.2.30 (", "MoltenVK", "AppImage runtime",
+            "FFmpeg", "MinGW-w64 runtime", "SDL 3.2.30 (", "MoltenVK", "AppImage runtime", "Cartridge (portions",
+            "Artwork downloaded while Phobos runs",
         )
         for (name in expected) assertTrue("no notice for $name", titles.any { it.startsWith(name) })
     }
@@ -43,6 +44,24 @@ class LicenseNoticesTest {
             assertTrue("$derived is where the notice says", File(path).exists())
         }
         assertTrue("no notice for the removed glyph packs", notices.none { it.title.contains("glyph", ignoreCase = true) })
+    }
+
+    @Test fun cartridgesNoticeCoversTheArtworkCodePortedFromIt() {
+        val notices = parseLicenseNotices(File("../../LICENSE").readText())
+        val cartridge = notices.single { it.title.startsWith("Cartridge (portions") }.text.replace(Regex("\\s+"), " ")
+        assertTrue("the MIT license", cartridge.contains("Permission is hereby granted, free of charge"))
+        assertTrue("its reconstructed line", cartridge.contains("Copyright (c) Isaiah (Cartridge)"))
+        assertTrue("says the line is reconstructed", cartridge.contains("reconstructed"))
+        for (derived in listOf("ArtMatch.kt", "ArtDownloader.kt", "ArtStore.kt", "ArtSystems.kt")) {
+            assertTrue("the notice names $derived", cartridge.contains(derived))
+            val source = File("src/main/java/com/phobos/emulator/art/$derived")
+            assertTrue("$derived is where the notice says", source.exists())
+            assertTrue("$derived's header names Cartridge", source.readLines().take(5).any { "Cartridge" in it })
+        }
+        assertTrue("the provenance file it names", File("../../docs/third-party/cartridge.md").exists())
+        val art = notices.single { it.title.startsWith("Artwork downloaded while Phobos runs") }.text
+        assertTrue("names the server", art.contains("https://thumbnails.libretro.com"))
+        assertTrue("says no license is published", art.contains("publishes no license"))
     }
 
     @Test fun ffmpegsNoticeCarriesItsLicenseAndWhereItsSourceIs() {

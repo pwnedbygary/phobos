@@ -49,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import coil.compose.AsyncImage
 import com.phobos.emulator.R
+import com.phobos.emulator.art.hasArt
 import com.phobos.emulator.data.GameKey
 import com.phobos.emulator.data.GameRecord
 import com.phobos.emulator.data.PlatformIconPack
@@ -69,6 +70,7 @@ import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.gameTitle
 import com.phobos.emulator.util.romTitle
 import kotlinx.coroutines.launch
+import java.io.File
 
 @Composable
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
@@ -76,13 +78,14 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val running by viewModel.runningGame.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val rows by viewModel.libraryRows.collectAsState()
+    val boxes by viewModel.artBoxes.collectAsState()
     var confirmQuit by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf<GameMenuRequest?>(null) }
     var choosingDisc by remember { mutableStateOf<RecordStart.Ready?>(null) }
     var notFound by remember { mutableStateOf<GameRecord?>(null) }
     var starting by remember { mutableStateOf(false) }
-    val continueFocus = remember { RowFocus() }
-    val favoritesFocus = remember { RowFocus() }
+    val continueFocus = remember { RowFocus(viewModel.continuePlayingFirstCard) }
+    val favoritesFocus = remember { RowFocus(viewModel.favoritesFirstCard) }
     val continueList = rememberLazyListState()
     val favoritesList = rememberLazyListState()
     val firstSystem = remember { FocusRequester() }
@@ -154,7 +157,14 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                 continueFocus.requester(card.key)
             }
         }
-        return stillFocused() && runCatching { requester.requestFocus() }.isSuccess
+        if (!stillFocused()) return false
+        return try {
+            requester.requestFocus()
+            true
+        } catch (_: IllegalStateException) {
+            // Compose 1.7.6 throws this for a card that isn't composed.
+            false
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -210,6 +220,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         list = continueList,
                         running = running,
                         art = art,
+                        boxes = boxes,
                         fill = tileFill,
                         spacing = gridSpacing,
                         onStart = { start(it) },
@@ -226,6 +237,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         list = favoritesList,
                         running = running,
                         art = art,
+                        boxes = boxes,
                         fill = tileFill,
                         spacing = gridSpacing,
                         onStart = { start(it) },
@@ -269,7 +281,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
         GameMenu(
             title = gameTitle(record.key.name, record.title),
             system = record.key.system,
-            items = gameMenuItems(record),
+            items = gameMenuItems(record, artwork = settings.artDownload && hasArt(record.key.system)),
             openedByHeldA = request.heldA,
             fullScreen = settings.fullScreenMode,
             onPick = { item ->
@@ -284,6 +296,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         if (!request.fromFavorites) continueFocus.leaving(record.key)
                         viewModel.hideFromContinuePlaying(record.key)
                     }
+                    GameMenuItem.REDOWNLOAD_ARTWORK -> viewModel.redownloadArt(record.key, record.title)
                 }
             },
             onDismiss = { menu = null },
@@ -345,13 +358,20 @@ private fun GameRow(
     list: LazyListState,
     running: RunningGame?,
     art: LibraryArt,
+    boxes: Map<GameKey, File>,
     fill: Color,
     spacing: Dp,
     onStart: (GameRecord) -> Unit,
     onMenu: (GameRecord, Boolean) -> Unit,
     onFavorite: (GameRecord) -> Unit,
 ) {
-    LaunchedEffect(games) { games?.let(focus::shown) }
+    LaunchedEffect(games) {
+        games ?: return@LaunchedEffect
+        // A row whose first card is another than at the last look, even one before the Library left for a game, goes
+        // back to its start, so a game just started is in view. A row restored but not laid out yet scrolls once it is.
+        if (focus.firstCard.moved(games.map { it.key })) list.scrollToItem(0)
+        focus.shown(games)
+    }
     Column(Modifier.fillMaxWidth()) {
         SectionHeader(title)
         if (games.isNullOrEmpty()) {
@@ -373,6 +393,7 @@ private fun GameRow(
                         running = running != null && running.systemName == record.key.system &&
                             running.romName == record.key.name,
                         art = art,
+                        box = boxes[record.key],
                         fill = fill,
                         modifier = Modifier.focusRequester(focus.requester(record.key)),
                         onStart = { onStart(record) },
@@ -389,7 +410,10 @@ private fun GameRow(
  * The focus in one of the Library's rows: each card's requester, where the focus goes when a card leaves the row
  * ([LeavingCard]), and whether the row has been laid out.
  */
-private class RowFocus {
+private class RowFocus(
+    /** The row's first card, to tell when it's another one: the view model's, kept while the Library isn't shown. */
+    val firstCard: FirstCard,
+) {
     private val requesters = HashMap<GameKey, FocusRequester>()
     private val leavingCard = LeavingCard()
 
@@ -410,20 +434,28 @@ private class RowFocus {
         val keys = now.map { it.key }
         // A card not composed (scrolled out of view) can't take the focus, nor can any in touch mode; the next D-pad
         // press finds one.
-        leavingCard.shown(keys)?.let { next -> runCatching { requester(next).requestFocus() } }
+        leavingCard.shown(keys)?.let { next ->
+            try {
+                requester(next).requestFocus()
+            } catch (_: IllegalStateException) {
+                // Not composed: no card takes the focus.
+            }
+        }
         requesters.keys.retainAll(keys.toSet())
     }
 }
 
 /**
- * A game in one of the Library's rows: its system's console art, its title and its system, marked Running or Not found
- * when so, with a star when it's a favorite. A CRT card blinks the cursor after its title while it has the focus.
+ * A game in one of the Library's rows: its [box] art once downloaded, else its system's console art, its title and its
+ * system, marked Running or Not found when so, with a star when it's a favorite. A CRT card blinks the cursor after
+ * its title while it has the focus.
  */
 @Composable
 private fun GameCard(
     record: GameRecord,
     running: Boolean,
     art: LibraryArt,
+    box: File?,
     fill: Color,
     modifier: Modifier,
     onStart: () -> Unit,
@@ -453,7 +485,16 @@ private fun GameCard(
     ) {
         Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                SystemIcon(record.key.system, art, size = 64.dp)
+                if (box != null) {
+                    AsyncImage(
+                        model = box,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    SystemIcon(record.key.system, art, size = 64.dp)
+                }
                 if (record.favourite) {
                     Icon(
                         Icons.Rounded.Star,

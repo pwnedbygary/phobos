@@ -1,0 +1,284 @@
+{
+  "made": "node tools/art-fixtures/make-fixtures.mjs android/app/src/test/resources/art",
+  "node": "v26.11.1",
+  "listing": [
+    "Legend of Zelda, The - A Link to the Past (USA)",
+    "Legend of Zelda, The - A Link to the Past (Europe)",
+    "Super Mario World (USA)",
+    "Super Mario World (Japan)",
+    "Metal Slug 3 (NGH-2560)",
+    "Garou - Mark of the Wolves (NGH-2530)",
+    "King of Fighters '94, The (NGM-055)(NGH-055)",
+    "Chrono Trigger (USA)",
+    "Pokemon - Red Version (USA, Europe)",
+    "Pokemon - Blue Version (USA, Europe)",
+    "Sonic The Hedgehog (USA, Europe)",
+    "Sonic The Hedgehog 2 (World)",
+    "Final Fantasy VII (USA) (Disc 1)",
+    "Tetris (World) (Rev 1)",
+    "Tetris (Japan) (En)",
+    "Mega Man X (USA)",
+    "Mega Man X (USA) (Beta)",
+    "Ys I _ II (Japan)",
+    "Pokémon Stadium (USA)",
+    "Contra (USA)",
+    "Contra Force (USA)"
+  ],
+  "keys": [
+    {
+      "name": "Legend of Zelda, The - A Link to the Past (USA)",
+      "key": "thelegendofzeldaalinktothepast"
+    },
+    {
+      "name": "Super Mario World (USA) v1.1",
+      "key": "supermarioworld"
+    },
+    {
+      "name": "Pokémon Stadium (USA)",
+      "key": "pokemonstadium"
+    },
+    {
+      "name": "Ys I & II (Japan)",
+      "key": "ysiandii"
+    },
+    {
+      "name": "Some Game (Europe) [!].zip",
+      "key": "somegame"
+    },
+    {
+      "name": "Game Decrypted",
+      "key": "game"
+    },
+    {
+      "name": "Street Fighter II Special Champion Edition (USA)",
+      "key": "streetfighteriispecialchampion"
+    },
+    {
+      "name": "Tetris",
+      "key": "tetris"
+    },
+    {
+      "name": "",
+      "key": ""
+    }
+  ],
+  "sanitized": [
+    {
+      "name": "Ys I & II",
+      "sanitized": "Ys I _ II"
+    },
+    {
+      "name": "What? Who* Where: Here/There <a|b> \"q\" `t`",
+      "sanitized": "What_ Who_ Where_ Here_There _a_b_ _q_ _t_"
+    },
+    {
+      "name": "Plain",
+      "sanitized": "Plain"
+    }
+  ],
+  "matches": [
+    {
+      "base": "Legend of Zelda, The - A Link to the Past (USA)",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Legend of Zelda, The - A Link to the Past (USA)"
+    },
+    {
+      "base": "Legend of Zelda, The - A Link to the Past (Germany)",
+      "order": [
+        "EU",
+        "W",
+        "US",
+        "JP"
+      ],
+      "cartridge": "Legend of Zelda, The - A Link to the Past (Europe)"
+    },
+    {
+      "base": "Super Mario World",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Super Mario World (USA)"
+    },
+    {
+      "base": "Super Mario World",
+      "order": [
+        "JP",
+        "W",
+        "US",
+        "EU"
+      ],
+      "cartridge": "Super Mario World (Japan)"
+    },
+    {
+      "base": "Metal Slug",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Metal Slug 3 (NGH-2560)",
+      "guard": true
+    },
+    {
+      "base": "The King of Fighters '98",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "King of Fighters '94, The (NGM-055)(NGH-055)",
+      "guard": true
+    },
+    {
+      "base": "Garou - Mark of the Wolves",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Garou - Mark of the Wolves (NGH-2530)"
+    },
+    {
+      "base": "Pokemon - Red Version (USA)",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Pokemon - Red Version (USA, Europe)"
+    },
+    {
+      "base": "Sonic the Hedgehog 2 (USA)",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Sonic The Hedgehog 2 (World)"
+    },
+    {
+      "base": "Sonic the Hedgehog 3 (USA)",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Sonic The Hedgehog (USA, Europe)",
+      "guard": true
+    },
+    {
+      "base": "Tetris",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Tetris (World) (Rev 1)"
+    },
+    {
+      "base": "Tetris",
+      "order": [
+        "JP",
+        "W",
+        "US",
+        "EU"
+      ],
+      "cartridge": "Tetris (Japan) (En)"
+    },
+    {
+      "base": "Mega Man X",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Mega Man X (USA)"
+    },
+    {
+      "base": "Ys I & II (Japan)",
+      "order": [
+        "JP",
+        "W",
+        "US",
+        "EU"
+      ],
+      "cartridge": "Ys I _ II (Japan)"
+    },
+    {
+      "base": "Pokémon Stadium (USA)",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Pokémon Stadium (USA)"
+    },
+    {
+      "base": "Pokemon Stadium (USA)",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Pokémon Stadium (USA)"
+    },
+    {
+      "base": "Contra",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Contra (USA)"
+    },
+    {
+      "base": "Final Fantasy VII (USA)",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": "Final Fantasy VII (USA) (Disc 1)"
+    },
+    {
+      "base": "Chrono Trigger - Refined Text Edition [v2.0]",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": null
+    },
+    {
+      "base": "Zzz Not A Game",
+      "order": [
+        "US",
+        "W",
+        "JP",
+        "EU"
+      ],
+      "cartridge": null
+    }
+  ]
+}

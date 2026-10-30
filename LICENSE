@@ -3873,6 +3873,60 @@ PSPs derived from it.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
+Cartridge (portions: android/app/src/main/java/com/phobos/emulator/art/)
+
+Phobos's artwork downloads are ported from Cartridge 0.4.9.3, Isaiah's
+game frontend, as read from its shipped application: ArtMatch.kt (the
+match key, the tags' reading, the listing parser, the names' sanitizing
+and the choice among names) from electron/titles.js and
+electron/scraper.js; ArtDownloader.kt and ArtStore.kt (the order of the
+look-ups, what counts as a miss or a failure, and the times before
+another try) from electron/scraper.js; and ArtSystems.kt's folder names,
+in part, from electron/systems.js. docs/third-party/cartridge.md says
+which file comes from which and the permission Phobos's owner reports.
+Cartridge's application declares the MIT license and Isaiah as its
+author but ships no notice of its own: the copyright line below is
+reconstructed from those two fields. Code under the MIT license may be
+included in a work under the GPL version 3, as Phobos is.
+
+MIT License
+
+Copyright (c) Isaiah (Cartridge)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+Artwork downloaded while Phobos runs (libretro-thumbnails)
+
+Games' box art, screenshots and title logos are downloaded while Phobos
+runs from libretro's thumbnail server, https://thumbnails.libretro.com,
+which serves the libretro-thumbnails project's pictures
+(https://github.com/libretro-thumbnails/libretro-thumbnails). None ships
+with Phobos. The project publishes no license or terms for them: it
+thanks its many contributors, and says the game art itself originates
+from the work of each game's developers and publishers. The downloads
+are on by default, as Phobos's owner chose, and Settings → Artwork turns
+them off.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 ZX Spectrum 48K and 128K ROMs (mia/Firmware/ZX Spectrum, ZX Spectrum 128)
 
 Copyright Amstrad plc (originally Sinclair Research Ltd).

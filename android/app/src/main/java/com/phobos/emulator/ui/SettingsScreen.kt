@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Palette
@@ -35,6 +36,7 @@ fun SettingsScreen(
     onNavigateToInputs: () -> Unit,
     onNavigateToPaths: () -> Unit,
     onNavigateToVisibility: () -> Unit,
+    onNavigateToArtwork: () -> Unit,
     onNavigateToAbout: () -> Unit
 ) {
     val themeName = LocalPhobosTheme.current.theme.name
@@ -64,6 +66,7 @@ fun SettingsScreen(
                 SettingsClickableItem(title = "Inputs & Hotkeys", description = "Touch controls, controller mapping, hotkeys", onClick = onNavigateToInputs, icon = Icons.Rounded.SportsEsports)
                 SettingsClickableItem(title = "Paths", description = "Firmware and save directories", onClick = onNavigateToPaths, icon = Icons.Rounded.Folder)
                 SettingsClickableItem(title = "Platform Visibility", description = "Choose which systems to show in your library", onClick = onNavigateToVisibility, icon = Icons.Rounded.Visibility)
+                SettingsClickableItem(title = "Artwork", description = "Box art downloads, and what they send", onClick = onNavigateToArtwork, icon = Icons.Rounded.Image)
             }
         }
         item {
