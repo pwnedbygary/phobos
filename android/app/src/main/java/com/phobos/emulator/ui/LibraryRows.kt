@@ -41,19 +41,20 @@ fun needsSystemPage(record: GameRecord, extensions: Collection<String>): Boolean
 }
 
 /** What a game's menu offers. */
-enum class GameMenuItem { ADD_TO_FAVORITES, REMOVE_FROM_FAVORITES, HIDE_FROM_CONTINUE_PLAYING, REDOWNLOAD_ARTWORK }
+enum class GameMenuItem { ADD_TO_FAVORITES, REMOVE_FROM_FAVORITES, HIDE_FROM_CONTINUE_PLAYING, REDOWNLOAD_ARTWORK, CART_OPTIONS }
 
 /**
  * The menu for the game [record] is about (null when it has none yet): Favorite or not, and Hide from Continue Playing
  * while the game is in it (played, and not hidden), as Cartridge offers its own; Re-download Artwork when [artwork]
  * (its system has pictures on the server, and downloading is on).
  */
-fun gameMenuItems(record: GameRecord?, artwork: Boolean = false): List<GameMenuItem> = buildList {
+fun gameMenuItems(record: GameRecord?, artwork: Boolean = false, carts: Boolean = false): List<GameMenuItem> = buildList {
     add(if (record?.favourite == true) GameMenuItem.REMOVE_FROM_FAVORITES else GameMenuItem.ADD_TO_FAVORITES)
     if (record != null && record.lastPlayed > 0 && !record.hiddenFromHistory) {
         add(GameMenuItem.HIDE_FROM_CONTINUE_PLAYING)
     }
     if (artwork) add(GameMenuItem.REDOWNLOAD_ARTWORK)
+    if (carts) add(GameMenuItem.CART_OPTIONS)
 }
 
 /**

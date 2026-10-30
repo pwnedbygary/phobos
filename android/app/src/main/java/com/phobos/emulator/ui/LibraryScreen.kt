@@ -74,9 +74,27 @@ import java.io.File
 
 @Composable
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
+    val cartContext = androidx.compose.ui.platform.LocalContext.current
+    val gameLoaded by viewModel.gameLoaded.collectAsState()
+    val cartLabels by viewModel.artLabels.collectAsState()
+    val cartTheme = com.phobos.emulator.ui.theme.LocalPhobosTheme.current.theme.name
     val systems by viewModel.visibleSystems.collectAsState()
     val running by viewModel.runningGame.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val cartsOn = settings.carts && !gameLoaded
+    val cartEngine = remember(cartsOn) {
+        if (cartsOn) com.phobos.emulator.ui.carts.CartsEngine.get(cartContext) else null
+    }
+    val cartThumbnailer = remember(cartEngine) {
+        cartEngine?.let { com.phobos.emulator.ui.carts.CartThumbnailer(cartContext, it) }
+    }
+    val cartRenderCache = remember(cartContext) {
+        com.phobos.emulator.ui.carts.CartBitmapCache(
+            java.io.File(cartContext.cacheDir, "cart-render"),
+            64L * 1024 * 1024,
+        )
+    }
+    androidx.compose.runtime.DisposableEffect(cartThumbnailer) { onDispose { cartThumbnailer?.release() } }
     val rows by viewModel.libraryRows.collectAsState()
     val boxes by viewModel.artBoxes.collectAsState()
     var confirmQuit by remember { mutableStateOf(false) }
@@ -221,6 +239,15 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         running = running,
                         art = art,
                         boxes = boxes,
+                        cartThumbnailer = cartThumbnailer,
+                        cartCache = cartRenderCache,
+                        cartLabels = if (settings.realLabels) cartLabels else emptyMap(),
+                        cartTheme = cartTheme,
+                        cartLooksJson = settings.cartsLooks,
+                        cartSpecialEditions = settings.cartsSpecialEditions,
+                        cartWearOn = settings.cartsWear,
+                        cartEngraving = settings.cartsEngraving,
+                        cartEnabled = settings.carts,
                         fill = tileFill,
                         spacing = gridSpacing,
                         onStart = { start(it) },
@@ -238,6 +265,15 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         running = running,
                         art = art,
                         boxes = boxes,
+                        cartThumbnailer = cartThumbnailer,
+                        cartCache = cartRenderCache,
+                        cartLabels = if (settings.realLabels) cartLabels else emptyMap(),
+                        cartTheme = cartTheme,
+                        cartLooksJson = settings.cartsLooks,
+                        cartSpecialEditions = settings.cartsSpecialEditions,
+                        cartWearOn = settings.cartsWear,
+                        cartEngraving = settings.cartsEngraving,
+                        cartEnabled = settings.carts,
                         fill = tileFill,
                         spacing = gridSpacing,
                         onStart = { start(it) },
@@ -276,17 +312,23 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
         )
     }
 
+    var cartOptionsFor by remember { mutableStateOf<com.phobos.emulator.data.GameRecord?>(null) }
     menu?.let { request ->
         val record = request.record
         GameMenu(
             title = gameTitle(record.key.name, record.title),
             system = record.key.system,
-            items = gameMenuItems(record, artwork = settings.artDownload && hasArt(record.key.system)),
+            items = gameMenuItems(
+                record,
+                artwork = settings.artDownload && hasArt(record.key.system),
+                carts = settings.carts && com.phobos.emulator.ui.carts.CartShapes.cartShape(record.key.system) != null,
+            ),
             openedByHeldA = request.heldA,
             fullScreen = settings.fullScreenMode,
             onPick = { item ->
                 menu = null
                 when (item) {
+                    GameMenuItem.CART_OPTIONS -> cartOptionsFor = record
                     GameMenuItem.ADD_TO_FAVORITES -> viewModel.setFavourite(record.key, true)
                     GameMenuItem.REMOVE_FROM_FAVORITES -> {
                         if (request.fromFavorites) favoritesFocus.leaving(record.key)
@@ -300,6 +342,16 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                 }
             },
             onDismiss = { menu = null },
+        )
+    }
+    cartOptionsFor?.let { rec ->
+        com.phobos.emulator.ui.carts.CartOptionsDialog(
+            system = rec.key.system,
+            romName = rec.key.name,
+            romTitle = rec.title,
+            looksJson = settings.cartsLooks,
+            onSave = viewModel::setCartsLooks,
+            onDismiss = { cartOptionsFor = null },
         )
     }
 
@@ -359,6 +411,15 @@ private fun GameRow(
     running: RunningGame?,
     art: LibraryArt,
     boxes: Map<GameKey, File>,
+    cartThumbnailer: com.phobos.emulator.ui.carts.CartThumbnailer? = null,
+    cartCache: com.phobos.emulator.ui.carts.CartBitmapCache? = null,
+    cartLabels: Map<GameKey, File> = emptyMap(),
+    cartTheme: String = "",
+    cartLooksJson: String = "",
+    cartSpecialEditions: Boolean = true,
+    cartWearOn: Boolean = true,
+    cartEngraving: String = "none",
+    cartEnabled: Boolean = false,
     fill: Color,
     spacing: Dp,
     onStart: (GameRecord) -> Unit,
@@ -388,12 +449,31 @@ private fun GameRow(
             ) {
                 // A lazy list's keys have to fit in a Bundle, so the key is a string; a ROM name can't hold a newline.
                 items(games, key = { "${it.key.system}\n${it.key.name}" }) { record ->
+                    val cartFile = if (cartEnabled) {
+                        com.phobos.emulator.ui.carts.rememberCartCardFile(
+                            system = record.key.system,
+                            name = record.key.name,
+                            title = record.title,
+                            labelFile = cartLabels[record.key],
+                            box = boxes[record.key],
+                            looksJson = cartLooksJson,
+                            specialEditions = cartSpecialEditions,
+                            wearOn = cartWearOn,
+                            playTimeMs = record.playTimeMs,
+                            themeKey = cartTheme,
+                            faceKey = cartTheme,
+                            engraving = cartEngraving,
+                            thumbnailer = cartThumbnailer,
+                            cache = cartCache,
+                            enabled = cartEnabled,
+                        )
+                    } else null
                     GameCard(
                         record = record,
                         running = running != null && running.systemName == record.key.system &&
                             running.romName == record.key.name,
                         art = art,
-                        box = boxes[record.key],
+                        box = cartFile ?: boxes[record.key],
                         fill = fill,
                         modifier = Modifier.focusRequester(focus.requester(record.key)),
                         onStart = { onStart(record) },
