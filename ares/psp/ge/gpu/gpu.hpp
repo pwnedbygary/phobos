@@ -335,6 +335,40 @@ struct GPU : GE::Renderer {
     u32 scale = 1, mostScale = 1;
     u64 pipelines = 0;        //made so far
     u64 pipelineMaking = 0;   //nanoseconds the driver took making them
+    //(PHOBOS_GPU_STATS, a benchmark's: by command kind (the enum's order), the Commands recorded, the Pixels the
+    //commands' rectangles cover (one rectangle a command: a kind that draws its rectangle several times over, as
+    //Alpha and an upload's stencil do, counts it once; Draw and Mesh count none, their triangles' coverage not being
+    //known here; at the GPU's scale for the kinds that fill a target, at the PSP's size for Present and Shot, and at
+    //the read-back's scale for Readback), and, with "time", the NANOSECONDS between the timestamps that bound it.
+    //All zero unless the environment names the variable when the backend is made; timing says whether "time" was
+    //asked for. Nothing else about what's drawn or how changes.)
+    u64 kindCommands[10] = {}, kindPixels[10] = {}, kindNanos[10] = {};
+    //(the same, by target: how many were made; how many were shown — presented on a window (Present), shot for the
+    //host (Shot), or read back as the host's picture (Readback) — and how many were copied into a texture for draws
+    //to sample; and, in pixels at the scale, the area of those shown, of those copied, and of those shown and never
+    //copied (the last the only "shown-only" figure: there is no count of them).)
+    u32 targetsMade = 0, targetsShown = 0, targetsCopied = 0;
+    u64 shownArea = 0, copiedArea = 0, shownOnlyArea = 0;
+    bool timing = false;  //("time": kindNanos is real; with "1" it stays zero)
+    u64 timedSpans = 0;   //(the kind stretches a timestamp actually bounded: 0, timing said but nothing was read)
+    //(PHOBOS_GPU_STATS=draws: each draw's own time in a log-spaced histogram — bucket i covers 2^(i+10) ns to
+    //2^(i+11) ns, so 1.024 us, 2.048 us ... 8.6 s at i = 23 — to show the tail the totals hide)
+    u64 drawTimes[24] = {};
+    bool drawTiming = false;
+    //(PHOBOS_GPU_STATS=draws: every draw's own record — its time, primitives, target and whether it was shown or
+    //copied, the render pass it was in, a hash of its pipeline's key, and whether its shader writes the depth — for
+    //the tail and the hidden-fragment share; the runner writes them as a CSV beside its report)
+    struct DrawRecord {
+      u64 ns = ~0ull, pipeline = 0; u32 prims = 0, target = 0, pass = 0, scale = 1;
+      u8 writesDepth = 0, shown = 0, copied = 0;
+    };
+    std::vector<DrawRecord> drawRecords;
+    bool recordDraws = false;
+    u32 passSerial = 0;  //(the render pass a draw is in: counted as passes begin)
+    //(each target made, for the attribution: its room in PSP pixels and whether it was shown, copied, or both)
+    struct TargetStat { u32 width = 0, height = 0, id = 0; bool shown = false, copied = false; };
+    TargetStat targetStats[64] = {};
+    u32 targetStatsCount = 0;
     u64 recording = 0, submitting = 0, waiting = 0;  //nanoseconds in run()'s recording, vkQueueSubmit, the waits
     u64 passes = 0;                                  //render passes begun
     virtual auto name() const -> std::string = 0;

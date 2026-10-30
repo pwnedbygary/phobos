@@ -472,7 +472,7 @@ auto main(int argc, char** argv) -> int {
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
   bool lateFrames = false, gePspTiming = true;
-  std::string pipelineCache;
+  std::string pipelineCache, frameTimesFile;
   fs::path reportFile;
   u32 startTime = 0, screenStopsAt = 0;
   bool startTimeGiven = false, framesGiven = false, geProfileFromGiven = false;
@@ -518,6 +518,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--renderer") renderer = next();
     else if(option == "--resolution") resolution = parseUint(next(), option);
     else if(option == "--late-frames") lateFrames = true;
+    else if(option == "--frame-times") frameTimesFile = next();
     else if(option == "--ge-timing") {
       auto timing = next();
       if(timing != "psp" && timing != "fast") {
@@ -744,6 +745,15 @@ auto main(int argc, char** argv) -> int {
   u64 clockStart = psp.kernel.startTime;            //the clock the run began with (a loaded state's own)
   struct Capture { u32 frame, arrivedIn; f64 waited; bool fresh, picture; };
   std::vector<Capture> captures;                    //each PNG asked for, for the report
+  //(--frame-times) each frame's host time, in ms, written as the frame ends: a run cut short keeps every line it wrote
+  std::ofstream frameTimesStream;
+  if(!frameTimesFile.empty()) {
+    frameTimesStream.open(frameTimesFile);
+    if(!frameTimesStream) {  //(a benchmark's file silently unwritten would be worse than the run not starting)
+      std::fprintf(stderr, "can't write the frame times to %s\n", frameTimesFile.c_str());
+      return 1;
+    }
+  }
   PlayStationPortable::GeProfile geProfile;         //(--ge-profile) recorded from its frame on
   u32 geProfileTo = frames;                         //its last frame: the run's, or the program's restart's
   //The clock asked for, held: a game that starts itself again (sceKernelLoadExec, or largeRestart with all of RAM)
@@ -765,6 +775,7 @@ auto main(int argc, char** argv) -> int {
   };
   for(u32 frame = 1; frame <= frames; frame++) {
     frameNumber = frame;
+    auto frameBegan = std::chrono::steady_clock::now();
     if(screenStopsAt && frame == screenStopsAt) {
       std::lock_guard lock{host.mutex};
       host.screenStopped = true;
@@ -830,8 +841,14 @@ auto main(int argc, char** argv) -> int {
       captures.push_back({frame, arrivedIn, waited, fresh, w && h});
       captured += std::chrono::steady_clock::now() - pngStarted;
     }
+    if(frameTimesStream) {  //flushed every 16 frames: a run the harness has to kill loses at most 15 lines
+      frameTimesStream << std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - frameBegan).count()
+                       << "\n";
+      if(frame % 16 == 0) frameTimesStream.flush();
+    }
   }
   holdClock(frames);
+  if(frameTimesStream) frameTimesStream.flush();
   auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
   psp.kernel.geProfileStop();
@@ -840,9 +857,35 @@ auto main(int argc, char** argv) -> int {
   //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
   std::optional<PlayStationPortable::GPU::Statistics> gpu;
   if(psp.gpu) gpu = psp.gpu->statistics;
-  u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
   psp.kernel.geFold(true);  //(with the GE on its thread, the stretches the CPU ended after its runs taken first)
+
+  u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
+  //(PHOBOS_GPU_STATS: the breakdown by command kind, taken before unloading lets the renderer go)
+  u64 kindCommands[10]{}, kindPixels[10]{}, kindNanos[10]{};
+  u32 targetsMade = 0, targetsShown = 0, targetsCopied = 0;
+  bool timed = false;  //(the run was made with PHOBOS_GPU_STATS=time: the kinds' ms are real)
+  u64 drawTimes[24]{};
+  PlayStationPortable::GPU::Backend::TargetStat targetStats[64]{};
+  std::vector<PlayStationPortable::GPU::Backend::DrawRecord> drawRecords;
+  u32 targetStatsCount = 0;  //(PHOBOS_GPU_STATS=draws: each draw's time in log-spaced buckets, 1.024 us doubling)
+  u64 shownArea = 0, copiedArea = 0, shownOnlyArea = 0;
+  if(psp.gpu) {
+    for(int n = 0; n < 10; n++) {
+      kindCommands[n] = psp.gpu->backend->kindCommands[n];
+      kindPixels[n] = psp.gpu->backend->kindPixels[n];
+      kindNanos[n] = psp.gpu->backend->kindNanos[n];
+    }
+    targetsMade = psp.gpu->backend->targetsMade, targetsShown = psp.gpu->backend->targetsShown;
+    targetsCopied = psp.gpu->backend->targetsCopied;
+    shownArea = psp.gpu->backend->shownArea, copiedArea = psp.gpu->backend->copiedArea;
+    shownOnlyArea = psp.gpu->backend->shownOnlyArea;
+    timed = psp.gpu->backend->timing && psp.gpu->backend->timedSpans;
+    for(int n = 0; n < 24; n++) drawTimes[n] = psp.gpu->backend->drawTimes[n];
+    targetStatsCount = psp.gpu->backend->targetStatsCount;
+    for(u32 n = 0; n < targetStatsCount && n < 64; n++) targetStats[n] = psp.gpu->backend->targetStats[n];
+    drawRecords = psp.gpu->backend->drawRecords;
+  }
   f64 geBusyCycles = psp.kernel.geBusyCycles, geBusyLines = psp.kernel.geBusyLines;  //(so too)
   u64 geCapped = psp.kernel.geCapped, geSkipsRefused = psp.kernel.geSkipsRefused;  //(the CPU beside the GE's counts)
   u64 geRefusedInstructions = psp.kernel.geRefusedRun(), geInstructions = psp.kernel.geInstructions;
@@ -953,6 +996,18 @@ auto main(int argc, char** argv) -> int {
 
   //The report, as JSON: the runner's build, what was asked (null: not given), what ran, and what came of it (counts
   //the GPU didn't give are null). Written beside its name, then renamed, so a report is never a part of one.
+  if(!reportFile.empty() && !drawRecords.empty()) {  //(PHOBOS_GPU_STATS=draws: one line a draw, beside the report)
+    auto path = reportFile;
+    path += ".draws.csv";
+    std::ofstream log(path);
+    log << "ms,triangles,target,scale,pass,pipeline,writes_depth,shown,copied\n";
+    for(auto& r : drawRecords) {
+      if(r.ns == ~0ull) log << ',';
+      else log << r.ns / 1e6 << ',';
+      log << r.prims << ',' << r.target << ',' << r.scale << ',' << r.pass << ','
+          << r.pipeline << ',' << int(r.writesDepth) << ',' << int(r.shown) << ',' << int(r.copied) << '\n';
+    }
+  }
   if(!reportFile.empty()) {
     auto text = [](const std::string& value) { return value.empty() ? std::string("null") : jsonText(value); };
     auto number = [](bool given, u64 value) { return given ? std::to_string(value) : std::string("null"); };
@@ -991,6 +1046,61 @@ auto main(int argc, char** argv) -> int {
                     (unsigned long long)gpu->copies, (unsigned long long)gpu->pictures, (unsigned long long)gpu->moves,
                     frames ? gpu->waiting / 1e6 / frames : 0.0, (unsigned long long)pipelines, making / 1e6);
       gpuCounts = counts;
+      {  //(PHOBOS_GPU_STATS: what each command kind filled and how long the GPU spent in it)
+        static const char* kinds[] = {"Draw", "Upload", "Readback", "Copy", "Present",
+                                      "Shot", "Mesh", "Move", "Depth", "Alpha"};
+        std::string byKind = "{";
+        bool any = false;
+        for(int n = 0; n < 10; n++) {
+          if(!kindCommands[n]) continue;
+          char entry[256];
+          //(area: the rectangle a command covers, summed (at the GPU's scale for the kinds that fill a target, the
+          //PSP's size for Present and Shot, the read-back's for Readback): null for Draw and Mesh, whose triangles'
+          //coverage isn't known here; ms: null unless the run was made with PHOBOS_GPU_STATS=time)
+          char area[32] = "null", ms[32] = "null";
+          static const bool measured[10] = {false, true, true, true, true, true, false, true, true, true};
+          if(measured[n]) std::snprintf(area, sizeof(area), "%llu", (unsigned long long)kindPixels[n]);
+          if(timed) std::snprintf(ms, sizeof(ms), "%.3f", kindNanos[n] / 1e6);
+          std::snprintf(entry, sizeof(entry), "%s\"%s\": {\"commands\": %llu, \"area\": %s, \"ms\": %s}",
+                        any ? ", " : "", kinds[n], (unsigned long long)kindCommands[n], area, ms);
+          byKind += entry;
+          any = true;
+        }
+        if(any) {
+          std::string drawTimesText;
+          for(int n = 0; n < 24; n++) {
+            char bucket[48];
+            std::snprintf(bucket, sizeof(bucket), "%s%.6f", n ? ", " : "", std::pow(2.0, n + 10) / 1e6);
+            drawTimesText += bucket;
+          }
+          char drawCounts[512] = "";
+          for(int n = 0; n < 24; n++) {
+            char count[24];
+            std::snprintf(count, sizeof(count), "%s%llu", n ? ", " : "", (unsigned long long)drawTimes[n]);
+            std::strncat(drawCounts, count, sizeof(drawCounts) - std::strlen(drawCounts) - 1);
+          }
+          char targets[256];
+          std::snprintf(targets, sizeof(targets),
+                        ", \"targets\": {\"made\": %u, \"shown\": %u, \"copied\": %u, \"shown area\": %llu, "
+                        "\"copied area\": %llu, \"shown only area\": %llu, \"timed\": %s}",
+                        targetsMade, targetsShown, targetsCopied,
+                        (unsigned long long)shownArea, (unsigned long long)copiedArea,
+                        (unsigned long long)shownOnlyArea, timed ? "true" : "false");
+          std::string targetList = "[";
+          for(u32 n = 0; n < targetStatsCount; n++) {
+            char entry[128];
+            std::snprintf(entry, sizeof(entry), "%s{\"id\": %u, \"w\": %u, \"h\": %u, \"shown\": %s, \"copied\": %s}",
+                          n ? ", " : "", targetStats[n].id, targetStats[n].width, targetStats[n].height,
+                          targetStats[n].shown ? "true" : "false", targetStats[n].copied ? "true" : "false");
+            targetList += entry;
+          }
+          targetList += "]";
+          gpuCounts.insert(gpuCounts.size() - 1, ", \"kinds\": " + byKind + "}" + targets + ", \"target list\": " +
+                                             targetList + (drawRecords.empty() ? "" :
+                                             ", \"draw times\": {\"buckets low ms\": [" + drawTimesText + "], "
+                                             "\"counts\": [" + drawCounts + "]}"));
+        }
+      }
     }
 #if defined(BUILD_RELEASE)
     const char* build = "release";
