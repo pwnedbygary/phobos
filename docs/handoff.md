@@ -369,6 +369,88 @@ one row of `docs/implementation-plan.md`.
   stores apart in its first lines, would count the old reading again. No mutation run.
 - **Next**: the pull request's CI; then the Library's Continue Playing and Favourites rows and the game menu
   (Favourite, Hide from Continue Playing), the integration's next pull request.
+## PSP Vulkan: a pipeline that writes no color blends nothing and takes no dual-source factor, for Midnight Club: L.A. Remix's lost GPU on the RP6's stock driver — 2026-10-27
+
+Branch `rp6-gpu-loss-fix`, from master `1b32520cc` (#314). Changed: `ares/psp/ge/gpu/gpu.hpp` (`GPU::blendFor`, new),
+`ares/psp/ge/gpu/vulkan.cpp` (`pipelineFor()`, and `GPU::blendFor`'s definition), `tests/psp/gpu.cpp`
+(`gpuBlendUnwritten`, new), `docs/psp-gpu-renderers.md` ("Blending") and this file. The investigation's reports,
+reviews, test switches, scripts and logs are kept outside the repository. Checks says what has run, and Next what is
+still to come.
+- **The change**: `pipelineFor()` makes its color attachment's blending from `GPU::blendFor(k)` rather than from the
+  key as it is. Where a key writes no color (the four bits of its `colorMask` 0), its pipeline doesn't blend, and a
+  color factor taking the fragment shader's second output (`Source1Color` or `OneMinusSource1Color`, Vulkan's
+  `SRC1_COLOR` and `ONE_MINUS_SRC1_COLOR`: dual-source blending) is `Zero`; the rest of the attachment and every other
+  key's pipeline are made as before. The keys, the shaders and their constants are unchanged, so the fragment shader
+  still writes its second output. By Vulkan's rules no pixel changes: with a write mask of 0 no color is written
+  whatever the blending, and the depth and stencil don't depend on it. Both Vulkan modes make every GE draw's pipeline
+  there, fast mode's 3D among them; the copy, move and present pipelines set their own blending, none with a
+  dual-source factor or with blending and no color written, and are unchanged.
+- **Why**: on the RP6's stock Qualcomm driver (Adreno 740, driver version 802a4035), Midnight Club: L.A. Remix loses
+  the GPU: the kernel's GPU driver (KGSL) reports a hang and recovers, until its fault threshold, after which the next
+  submission returns `VK_ERROR_DEVICE_LOST`. Round three of the investigation (its RP6 block, 12 runs of the headless
+  runner on 26 Oct, and its report, which passed an independent review) maps every hang, by submission number and by
+  time, to draws with one pipeline, K (in three runs, K's changed key: below), or to submissions holding them:
+  blending One and `Source1Color` under Add, no color written, its depth tested greater or equal and written (the
+  game's 3D in Vulkan (fast)). In the three runs whose switches changed K's alpha test, its depth range or both, the
+  hangs map to that changed key, which kept K's blending and dual-source factor. Every stock run that kept K's
+  dual-source factor hung (7 of 7 in the block, as 5 of 5 in round two); the two that changed K's blending
+  alone ran clean: the factor made `Zero` with blending kept, and the same with blending off, the form taken here (one
+  run each: 2,400 frames, all 546 of K's logged draws completed, the longest logged wait 1.4 ms). With either of K's
+  discards taken out, or its depth declaration, the runs still hung. In the clean run that kept blending, K's twin (the
+  same key writing red, green and blue) kept its factor and drew 1,077 times without a hang, and the 13 keys besides K
+  that blend by that output and write color, 22,615 times (its logged draws). On lavapipe, Midnight Club's six compared
+  frames were byte for byte the same with each form (in Vulkan (fast)).
+- **Tests**: `gpuBlendUnwritten` (new; no GPU needed) gives `GPU::blendFor()` K as the game made it, then K with
+  nothing written, each channel alone, red, green and blue together, and all four, each dual-source factor on either
+  side, a blending that takes no second output, and blending already off. Expected, from Vulkan's rules, the runner's
+  logged outcome for K (blending 0, factors ONE and ZERO) and its switch (a dual-source factor made ZERO wherever no
+  color is written, blending or not): with no color written, no blending and `Zero` for each dual-source factor, the
+  other factor kept; with any channel written (K's twin's mask, each channel alone, all four), the key's blending and
+  factors. Master has no `GPU::blendFor()` and makes the attachment from the key as it is; with the function giving
+  back its key unchanged, the test fails its five cases with no color written (the four that blend still blending,
+  and the one with blending already off keeping its dual-source factor) and passes the six others. Run so (Checks),
+  it printed four of the five, as it prints four failing rows at most, and its check reported 5.
+- **Checks** (GCC 16.2.1, CC and CXX unset): on this tree, `tests/psp/run-tests.sh` in its default mode, a debug
+  build at -O1 with `-g -Wall -Wextra -Werror` and the address and undefined-behavior sanitizers, with
+  `PHOBOS_TESTS_ONLY` set to the new group alone. All 54 units compiled with no warning or error, and the group
+  passed; it passed again after the five runs that follow. Each of five broken copies of `GPU::blendFor()`'s body
+  made it fail, on the rows expected: giving back its key unchanged (master's behaviour), the five with no color
+  written (four printed; its check reported 5); acting only where the key blends, the one with blending already off
+  (1); without `b.blend = 0`, the four that blend with no color written (4); without the factor loop, the four with
+  a dual-source factor and no color written (4); without the mask test, the six that write color (6, four printed).
+  The group opens no GPU. Nothing else has run with this change yet; what is still to come is in Next.
+- **Limits**:
+  - The fix rests on one runner run per form, in one scene of one game (the same 2,400 frames); it isn't repeated
+    yet, nor tried in the app.
+  - What the runs separate: K's dual-source factor is needed for the hang, as far as they go; that it's enough isn't
+    shown, no run having changed K's color mask, its depth written by the shader, or its greater-or-equal test with
+    the depth written. Fast mode's GPU transform isn't needed for the hang: round one's accurate-mode run, which had
+    none, hung at the same submissions (below).
+  - Round three's RP6 runs were all in Vulkan (fast). In round one, a run of the same scene in Vulkan (accurate), on
+    master's code of 23 October, lost the GPU at the same four submissions as the fast mode's unsplit runs (no GPU
+    transform: 0 meshes). Its keys weren't logged, so that its pipeline was K with only `transformed` changed is a
+    hypothesis. No accurate-mode run has been made with either form of the change.
+  - Not done: the 266-game pixel check in both Vulkan modes, and a Turnip run with the change (Turnip ran K without a
+    hang, without it). Of the owner's four conditions for a fix, the runner half of the first is met, once per form.
+  - Burnout Dominator and Need for Speed: Shift, which lost the GPU on the RP6 under #297's builds, didn't in one short
+    run each on master's code, and drew no pipeline this change makes differently.
+  - On a device without dual-source blending no key has such a factor (`GPU::settings()` gives the GPU's own factors
+    there), so only the blending half acts.
+  - The validation layer saw this form only beside another of the runner's switches, never alone; GPU-assisted
+    validation never ran.
+  - A pipeline kept between sessions (System's "Pipeline Cache") for a key this changes is made again once, its
+    blending being part of what the driver finds it by (derived; not run).
+- **Review**: independent and read-only. The first look found two errors in these notes and asked for changes: a
+  limit that said no accurate-mode run had been made on the RP6, and a summary that mapped every hang to K alone;
+  both are fixed above, with its suggestions (the test's row with blending already off among them). The second look
+  passed the result with no findings. This text, with its checks, has its own look before the first commit.
+- **Next**: CI's suites and builds on the pull request (the PSP suites sanitized and built as the app is, lavapipe
+  required as CI requires it); the PSP runner rebuilt with the change, for lavapipe (Midnight Club's six frames
+  against round three's reference, and one validation pass of this change alone) and for the RP6; the 266-game pixel
+  check in both Vulkan modes; one RP6 block under the shared lock: three stock runs in Vulkan (fast), two in Vulkan
+  (accurate), one with the change and one without it, both built from the same master (round one's accurate-mode run
+  was on master of 23 October, and #294, #305 and #311 have changed the renderer since), one run on Turnip, and the
+  two EA games; then the owner's own session with a test build.
 
 ## Thirteen themes kept: Phobos, the default, in the website's colors, and System and Light / Dark / Auto gone — 2026-10-24
 
