@@ -1,0 +1,23 @@
+npm 12.2.1
+node v26.11.1
+lockfile sha256 33d8f0df6dfa542873e102ec143c84fdda00fa605b1203658592f1bba965c3a1
+node_modules/@xmldom/xmldom version=0.9.8 integrity=sha512-p96FSY54r+WJ50FIOsCOjyj/wavs8921hG5+kVMmZgKcvIKxMXHTrjNJvRgWa/zuX3B6t2lijLNFaOyuxUH+2A==
+node_modules/pngjs version=7.0.0 integrity=sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==
+node_modules/three version=0.186.0 integrity=sha512-cr/fIM2ddMSVbYVgkfD4jLJv7Fh/8ZTjvo+7gQeSVGUZHxpx9FDwoL5iC7hUz/LiRA8wMbqfnb90xKfm1/HHkQ==
+THREE-MATCHES root-deps copy
+
+added 3 packages in 417ms
+24M	node_modules
+three tarball-sha256 61eeff9d7616005c9a481c796f52287d81fbbbc0d55eaca5565322924252c1aa cache=yes
+pngjs tarball-sha256 c4b71873d48a692dd5eeb1dcb62185c7aafe40f2180c7cc7f30ec71e89a080be cache=yes
+@xmldom/xmldom tarball-sha256 eb85b871f14f569d1fd93b951cddfb22c9e9de1e8010838dbf256bafb67fc1fc cache=yes
+
+added 3 packages in 377ms
+24M	node_modules
+THREE-MATCHES root-deps copy after offline reinstall
+33d8f0df6dfa542873e102ec143c84fdda00fa605b1203658592f1bba965c3a1  package-lock.json
+
+22:24 registry fetch disclosure (pre-decision, before the host rule): the first install fetched three 0.186.0,
+pngjs 7.0.0 and @xmldom/xmldom 0.9.8 from registry.npmjs.org, 24 MB in total; those tarballs are the ones now in
+the local npm cache (cache=yes on every line above), and the 22:57 offline reinstall served everything from that
+cache. No other registry use after 22:24.

@@ -1,0 +1,175 @@
+{
+  "generatedBy": "tools/carts/bake-carts.mjs",
+  "shapes": {
+    "carts": [
+      "famicom",
+      "sfc",
+      "gb",
+      "gbc",
+      "gba",
+      "n64",
+      "sms",
+      "md",
+      "small",
+      "aes",
+      "hucard",
+      "a26",
+      "pcb"
+    ],
+    "discs": [
+      "cd",
+      "psx",
+      "minidisc"
+    ],
+    "engravings": [
+      [
+        "gba",
+        "badge"
+      ],
+      [
+        "gba",
+        "lines"
+      ]
+    ]
+  },
+  "inputs": {
+    "cartridge/carts/pipeline.js": "a5cbbe9d288972781db3ef26ecf471221b76a16005eb7541155b699e66011967",
+    "cartridge/shared/logo.js": "83ed228846aac6875002b074ff26515342e9c52e793bcfa235fef35cf795eaaf",
+    "cartridge/assets/studio.hdr": "f6a989f89432eb4eee3191364a9c1ceed195c4ec3544173a3c04fd96cb91d0ba",
+    "bake-carts.mjs": "0ef94e0177c85c69c3f7ec070f9098351108c096d11bc077472d4cab32a89497",
+    "dom-shim.mjs": "1f5df57db68e4767d2cc76d9c3cfe0bc0c3d64f6b7fdb63d52983727b9774264",
+    "gltf-shim.mjs": "6ecbe3fcc0ac4748bbfbdba0b73985716f6027d4069ad1f68dfacef93f529418",
+    "hdr-url-loader.mjs": "e8c44e7f768409dd9f359cf94c1a8d3989fe02b7a33be0bfbeaf48cde051e78d",
+    "disc.mat": "e65284b21d3fd688aa1bb3d92c2430c898dfb445e1ef46be3250f602c7cd290a",
+    "package.json": "0c4bf049ae82aa0c17ebd44928a53ae19b67ef0604a092e79686dbb8e2cd2322",
+    "package-lock.json": "33d8f0df6dfa542873e102ec143c84fdda00fa605b1203658592f1bba965c3a1",
+    ".nvmrc": "45507e6d96329a845faa642c0f485313bcb2ca1e08b043589cde4ddd15969cd6",
+    "npm-evidence.txt": "56cfed7db199e5ecceeb9a6bbf3f95201bcdd9920496e2418d845306c81dd9ac",
+    "filamentTgzSha256": "6d3391197dcbdec318dd8a7f4e8d6fd0766794231d53c756a1565fd92bba31b2",
+    "cmgen": "3b07ec38c79f1820763b27bc95a7797d862011bdd61545252a3f7245384e56a1",
+    "matc": "776e55f71d44c7485875105b592d850104a69dbfea7d4dc1d1bd83e4f8bed697",
+    "node": "v26.11.1"
+  },
+  "outputs": [
+    {
+      "path": "carts/a26.glb",
+      "bytes": 385728,
+      "sha256": "5045c210a346c711a52ebd339c8f08be0a41575b984315b11d2b0f6e5f636376"
+    },
+    {
+      "path": "carts/aes.glb",
+      "bytes": 393196,
+      "sha256": "48d9063b03e7bb560e6880aeb9c6614e43772c5c2bc3bb022ebb5d865be58626"
+    },
+    {
+      "path": "carts/famicom.glb",
+      "bytes": 244420,
+      "sha256": "5d6601c37200ba12ca2f7420b48598402e015b14be4241a6c165c30a80d345dd"
+    },
+    {
+      "path": "carts/gb.glb",
+      "bytes": 551060,
+      "sha256": "b4ff9dec25168751857787daa762898f3e25febad57d0c8436d895775364276f"
+    },
+    {
+      "path": "carts/gba-badge.glb",
+      "bytes": 681992,
+      "sha256": "6b920e96bef8b77396c86bf28c760e70ad93e1f4257c8bbe8eb6b6f4378d686b"
+    },
+    {
+      "path": "carts/gba-lines.glb",
+      "bytes": 414288,
+      "sha256": "2bcce148629386bed96f09cfd5dd88bcc940db415e949d8ba5a95094e39d1092"
+    },
+    {
+      "path": "carts/gba.glb",
+      "bytes": 397328,
+      "sha256": "7624eeb4b1dc1c939d54743a0b701510215fff066ab64dea250dfe6287d8a4f1"
+    },
+    {
+      "path": "carts/gbc.glb",
+      "bytes": 547020,
+      "sha256": "69737ed18ff9e31add72b309d2a7207dee72c2401d46ab8930a7763d1094f2f0"
+    },
+    {
+      "path": "carts/hucard.glb",
+      "bytes": 140848,
+      "sha256": "962003c99ebd12ebde45f66280fa9b46c8e658330d54e772eb82374d9684298d"
+    },
+    {
+      "path": "carts/md.glb",
+      "bytes": 296260,
+      "sha256": "24cc24b149e7bda018340ed43bf3c65762839c816308078ceb78cbf5d48b8a6a"
+    },
+    {
+      "path": "carts/n64.glb",
+      "bytes": 329456,
+      "sha256": "84a68d1aeeac806f839379b3831052ddc01dd8b4f6289bb9db58671eb1b0ac0e"
+    },
+    {
+      "path": "carts/pcb.glb",
+      "bytes": 202496,
+      "sha256": "355248c5b3a824a300e124a92ff31f5b5abbcf71dbbadcfc25b4188bd2af55af"
+    },
+    {
+      "path": "carts/sfc.glb",
+      "bytes": 263048,
+      "sha256": "a2e739e9e21a0fd82d2997d6109c228a481107d6cec09ed7e90cf7caf619a417"
+    },
+    {
+      "path": "carts/small.glb",
+      "bytes": 267976,
+      "sha256": "8e95dcd1b61f05195068fbeeebd647b01fd8638a46c8245577149eea9f15b177"
+    },
+    {
+      "path": "carts/sms.glb",
+      "bytes": 230548,
+      "sha256": "886d191bc71cc3b93535c2c2a0c16cfa768c217cdeda035b0de4f76fe1c6e8ad"
+    },
+    {
+      "path": "discs/cd.glb",
+      "bytes": 293736,
+      "sha256": "f9957392dfe58611361615d85b5e1f2c4b1b56ad1fcb096258f4c1b8cd55589f"
+    },
+    {
+      "path": "discs/minidisc.glb",
+      "bytes": 292204,
+      "sha256": "fd0e6112b02cebd3cf90337ada45e7a48b6a3018177636001b1681db1db54611"
+    },
+    {
+      "path": "discs/psx.glb",
+      "bytes": 293736,
+      "sha256": "e87ab7b1255306d9120c200b31d36b5235505e90c7864854b2740ea812a80764"
+    },
+    {
+      "path": "ibl/ibl_ibl.ktx",
+      "bytes": 2095472,
+      "sha256": "6ae558bd3a56329b916ee634f519975e540fb2d62adff7e08939670d21fdd5ca"
+    },
+    {
+      "path": "ibl/ibl_skybox.ktx",
+      "bytes": 1572932,
+      "sha256": "a07a0628048133860073b2f3ed7600fed602991e98e05d36928eb3d3b1e5f21e"
+    },
+    {
+      "path": "ibl/sh.txt",
+      "bytes": 885,
+      "sha256": "ba49a6405c3cc5cd8b7e4f554920e580304b2f25aa7f1a547e3818830d76df15"
+    },
+    {
+      "path": "materials/disc.filamat",
+      "bytes": 87636,
+      "sha256": "3714a34ef9f5bec08f9a306eed9a24d9408203e0f1bd4671637c2c1c1f244c91"
+    },
+    {
+      "path": "textures/glitter-normal.png",
+      "bytes": 29378,
+      "sha256": "8ae33dc5cfc4e5101e28ce53a7b80c352cd77f5f3fccbf6797a6ad2535c5e57d"
+    },
+    {
+      "path": "textures/plastic-normal.png",
+      "bytes": 43860,
+      "sha256": "28eea08241d6bf6d546feccd95a478d4a7ff9eddf6d496f215bbb6abe99e9a78"
+    }
+  ]
+}
