@@ -29,15 +29,27 @@ import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.GameKeys
 import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.input.PspRightStick
+import com.phobos.emulator.art.ArtDownloader
+import com.phobos.emulator.art.ArtGame
+import com.phobos.emulator.art.ArtKind
+import com.phobos.emulator.art.ArtStats
+import com.phobos.emulator.art.artRegionOrder
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.CatalogBackdrop
 import com.phobos.emulator.data.CrtBackdropScene
+import com.phobos.emulator.data.ContentGameUris
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GameDisc
+import com.phobos.emulator.data.GameFiles
+import com.phobos.emulator.data.GameKey
+import com.phobos.emulator.data.GameRecord
+import com.phobos.emulator.data.GameStore
 import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.MangaBackdropScene
 import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.PlatformIconPack
+import com.phobos.emulator.data.PlayClock
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.RetrowaveBackdropScene
 import com.phobos.emulator.data.RpgBackdropScene
@@ -226,6 +238,11 @@ class MainViewModel(
 ) : ViewModel(), DefaultLifecycleObserver {
     val settings: StateFlow<EmulatorSettings> = settingsStore.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), initialSettings)
+
+    // The games played, with their plays, play time and when last played: one store for the whole app. Its file is
+    // read now, for the Library's rows.
+    private val gameStore = GameStore.get(context).also { it.load() }
+    private val gameUris = ContentGameUris(context.contentResolver)
 
     // The loaded game, as the level its controls resolve at; null with none loaded.
     private val _loadedGame = MutableStateFlow<ControlLevel.Game?>(null)
@@ -698,6 +715,9 @@ class MainViewModel(
         _frameStepping.value = false
         _isPaused.value = paused
         PhobosCore.setPause(paused)
+        // Pausing (the menu, the Library, the app leaving the screen) saves the play time so far, so a game the
+        // system kills while it's away keeps it.
+        if (paused && _isLoaded.value) gameStore.checkpoint(playClock())
         // Controller input goes to the menus while paused, so a button held now would stay down for the game.
         if (paused) GameInputState.releaseAllButtons()
         // Back in the game, a stick or trigger still held from a binding is the game's again.
@@ -803,6 +823,10 @@ class MainViewModel(
         }
     }
 
+    /** The core's play clock, the HUD's, with the emulation thread counting it; null when it can't be read. */
+    private fun playClock(): PlayClock? =
+        runCatching { PhobosCore.getPerformanceStats().let { PlayClock(it.emuTid, it.playTimeMs) } }.getOrNull()
+
     /**
      * Unloads the game the core holds, whichever instance loaded it, snapshotting it first when [autoSave] and
      * Auto-Save State (Task 17) are on. Call with [CoreSession.lock] held.
@@ -811,6 +835,8 @@ class MainViewModel(
         val sysName = CoreSession.system
         val romName = CoreSession.rom
         if (sysName.isEmpty()) return
+        // Read before anything is torn down; the play clock only counted while the game ran unpaused.
+        gameStore.gameEnded(GameKey(sysName, romName), playClock())
         // The snapshot comes BEFORE any teardown, while the core is still alive.
         if (autoSave && settings.value.autoSaveState && romName.isNotEmpty()) {
             try {
@@ -1532,6 +1558,58 @@ class MainViewModel(
         merged.filter { it !in s.hiddenSystems }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** Every game record, for a system's list (which games are favorites); null until the store has read its file. */
+    val gameRecords: StateFlow<List<GameRecord>?> = gameStore.games
+
+    /**
+     * The Library's Continue Playing and Favorites rows; null until the store has read its file and the systems are
+     * known.
+     */
+    val libraryRows: StateFlow<LibraryRows?> = combine(gameStore.games, visibleSystems) { games, systems ->
+        if (games == null || systems.isEmpty()) null else libraryRowsOf(games, systems)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /**
+     * Each row's first card at the Library's last look, kept here so it outlives the Library while a game started from
+     * a row runs: back in the Library, a row whose first card changed goes back to its start, however soon the game
+     * loaded. Used on the main thread only.
+     */
+    val continuePlayingFirstCard = FirstCard()
+    val favoritesFirstCard = FirstCard()
+
+    /** Makes [key] a favorite or not; a game with no record yet is found at [rom]. */
+    fun setFavourite(key: GameKey, favourite: Boolean, rom: RomFile? = null) =
+        gameStore.setFavourite(key, favourite, rom?.toGameFiles())
+
+    /** Keeps [key] out of Continue Playing until it next starts. */
+    fun hideFromContinuePlaying(key: GameKey) = gameStore.hideFromHistory(key)
+
+    /**
+     * What a Library row's start of [record] comes to. A multi-disc game whose discs its record lacks goes to its
+     * system's page, whose scan records them. Otherwise its files must open first, checked off the main thread before
+     * anything is unloaded; a record whose files don't is marked missing.
+     */
+    suspend fun recordStart(record: GameRecord): RecordStart {
+        val key = record.key
+        if (isRunning(key.system, key.name)) return RecordStart.Running
+        if (needsSystemPage(record, PhobosCore.getSystemExtensions(key.system))) return RecordStart.SystemPage
+        val rom = record.toRomFile()
+        val opens = rom != null && withContext(Dispatchers.IO) {
+            (listOf(rom) + rom.discs).all { gameUris.opens(it.uri.toString()) }
+        }
+        if (rom == null || !opens) {
+            gameStore.setMissing(key, true)
+            return RecordStart.NotFound
+        }
+        return RecordStart.Ready(key.system, rom)
+    }
+
+    /** Starts [rom] on [system] from a Library row, from [disc] of a multi-disc game, as a system's list does. */
+    fun startFromRow(context: Context, system: String, rom: RomFile, disc: Int = 0) {
+        loadRom(context, system, rom, disc)
+        navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(rom.name)}")
+    }
+
     private val _roms = MutableStateFlow<List<RomFile>>(emptyList())
     val roms: StateFlow<List<RomFile>> = _roms
 
@@ -1640,6 +1718,66 @@ class MainViewModel(
     /** Whether [romName] on [systemName] is the game that's loaded. */
     fun isRunning(systemName: String, romName: String): Boolean =
         _isLoaded.value && currentSystemName == systemName && currentRomName == romName
+
+    // Games' pictures, downloaded from libretro's thumbnail server: one downloader for the whole app.
+    private val art = ArtDownloader.get(context)
+
+    /** Loads begun and not yet ended or failed: artwork waits while there's one, as it does while a game is loaded. */
+    private val _loadsStarting = MutableStateFlow(0)
+
+    /** Each game's downloaded box art, for the Library's cards and a system's list. */
+    val artBoxes: StateFlow<Map<GameKey, File>> = art.boxes
+
+    /** How many pictures are kept and what they take, for the Artwork page. */
+    val artStats: StateFlow<ArtStats> = art.stats
+
+    /** The most the pictures may take. */
+    val artCapBytes: Long get() = art.capBytes
+
+    init {
+        // No new request starts while a game is loading or loaded, so downloads never compete with it; those going
+        // finish.
+        viewModelScope.launch {
+            combine(_isLoaded, _loadsStarting) { loaded, starting -> loaded || starting > 0 }
+                .distinctUntilChanged()
+                .collect { art.setPaused(it) }
+        }
+        // What to download, and the games in the Library's rows: their pictures are looked for whatever system was
+        // scanned, again whenever downloading is switched on, and are the last to go when room is needed.
+        viewModelScope.launch {
+            val choices = settingsStore.settings
+                .map { Triple(it.artDownload, it.artExtras, it.regionPreference) }
+                .distinctUntilChanged()
+            val rows = combine(gameStore.games, visibleSystems) { games, systems ->
+                if (games == null || systems.isEmpty()) null else libraryRowsOf(games, systems)
+            }
+            combine(choices, rows) { choice, shown -> choice to shown }.collect { (choice, shown) ->
+                val (download, extras, region) = choice
+                val kinds = when {
+                    !download -> emptyList()
+                    extras -> ArtKind.entries
+                    else -> listOf(ArtKind.BOX)
+                }
+                art.configure(kinds, artRegionOrder(region))
+                shown ?: return@collect
+                val games = (shown.continuePlaying + shown.favorites).distinctBy { it.key }
+                art.setKeep(games.map { it.key }.toSet())
+                art.request(games.map { ArtGame(it.key, it.title) })
+            }
+        }
+    }
+
+    /** Downloads [key]'s pictures again (the game menu's Re-download Artwork); [discTitle] is a PSP disc's own. */
+    fun redownloadArt(key: GameKey, discTitle: String? = null) = art.redownload(ArtGame(key, discTitle))
+
+    /** Looks again now for the pictures of every game that has none, forgetting the misses (the Artwork page). */
+    fun downloadMissingArt() = art.retryMissing()
+
+    /** Deletes every picture and listing and downloads them all again (the Artwork page). */
+    fun redownloadAllArt() = art.redownloadAll()
+
+    fun setArtDownload(enabled: Boolean) = viewModelScope.launch { settingsStore.setArtDownload(enabled) }
+    fun setArtExtras(enabled: Boolean) = viewModelScope.launch { settingsStore.setArtExtras(enabled) }
 
     // The EmulatorScreen on show. When a frontend starts a game over the running one, the new game's screen
     // arrives before the old one leaves, so only the current screen's exit counts.
@@ -2770,12 +2908,20 @@ class MainViewModel(
             }
             ensureActive()
             _roms.value = foundRoms
+            // A known game's record follows its file to a new URI (a folder added again from another level) and gets
+            // what it lacks, such as a multi-disc game's discs.
+            gameStore.refreshFiles(systemName, foundRoms.map { it.name to it.toGameFiles() })
             // Plain list first; titles and icons filled in on the same job so a superseded scan can't clobber
             // another system's list after a late finish.
             if (systemName == LaunchSystems.PSP) {
                 val enriched = withContext(Dispatchers.IO) { withPspDiscInfo(context, foundRoms) }
                 ensureActive()
                 _roms.value = enriched
+                gameStore.refreshFiles(systemName, enriched.map { it.name to it.toGameFiles() })
+                // A PSP disc's own title is a second name to look its pictures up by, so they wait for it.
+                art.request(enriched.map { ArtGame(GameKey(systemName, it.name), it.title) })
+            } else {
+                art.request(foundRoms.map { ArtGame(GameKey(systemName, it.name)) })
             }
         }
     }
@@ -2921,19 +3067,29 @@ class MainViewModel(
         context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true,
         beforeLoad: (suspend () -> Unit)? = null,
     ) {
+        _loadsStarting.update { it + 1 }
         viewModelScope.launch(Dispatchers.IO) {
-            CoreSession.lock.withLock {
-                // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
-                // loaded; reloading the running game starts it over without saving it.
-                val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName && CoreSession.rom == rom.name
-                closeSessionLocked(autoSave = !reload)
-                beforeLoad?.invoke()
-                loadLocked(context, systemName, rom, disc, autoLoad)
+            try {
+                CoreSession.lock.withLock {
+                    // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
+                    // loaded; reloading the running game starts it over without saving it.
+                    val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName &&
+                        CoreSession.rom == rom.name
+                    closeSessionLocked(autoSave = !reload)
+                    beforeLoad?.invoke()
+                    loadLocked(context, systemName, rom, disc, autoLoad, reload)
+                }
+            } finally {
+                _loadsStarting.update { it - 1 }
             }
         }
     }
 
-    private suspend fun loadLocked(context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true) {
+    /** [reload] is the running game started over, which isn't another play of it. */
+    private suspend fun loadLocked(
+        context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true,
+        reload: Boolean = false,
+    ) {
         withContext(Dispatchers.IO) {
             // For the merged "ZX Spectrum" entry, native detects 48K vs 128K by
             // CONTENT (TAP header block scan) — see PhobosRunner initialize().
@@ -3249,6 +3405,10 @@ class MainViewModel(
                         CoreSession.system = effectiveSystem
                         CoreSession.rom = rom.name
                         CoreSession.owner = sessionToken
+                        gameStore.gameStarted(
+                            GameKey(effectiveSystem, rom.name), rom.toGameFiles(), newPlay = !reload,
+                            clock = playClock(),
+                        )
                         loadedRom = rom
                         _isLoaded.value = true
                         currentSystemName = effectiveSystem
@@ -3368,6 +3528,8 @@ class MainViewModel(
                     } else {
                         PhobosCore.setSecondaryRomFd(descriptor!!.detachFd())
                     }
+                    // A 64DD disk starts another emulation thread and play clock: the time so far is counted first.
+                    gameStore.checkpoint(playClock())
                     PhobosCore.loadSecondaryRom(systemName, file.uri.toString()).also { success ->
                         if (!success) Log.e("Phobos", "Native loadSecondaryRom failed for $systemName")
                     }
@@ -3571,3 +3733,38 @@ data class RomFile(
     /** The file's last modification time, for the icon cache key. */
     val mtime: Long = 0,
 )
+
+/** What a Library row's start of a game comes to (see [MainViewModel.recordStart]). */
+sealed interface RecordStart {
+    /** It's the game behind the Library: it resumes. */
+    data object Running : RecordStart
+
+    /** Its system's page starts it, the first time (a multi-disc game whose discs its record lacks). */
+    data object SystemPage : RecordStart
+
+    /** Its files didn't open. */
+    data object NotFound : RecordStart
+
+    /** [rom] on [system] can start. */
+    data class Ready(val system: String, val rom: RomFile) : RecordStart
+}
+
+/** Where [this] game's files are, for its record. */
+private fun RomFile.toGameFiles() = GameFiles(
+    uri = uri.toString(),
+    parentUri = parentUri?.toString(),
+    discs = discs.map { GameDisc(it.name, it.uri.toString(), it.parentUri?.toString()) },
+    title = title,
+)
+
+/** The game [this] record is, as a system's list has it; null for a record that has no file. */
+private fun GameRecord.toRomFile(): RomFile? {
+    val file = uri ?: return null
+    return RomFile(
+        name = key.name,
+        uri = Uri.parse(file),
+        parentUri = parentUri?.let(Uri::parse),
+        discs = discs.map { RomFile(it.name, Uri.parse(it.uri), it.parentUri?.let(Uri::parse)) },
+        title = title,
+    )
+}

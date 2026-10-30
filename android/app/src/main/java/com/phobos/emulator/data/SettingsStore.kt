@@ -225,6 +225,10 @@ data class EmulatorSettings(
     /** Offer the nightly build of every push to master, not only releases. */
     val appUpdateNightly: Boolean = false,
     val appUpdateCheckTime: Long = 0L,
+    /** Download games' box art from libretro's thumbnail server, after each folder scan and for the Library's rows. */
+    val artDownload: Boolean = true,
+    /** With the box art, each game's screenshot and title logo, kept for later: nothing shows them yet. */
+    val artExtras: Boolean = true,
     val ps1AnalogMode: Boolean = true,
     val n64ExpansionPak: Boolean = true,
     val n64DisableVIProcessing: Boolean = false,
@@ -385,6 +389,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val APP_UPDATE_AUTO_CHECK = booleanPreferencesKey("app_update_auto_check")
         val APP_UPDATE_NIGHTLY = booleanPreferencesKey("app_update_nightly")
         val APP_UPDATE_CHECK_TIME = longPreferencesKey("app_update_check_time")
+        val ART_DOWNLOAD = booleanPreferencesKey("art_download")
+        val ART_EXTRAS = booleanPreferencesKey("art_extras")
         val PS1_ANALOG_MODE = booleanPreferencesKey("ps1_analog_mode")
         val N64_EXPANSION_PAK = booleanPreferencesKey("n64_expansion_pak")
         val N64_DISABLE_VI_PROCESSING = booleanPreferencesKey("n64_disable_vi_processing")
@@ -609,6 +615,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             appUpdateAutoCheck = safeGet(APP_UPDATE_AUTO_CHECK, true),
             appUpdateNightly = safeGet(APP_UPDATE_NIGHTLY, false),
             appUpdateCheckTime = safeGet(APP_UPDATE_CHECK_TIME, 0L),
+            artDownload = safeGet(ART_DOWNLOAD, true),
+            artExtras = safeGet(ART_EXTRAS, true),
             ps1AnalogMode = safeGet(PS1_ANALOG_MODE, true),
             n64ExpansionPak = safeGet(N64_EXPANSION_PAK, true),
             n64DisableVIProcessing = safeGet(N64_DISABLE_VI_PROCESSING, false),
@@ -863,6 +871,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setAppUpdateAutoCheck(enabled: Boolean) = dataStore.edit { it[APP_UPDATE_AUTO_CHECK] = enabled }
     suspend fun setAppUpdateNightly(enabled: Boolean) = dataStore.edit { it[APP_UPDATE_NIGHTLY] = enabled }
     suspend fun setAppUpdateCheckTime(time: Long) = dataStore.edit { it[APP_UPDATE_CHECK_TIME] = time }
+    suspend fun setArtDownload(enabled: Boolean) = dataStore.edit { it[ART_DOWNLOAD] = enabled }
+    suspend fun setArtExtras(enabled: Boolean) = dataStore.edit { it[ART_EXTRAS] = enabled }
     suspend fun setPs1AnalogMode(enabled: Boolean) = dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
     suspend fun setOrientationMode(vertical: Boolean) = dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
     suspend fun setN64ExpansionPak(enabled: Boolean) = dataStore.edit { it[N64_EXPANSION_PAK] = enabled }

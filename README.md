@@ -186,7 +186,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 - **Themes:** 13 of them: Phobos, the default, in the website's Mars orange, violet and gold on deep space; Synthwave '84, LaserWave and Shades of Purple; Dracula, Monokai, Gruvbox Dark, Ayu Dark, Night Owl, Rosé Pine, Everforest Dark, Kanagawa and the light Rosé Pine Dawn; style effects (glass, retrowave neon, an XMB-style backdrop), and backdrops (pixel-art scenes, manga ink, 16-bit RPG, retrowave) for the app and its screensaver.
 - **Video:** color emulation, interframe blending and overscan in Settings → Video; its Shaders screen saves a `.slangp` preset, not yet applied.
 - **Performance Monitor:** an in-game HUD with FPS, frame times and system stats, in presets or metric by metric; press and hold it in a game to move or resize it.
-- **Library:** console illustrations drawn in the theme's colors, Platform Visibility to hide systems you don't use, and games started from frontends (below).
+- **Library:** console illustrations drawn in the theme's colors, games' box art downloaded after each folder scan (Settings → Artwork; see Network use below), Platform Visibility to hide systems you don't use, and games started from frontends (below).
 
 ### 9. CI / distribution
 
@@ -217,6 +217,21 @@ Phobos's registry entry ([rommapp/argosy-launcher#471](https://github.com/rommap
 own launcher has a fixed emulator list and can't.
 
 ---
+
+## Network use
+
+Phobos needs no account. It goes online for three things:
+
+- **App updates:** at most once a day as it starts, it asks GitHub (`api.github.com`) for Phobos's releases; Settings →
+  About turns the check off. Updates download from GitHub only when you choose to install one.
+- **GPU drivers:** the GPU Driver Manager asks GitHub for its sources' releases and downloads a driver when you
+  choose one. With update notifications on, it asks again at most every six hours.
+- **Artwork:** after each folder scan, on any network, and for the games in the Library's rows, Phobos downloads box
+  art (with screenshots and title logos, kept for later) from libretro's thumbnail server,
+  `thumbnails.libretro.com`, behind Cloudflare. It asks for a system's list of pictures, then for the pictures of the
+  games found on it: the server receives those systems' and games' names, your IP address, and "Phobos" with its
+  version. Names not on the list never leave your device, and nothing starts while a game is loading or running.
+  Settings → Artwork turns it off.
 
 ## Building Phobos
 

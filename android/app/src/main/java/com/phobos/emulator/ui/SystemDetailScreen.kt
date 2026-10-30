@@ -4,8 +4,11 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,11 +22,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.phobos.emulator.art.hasArt
+import com.phobos.emulator.data.GameKey
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.romTitle
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SystemDetailScreen(
     encodedSystemName: String,
@@ -51,6 +58,36 @@ fun SystemDetailScreen(
                 viewModel.loadRom(context, systemName, game, disc)
                 onRomClick(Uri.encode(systemName), Uri.encode(game.name))
             },
+        )
+    }
+
+    // This system's game records by ROM name, for the stars and the game menu.
+    val records by viewModel.gameRecords.collectAsState()
+    val boxes by viewModel.artBoxes.collectAsState()
+    val recorded = remember(records, systemName) {
+        records.orEmpty().filter { it.key.system == systemName }.associateBy { it.key.name }
+    }
+    // A game's menu, opened by a held A (true) or a long press.
+    var menuFor by remember { mutableStateOf<Pair<RomFile, Boolean>?>(null) }
+    menuFor?.let { (game, heldA) ->
+        val key = GameKey(systemName, game.name)
+        GameMenu(
+            title = if (game.discs.isNotEmpty()) romTitle(game.name)
+                else com.phobos.emulator.util.displayTitle(game.name, game.title),
+            system = systemName,
+            items = gameMenuItems(recorded[game.name], artwork = settings.artDownload && hasArt(systemName)),
+            openedByHeldA = heldA,
+            fullScreen = settings.fullScreenMode,
+            onPick = { item ->
+                menuFor = null
+                when (item) {
+                    GameMenuItem.ADD_TO_FAVORITES -> viewModel.setFavourite(key, true, game)
+                    GameMenuItem.REMOVE_FROM_FAVORITES -> viewModel.setFavourite(key, false, game)
+                    GameMenuItem.HIDE_FROM_CONTINUE_PLAYING -> viewModel.hideFromContinuePlaying(key)
+                    GameMenuItem.REDOWNLOAD_ARTWORK -> viewModel.redownloadArt(key, game.title)
+                }
+            },
+            onDismiss = { menuFor = null },
         )
     }
 
@@ -146,6 +183,20 @@ fun SystemDetailScreen(
                                         }.getOrNull()?.asImageBitmap()
                                     }
                                 }
+                                val box = boxes[GameKey(systemName, rom.name)]
+                                val favourite = recorded[rom.name]?.favourite == true
+                                val source = remember { MutableInteractionSource() }
+                                val start: () -> Unit = {
+                                    // The game already paused behind the Library carries on instead of restarting
+                                    if (viewModel.isRunning(systemName, rom.name)) {
+                                        viewModel.swapBackToGame()
+                                    } else if (multiDisc) {
+                                        choosingDisc = rom
+                                    } else {
+                                        viewModel.loadRom(context, systemName, rom)
+                                        onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
+                                    }
+                                }
                                 ListItem(
                                     headlineContent = { Text(displayTitle) },
                                     supportingContent = if (multiDisc) {
@@ -153,7 +204,17 @@ fun SystemDetailScreen(
                                     } else if (rom.title != null) {
                                         { Text(rom.name) }
                                     } else null,
-                                    leadingContent = if (iconBitmap != null) {
+                                    // Its downloaded box art, else a PSP disc's own icon, else the play badge.
+                                    leadingContent = if (box != null) {
+                                        {
+                                            AsyncImage(
+                                                model = box,
+                                                contentDescription = displayTitle,
+                                                contentScale = ContentScale.Fit,
+                                                modifier = Modifier.size(48.dp),
+                                            )
+                                        }
+                                    } else if (iconBitmap != null) {
                                         {
                                             Image(
                                                 bitmap = iconBitmap,
@@ -164,18 +225,32 @@ fun SystemDetailScreen(
                                     } else {
                                         { IconBadge(Icons.Default.PlayArrow) }
                                     },
-                                    colors = transparentListItemColors(),
-                                    modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable {
-                                        // The game already paused behind the Library carries on instead of restarting
-                                        if (viewModel.isRunning(systemName, rom.name)) {
-                                            viewModel.swapBackToGame()
-                                        } else if (multiDisc) {
-                                            choosingDisc = rom
-                                        } else {
-                                            viewModel.loadRom(context, systemName, rom)
-                                            onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
+                                    trailingContent = if (favourite) {
+                                        {
+                                            Icon(
+                                                Icons.Default.Star,
+                                                contentDescription = "Favorite",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                            )
                                         }
-                                    }
+                                    } else null,
+                                    colors = transparentListItemColors(),
+                                    modifier = Modifier
+                                        .gameButtons(
+                                            source,
+                                            onClick = start,
+                                            onMenu = { menuFor = rom to true },
+                                            onFavorite = {
+                                                viewModel.setFavourite(GameKey(systemName, rom.name), !favourite, rom)
+                                            },
+                                        )
+                                        .focusRing(MaterialTheme.colorScheme.primary)
+                                        .combinedClickable(
+                                            interactionSource = source,
+                                            indication = LocalIndication.current,
+                                            onLongClick = { menuFor = rom to false },
+                                            onClick = start,
+                                        ),
                                 )
                             }
                         }
