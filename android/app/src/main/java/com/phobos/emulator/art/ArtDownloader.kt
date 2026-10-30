@@ -9,17 +9,21 @@ import android.graphics.BitmapFactory
 import android.util.Log
 import com.phobos.emulator.BuildConfig
 import com.phobos.emulator.data.GameKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -36,7 +40,10 @@ const val ART_DOWNLOADS_AT_ONCE = 4
 /** A picture or a listing that isn't there to have: a 404 or 410, not an image, or too big. Not tried for a week. */
 class ArtGone(message: String) : IOException(message)
 
-/** Fetches from the server. Any other exception than [ArtGone] is a failure, tried again in an hour. */
+/**
+ * Fetches from the server. Any other exception than [ArtGone] is a failure, tried again in an hour — except a lookup
+ * timeout ([ArtLookupException]), which is transient: nothing is stamped and the job is re-queued shortly.
+ */
 interface ArtFetcher {
     /** The listing page at [url]. */
     fun listing(url: String): String
@@ -62,11 +69,13 @@ class ArtDownloader internal constructor(
     private val now: () -> Long,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
+    private val lookupRequeueMs: Long = ART_LOOKUP_REQUEUE_MS,
 ) {
     private val lock = Any()
     private val queue = ArrayDeque<ArtJob>()
     private val queued = HashMap<GameKey, ArtJob>()
     private var workers = 0
+    private var requests = 0
     private val pending = MutableStateFlow(0)
     private val paused = MutableStateFlow(false)
 
@@ -119,26 +128,35 @@ class ArtDownloader internal constructor(
         if (kinds.isEmpty()) return
         val wanted = games.filter { hasArt(it.key.system) }
         if (wanted.isEmpty()) return
+        // Counted before the launch, so awaitIdle can't see nothing pending while the request is still being queued.
+        synchronized(lock) {
+            requests++
+            updatePending()
+        }
         scope.launch {
-            // Taken before the games are marked seen, so they're seen at it or later: none makes room for another.
-            val since = now()
-            store.seen(wanted)
-            synchronized(lock) {
-                for (game in wanted) {
-                    val job = queued[game.key]
-                    if (job != null) {
-                        job.force = job.force || force
-                        job.retry = job.retry || retry
-                    } else {
-                        val next = ArtJob(game, force, retry, since)
-                        queued[game.key] = next
-                        queue.addLast(next)
+            try {
+                // Taken before the games are marked seen, so they're seen at it or later: none makes room for another.
+                val since = now()
+                store.seen(wanted)
+                synchronized(lock) {
+                    for (game in wanted) {
+                        val job = queued[game.key]
+                        if (job != null) {
+                            job.force = job.force || force
+                            job.retry = job.retry || retry
+                        } else {
+                            val next = ArtJob(game, force, retry, since)
+                            queued[game.key] = next
+                            queue.addLast(next)
+                        }
                     }
+                    updatePending()
+                    startWorkers()
                 }
-                updatePending()
-                while (workers < ART_DOWNLOADS_AT_ONCE && workers < queue.size) {
-                    workers++
-                    scope.launch { work() }
+            } finally {
+                synchronized(lock) {
+                    requests--
+                    updatePending()
                 }
             }
         }
@@ -181,7 +199,18 @@ class ArtDownloader internal constructor(
     }
 
     private fun updatePending() {
-        pending.value = queue.size + workers
+        pending.value = queue.size + workers + requests
+    }
+
+    /**
+     * Starts workers up to the limit; the caller holds [lock]. Each launch starts undispatched: [work] raises
+     * [workers] before this returns (so the loop here counts it) and yields to the dispatcher before any fetch, so a
+     * launch that never runs raises nothing and a caller is never held during a download.
+     */
+    private fun startWorkers() {
+        while (workers < ART_DOWNLOADS_AT_ONCE && workers < queue.size) {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) { work() }
+        }
     }
 
     /** Waits while a game is loading or loaded: called before each job, each kind and each request. */
@@ -190,23 +219,62 @@ class ArtDownloader internal constructor(
     }
 
     private suspend fun work() {
-        while (true) {
-            unpaused()
-            val job = synchronized(lock) {
-                queue.removeFirstOrNull()?.also { queued.remove(it.game.key) } ?: run {
-                    workers--
-                    updatePending()
-                    null
+        try {
+            // Raised inside the coroutine: a launch cancelled before it starts raises nothing. The yield runs the rest
+            // on the dispatcher, never on whatever thread requested the download.
+            synchronized(lock) { workers++ }
+            yield()
+            while (true) {
+                unpaused()
+                val job = synchronized(lock) {
+                    queue.removeFirstOrNull()?.also { queued.remove(it.game.key) }
+                } ?: break
+                try {
+                    download(job)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ArtLookupException) {
+                    // Transient: nothing is stamped, the job goes back in the queue shortly.
+                    requeueAfterLookupTimeout(job)
+                } catch (e: Exception) {
+                    log("Artwork: ${job.game.key.name} (${job.game.key.system}): ${e.message}")
+                } catch (t: Throwable) {
+                    // A real Error: stamp the entry as failed so the Artwork page tells the truth, then rethrow.
+                    for (kind in kinds) {
+                        if (store.wanted(job.game.key, kind, job.force, job.retry)) {
+                            store.missed(job.game.key, kind, failed = true)
+                        }
+                    }
+                    throw t
                 }
-            } ?: break
-            try {
-                download(job)
-            } catch (e: Exception) {
-                log("Artwork: ${job.game.key.name} (${job.game.key.system}): ${e.message}")
+            }
+        } finally {
+            val idle = synchronized(lock) {
+                workers--
+                updatePending()
+                workers == 0
+            }
+            if (idle) store.flush()
+        }
+    }
+
+    /**
+     * A lookup that missed its deadline stamps nothing: the job goes back in the queue once after [lookupRequeueMs],
+     * unless a new request already queued it or the game got the kind meanwhile. Games waiting on the same listing are
+     * untouched - each fails and re-queues on its own.
+     */
+    private fun requeueAfterLookupTimeout(job: ArtJob) {
+        scope.launch {
+            delay(lookupRequeueMs)
+            if (kinds.none { store.wanted(job.game.key, it, job.force, job.retry) }) return@launch
+            synchronized(lock) {
+                if (queued.containsKey(job.game.key)) return@launch
+                queued[job.game.key] = job
+                queue.addLast(job)
+                updatePending()
+                startWorkers()
             }
         }
-        val idle = synchronized(lock) { workers == 0 }
-        if (idle) store.flush()
     }
 
     private suspend fun download(job: ArtJob) {
@@ -243,6 +311,10 @@ class ArtDownloader internal constructor(
                     store.stored(key, kind, file)
                     got = true
                     break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ArtLookupException) {
+                    throw e
                 } catch (e: ArtGone) {
                     log("Artwork: $folder/${kind.folder}/$name: ${e.message}")
                 } catch (e: Exception) {
@@ -268,7 +340,13 @@ class ArtDownloader internal constructor(
             failedAt[id]?.let { if (now() - it in 0L until LISTING_FAILURE_MS) return null }
             loading.getOrPut(id) { scope.async { fetchListing(folder, kind) } }
         }
-        val listing = fetch.await()
+        val listing = try {
+            fetch.await()
+        } catch (e: ArtLookupException) {
+            // Transient: no failedAt, so the next caller fetches the listing again instead of reading a dead bar.
+            listingLock.withLock { loading.remove(id) }
+            throw e
+        }
         listingLock.withLock {
             loading.remove(id)
             if (listing == null) failedAt[id] = now() else read[id] = listing to now()
@@ -288,6 +366,10 @@ class ArtDownloader internal constructor(
                 listings.put(folder, kind, names)
                 ArtListing(names)
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ArtLookupException) {
+            throw e
         } catch (e: ArtGone) {
             listings.put(folder, kind, emptyList())
             ArtListing(emptyList())
@@ -333,7 +415,7 @@ class ArtDownloader internal constructor(
             return ArtDownloader(
                 store,
                 ArtListingCache(File(app.cacheDir, "art-listings")),
-                HttpArtFetcher("Phobos/${BuildConfig.VERSION_NAME}"),
+                HttpArtFetcher("Phobos/${BuildConfig.VERSION_NAME}", log = log),
                 { titles.value },
                 System::currentTimeMillis,
                 scope,
@@ -392,10 +474,15 @@ internal fun artDecodeSample(width: Int, height: Int, kind: ArtKind): Int? {
 
 /**
  * Fetches with [HttpURLConnection], as Phobos's update and driver downloads do: [userAgent], 15 s to connect and 30 s
- * to read, and no redirect followed, so every request goes to [ART_SERVER]. A picture is scaled down to its kind's
- * width with Android's own decoder.
+ * to read, and no redirect followed, so every request goes to [ART_SERVER]. The host is resolved first through
+ * [resolver], bounded, so a platform lookup that hangs can't hold a worker; a fetch over a second is logged once with
+ * its phases. A picture is scaled down to its kind's width with Android's own decoder.
  */
-internal class HttpArtFetcher(private val userAgent: String) : ArtFetcher {
+internal class HttpArtFetcher(
+    private val userAgent: String,
+    private val log: (String) -> Unit = {},
+    private val resolver: ArtHostResolver = BoundedHostResolver(log = log),
+) : ArtFetcher {
     override fun listing(url: String): String =
         String(get(url, MAX_LISTING_BYTES, tooBigIsGone = false), Charsets.UTF_8)
 
@@ -430,23 +517,35 @@ internal class HttpArtFetcher(private val userAgent: String) : ArtFetcher {
     }
 
     private fun get(url: String, maxBytes: Int, tooBigIsGone: Boolean): ByteArray {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            setRequestProperty("User-Agent", userAgent)
-            instanceFollowRedirects = false
-            connectTimeout = 15_000
-            readTimeout = 30_000
-        }
+        val started = System.nanoTime()
+        var mark = started
+        var lookupMs = -1L
+        var connectMs = -1L
+        var readMs = -1L
+        val out = ByteArrayOutputStream()
+        var conn: HttpURLConnection? = null
         try {
-            val code = conn.responseCode
+            resolver.resolve(URL(url).host)
+            lookupMs = msSince(mark)
+            mark = System.nanoTime()
+            val c = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", userAgent)
+                instanceFollowRedirects = false
+                connectTimeout = 15_000
+                readTimeout = 30_000
+            }
+            conn = c
+            val code = c.responseCode
+            connectMs = msSince(mark)
+            mark = System.nanoTime()
             if (code == HttpURLConnection.HTTP_NOT_FOUND || code == HttpURLConnection.HTTP_GONE) {
                 throw ArtGone("HTTP $code")
             }
             if (code != HttpURLConnection.HTTP_OK) throw IOException("HTTP $code")
             val tooBig = { if (tooBigIsGone) ArtGone("over $maxBytes bytes") else IOException("over $maxBytes bytes") }
-            if (conn.contentLengthLong > maxBytes) throw tooBig()
-            val out = ByteArrayOutputStream()
-            conn.inputStream.use { input ->
+            if (c.contentLengthLong > maxBytes) throw tooBig()
+            c.inputStream.use { input ->
                 val buffer = ByteArray(16 * 1024)
                 while (true) {
                     val read = input.read(buffer)
@@ -455,15 +554,27 @@ internal class HttpArtFetcher(private val userAgent: String) : ArtFetcher {
                     if (out.size() > maxBytes) throw tooBig()
                 }
             }
+            readMs = msSince(mark)
             return out.toByteArray()
         } finally {
-            conn.disconnect()
+            conn?.disconnect()
+            // A phase that failed keeps its own time: the lookup, or the connect, or the read up to the failure.
+            if (lookupMs < 0) lookupMs = msSince(mark)
+            else if (connectMs < 0) connectMs = msSince(mark)
+            else if (readMs < 0) readMs = msSince(mark)
+            val total = msSince(started)
+            if (total >= SLOW_FETCH_MS) {
+                log("Artwork: $url took $total ms (lookup $lookupMs, connect $connectMs, read $readMs, ${out.size()} bytes)")
+            }
         }
     }
+
+    private fun msSince(nano: Long): Long = (System.nanoTime() - nano) / 1_000_000
 
     private companion object {
         const val MAX_PICTURE_BYTES = 4 * 1024 * 1024
         const val MAX_LISTING_BYTES = 16 * 1024 * 1024
         const val JPEG_QUALITY = 86
+        const val SLOW_FETCH_MS = 1_000L
     }
 }

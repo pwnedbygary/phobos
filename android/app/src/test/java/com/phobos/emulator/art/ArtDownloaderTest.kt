@@ -1,8 +1,11 @@
 package com.phobos.emulator.art
 
 import com.phobos.emulator.data.GameKey
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -13,6 +16,8 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** The downloader against a server that's a map of pages: nothing leaves the test. */
 class ArtDownloaderTest {
@@ -226,5 +231,165 @@ class ArtDownloaderTest {
         art.idle()
         assertEquals(2, server.asked.count { it == listingUrl(gameBoy, ArtKind.BOX) })
         assertTrue(tetris in store.boxes.value)
+    }
+
+    /** A scope on real threads for the tests that need a fetch to be in flight when the test acts on it. */
+    private fun threadedScope() = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, _ -> /* asserted in the store */ },
+    )
+
+    private fun threadedDownloader(
+        scope: CoroutineScope,
+        kinds: List<ArtKind> = listOf(ArtKind.BOX),
+        requeueMs: Long = ART_LOOKUP_REQUEUE_MS,
+    ) = ArtDownloader(
+        store, ArtListingCache(File(folder.root, "listings"), now = { clock }), server, { emptyMap() }, { clock },
+        scope, {}, requeueMs,
+    ).also { it.configure(kinds, us) }
+
+    @Test fun aPlainLookupFailureKeepsTheFailureMappingAndTheKindsAfterItStillGo() {
+        // Coverage of the pre-existing mapping, not the timeout path: a lookup that FAILS (not times out) is an
+        // hourly failure. Lookup TIMEOUTS are transient - the tests below.
+        server.pages[listingUrl(gameBoy, ArtKind.BOX)] = { throw IOException("lookup of thumbnails.libretro.com failed") }
+        server.pages[listingUrl(gameBoy, ArtKind.SNAP)] = { page("Tetris (World)") }
+        server.pictures[pictureUrl(gameBoy, ArtKind.SNAP, "Tetris (World)")] = {}
+        val art = downloader(kinds = listOf(ArtKind.BOX, ArtKind.SNAP))
+        art.request(listOf(ArtGame(tetris)))
+        art.idle()
+        assertEquals("the kind after the failed lookup was still fetched", 1, store.stats.value.pictures)
+        clock += 60_000
+        assertFalse("the failed lookup waits an hour, not a week", store.wanted(tetris, ArtKind.BOX))
+        clock += hour
+        assertTrue("then it's tried again", store.wanted(tetris, ArtKind.BOX))
+        assertFalse("the picture it has isn't asked for again", store.wanted(tetris, ArtKind.SNAP))
+    }
+
+    @Test fun aCancelledListingFetchRecordsNoMissAndReleasesItsWorkers() {
+        val started = CountDownLatch(1)
+        server.pages[listingUrl(gameBoy, ArtKind.BOX)] = {
+            started.countDown()
+            Thread.sleep(10_000)
+            page("Tetris (World)")
+        }
+        val scope = threadedScope()
+        val art = threadedDownloader(scope)
+        art.request(listOf(ArtGame(tetris)))
+        assertTrue("the listing fetch started", started.await(5, TimeUnit.SECONDS))
+        assertTrue("the store knew the game before the cancel", tetris in store.known().map { it.key })
+        scope.cancel()
+        runBlocking { withTimeout(5_000) { art.awaitIdle() } }
+        clock += 60_000
+        assertTrue("a cancellation records no miss", store.wanted(tetris, ArtKind.BOX))
+        assertFalse("and no picture", tetris in store.boxes.value)
+    }
+
+    @Test fun anErrorStampsTheEntryAndTheNextRequestStillDownloads() {
+        server.pages[listingUrl(gameBoy, ArtKind.BOX)] = { page("Tetris (World)") }
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "Tetris (World)")] = { throw OutOfMemoryError("too big") }
+        val scope = threadedScope()
+        val art = threadedDownloader(scope)
+        art.request(listOf(ArtGame(tetris)))
+        runBlocking { withTimeout(5_000) { art.awaitIdle() } }
+        clock += 60_000
+        assertFalse("an Error is stamped as a failure", store.wanted(tetris, ArtKind.BOX))
+        clock += hour
+        assertTrue("tried again in an hour", store.wanted(tetris, ArtKind.BOX))
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "Tetris (World)")] = {}
+        art.request(listOf(ArtGame(tetris)), force = true)
+        runBlocking { withTimeout(5_000) { art.awaitIdle() } }
+        assertTrue("the worker count came back so the next request downloads", tetris in store.boxes.value)
+    }
+
+    /** Polls [cond] until it holds or [ms] passes: a requeue's delay is time, not an event to await. */
+    private fun waitUntil(ms: Long, what: String, cond: () -> Boolean) {
+        val end = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < end) {
+            if (cond()) return
+            Thread.sleep(10)
+        }
+        assertTrue("timed out waiting for $what", cond())
+    }
+
+    @Test fun aLookupTimeoutStampsNeitherMissNorFailure() {
+        server.pages[listingUrl(gameBoy, ArtKind.BOX)] = { throw ArtLookupException("lookup of x timed out") }
+        val scope = threadedScope()
+        val art = threadedDownloader(scope, requeueMs = hour)
+        art.request(listOf(ArtGame(tetris)))
+        runBlocking { withTimeout(5_000) { art.awaitIdle() } }
+        assertTrue("still wanted: no miss and no failure", store.wanted(tetris, ArtKind.BOX))
+        assertEquals("nothing fetched", 0, store.stats.value.pictures)
+        scope.cancel()
+    }
+
+    @Test fun aTimedOutListingDoesNotBarTheFoldersOtherGames() {
+        val boxes = listingUrl(gameBoy, ArtKind.BOX)
+        var calls = 0
+        server.pages[boxes] = {
+            calls++
+            if (calls == 1) {
+                throw ArtLookupException("lookup of x timed out")
+            } else {
+                page("Tetris (World)", "My Secret Homebrew")
+            }
+        }
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "Tetris (World)")] = {}
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "My Secret Homebrew")] = {}
+        val scope = threadedScope()
+        val art = threadedDownloader(scope, requeueMs = 200)
+        art.request(listOf(ArtGame(tetris), ArtGame(secret)))
+        waitUntil(5_000, "both pictures after the listing was fetched again") { store.stats.value.pictures == 2 }
+        assertEquals("the listing was fetched again, not barred", 2, calls)
+        assertTrue("the other game got its picture", secret in store.boxes.value)
+        scope.cancel()
+    }
+
+    @Test fun aLookupTimeoutIsRequeuedAndDownloadsAfterwards() {
+        var attempts = 0
+        server.pages[listingUrl(gameBoy, ArtKind.BOX)] = { page("Tetris (World)") }
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "Tetris (World)")] = {
+            attempts++
+            if (attempts == 1) throw ArtLookupException("timed out")
+        }
+        val scope = threadedScope()
+        val art = threadedDownloader(scope, requeueMs = 200)
+        art.request(listOf(ArtGame(tetris)))
+        waitUntil(5_000, "the retry's picture") { tetris in store.boxes.value }
+        assertEquals("the first attempt timed out, the retry fetched it", 2, attempts)
+        scope.cancel()
+    }
+
+    @Test fun theQueueKeepsMovingWhileAJobWaitsForItsLookupRetry() {
+        server.pages[listingUrl(gameBoy, ArtKind.BOX)] = { page("Tetris (World)", "My Secret Homebrew") }
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "My Secret Homebrew")] = {}
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "Tetris (World)")] = {
+            throw ArtLookupException("timed out")
+        }
+        val scope = threadedScope()
+        val art = threadedDownloader(scope, requeueMs = hour)
+        art.request(listOf(ArtGame(tetris), ArtGame(secret)))
+        waitUntil(5_000, "the other game's picture while the first waits") { secret in store.boxes.value }
+        assertTrue("the timed-out game is still wanted", store.wanted(tetris, ArtKind.BOX))
+        scope.cancel()
+    }
+
+    @Test fun aCancelledPictureFetchRecordsNoMiss() {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.pages[listingUrl(gameBoy, ArtKind.BOX)] = { page("Tetris (World)") }
+        server.pictures[pictureUrl(gameBoy, ArtKind.BOX, "Tetris (World)")] = {
+            started.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            throw kotlinx.coroutines.CancellationException("cancelled mid-picture")
+        }
+        val scope = threadedScope()
+        val art = threadedDownloader(scope)
+        art.request(listOf(ArtGame(tetris)))
+        assertTrue("the picture fetch started", started.await(5, TimeUnit.SECONDS))
+        scope.cancel()
+        release.countDown()
+        runBlocking { withTimeout(5_000) { art.awaitIdle() } }
+        clock += 60_000
+        assertTrue("a cancelled picture records no miss", store.wanted(tetris, ArtKind.BOX))
+        assertFalse("and no picture", tetris in store.boxes.value)
     }
 }
