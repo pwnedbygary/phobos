@@ -29,7 +29,8 @@ class LicenseNoticesTest {
             "MAME (portions)", "paraLLEl-RDP", "volk", "sse2neon", "miniz", "Zstandard", "libadrenotools",
             "Vulkan-Headers", "font-rs", "puff", "Systematic console icons", "ZX Spectrum", "Android and Kotlin libraries", "C-BIOS",
             "FFmpeg", "MinGW-w64 runtime", "SDL 3.2.30 (", "MoltenVK", "AppImage runtime", "Cartridge (portions",
-            "Artwork downloaded while Phobos runs",
+            "Artwork downloaded while Phobos runs", "Filament (Apache License 2.0", "three.js (MIT; build tools only",
+            "studio.hdr (origin unknown",
         )
         for (name in expected) assertTrue("no notice for $name", titles.any { it.startsWith(name) })
     }
@@ -91,6 +92,21 @@ class LicenseNoticesTest {
         assertTrue("its overall (ZPL) notice", flat.contains("Copyright (c) 2009, 2010, 2011, 2012, 2013 by the mingw-w64 project"))
         assertTrue("winpthreads' (MIT) notice", flat.contains("Copyright (c) 2011 mingw-w64 project"))
         assertTrue("winpthreads' Lockless part", flat.contains("(C) 2010 Lockless Inc."))
+    }
+
+    @Test fun everyLabelCapableFontIsCoveredWithItsCopyrightAndTheOfl() {
+        val notices = parseLicenseNotices(File("../../LICENSE").readText())
+        for (face in listOf(
+            "vt323", "comic_neue_regular", "comic_neue_bold", "galmuri11", "galmuri9", "mplus1",
+            "dotgothic16", "press_start_2p", "bangers",
+        )) {
+            assertTrue("$face is a bundled face", File("src/main/res/font/$face.ttf").exists())
+        }
+        for (family in listOf("VT323", "Comic Neue", "M PLUS 1", "Galmuri", "DotGothic16", "Press Start 2P", "Bangers")) {
+            val notice = notices.first { it.title.contains(family) }
+            assertTrue("$family's notice has its copyright line", notice.text.contains("Copyright"))
+            assertTrue("$family's notice carries the OFL", notice.text.contains("SIL OPEN FONT LICENSE"))
+        }
     }
 
     @Test fun copyingIsTheGplVersion3() {

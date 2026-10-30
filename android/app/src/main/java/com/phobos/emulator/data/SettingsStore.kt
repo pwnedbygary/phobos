@@ -229,6 +229,18 @@ data class EmulatorSettings(
     val artDownload: Boolean = true,
     /** With the box art, each game's screenshot and title logo, kept for later: nothing shows them yet. */
     val artExtras: Boolean = true,
+    /** Show carts (or discs) in a system's list, and the Library's cards as their carts. */
+    val carts: Boolean = true,
+    /** With carts, download their real label scans from the LaunchBox Games Database. */
+    val realLabels: Boolean = true,
+    /** Special-edition shells (gold Zelda, the Pokemon colours) unless switched off. */
+    val cartsSpecialEditions: Boolean = true,
+    /** Wear (scuffs, yellowing, worn labels) that grows with play time unless switched off. */
+    val cartsWear: Boolean = true,
+    /** GBA engraving: "none", "badge" or "lines" (the Cartridge wordmark stays dropped). */
+    val cartsEngraving: String = "badge",
+    /** Stored cart looks as JSON: "s:<system>"/"g:<id>" -> "finish|#rrggbb" (see CartLooks). */
+    val cartsLooks: String = "",
     val ps1AnalogMode: Boolean = true,
     val n64ExpansionPak: Boolean = true,
     val n64DisableVIProcessing: Boolean = false,
@@ -391,6 +403,12 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val APP_UPDATE_CHECK_TIME = longPreferencesKey("app_update_check_time")
         val ART_DOWNLOAD = booleanPreferencesKey("art_download")
         val ART_EXTRAS = booleanPreferencesKey("art_extras")
+        val CARTS = booleanPreferencesKey("carts")
+        val REAL_LABELS = booleanPreferencesKey("real_labels")
+        val CARTS_SPECIAL_EDITIONS = booleanPreferencesKey("carts_special_editions")
+        val CARTS_WEAR = booleanPreferencesKey("carts_wear")
+        val CARTS_ENGRAVING = stringPreferencesKey("carts_engraving")
+        val CARTS_LOOKS = stringPreferencesKey("carts_looks")
         val PS1_ANALOG_MODE = booleanPreferencesKey("ps1_analog_mode")
         val N64_EXPANSION_PAK = booleanPreferencesKey("n64_expansion_pak")
         val N64_DISABLE_VI_PROCESSING = booleanPreferencesKey("n64_disable_vi_processing")
@@ -617,6 +635,12 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             appUpdateCheckTime = safeGet(APP_UPDATE_CHECK_TIME, 0L),
             artDownload = safeGet(ART_DOWNLOAD, true),
             artExtras = safeGet(ART_EXTRAS, true),
+            carts = safeGet(CARTS, true),
+            realLabels = safeGet(REAL_LABELS, true),
+            cartsSpecialEditions = safeGet(CARTS_SPECIAL_EDITIONS, true),
+            cartsWear = safeGet(CARTS_WEAR, true),
+            cartsEngraving = safeGet(CARTS_ENGRAVING, "badge"),
+            cartsLooks = safeGet(CARTS_LOOKS, ""),
             ps1AnalogMode = safeGet(PS1_ANALOG_MODE, true),
             n64ExpansionPak = safeGet(N64_EXPANSION_PAK, true),
             n64DisableVIProcessing = safeGet(N64_DISABLE_VI_PROCESSING, false),
@@ -873,6 +897,12 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setAppUpdateCheckTime(time: Long) = dataStore.edit { it[APP_UPDATE_CHECK_TIME] = time }
     suspend fun setArtDownload(enabled: Boolean) = dataStore.edit { it[ART_DOWNLOAD] = enabled }
     suspend fun setArtExtras(enabled: Boolean) = dataStore.edit { it[ART_EXTRAS] = enabled }
+    suspend fun setCarts(enabled: Boolean) = dataStore.edit { it[CARTS] = enabled }
+    suspend fun setRealLabels(enabled: Boolean) = dataStore.edit { it[REAL_LABELS] = enabled }
+    suspend fun setCartsSpecialEditions(enabled: Boolean) = dataStore.edit { it[CARTS_SPECIAL_EDITIONS] = enabled }
+    suspend fun setCartsWear(enabled: Boolean) = dataStore.edit { it[CARTS_WEAR] = enabled }
+    suspend fun setCartsEngraving(value: String) = dataStore.edit { it[CARTS_ENGRAVING] = value }
+    suspend fun setCartsLooks(value: String) = dataStore.edit { it[CARTS_LOOKS] = value }
     suspend fun setPs1AnalogMode(enabled: Boolean) = dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
     suspend fun setOrientationMode(vertical: Boolean) = dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
     suspend fun setN64ExpansionPak(enabled: Boolean) = dataStore.edit { it[N64_EXPANSION_PAK] = enabled }

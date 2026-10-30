@@ -26,6 +26,10 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import com.phobos.emulator.art.hasArt
 import com.phobos.emulator.data.GameKey
+import com.phobos.emulator.ui.carts.CartGrid
+import com.phobos.emulator.ui.carts.CartOptionsDialog
+import com.phobos.emulator.ui.carts.CartShapes
+import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.romTitle
 import java.io.File
@@ -40,6 +44,7 @@ fun SystemDetailScreen(
 ) {
     val systemName = remember(encodedSystemName) { Uri.decode(encodedSystemName) }
     val settings by viewModel.settings.collectAsState()
+    val gameLoaded by viewModel.gameLoaded.collectAsState()
     val roms by viewModel.roms.collectAsState()
     val context = LocalContext.current
     // A multi-disc game asks which disc to start from, the last one played picked to begin with.
@@ -64,18 +69,22 @@ fun SystemDetailScreen(
     // This system's game records by ROM name, for the stars and the game menu.
     val records by viewModel.gameRecords.collectAsState()
     val boxes by viewModel.artBoxes.collectAsState()
+    val labels by viewModel.artLabels.collectAsState()
+    val themeName = LocalPhobosTheme.current.theme.name
     val recorded = remember(records, systemName) {
         records.orEmpty().filter { it.key.system == systemName }.associateBy { it.key.name }
     }
     // A game's menu, opened by a held A (true) or a long press.
     var menuFor by remember { mutableStateOf<Pair<RomFile, Boolean>?>(null) }
+    var cartOptionsFor by remember { mutableStateOf<RomFile?>(null) }
     menuFor?.let { (game, heldA) ->
         val key = GameKey(systemName, game.name)
         GameMenu(
             title = if (game.discs.isNotEmpty()) romTitle(game.name)
                 else com.phobos.emulator.util.displayTitle(game.name, game.title),
             system = systemName,
-            items = gameMenuItems(recorded[game.name], artwork = settings.artDownload && hasArt(systemName)),
+            items = gameMenuItems(recorded[game.name], artwork = settings.artDownload && hasArt(systemName),
+                carts = settings.carts && CartShapes.cartShape(systemName) != null),
             openedByHeldA = heldA,
             fullScreen = settings.fullScreenMode,
             onPick = { item ->
@@ -85,9 +94,21 @@ fun SystemDetailScreen(
                     GameMenuItem.REMOVE_FROM_FAVORITES -> viewModel.setFavourite(key, false, game)
                     GameMenuItem.HIDE_FROM_CONTINUE_PLAYING -> viewModel.hideFromContinuePlaying(key)
                     GameMenuItem.REDOWNLOAD_ARTWORK -> viewModel.redownloadArt(key, game.title)
+                    GameMenuItem.CART_OPTIONS -> cartOptionsFor = game
                 }
             },
             onDismiss = { menuFor = null },
+        )
+    }
+
+    cartOptionsFor?.let { rom ->
+        CartOptionsDialog(
+            system = systemName,
+            romName = rom.name,
+            romTitle = rom.title,
+            looksJson = settings.cartsLooks,
+            onSave = viewModel::setCartsLooks,
+            onDismiss = { cartOptionsFor = null },
         )
     }
 
@@ -112,6 +133,18 @@ fun SystemDetailScreen(
             viewModel.scanRoms(context, systemName, directoryUris)
         } else {
             viewModel.clearRoms()
+        }
+    }
+
+    val startRom: (RomFile) -> Unit = { rom ->
+        // The game already paused behind the Library carries on instead of restarting.
+        if (viewModel.isRunning(systemName, rom.name)) {
+            viewModel.swapBackToGame()
+        } else if (rom.discs.size > 1) {
+            choosingDisc = rom
+        } else {
+            viewModel.loadRom(context, systemName, rom)
+            onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
         }
     }
 
@@ -166,6 +199,43 @@ fun SystemDetailScreen(
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         BackdropText("No compatible ROMs found in these folders", style = MaterialTheme.typography.bodyMedium)
                     }
+                } else if (settings.carts && !gameLoaded && CartShapes.cartShape(systemName) != null) {
+                    CartGrid(
+                        system = systemName,
+                        roms = roms,
+                        boxes = boxes,
+                        labels = if (settings.realLabels) labels else emptyMap(),
+                        favourites = recorded.filterValues { it.favourite }.keys,
+                        looks = remember(settings.cartsLooks, systemName, roms, settings.cartsSpecialEditions) {
+                        val stored = com.phobos.emulator.ui.carts.CartLooks.parse(settings.cartsLooks)
+                        buildMap {
+                            for (rom in roms) {
+                                val look = com.phobos.emulator.ui.carts.LookResolver.resolve(
+                                    com.phobos.emulator.ui.carts.LookResolver.GameInput(
+                                        com.phobos.emulator.ui.carts.CartLooks.gameId(systemName, rom.name),
+                                        rom.name,
+                                    ),
+                                    systemName,
+                                    stored,
+                                    settings.cartsSpecialEditions,
+                                ) ?: continue
+                                put(GameKey(systemName, rom.name), look)
+                            }
+                        }
+                    },
+                        specialEditions = settings.cartsSpecialEditions,
+                        wearOn = settings.cartsWear,
+                        engraving = settings.cartsEngraving,
+                        playtimeSeconds = { rom -> (recorded[rom.name]?.playTimeMs ?: 0L) / 1000 },
+                        themeKey = themeName,
+                        faceKey = themeName,
+                        onStart = startRom,
+                        onMenu = { menuFor = it to false },
+                        onFavourite = { game ->
+                            val key = GameKey(systemName, game.name)
+                            viewModel.setFavourite(key, !(recorded[game.name]?.favourite == true), game)
+                        },
+                    )
                 } else {
                     // The bottom padding lets the last row scroll clear of the add-folder button.
                     SettingsCard(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp).weight(1f, fill = false)) {

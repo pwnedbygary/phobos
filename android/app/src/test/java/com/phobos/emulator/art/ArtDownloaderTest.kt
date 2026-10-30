@@ -47,6 +47,13 @@ class ArtDownloaderTest {
             (pictures[url] ?: throw IOException("offline"))()
             file.writeBytes(ByteArray(10))
         }
+
+        val labels = HashMap<String, (File) -> LabelPicture.Format>()
+
+        override fun label(url: String, shape: String, file: File): LabelPicture.Format? {
+            asked += url
+            return (labels[url] ?: throw IOException("offline"))(file)
+        }
     }
 
     private fun page(vararg names: String) =
@@ -242,9 +249,11 @@ class ArtDownloaderTest {
         scope: CoroutineScope,
         kinds: List<ArtKind> = listOf(ArtKind.BOX),
         requeueMs: Long = ART_LOOKUP_REQUEUE_MS,
+        labelTarget: (GameKey) -> LabelTarget? = { null },
+        labelIndex: () -> LabelMatch.Index? = { null },
     ) = ArtDownloader(
         store, ArtListingCache(File(folder.root, "listings"), now = { clock }), server, { emptyMap() }, { clock },
-        scope, {}, requeueMs,
+        scope, {}, requeueMs, labelTarget, labelIndex,
     ).also { it.configure(kinds, us) }
 
     @Test fun aPlainLookupFailureKeepsTheFailureMappingAndTheKindsAfterItStillGo() {
@@ -319,6 +328,96 @@ class ArtDownloaderTest {
         assertTrue("still wanted: no miss and no failure", store.wanted(tetris, ArtKind.BOX))
         assertEquals("nothing fetched", 0, store.stats.value.pictures)
         scope.cancel()
+    }
+
+    // ---- the label path: same bounded resolver and transient-failure semantics as the libretro kinds ----
+
+    private val labelsJson =
+        """{"base":"https://images.launchbox-app.com/","index":{"gb":{"tetris":[["tetris.png","US","c"]]}}}"""
+
+    @Test fun aLabelLookupTimeoutStampsNothing() {
+        server.labels["https://images.launchbox-app.com/tetris.png"] = {
+            throw ArtLookupException("lookup of images.launchbox-app.com timed out")
+        }
+        val scope = threadedScope()
+        val art = threadedDownloader(
+            scope, kinds = listOf(ArtKind.LABEL), requeueMs = hour,
+            labelTarget = { LabelTarget("gb", "cart", "gb", "US") },
+            labelIndex = { LabelMatch.parse(labelsJson) },
+        )
+        art.request(listOf(ArtGame(tetris)))
+        art.idle()
+        assertTrue("still wanted: a label lookup timeout stamps nothing", store.wanted(tetris, ArtKind.LABEL))
+        assertEquals("nothing stored", 0, store.stats.value.pictures)
+        scope.cancel()
+    }
+
+    @Test fun aLabelLookupTimeoutIsRequeuedAndThenDownloads() {
+        var calls = 0
+        server.labels["https://images.launchbox-app.com/tetris.png"] = {
+            calls++
+            if (calls == 1) throw ArtLookupException("lookup of images.launchbox-app.com timed out")
+            LabelPicture.Format.JPEG
+        }
+        val scope = threadedScope()
+        val art = threadedDownloader(
+            scope, kinds = listOf(ArtKind.LABEL), requeueMs = 200,
+            labelTarget = { LabelTarget("gb", "cart", "gb", "US") },
+            labelIndex = { LabelMatch.parse(labelsJson) },
+        )
+        art.request(listOf(ArtGame(tetris)))
+        art.idle()
+        assertTrue("nothing stamped after the timeout", store.wanted(tetris, ArtKind.LABEL))
+        waitUntil(5_000, "the re-queued label downloads") { store.stats.value.pictures == 1 }
+        assertEquals("tried twice: the timeout, then the requeue", 2, calls)
+        assertFalse("stored after the requeue", store.wanted(tetris, ArtKind.LABEL))
+        scope.cancel()
+    }
+
+    @Test fun aLabelMatchUsesTheBundledIndexUrls() {
+        server.labels["https://images.launchbox-app.com/tetris.png"] = { LabelPicture.Format.JPEG }
+        val scope = threadedScope()
+        val art = threadedDownloader(
+            scope, kinds = listOf(ArtKind.LABEL),
+            labelTarget = { LabelTarget("gb", "cart", "gb", "US") },
+            labelIndex = { LabelMatch.parse(labelsJson) },
+        )
+        art.request(listOf(ArtGame(tetris)))
+        waitUntil(5_000, "the label downloads") { store.stats.value.pictures == 1 }
+        assertEquals(listOf("https://images.launchbox-app.com/tetris.png"), server.asked)
+        scope.cancel()
+    }
+
+    @Test fun aLabelRespectsTheArtCapAndNeverOvershoots() {
+        val capped = ArtStore(File(folder.root, "capped"), now = { clock }, capBytes = 1_000)
+        val a = GameKey("Game Boy", "A (USA).gb")
+        val b = GameKey("Game Boy", "B (USA).gb")
+        capped.seen(listOf(ArtGame(a), ArtGame(b)))
+        for (k in listOf(a, b)) {
+            capped.stored(k, ArtKind.BOX, File(folder.root, "fill-${k.name}.bin").apply { writeBytes(ByteArray(600)) })
+        }
+        server.labels["https://images.launchbox-app.com/tetris.png"] = { LabelPicture.Format.JPEG }
+        val art = ArtDownloader(
+            capped, ArtListingCache(File(folder.root, "capped-listings"), now = { clock }), server, { emptyMap() },
+            { clock }, CoroutineScope(Dispatchers.Unconfined), {}, ART_LOOKUP_REQUEUE_MS,
+            { LabelTarget("gb", "cart", "gb", "US") }, { LabelMatch.parse(labelsJson) },
+        ).also { it.configure(listOf(ArtKind.LABEL), us) }
+
+        art.setKeep(setOf(a, b))
+        art.request(listOf(ArtGame(tetris)))
+        art.idle()
+        assertTrue("no room, nothing asked", server.asked.isEmpty())
+        assertTrue("the label stays wanted", capped.wanted(tetris, ArtKind.LABEL))
+        assertEquals("the kept pictures are untouched", 2, capped.stats.value.pictures)
+
+        art.setKeep(emptySet())
+        clock += 10_000
+        art.request(listOf(ArtGame(tetris)))
+        // makeRoom stops evicting as soon as the total is under the cap, so one picture may stay and the label joins it.
+        waitUntil(5_000, "the label downloads after making room") { capped.labels.value.containsKey(tetris) }
+        assertFalse("stored after making room", capped.wanted(tetris, ArtKind.LABEL))
+        assertTrue("never over the cap", capped.stats.value.bytes <= 1_000)
+        assertTrue("room was made by evicting at most both kept pictures", capped.boxes.value.size <= 1)
     }
 
     @Test fun aTimedOutListingDoesNotBarTheFoldersOtherGames() {

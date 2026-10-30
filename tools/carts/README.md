@@ -1,10 +1,14 @@
-# tools/carts - the 3D cart and disc generator (PR 4a)
+# tools/carts - the 3D cart and disc generator (PRs 4a and 4b)
 
 Builds every cart and disc shell Phobos presents into one GLB per shape, writes the procedural plastic and
 glitter normal maps as PNGs, turns `studio.hdr` into IBL KTX with Filament's `cmgen` and compiles the disc
-material with `matc`. Everything lands in `out/`, **deliberately not in the app's assets**: PR 4b moves the
-files into `android/app/src/main/assets/carts/` and wires them in. This PR changes no app code and adds no
-dependencies to the app.
+material with `matc`. The generator writes straight into the app's assets,
+`android/app/src/main/assets/carts/`; `--check` regenerates into `out-verify/` and compares every generated file
+byte-for-byte against the committed assets. The LaunchBox label index (`labels.json.gz`) is bundled there
+separately: it is not generated and `--check` excludes it.
+
+History: PR 4a first committed the outputs under `tools/carts/out/`; PR 4b moved them, byte-for-byte, into the
+app's assets.
 
 ## Requirements
 

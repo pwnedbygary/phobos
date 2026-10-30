@@ -1,16 +1,19 @@
 #!/usr/bin/env node
-// PR 4a generator: builds every cart and disc shape Phobos uses into one GLB each (named materials, welded
+// Carts generator: builds every cart and disc shape Phobos uses into one GLB each (named materials, welded
 // geometry, the label as its own primitive), writes the procedural plastic and glitter normal maps as PNGs, turns
 // studio.hdr into IBL KTX with Filament's cmgen and compiles the disc material with matc, then writes the manifest.
 //
-//   FILAMENT_BIN=/path/to/filament-v1.77.3/bin node bake-carts.mjs            write out/
+//   FILAMENT_BIN=/path/to/filament-v1.77.3/bin node bake-carts.mjs            write
+//                                                                             android/app/src/main/assets/carts/
 //   FILAMENT_BIN=/path/to/filament-v1.77.3/bin node bake-carts.mjs --check    regenerate everything into
 //                                                                             out-verify/ and compare all 25
-//                                                                             files byte-for-byte with out/
+//                                                                             generated files byte-for-byte with
+//                                                                             the committed assets
 // FILAMENT_BIN is REQUIRED in both modes: cmgen and matc are part of the bake and the manifest covers their
 // outputs (ibl/*, materials/disc.filamat). Without it the run stops instead of producing a partial set.
 //
-// Outputs land in tools/carts/out/ - deliberately NOT in the app's assets: PR 4b moves and wires them.
+// Outputs land in android/app/src/main/assets/carts/ - the app's own assets. The bundled LaunchBox label index
+// (labels.json.gz) sits beside them but is NOT generated, so --check excludes it.
 // The Cartridge pipeline copy under cartridge/ is verbatim (see PROVENANCE.md); this script only adds the two
 // provisional Famicom/Super Famicom specs and drives the builders.
 import { register } from 'node:module';
@@ -36,7 +39,8 @@ const pipe = await import('./cartridge/carts/pipeline.js');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CHECK = process.argv.includes('--check');
-const OUT = path.join(HERE, CHECK ? 'out-verify' : 'out');
+const ASSETS = path.join(HERE, '../../android/app/src/main/assets/carts');
+const OUT = CHECK ? path.join(HERE, 'out-verify') : ASSETS;
 
 // Shapes Phobos presents, per report section 2 (Famicom/Super Famicom use the new provisional shells below).
 // Cartridge has no PSP disc spec: the UMD is nearest to `minidisc` (both are small caddied discs); documented in
@@ -214,7 +218,10 @@ async function main() {
       + 'of the bake and their outputs are in the manifest (see README)');
     process.exit(2);
   }
-  fs.rmSync(OUT, { recursive: true, force: true });
+  // assets/carts also holds the bundled LaunchBox index: clear only the generator's own outputs.
+  if (!CHECK) for (const p of ['carts', 'discs', 'ibl', 'materials', 'textures', 'MANIFEST.json']) {
+    fs.rmSync(path.join(OUT, p), { recursive: true, force: true });
+  }
   fs.mkdirSync(OUT, { recursive: true });
   const outputs = [];
 
@@ -272,19 +279,21 @@ async function main() {
   console.log(`baked ${outputs.length} outputs, ${outputs.reduce((s, o) => s + o.bytes, 0)} bytes`);
 
   if (CHECK) {
-    const ref = path.join(HERE, 'out');
+    const ref = ASSETS;
     const walk = (base, d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
       e.isDirectory() ? walk(base, path.join(d, e.name)) : [path.relative(base, path.join(d, e.name))]);
-    const mine = new Set(walk(OUT, OUT));
-    const refs = new Set(walk(ref, ref));
+    // assets/carts also holds the bundled LaunchBox index, which the bake does not generate: leave it out.
+    const generated = (set) => new Set([...set].filter((rel) => rel !== 'labels.json.gz'));
+    const mine = generated(walk(OUT, OUT));
+    const refs = generated(walk(ref, ref));
     let bad = 0;
     for (const rel of new Set([...mine, ...refs])) {
       const a = path.join(OUT, rel), b = path.join(ref, rel);
       if (!fs.existsSync(a)) { console.error(`MISSING from the regeneration: ${rel}`); bad++; continue; }
-      if (!fs.existsSync(b)) { console.error(`EXTRA against out/: ${rel}`); bad++; continue; }
+      if (!fs.existsSync(b)) { console.error(`EXTRA against assets/carts: ${rel}`); bad++; continue; }
       if (!fs.readFileSync(a).equals(fs.readFileSync(b))) { console.error(`DIFFERS ${rel}`); bad++; }
     }
-    if (bad === 0) { console.log('CHECK OK: every output is byte-identical to out/'); fs.rmSync(OUT, { recursive: true, force: true }); }
+    if (bad === 0) { console.log('CHECK OK: every output is byte-identical to android/app/src/main/assets/carts/'); fs.rmSync(OUT, { recursive: true, force: true }); }
     else { console.error(`CHECK FAILED (${bad} difference(s)); out-verify/ kept for inspection (git-ignored)`); process.exitCode = 1; }
   }
 }

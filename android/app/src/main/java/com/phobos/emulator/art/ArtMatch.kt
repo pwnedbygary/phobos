@@ -12,11 +12,14 @@ import java.text.Normalizer
 import kotlin.math.abs
 import kotlin.math.max
 
-/** A kind of picture: its folder on libretro's thumbnail server, the width it's kept at, and whether it's a PNG. */
+/** A kind of picture: its folder on libretro's thumbnail server (labels: the LaunchBox label store), the width it's kept at, and whether it's a PNG. */
 enum class ArtKind(val folder: String, val width: Int, val png: Boolean) {
     BOX("Named_Boxarts", 520, false),
     SNAP("Named_Snaps", 640, false),
     LOGO("Named_Logos", 480, true),
+
+    /** LaunchBox label scans: matched through the bundled index, cropped by [LabelCrop], stored as PNG. */
+    LABEL("labels", 1024, true),
 }
 
 private val regions = listOf(

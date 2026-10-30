@@ -419,6 +419,7 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
                                 onNavigateToPaths = { navController.navigate("settings/paths") },
                                 onNavigateToVisibility = { navController.navigate("settings/visibility") },
                                 onNavigateToArtwork = { navController.navigate("settings/artwork") },
+                                onNavigateToCarts = { navController.navigate("settings/carts") },
                                 onNavigateToAbout = { navController.navigate("settings/about") }
                             )
                         }
@@ -480,6 +481,9 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
                         }
                         composable("settings/artwork") {
                             ArtworkSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                        }
+                        composable("settings/carts") {
+                            CartsSettingsScreen(viewModel, onBack = { navController.popBackStack() })
                         }
                         composable("settings/firmware") {
                             FirmwareSettingsScreen(viewModel, onBack = { navController.popBackStack() })

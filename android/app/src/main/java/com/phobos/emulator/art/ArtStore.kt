@@ -59,10 +59,14 @@ class ArtStore(
     private var writable = true
     private var changes = 0
     private val _boxes = MutableStateFlow<Map<GameKey, File>>(emptyMap())
+    private val _labels = MutableStateFlow<Map<GameKey, File>>(emptyMap())
     private val _stats = MutableStateFlow(ArtStats(0, 0))
 
     /** Each game's box art file, for the Library's cards and a system's list. */
     val boxes: StateFlow<Map<GameKey, File>> = _boxes.asStateFlow()
+
+    /** The stamped real label scans, per game; used by the carts and their cards. */
+    val labels: StateFlow<Map<GameKey, File>> = _labels.asStateFlow()
 
     /** How many pictures there are and what they take, for the Artwork page. */
     val stats: StateFlow<ArtStats> = _stats.asStateFlow()
@@ -170,14 +174,14 @@ class ArtStore(
 
     /** [file], a picture just downloaded, is [key]'s [kind]: it's moved into the store. */
     @Synchronized
-    fun stored(key: GameKey, kind: ArtKind, file: File) {
+    fun stored(key: GameKey, kind: ArtKind, file: File, png: Boolean = kind.png) {
         load()
         val entry = entries[key]
         if (entry == null || !writable) {
             file.delete()
             return
         }
-        val name = "${kind.name.lowercase()}/${sha1("${key.system}\n${key.name}")}.${if (kind.png) "png" else "jpg"}"
+        val name = "${kind.name.lowercase()}/${sha1("${key.system}\n${key.name}")}.${if (png) "png" else "jpg"}"
         val target = File(dir, name)
         target.parentFile?.mkdirs()
         if (!file.renameTo(target)) {
@@ -282,14 +286,17 @@ class ArtStore(
 
     private fun publish() {
         val boxes = HashMap<GameKey, File>()
+        val labels = HashMap<GameKey, File>()
         var pictures = 0
         var bytes = 0L
         for (entry in entries.values) {
             entry.pictures[ArtKind.BOX]?.let { boxes[entry.key] = File(dir, it.file) }
+            entry.pictures[ArtKind.LABEL]?.let { labels[entry.key] = File(dir, it.file) }
             pictures += entry.pictures.size
             bytes += entry.pictures.values.sumOf { it.bytes }
         }
         _boxes.value = boxes
+        _labels.value = labels
         _stats.value = ArtStats(pictures, bytes)
     }
 

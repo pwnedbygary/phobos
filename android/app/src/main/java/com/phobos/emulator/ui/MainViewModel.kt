@@ -33,7 +33,9 @@ import com.phobos.emulator.art.ArtDownloader
 import com.phobos.emulator.art.ArtGame
 import com.phobos.emulator.art.ArtKind
 import com.phobos.emulator.art.ArtStats
+import com.phobos.emulator.art.BundledLabelIndex
 import com.phobos.emulator.art.artRegionOrder
+import com.phobos.emulator.ui.carts.CartLabelTargets
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.CatalogBackdrop
 import com.phobos.emulator.data.CrtBackdropScene
@@ -230,6 +232,14 @@ private object CoreSession {
     @Volatile var rom = ""
     @Volatile var owner: Any? = null
 }
+
+private data class ArtChoice(
+    val download: Boolean,
+    val extras: Boolean,
+    val region: RegionPreference,
+    val carts: Boolean,
+    val realLabels: Boolean,
+)
 
 class MainViewModel(
     private val context: Context,
@@ -864,6 +874,11 @@ class MainViewModel(
         _pspStartSettings.value = null
         _loadedTitle.value = null
         _runningFrame.value = null
+        // A closed game leaves no cart engine behind; the grid recreates it lazily when shown. Main-thread-affine:
+        // the UI may still hold the remembered engine, so the destroy must not happen on CoreSession's IO thread.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+            com.phobos.emulator.ui.carts.CartsEngine.releaseAll()
+        }
         PhobosCore.setEmulationRunning(false)
         PhobosCore.unloadSystem()
         // Native code removes its own copies on unload; the .cue tracks copied for it go too.
@@ -1728,6 +1743,10 @@ class MainViewModel(
     /** Each game's downloaded box art, for the Library's cards and a system's list. */
     val artBoxes: StateFlow<Map<GameKey, File>> = art.boxes
 
+    /** Whether a game is loaded (running or paused): the cart engine exists only while this is false. */
+    val gameLoaded: StateFlow<Boolean> = _isLoaded
+    val artLabels: StateFlow<Map<GameKey, File>> = art.labels
+
     /** How many pictures are kept and what they take, for the Artwork page. */
     val artStats: StateFlow<ArtStats> = art.stats
 
@@ -1740,25 +1759,39 @@ class MainViewModel(
         viewModelScope.launch {
             combine(_isLoaded, _loadsStarting) { loaded, starting -> loaded || starting > 0 }
                 .distinctUntilChanged()
-                .collect { art.setPaused(it) }
+                .collect {
+                    art.setPaused(it)
+                    // Derived from real state: blocked while loaded OR while a load is starting, so a failed
+                    // fresh load releases the carts too (the old manual flag leaked true there).
+                    com.phobos.emulator.ui.carts.CartsEngine.gameResident =
+                        !com.phobos.emulator.ui.carts.CartLifetime.engineAllowed(
+                            gameLoaded = _isLoaded.value,
+                            loadsStarting = _loadsStarting.value,
+                        )
+                }
         }
         // What to download, and the games in the Library's rows: their pictures are looked for whatever system was
         // scanned, again whenever downloading is switched on, and are the last to go when room is needed.
         viewModelScope.launch {
             val choices = settingsStore.settings
-                .map { Triple(it.artDownload, it.artExtras, it.regionPreference) }
+                .map { ArtChoice(it.artDownload, it.artExtras, it.regionPreference, it.carts, it.realLabels) }
                 .distinctUntilChanged()
             val rows = combine(gameStore.games, visibleSystems) { games, systems ->
                 if (games == null || systems.isEmpty()) null else libraryRowsOf(games, systems)
             }
             combine(choices, rows) { choice, shown -> choice to shown }.collect { (choice, shown) ->
-                val (download, extras, region) = choice
-                val kinds = when {
-                    !download -> emptyList()
-                    extras -> ArtKind.entries
-                    else -> listOf(ArtKind.BOX)
+                val kinds = buildList {
+                    if (choice.download) {
+                        add(ArtKind.BOX)
+                        if (choice.extras) {
+                            add(ArtKind.SNAP)
+                            add(ArtKind.LOGO)
+                        }
+                        if (choice.carts && choice.realLabels) add(ArtKind.LABEL)
+                    }
                 }
-                art.configure(kinds, artRegionOrder(region))
+                art.configure(kinds, artRegionOrder(choice.region))
+                art.configureLabels({ key -> CartLabelTargets.of(key.system) }, { BundledLabelIndex.load(context) })
                 shown ?: return@collect
                 val games = (shown.continuePlaying + shown.favorites).distinctBy { it.key }
                 art.setKeep(games.map { it.key }.toSet())
@@ -1778,6 +1811,12 @@ class MainViewModel(
 
     fun setArtDownload(enabled: Boolean) = viewModelScope.launch { settingsStore.setArtDownload(enabled) }
     fun setArtExtras(enabled: Boolean) = viewModelScope.launch { settingsStore.setArtExtras(enabled) }
+    fun setCarts(enabled: Boolean) = viewModelScope.launch { settingsStore.setCarts(enabled) }
+    fun setRealLabels(enabled: Boolean) = viewModelScope.launch { settingsStore.setRealLabels(enabled) }
+    fun setCartsSpecialEditions(enabled: Boolean) = viewModelScope.launch { settingsStore.setCartsSpecialEditions(enabled) }
+    fun setCartsWear(enabled: Boolean) = viewModelScope.launch { settingsStore.setCartsWear(enabled) }
+    fun setCartsEngraving(value: String) = viewModelScope.launch { settingsStore.setCartsEngraving(value) }
+    fun setCartsLooks(value: String) = viewModelScope.launch { settingsStore.setCartsLooks(value) }
 
     // The EmulatorScreen on show. When a frontend starts a game over the running one, the new game's screen
     // arrives before the old one leaves, so only the current screen's exit counts.
@@ -3067,6 +3106,10 @@ class MainViewModel(
         context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true,
         beforeLoad: (suspend () -> Unit)? = null,
     ) {
+        // The carts engine exists only while no game is loaded: release it before anything starts, and refuse to
+        // create a new one from here on until the game is closed.
+        com.phobos.emulator.ui.carts.CartsEngine.gameResident = true
+        com.phobos.emulator.ui.carts.CartsEngine.releaseAll()
         _loadsStarting.update { it + 1 }
         viewModelScope.launch(Dispatchers.IO) {
             try {
