@@ -31,7 +31,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** libretro's thumbnail server, the only one artwork is downloaded from. */
+/** libretro's thumbnail server, for box art, screenshots and logos; label scans come from the LaunchBox host ([ArtKind.LABEL]). */
 const val ART_SERVER = "https://thumbnails.libretro.com"
 
 /** How many pictures download at once. */
@@ -50,7 +50,17 @@ interface ArtFetcher {
 
     /** The picture at [url], scaled to [kind]'s width and written to [file] in its format. */
     fun picture(url: String, kind: ArtKind, file: File)
+
+    /**
+     * The label scan at [url], cropped to [shape] by [LabelPicture] and written to [file]; the format the label was
+     * written in, or null when the scan isn't a usable label. Goes through the same bounded resolver and timeouts
+     * as the other fetches.
+     */
+    fun label(url: String, shape: String, file: File): LabelPicture.Format?
 }
+
+/** What the label path needs to place a game: its Cartridge system and media fields, and the region code. */
+data class LabelTarget(val systemId: String, val mediaType: String?, val mediaShape: String?, val region: String)
 
 /** One game waiting for its pictures; [since] is when it was asked for, for [ArtStore.makeRoom]. */
 private class ArtJob(val game: ArtGame, var force: Boolean, var retry: Boolean, val since: Long)
@@ -70,7 +80,17 @@ class ArtDownloader internal constructor(
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
     private val lookupRequeueMs: Long = ART_LOOKUP_REQUEUE_MS,
+    private val labelTarget: (GameKey) -> LabelTarget? = { null },
+    private val labelIndex: () -> LabelMatch.Index? = { null },
 ) {
+    /** Set after construction by the app; null keeps the constructor's defaults (the tests' seams). */
+    private var labelTargetOverride: ((GameKey) -> LabelTarget?)? = null
+    private var labelIndexOverride: (() -> LabelMatch.Index?)? = null
+
+    fun configureLabels(target: (GameKey) -> LabelTarget?, index: () -> LabelMatch.Index?) {
+        labelTargetOverride = target
+        labelIndexOverride = index
+    }
     private val lock = Any()
     private val queue = ArrayDeque<ArtJob>()
     private val queued = HashMap<GameKey, ArtJob>()
@@ -90,6 +110,9 @@ class ArtDownloader internal constructor(
 
     /** Each game's box art file. */
     val boxes: StateFlow<Map<GameKey, File>> = store.boxes
+
+    /** Each game's downloaded label scan, for the carts' printed labels. */
+    val labels: StateFlow<Map<GameKey, File>> = store.labels
 
     /** How many pictures are kept and what they take. */
     val stats: StateFlow<ArtStats> = store.stats
@@ -293,6 +316,10 @@ class ArtDownloader internal constructor(
         for (kind in kinds) {
             unpaused()
             if (!store.wanted(key, kind, job.force, job.retry)) continue
+            if (kind == ArtKind.LABEL) {
+                downloadLabel(job)
+                continue
+            }
             var got = false
             var failed = false
             for (folder in artFolders(key.system, key.name)) {
@@ -326,6 +353,49 @@ class ArtDownloader internal constructor(
             }
             if (!got) store.missed(key, kind, failed)
         }
+    }
+
+    /**
+     * One game's label scan: the bundled index picks up to three LaunchBox scans for its system and name, the first
+     * that crops to a usable label is stored. Same failure semantics as the other kinds: [ArtLookupException]
+     * rethrows untouched (transient, re-queued, nothing stamped); [ArtGone] tries the next scan; any other failure
+     * is stamped hourly; nothing found is a miss.
+     */
+    private suspend fun downloadLabel(job: ArtJob) {
+        val key = job.game.key
+        val target = (labelTargetOverride ?: labelTarget)(key)
+        val index = if (target == null) null else (labelIndexOverride ?: labelIndex)()
+        if (target == null || index == null) {
+            store.missed(key, ArtKind.LABEL, failed = target != null)
+            return
+        }
+        val match = LabelMatch.match(index, target.systemId, target.mediaType, target.mediaShape, key.name, target.region)
+        if (match == null) {
+            store.missed(key, ArtKind.LABEL, failed = false)
+            return
+        }
+        // The art store's cap applies to labels too: no room means leave it wanted and retry later.
+        if (!store.makeRoom(keep, job.since)) return
+        var failed = false
+        for (url in match.urls) {
+            unpaused()
+            val file = store.newTempFile()
+            try {
+                val format = fetcher.label(url, match.shape, file) ?: throw ArtGone("not a usable label scan")
+                store.stored(key, ArtKind.LABEL, file, png = format == LabelPicture.Format.PNG)
+                return
+            } catch (e: ArtLookupException) {
+                throw e
+            } catch (e: ArtGone) {
+                log("Artwork: $url: ${e.message}")
+            } catch (e: Exception) {
+                log("Artwork: $url: ${e.message}")
+                failed = true
+            } finally {
+                file.delete()
+            }
+        }
+        store.missed(key, ArtKind.LABEL, failed)
     }
 
     /**
@@ -474,7 +544,8 @@ internal fun artDecodeSample(width: Int, height: Int, kind: ArtKind): Int? {
 
 /**
  * Fetches with [HttpURLConnection], as Phobos's update and driver downloads do: [userAgent], 15 s to connect and 30 s
- * to read, and no redirect followed, so every request goes to [ART_SERVER]. The host is resolved first through
+ * to read, and no redirect followed, so every request goes to [ART_SERVER] or, for label scans, the LaunchBox
+ * host ([ArtKind.LABEL]). The host is resolved first through
  * [resolver], bounded, so a platform lookup that hangs can't hold a worker; a fetch over a second is logged once with
  * its phases. A picture is scaled down to its kind's width with Android's own decoder.
  */
@@ -515,6 +586,9 @@ internal class HttpArtFetcher(
             decoded.recycle()
         }
     }
+
+    override fun label(url: String, shape: String, file: File): LabelPicture.Format? =
+        LabelPicture.write(get(url, MAX_PICTURE_BYTES, tooBigIsGone = true), shape, file)
 
     private fun get(url: String, maxBytes: Int, tooBigIsGone: Boolean): ByteArray {
         val started = System.nanoTime()

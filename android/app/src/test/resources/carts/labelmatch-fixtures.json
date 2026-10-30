@@ -1,0 +1,374 @@
+{
+  "base": "https://images.launchbox-app.com/",
+  "index": {
+    "n64": {
+      "starfox64": [
+        [
+          "478d1cac-0f41-459d-b69d-edafbc6f44de.png",
+          "US",
+          "c"
+        ],
+        [
+          "e69c1e92-0b11-4c10-84ed-18e8334fe335.png",
+          "AU",
+          "c"
+        ],
+        [
+          "608293e7-760f-4105-b049-c4c3a1a03558.png",
+          "JP",
+          "c"
+        ],
+        [
+          "055b22b1-939e-4a3c-b1ca-ecea5e411b2e.png",
+          "EU",
+          "c"
+        ],
+        [
+          "e7ef3f03-47c1-46af-9156-35388631b322.jpg",
+          "US",
+          "fc"
+        ]
+      ],
+      "lylatwars": [
+        [
+          "478d1cac-0f41-459d-b69d-edafbc6f44de.png",
+          "US",
+          "c"
+        ],
+        [
+          "e69c1e92-0b11-4c10-84ed-18e8334fe335.png",
+          "AU",
+          "c"
+        ],
+        [
+          "608293e7-760f-4105-b049-c4c3a1a03558.png",
+          "JP",
+          "c"
+        ],
+        [
+          "055b22b1-939e-4a3c-b1ca-ecea5e411b2e.png",
+          "EU",
+          "c"
+        ],
+        [
+          "e7ef3f03-47c1-46af-9156-35388631b322.jpg",
+          "US",
+          "fc"
+        ]
+      ]
+    },
+    "nes": {
+      "1919": [
+        [
+          "abed6d62-4a8e-42b8-b834-b3d732c97550.png",
+          "W",
+          "c"
+        ]
+      ],
+      "1942": [
+        [
+          "097c5616-df73-43b4-b15c-3a37476176b2.png",
+          "US",
+          "c"
+        ],
+        [
+          "92025423-5234-4ece-93dd-4413f700a161.png",
+          "JP",
+          "c"
+        ],
+        [
+          "8b07a37a-7dc1-4d11-a7db-3248e4fd48c4.png",
+          "US",
+          "fc"
+        ],
+        [
+          "5e5f39ea-f38d-4afb-af0b-409cac0189c4.png",
+          "JP",
+          "fc"
+        ]
+      ]
+    },
+    "ps2": {
+      "1941": [
+        [
+          "r2_86dcac91-0704-4ac7-ad27-05fd46575d34.png",
+          "JP",
+          "d"
+        ],
+        [
+          "r2_2bb8cc9a-3692-444c-8a0a-67000aeda828.png",
+          "JP",
+          "d"
+        ]
+      ],
+      "2002": [
+        [
+          "r2_a6ebafe0-51e5-4b5e-8e3b-9601ae6427bd.png",
+          "JP",
+          "d"
+        ]
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "n64-0",
+      "system": {
+        "id": "n64",
+        "media": {
+          "shape": "n64"
+        }
+      },
+      "file": "starfox64",
+      "region": "US",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/478d1cac-0f41-459d-b69d-edafbc6f44de.png",
+          "https://images.launchbox-app.com/e69c1e92-0b11-4c10-84ed-18e8334fe335.png",
+          "https://images.launchbox-app.com/055b22b1-939e-4a3c-b1ca-ecea5e411b2e.png"
+        ],
+        "shape": "n64"
+      }
+    },
+    {
+      "label": "n64-1-jp",
+      "system": {
+        "id": "n64",
+        "media": {
+          "shape": "n64"
+        }
+      },
+      "file": "starfox64",
+      "region": "JP",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/608293e7-760f-4105-b049-c4c3a1a03558.png",
+          "https://images.launchbox-app.com/478d1cac-0f41-459d-b69d-edafbc6f44de.png",
+          "https://images.launchbox-app.com/e69c1e92-0b11-4c10-84ed-18e8334fe335.png"
+        ],
+        "shape": "n64"
+      }
+    },
+    {
+      "label": "n64-2",
+      "system": {
+        "id": "n64",
+        "media": {
+          "shape": "n64"
+        }
+      },
+      "file": "lylatwars",
+      "region": "US",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/478d1cac-0f41-459d-b69d-edafbc6f44de.png",
+          "https://images.launchbox-app.com/e69c1e92-0b11-4c10-84ed-18e8334fe335.png",
+          "https://images.launchbox-app.com/055b22b1-939e-4a3c-b1ca-ecea5e411b2e.png"
+        ],
+        "shape": "n64"
+      }
+    },
+    {
+      "label": "n64-3-jp",
+      "system": {
+        "id": "n64",
+        "media": {
+          "shape": "n64"
+        }
+      },
+      "file": "lylatwars",
+      "region": "JP",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/608293e7-760f-4105-b049-c4c3a1a03558.png",
+          "https://images.launchbox-app.com/478d1cac-0f41-459d-b69d-edafbc6f44de.png",
+          "https://images.launchbox-app.com/e69c1e92-0b11-4c10-84ed-18e8334fe335.png"
+        ],
+        "shape": "n64"
+      }
+    },
+    {
+      "label": "n64-4-fuzzy",
+      "system": {
+        "id": "n64",
+        "media": {
+          "shape": "n64"
+        }
+      },
+      "file": "starfox64 X",
+      "region": "US",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/478d1cac-0f41-459d-b69d-edafbc6f44de.png",
+          "https://images.launchbox-app.com/e69c1e92-0b11-4c10-84ed-18e8334fe335.png",
+          "https://images.launchbox-app.com/055b22b1-939e-4a3c-b1ca-ecea5e411b2e.png"
+        ],
+        "shape": "n64"
+      }
+    },
+    {
+      "label": "nes-5",
+      "system": {
+        "id": "nes",
+        "media": {
+          "shape": "nes"
+        }
+      },
+      "file": "1919",
+      "region": "US",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/abed6d62-4a8e-42b8-b834-b3d732c97550.png"
+        ],
+        "shape": "nes"
+      }
+    },
+    {
+      "label": "nes-6-jp",
+      "system": {
+        "id": "nes",
+        "media": {
+          "shape": "nes"
+        }
+      },
+      "file": "1919",
+      "region": "JP",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/abed6d62-4a8e-42b8-b834-b3d732c97550.png"
+        ],
+        "shape": "nes"
+      }
+    },
+    {
+      "label": "nes-7",
+      "system": {
+        "id": "nes",
+        "media": {
+          "shape": "nes"
+        }
+      },
+      "file": "1942",
+      "region": "US",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/097c5616-df73-43b4-b15c-3a37476176b2.png",
+          "https://images.launchbox-app.com/8b07a37a-7dc1-4d11-a7db-3248e4fd48c4.png"
+        ],
+        "shape": "nes"
+      }
+    },
+    {
+      "label": "nes-8-jp",
+      "system": {
+        "id": "nes",
+        "media": {
+          "shape": "nes"
+        }
+      },
+      "file": "1942",
+      "region": "JP",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/097c5616-df73-43b4-b15c-3a37476176b2.png",
+          "https://images.launchbox-app.com/8b07a37a-7dc1-4d11-a7db-3248e4fd48c4.png"
+        ],
+        "shape": "nes"
+      }
+    },
+    {
+      "label": "ps2-9",
+      "system": {
+        "id": "ps2",
+        "media": {
+          "type": "disc"
+        }
+      },
+      "file": "1941",
+      "region": "US",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/r2_86dcac91-0704-4ac7-ad27-05fd46575d34.png",
+          "https://images.launchbox-app.com/r2_2bb8cc9a-3692-444c-8a0a-67000aeda828.png"
+        ],
+        "shape": "disc"
+      }
+    },
+    {
+      "label": "ps2-10-jp",
+      "system": {
+        "id": "ps2",
+        "media": {
+          "type": "disc"
+        }
+      },
+      "file": "1941",
+      "region": "JP",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/r2_86dcac91-0704-4ac7-ad27-05fd46575d34.png",
+          "https://images.launchbox-app.com/r2_2bb8cc9a-3692-444c-8a0a-67000aeda828.png"
+        ],
+        "shape": "disc"
+      }
+    },
+    {
+      "label": "ps2-11",
+      "system": {
+        "id": "ps2",
+        "media": {
+          "type": "disc"
+        }
+      },
+      "file": "2002",
+      "region": "US",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/r2_a6ebafe0-51e5-4b5e-8e3b-9601ae6427bd.png"
+        ],
+        "shape": "disc"
+      }
+    },
+    {
+      "label": "ps2-12-jp",
+      "system": {
+        "id": "ps2",
+        "media": {
+          "type": "disc"
+        }
+      },
+      "file": "2002",
+      "region": "JP",
+      "expected": {
+        "urls": [
+          "https://images.launchbox-app.com/r2_a6ebafe0-51e5-4b5e-8e3b-9601ae6427bd.png"
+        ],
+        "shape": "disc"
+      }
+    },
+    {
+      "label": "no-match",
+      "system": {
+        "id": "n64",
+        "media": {
+          "shape": "n64"
+        }
+      },
+      "file": "Not A Real Game (USA)",
+      "region": "US",
+      "expected": null
+    },
+    {
+      "label": "no-system-in-index",
+      "system": {
+        "id": "gbc2",
+        "media": {
+          "shape": "gbc"
+        }
+      },
+      "file": "Any (USA)",
+      "region": "US",
+      "expected": null
+    }
+  ]
+}
