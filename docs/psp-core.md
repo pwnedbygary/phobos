@@ -20964,3 +20964,102 @@ blocks with detail inside (0% native).
 
 Kept outside the repository: the probe's and this part's notes, the runs' frames and reports, the probes, the mutants
 and the suites' logs.
+
+## Part 121: Vulkan render to texture from two frame buffers — the copy kept until either target changes, so God of War's 272 tiles take one copy a frame, not one a PRIM
+
+The owner's save state at God of War: Chains of Olympus' door/ogre scene, the scene the high-resolution performance
+work was waiting for: once the door opens and the Cyclops has burst through, the app's frames a second fall hard. The
+first measurement found the renderer taking 656 render-to-texture copies and 250 render passes a frame at 1x, almost
+all of them one copy of the same picture taken again for each of the game's 272 tiles — and this part keeps it.
+
+### Why
+
+- **The game's screen-shrink effect.** God of War draws its picture into a small frame buffer and draws it back over
+  the screen in 272 tiles, each tile sampling the picture. In this scene the picture is 64x64 texels and its rows run
+  from one frame buffer into the frame buffer below it: `take()` takes a *two-part* texture, part in one target and
+  part in the next (`Held::next`, `Held::split`), and `textureFor()` copies each part from its own target.
+- **A two-part copy was taken again for every PRIM.** `textureFor()`'s kept-copy path required `!h.next`, and its
+  new-copy path took both parts whole again (the comment: "the second part's changes aren't followed"): each of the
+  272 tile PRIMs that sampled the picture copied it again. Measured at 1x from the save state with the press script
+  below (900 frames): 597,229 copies (663.6 a frame; 99.2% of them the place taken afresh, not a dirty part) and 225,636
+  render passes (250.7 a frame, a pass holding a median of one draw). The copies were a handful of places taken again and
+  again: the most copied was 64x63 texels of target 12 beside one row of target 13.
+- **Why it costs.** Every copy ends the render pass it interrupts, so each tile draw was a render pass of its own: on a
+  tile-based GPU each is a tile store and load, and a copy moves every texel again (the resolution's square at 5x). It
+  also broke the renderer's batching of the 3D PRIMs: their hand-overs (Mesh commands) were 296.7 a frame with the
+  copies and 74.4 without. On llvmpipe at 5x the copies themselves were 19.9 ms a frame of GPU time (Copy is a memcpy
+  there; 3.6% of the frame) — the pass cost is what a tiled GPU pays and llvmpipe does not.
+- **The two targets barely change between the tiles.** From the draws' records: target 12 takes 1.7 draws a frame and
+  target 13 1.1 (of 303), so between the 272 samples of one frame the picture is as it was.
+
+### The change
+
+- **`GPU::Copied`** (gpu.hpp) gains `next` (the frame buffer below), `split` (where its part starts) and `nextDirty[4]`
+  (the rectangle of that target changed since the copy, in its own pixels, none where left is past right).
+- **`GPU::textureFor()`** (gpu.cpp): each target's changes are given to every copy of it — the copy whose place it is
+  (`dirty`, as before) and a copy whose second part it is (`nextDirty`) — for the PRIM's target and for the frame
+  buffer below it, then cleared. The copy kept for the place serves the PRIM where nothing has changed where it reads:
+  for a single-part texture only a copy that was taken single-part (a two-part copy's texture would hold stale rows
+  where its second part lay), as before; for a two-part one a copy with the same target below, the
+  same split and the same rows, whose dirty rectangle misses the PRIM's texels (`Held::takes`) and whose `nextDirty`
+  misses the part the PRIM takes from the target below (that target's columns `x` to `x + width - 1`, its rows 0 to
+  `rows - split - 1`). A two-part copy either target has changed in is taken whole again, both parts, as before: a
+  partial re-copy of each part is another mechanism, and the changes say when it must be taken.
+- **A new copy starts clean**, both dirty rectangles empty, as it holds both targets' pixels as they are (the old code
+  set the whole taken rectangle dirty for a two-part copy, which only made sense while such a copy could not be kept).
+  Nothing else changes: `MostCopies`, the copy age, `release()`, the moves and the finishes are untouched.
+- **Test** (`tests/psp/gpu.cpp`): "gpu render to texture from two frame buffers taken once for many PRIMs" — eight
+  PRIMs sampling one two-part texture with nothing drawn between take two copies, both parts of the first, and every
+  pixel is the software renderer's; without the reuse the eight took sixteen. A draw into a frame buffer between samples
+  is seen (a copy taken, the picture the software renderer's), and one below the rows the texture takes is not copied.
+  The existing "gpu render to texture from two frame buffers, one below the other, nothing finished" keeps its writes
+  between samples, so a wrong reuse after a change would show there too. The test runs at 1x: at 2x a texture of this
+  shape's samples differ from the software renderer's by 549 bytes on master too (found while writing it, and not this
+  change's to fix), so 2x is left out.
+
+### Evidence
+
+The host: a Ryzen 7 7800X3D with llvmpipe (Mesa's software Vulkan, `PSP_GPU_ON_CPU=1`), the desktop runner built from
+this branch. The state: the owner's save state at the door, the script that opens it (Cross mash frames 80-220, Circle
+mash 240-380; the Cyclops comes through at ~390 and the fight runs to ~900), Vulkan fast.
+
+- **The picture unchanged.** 1x, 1,000 frames, PNGs at frames 230, 380, 400, 440, 480, 520, 560, 600, 700, 800, 900
+  and 1,000: all twelve byte for byte the same before and after (`cmp`). 5x, 900 frames, PNGs at 380, 450, 550, 700
+  and 900: all five byte for byte the same. The GE profile of a 1x run is identical record for record (7,450 records,
+  the same lists, charges and vblanks) — the
+  emulated machine's behaviour, its GE timing charge included, is unchanged. The renderer's copies are not part of the
+  emulated machine's state.
+- **Copies and passes, 1x** (the same 700-frame window, `PHOBOS_GPU_STATS=time`): copies 474,920 → 6,542 (678.5 → 9.3
+  a frame; their area 1.14 G → 0.18 G texel-pixels, 12.5 → 0.4 screenfuls); render passes 23.0 a frame after (that
+  report has no pass counter before the change, and the runs with it are a 900-frame one before the change — 225,636,
+  250.7 a frame — and a 1,000-frame one after — 20,461, 20.5 a frame); Mesh commands 296.7 → 74.4 a frame; Draw
+  commands 13.8 → 14.0.
+- **Host time, 1x** (the same 700 frames): 42.1 s → 28.6 s (−32.0%); the GPU's kind times 56.6 → 35.5 ms a frame
+  (Mesh 37.6 → 24.2, Draw 8.6 → 8.3, Copy 7.5 → 0.3, Move 2.7 → 2.5, the rest under 0.2 each).
+- **At 5x** (the same state and script, 900 frames, `PHOBOS_GPU_STATS=time`): 511.5 s → 451.6 s (−11.7%); copies
+  597,229 → 7,519 (663.6 → 8.4 a frame, −98.7%); render passes 29.3 a frame after; the GPU's kind times 557.5 → 490.1
+  ms a frame (Copy 19.9 → 1.9, Mesh 376.3 → 330.0, Draw 117.8 → 115.5, Move 28.9 → 28.2, the rest the same), most of
+  what remains the scene's own fill. The per-window means: the door's 300 frames −8.4%, the 272 tiles' 150 frames
+  −8.5%, the Cyclops' burst −13.8%, the fight −16.3%.
+- **Checks:** `tests/psp/run-tests.sh` (the debug build with ASan and UBSan, on lavapipe as CI runs it) on this
+  snapshot: 669 groups, 0 failures, 1 skipped (the GPU without rasterization order, which lavapipe reads in order for —
+  master's skip too). The new test passes there, and with master's renderer and the same test file it fails on the
+  count (the eight samples take sixteen copies where two are asked for). The clean snapshot's runner — the
+  measurement counters left out — reproduced the twelve 1x PNGs and the GE profile byte for byte. `git diff --check`
+  clean. The APK was not built or run here: CI's Android Build compiles the PSP core on every pull request.
+- **Not run:** the RP6 (the pass count's cost on a tile-based GPU is the reason for the change and is unmeasured on
+  hardware); a library check of the other games that take two-part copies (Midnight Club 3's menu among them); PPSSPP
+  as a comparison. No change is made to what is sampled or when: a copy is kept only where its targets' recorded
+  changes say its content is what the copy already holds.
+
+### Limits
+
+The host's llvmpipe prices copies and passes unlike a tile-based GPU (it is a memcpy and it keeps no tiles), so the 5x
+host figure understates what this saves on a phone; that claim is inference, not measurement. The scene's emulated
+frame rate under the PSP's GE timing is unchanged (37 fps in the heavy phase), as the model's charge is: this is the
+renderer's cost, not the emulated machine's.
+
+### Scratch
+
+Kept outside the repository: the owner's save state (not in the repository), the press script, the runs' frames,
+reports and profiles, the copies' and passes' counters used beside the repository's statistics build, and the probes.
