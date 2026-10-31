@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <string_view>
 
 //Vulkan's types only: every function comes through vkGetInstanceProcAddr (vulkan.cpp)
 #if !defined(VK_NO_PROTOTYPES)

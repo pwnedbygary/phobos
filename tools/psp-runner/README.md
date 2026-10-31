@@ -100,6 +100,9 @@ the runner refuses anything else):
   with `--ge-profile`, and alone is an error
 - `--report FILE` — the run as JSON (below): for comparing runs by what ran, not only by their
   speed
+- `--frame-times FILE` — each frame's host time, in milliseconds, one a line, from the first to the
+  last: a benchmark's percentiles. A frame includes anything else that run does in it: a PNG's
+  wait for the screen, a save state. Left out of the report's own speed, as it is.
 - `--start-time SECONDS` — the PSP's clock starts there (seconds since 1970, up to 4294967295)
   rather than at the host's time, so two runs see the same dates and can be compared byte for
   byte (the time zone is the host's `TZ`: `TZ=UTC` pins it too). A game that starts itself again
@@ -255,7 +258,33 @@ later layout gets another number):
   `arrived in frame`, null with no picture, how long it waited, `waited ms`, and whether the
   picture was new, `fresh`), the missing functions (library, NID, count) and the last note;
 - `gpu`: the GPU renderer's counts (as the summary's `gpu:` line, with its pipelines), or null
-  where the software renderer drew.
+  where the software renderer drew. With `PHOBOS_GPU_STATS` set (any non-empty value) it also has
+  `kinds`: per command kind (`Draw`, `Upload`, `Readback`, `Copy`, `Present`, `Shot`, `Mesh`,
+  `Move`, `Depth`, `Alpha`) the `commands` recorded, the `area` their rectangles cover in pixels,
+  summed — at the GPU's scale for the kinds that fill a target, at the PSP's size for `Present` and
+  `Shot`, at the read-back's scale for `Readback` (`null` for `Draw` and `Mesh`: what their triangles cover isn't known
+  without asking the GPU; and one rectangle a command, so a kind that draws its rectangle several
+  times over, `Alpha` and an upload's stencil among them, is counted once), and the `ms` between
+  the timestamps that bound the kind (`null` unless `PHOBOS_GPU_STATS=time`). `targets`: the
+  targets made, shown (presented on a window, shot for the host, or read back as its picture) and
+  copied into a texture for draws to sample, with their rooms at the scale summed (a target's
+  width x height x scale squared: what filling it whole would cost, its pictures growing lazily),
+  `shown only area` being those shown and never copied, and `timed` whether the `ms` are real. With `"time"`
+  a frame is about 3% slower on llvmpipe (a timestamp is a sync point); with `"1"` the counters
+  cost nothing measurable. The times cover the commands in the run's buffer, not the transitions
+  recorded before them and not a run submitted without a wait. It is a benchmark's breakdown: off,
+  nothing is counted or timed, and nothing about what's drawn or how changes with it on.
+  `PHOBOS_GPU_STATS=draws` adds, besides those, one CSV line a draw beside the report, `<report>.draws.csv`:
+  `ms`, `triangles`, `target`, `scale`, `pass` (the render pass it ran in), `pipeline` (a fingerprint of the
+  pipeline key's fields), `writes_depth` (the shader writes the depth and does the GE's range test), `shown` and
+  `copied` (the target's state when the draw was recorded), and `draw times`, the same times in 24 log-spaced buckets
+  whose `buckets low ms` are their lower bounds (1.024 us doubling). A draw whose timestamps were skipped (a pool the
+  device wouldn't make, or the record cap) has an empty `ms`, not 0. The per-draw timestamps are a sync point each, so
+  this mode costs about 2.6% of a 5x frame and its absolute per-draw times are inflated; the shares between draws are
+  what it is for. `shown`/`copied` are the target's flags as of that draw, so a draw before its target is first shown
+  reads 0/0; the target list's own flags are the run's final ones. A run records at most 400,000 draws, then stops
+  recording, and at most 64 targets are listed; 3,600 frames of a heavy 5x scene would reach the draw cap, so a long
+  run's log covers its first part only.
 
 Values the run didn't have are null, not zero. Text is UTF-8: a byte of a name or a note that
 isn't part of a UTF-8 character (a game's Shift-JIS output, say) is written as the character of

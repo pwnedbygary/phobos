@@ -50,7 +50,8 @@
   F(vkCmdBindDescriptorSets) F(vkCmdBindVertexBuffers) F(vkCmdSetViewport) F(vkCmdSetScissor) \
   F(vkCmdSetStencilReference) F(vkCmdSetStencilCompareMask) F(vkCmdSetStencilWriteMask) \
   F(vkCmdSetBlendConstants) F(vkCmdPushConstants) F(vkCmdDraw) F(vkCmdBlitImage) F(vkCmdClearAttachments) \
-  F(vkCmdBindIndexBuffer) F(vkCmdDrawIndexed)
+  F(vkCmdBindIndexBuffer) F(vkCmdDrawIndexed) \
+  F(vkCreateQueryPool) F(vkDestroyQueryPool) F(vkCmdResetQueryPool) F(vkCmdWriteTimestamp) F(vkGetQueryPoolResults)
 //Presenting's, where there's a window to show on: missing ones mean only that there's no presenting
 #define PSP_VULKAN_SURFACE(F) \
   F(vkDestroySurfaceKHR) F(vkGetPhysicalDeviceSurfaceSupportKHR) F(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
@@ -102,6 +103,9 @@ struct VulkanBackend : GPU::Backend {
     VkDescriptorSet set = VK_NULL_HANDLE;  //(its colors sampled, to be presented: made when first presented)
     VkDescriptorSet frame = VK_NULL_HANDLE;  //its colors as draw.frag's input attachment (shader blending)
     bool fresh = true;  //its pictures not yet in their layouts (the next run puts them there)
+    //(PHOBOS_GPU_STATS: whether its pixels were shown (Present or Shot on a window, or Readback for the host's
+    //picture) or copied into a texture for draws to sample (Copy), for the shown-only and sampled areas)
+    bool shown = false, copied = false;
   };
   //A picture the CPU fills for the GPU to read, at the PSP's size (a higher resolution's uploads: copy.frag), with
   //the descriptor set that samples it; made larger when a bigger one is wanted
@@ -147,8 +151,20 @@ struct VulkanBackend : GPU::Backend {
     Buffer shot;
     bool shooting = false;
     u32 shotWidth = 0, shotHeight = 0, shotFormat = 3;
+    //(PHOBOS_GPU_STATS: the timestamps written into this slot's run, the kinds they bound, and their pool)
+    VkQueryPool queries = VK_NULL_HANDLE;
+    u32 stamps = 0;
+    GPU::Command::Kind stampKinds[512]{};
+    //(PHOBOS_GPU_STATS=draws: the pairs of timestamps that bound a draw, and the one still open)
+    u32 drawIndex[512]{};  //(the record each timestamp opened, for the pairing)
+    u32 drawRecordOpen = ~0u, drawOpen = ~0u;  //(the record, and whether a draw's span is still open)
   };
   static constexpr u32 Slots = 8;
+  static constexpr u32 MaxStamps = 512;  //(a run's timestamps: one a kind change, and one after its last command)
+  //(PHOBOS_GPU_STATS, a benchmark's: "1" counts each command kind's commands and pixels and each target's shown and
+  //copied areas, at no cost but a few adds; "time" also times each kind with a Vulkan timestamp, which costs about
+  //3% of a 5x frame on llvmpipe (set every time the kind changes, and a sync point for the driver))
+  bool stamping = false, poolStamps = false;
   static constexpr u64 Timeout = 5'000'000'000;
   //(general: a target's colors are its render pass's color attachment and input attachment at once, for shader
   //blending's draws to read)
@@ -324,6 +340,7 @@ struct VulkanBackend : GPU::Backend {
         release(slot.staging), release(slot.shot);
         if(slot.fence) vk.vkDestroyFence(device, slot.fence, nullptr);
         if(slot.acquired) vk.vkDestroySemaphore(device, slot.acquired, nullptr);
+        if(slot.queries) vk.vkDestroyQueryPool(device, slot.queries, nullptr);
       }
       release(readback);
       if(commandPool) vk.vkDestroyCommandPool(device, commandPool, nullptr);
@@ -495,6 +512,10 @@ struct VulkanBackend : GPU::Backend {
     if(!makePictures(t, scale == 1 ? height : std::min(height, 288u))) return destroy(t), 0;
     u32 id = nextId++;
     targetImages[id] = t;
+    if(stamping) {
+      targetsMade++;
+      if(targetStatsCount < 64) targetStats[targetStatsCount++] = {width, height, id};
+    }
     return id;
   }
 
@@ -673,6 +694,30 @@ struct VulkanBackend : GPU::Backend {
     if(waited != VK_SUCCESS) return lost = true, false;
     vk.vkResetFences(device, 1, &slot.fence);
     slot.busy = false;
+    if((timing || drawTiming) && slot.stamps >= 2 && slot.queries) {  //(the run's timestamps: each kind's stretch, and its time)
+      u64 times[MaxStamps]{};
+      if(vk.vkGetQueryPoolResults(device, slot.queries, 0, slot.stamps, sizeof(times[0]) * slot.stamps, times,
+                                  sizeof(times[0]), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+        double period = chosen.limits.timestampPeriod ? chosen.limits.timestampPeriod : 1.0;  //(nanoseconds a tick)
+        for(u32 n = 0; n + 1 < slot.stamps; n++) {
+          if(times[n + 1] <= times[n]) continue;
+          kindNanos[int(slot.stampKinds[n])] += u64(double(times[n + 1] - times[n]) * period);
+          timedSpans++;
+        }
+        if(drawTiming) {  //(each draw's stretch — from its stamp to the next — into its bucket and its record)
+          for(u32 n = 0; n + 1 < slot.stamps; n++) {
+            u32 index = slot.drawIndex[n];
+            if(index >= drawRecords.size()) continue;
+            if(times[n + 1] <= times[n]) continue;
+            double ns = double(times[n + 1] - times[n]) * period;
+            int bucket = int(std::floor(std::log2(std::max(ns, 1.0)))) - 10;
+            drawTimes[std::clamp(bucket, 0, 23)]++;
+            drawRecords[index].ns = u64(ns);
+          }
+        }
+      }
+      slot.stamps = 0;
+    }
     completed = std::max(completed, slot.serial);
     if(slot.shooting) keep(slot);
     return true;
@@ -1248,6 +1293,7 @@ struct VulkanBackend : GPU::Backend {
     auto begin = made<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vk.vkBeginCommandBuffer(commands, &begin);
+    if((timing || drawTiming) && slot.queries) vk.vkCmdResetQueryPool(commands, slot.queries, 0, MaxStamps);
     constexpr auto DepthStencil = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     for(auto& [id, t] : targetImages) {
       if(!t.fresh) continue;
@@ -1317,7 +1363,88 @@ struct VulkanBackend : GPU::Backend {
     readbacks.clear(), readbackSizes.clear(), squeezes.clear(), depthReads.clear();
     u64 readAt = 0;
     bool presenting = false;
+    slot.stamps = 0, slot.drawRecordOpen = ~0u, slot.drawOpen = ~0u;
+    i32 lastKind = -1;
     for(auto& c : r.commands) {
+      if(drawTiming && slot.queries) {  //(one timestamp a draw, to the next stamp; no pool, no records)
+        if(slot.drawRecordOpen != ~0u && slot.drawRecordOpen < drawRecords.size()) {
+          auto& previous = drawRecords[slot.drawRecordOpen];
+          if(!previous.pass) previous.pass = passSerial;  //(only ever unset until now)
+        }
+        if(c.kind == GPU::Command::Kind::Draw || c.kind == GPU::Command::Kind::Mesh) {
+          if(slot.stamps + 1 < MaxStamps && drawRecords.size() < 400000) {
+            auto& key = r.states[c.state].pipeline;
+            PlayStationPortable::GPU::Backend::DrawRecord record;
+            record.prims = c.count / 3, record.target = c.target, record.scale = scale;
+            auto openFound = targetImages.find(c.target);
+            bool beginsPass = !pass || openFound == targetImages.end() || &openFound->second != pass;
+            record.pass = passSerial + (beginsPass ? 1 : 0);  //(a target change begins a pass, later in this iteration)
+            record.pipeline = u64(key.depthTest) | u64(key.depthWrite) << 8 | u64(key.depthRange) << 16 |
+                              u64(key.depthCompare) << 24 | u64(key.reads) << 32 | u64(key.blending) << 40 |
+                              u64(key.textured) << 48 | u64(key.alphaTest) << 56 | u64(key.stencilTest) << 57 |
+                              u64(key.blend) << 58;
+            record.writesDepth = key.depths();
+            auto foundTarget = targetImages.find(c.target);
+            if(foundTarget != targetImages.end()) {
+              record.shown = foundTarget->second.shown, record.copied = foundTarget->second.copied;
+            }
+            drawRecords.push_back(record);
+            slot.drawRecordOpen = u32(drawRecords.size() - 1), slot.drawOpen = slot.stamps;
+            slot.drawIndex[slot.stamps] = slot.drawRecordOpen;
+            vk.vkCmdWriteTimestamp(commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot.queries, slot.stamps);
+            slot.stamps++;
+          } else {
+            slot.drawRecordOpen = ~0u;
+          }
+        } else if(slot.drawOpen != ~0u && slot.drawRecordOpen != ~0u && slot.stamps + 1 < MaxStamps) {
+          //(the next command is not a draw: its span ends here, and the next draw opens its own)
+          vk.vkCmdWriteTimestamp(commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot.queries, slot.stamps);
+          slot.drawIndex[slot.stamps] = ~0u;
+          slot.stamps++, slot.drawOpen = ~0u;
+        }
+      }
+      if(stamping) {  //(PHOBOS_GPU_STATS, a benchmark's: each kind's pixels counted, and with "time" its stretch timed)
+        if(timing && !drawTiming && slot.queries && int(c.kind) != lastKind && slot.stamps + 1 < MaxStamps) {
+          lastKind = int(c.kind);
+          slot.stampKinds[slot.stamps] = c.kind;
+          vk.vkCmdWriteTimestamp(commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot.queries, slot.stamps);
+          slot.stamps++;
+        }
+        auto kind = int(c.kind);
+        kindCommands[kind]++;
+        switch(c.kind) {
+        case GPU::Command::Kind::Upload: case GPU::Command::Kind::Copy: case GPU::Command::Kind::Move:
+        case GPU::Command::Kind::Depth: case GPU::Command::Kind::Alpha:
+          kindPixels[kind] += u64(c.width) * c.height * scale * scale; break;
+        case GPU::Command::Kind::Readback:  //(blitted at `at` times, not the scale)
+          kindPixels[kind] += u64(c.width) * c.height * c.at * c.at; break;
+        case GPU::Command::Kind::Present: case GPU::Command::Kind::Shot:
+          kindPixels[kind] += u64(c.width) * c.height; break;
+        default: break;  //(Draw and Mesh: what their triangles cover isn't known here)
+        }
+        //(a target's room at the scale: what filling it whole would cost, whether or not it has grown to it yet)
+        auto area = [&](const Target& t) { return u64(t.width) * t.height * scale * scale; };
+        //(a target's pixels shown: on a window (Present), or as the host's picture read back (Readback))
+        if(c.kind == GPU::Command::Kind::Present || c.kind == GPU::Command::Kind::Shot ||
+           c.kind == GPU::Command::Kind::Readback) {
+          auto found = targetImages.find(c.target);
+          if(found != targetImages.end() && !found->second.shown) {
+            found->second.shown = true, targetsShown++;
+            for(u32 n = 0; n < targetStatsCount; n++) if(targetStats[n].id == c.target) targetStats[n].shown = true;
+            shownArea += area(found->second);
+            if(!found->second.copied) shownOnlyArea += area(found->second);
+          }
+        }
+        if(c.kind == GPU::Command::Kind::Copy) {  //(the target copied for draws to sample)
+          auto found = targetImages.find(c.target);
+          if(found != targetImages.end() && !found->second.copied) {
+            found->second.copied = true, targetsCopied++;
+            for(u32 n = 0; n < targetStatsCount; n++) if(targetStats[n].id == c.target) targetStats[n].copied = true;
+            copiedArea += area(found->second);
+            if(found->second.shown) shownOnlyArea -= area(found->second);
+          }
+        }
+      }
       if(c.kind == GPU::Command::Kind::Present) {  //(the first alone, where an image was acquired)
         u64 from = 0;
         if(!c.target) {
@@ -1639,6 +1766,13 @@ struct VulkanBackend : GPU::Backend {
       vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &memory,
                               0, nullptr, 0, nullptr);
     }
+    if(drawTiming && slot.drawRecordOpen != ~0u && slot.drawRecordOpen < drawRecords.size()) {
+      drawRecords[slot.drawRecordOpen].pass = passSerial;  //(the run's last draw: no next command to do it)
+    }
+    if((timing || drawTiming) && slot.queries && slot.stamps && slot.stamps < MaxStamps) {  //(the closing one: each kind's stretch is between its own and the next)
+      vk.vkCmdWriteTimestamp(commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot.queries, slot.stamps);
+      slot.stamps++;
+    }
     vk.vkEndCommandBuffer(commands);
     recording += nanoseconds(began);
     began = Clock::now();
@@ -1691,7 +1825,7 @@ struct VulkanBackend : GPU::Backend {
     info.renderPass = renderPass, info.framebuffer = t.framebuffer;
     info.renderArea = area ? *area : VkRect2D{{0, 0}, {t.width * scale, t.rows * scale}};
     vk.vkCmdBeginRenderPass(commands, &info, VK_SUBPASS_CONTENTS_INLINE);
-    passes++;
+    passes++, passSerial++;
   }
 
   //A rectangle of the PSP's pixels as the target's, inside its pictures
@@ -2556,12 +2690,31 @@ struct VulkanBackend : GPU::Backend {
     if(vk.vkCreateCommandPool(device, &commandPoolInfo, nullptr, &commandPool) != VK_SUCCESS) {
       return error = "no command pool", false;
     }
+    const char* stats = std::getenv("PHOBOS_GPU_STATS");
+    stamping = stats && *stats;
+    timing = stamping && std::string_view(stats) == "time";
+    drawTiming = stamping && std::string_view(stats) == "draws";
+    recordDraws = drawTiming;
+    if(recordDraws) drawRecords.reserve(200000);
+    poolStamps = timing || drawTiming;  //(either needs the timestamp pool; only "time" makes the kinds' ms real)
+    if(timing && !(chosen.limits.timestampPeriod > 0)) {  //(no timestamps' period: the times would be nonsense)
+      std::fprintf(stderr, "PHOBOS_GPU_STATS=time: this device reports no timestamp period; timing is off\n");
+      timing = false;
+    }
     for(auto& slot : slots) {
       auto commandInfo = made<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
       commandInfo.commandPool = commandPool, commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
       commandInfo.commandBufferCount = 1;
       if(vk.vkAllocateCommandBuffers(device, &commandInfo, &slot.commands) != VK_SUCCESS) {
         return error = "no command buffer", false;
+      }
+      if(poolStamps) {  //(a run's timestamps: off unless the environment asks, and no behaviour changes when on)
+        auto queryInfo = made<VkQueryPoolCreateInfo>(VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO);
+        queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP, queryInfo.queryCount = MaxStamps;
+        if(vk.vkCreateQueryPool(device, &queryInfo, nullptr, &slot.queries) != VK_SUCCESS) {
+          if(stamping) std::fprintf(stderr, "PHOBOS_GPU_STATS: no timestamp queries on this device; the breakdown is off\n");
+          stamping = false;
+        }
       }
       auto fenceInfo = made<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
       if(vk.vkCreateFence(device, &fenceInfo, nullptr, &slot.fence) != VK_SUCCESS) return error = "no fence", false;
@@ -2575,6 +2728,7 @@ struct VulkanBackend : GPU::Backend {
         slot.acquired = VK_NULL_HANDLE, canPresent = false;
       }
     }
+    if(!poolStamps) drawTiming = false, recordDraws = false;  //(no timestamps' pool or no period: no per-draw times)
     depthAlone = depthAloneProbe();
     if(lost) return error = "the device was lost", false;
     //the blank texture, texture 0
