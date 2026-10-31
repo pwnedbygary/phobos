@@ -837,9 +837,10 @@ struct VulkanBackend : GPU::Backend {
                    stencilOperation(k.stencilDepthFail), compare(k.stencilCompare), 0xff, 0xff, 0};
     depth.back = depth.front;
     VkPipelineColorBlendAttachmentState attachment{};
-    attachment.blendEnable = k.blend;
-    attachment.srcColorBlendFactor = factor(k.sourceFactor), attachment.dstColorBlendFactor = factor(
-      k.destinationFactor);
+    GPU::Pipeline b = GPU::blendFor(k);  //(none where no color is written)
+    attachment.blendEnable = b.blend;
+    attachment.srcColorBlendFactor = factor(b.sourceFactor), attachment.dstColorBlendFactor = factor(
+      b.destinationFactor);
     static constexpr VkBlendOp operations[5] = {VK_BLEND_OP_ADD, VK_BLEND_OP_SUBTRACT,
       VK_BLEND_OP_REVERSE_SUBTRACT, VK_BLEND_OP_MIN, VK_BLEND_OP_MAX};
     attachment.colorBlendOp = operations[k.operation < 5 ? k.operation : 0];
@@ -2876,4 +2877,15 @@ auto GPU::undeclared(const u32* words, size_t size) -> std::vector<u32> {
     n += length;
   }
   return kept;
+}
+
+auto GPU::blendFor(const Pipeline& k) -> Pipeline {
+  Pipeline b = k;
+  if(!(k.colorMask & 15)) {
+    for(u8* f : {&b.sourceFactor, &b.destinationFactor}) {
+      if(*f == Source1Color || *f == OneMinusSource1Color) *f = Zero;
+    }
+    b.blend = 0;
+  }
+  return b;
 }
