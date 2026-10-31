@@ -846,33 +846,56 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
     //time, each taking more of the frame buffer it shrank the screen into than the one before, and copied for each
     //it was 2,184 copies a frame shown. With MostCopies kept, one of the size taken from another place of the target
     //serves a new place, copied whole, before the one unused longest is let go.)
-    if(h.target->changes[0] <= h.target->changes[2]) {
-      auto& changes = h.target->changes;
+    //(the targets' changes given to every copy of them: the copy whose place one is, and a copy whose second part it
+    //is, each in its own pixels)
+    auto hear = [&](Target& t) {
+      if(t.changes[0] > t.changes[2]) return;
       for(auto& [where, copied] : copies) {
-        if(std::get<0>(where) == h.target->id) widen(copied.dirty, changes[0], changes[1], changes[2], changes[3]);
+        if(std::get<0>(where) == t.id) widen(copied.dirty, t.changes[0], t.changes[1], t.changes[2], t.changes[3]);
+        if(copied.next == t.id) widen(copied.nextDirty, t.changes[0], t.changes[1], t.changes[2], t.changes[3]);
       }
-      changes[0] = 0, changes[1] = 0, changes[2] = -1, changes[3] = -1;
-    }
+      t.changes[0] = 0, t.changes[1] = 0, t.changes[2] = -1, t.changes[3] = -1;
+    };
+    hear(*h.target);
+    if(h.next) hear(*h.next);
     scale = backend->scale;
     auto key = std::make_tuple(h.target->id, h.x, h.y);
     auto found = copies.find(key);
     if(found != copies.end()) found->second.used = uses;
-    if(found != copies.end() && !h.next && found->second.width >= h.width && found->second.rows >= h.rows) {
+    //(the copy kept for this place serves the PRIM where nothing has changed since it was taken: in its own target,
+    //and in the frame buffer below where its rows run on into it — the same rows and place there, or taken again)
+    bool fits = found != copies.end() && found->second.width >= h.width && found->second.rows >= h.rows;
+    if(fits) {
+      if(h.next) fits = found->second.next == h.next->id && found->second.split == h.split && found->second.rows == h.rows;
+      else fits = !found->second.next;
+    }
+    if(fits) {
       auto& copied = found->second;
       if(copied.width != h.width || copied.rows != h.rows) taken = Vertex::taken(h.width, h.rows);
       auto& d = copied.dirty;
-      if(d[0] > h.takes[2] || h.takes[0] > d[2] || d[1] > h.takes[3] || h.takes[1] > d[3]) return copied.texture;
-      s32 left = std::max(copied.dirty[0], h.x), top = std::max(copied.dirty[1], h.y);
-      s32 right = std::min({copied.dirty[2], h.x + s32(copied.width) - 1, s32(h.target->stride) - 1});
-      s32 bottom = std::min(copied.dirty[3], h.y + s32(copied.rows) - 1);
-      copied.dirty[0] = 0, copied.dirty[1] = 0, copied.dirty[2] = -1, copied.dirty[3] = -1;
-      if(left > right || top > bottom) return copied.texture;
-      Command c{Command::Kind::Copy, h.target->id};
-      c.x = left, c.y = top, c.texture = copied.texture;
-      c.width = right - left + 1, c.height = bottom - top + 1, c.intoX = left - h.x, c.intoY = top - h.y;
-      recorded.commands.push_back(c);
-      statistics.copies++, statistics.copied += c.width * c.height;
-      return copied.texture;
+      bool clean = d[0] > h.takes[2] || h.takes[0] > d[2] || d[1] > h.takes[3] || h.takes[1] > d[3];
+      if(clean && h.next) {  //(the part from the frame buffer below: its columns h.x to h.x + copied.width - 1, rows 0
+                             //to h.rows - h.split - 1)
+        auto& e = copied.nextDirty;
+        clean = e[0] > h.x + s32(copied.width) - 1 || h.x > e[2]
+             || e[1] > s32(h.rows - h.split) - 1 || 0 > e[3];
+      }
+      if(clean) return copied.texture;
+      if(!h.next) {  //(the part that changed copied again, into its place in the copy)
+        s32 left = std::max(copied.dirty[0], h.x), top = std::max(copied.dirty[1], h.y);
+        s32 right = std::min({copied.dirty[2], h.x + s32(copied.width) - 1, s32(h.target->stride) - 1});
+        s32 bottom = std::min(copied.dirty[3], h.y + s32(copied.rows) - 1);
+        copied.dirty[0] = 0, copied.dirty[1] = 0, copied.dirty[2] = -1, copied.dirty[3] = -1;
+        if(left > right || top > bottom) return copied.texture;
+        Command c{Command::Kind::Copy, h.target->id};
+        c.x = left, c.y = top, c.texture = copied.texture;
+        c.width = right - left + 1, c.height = bottom - top + 1, c.intoX = left - h.x, c.intoY = top - h.y;
+        recorded.commands.push_back(c);
+        statistics.copies++, statistics.copied += c.width * c.height;
+        return copied.texture;
+      }
+      //(one whose rows run on into the frame buffer below is taken whole again: both parts, as the second's changes
+      //are heard here, would be a copy of each in part)
     }
     u32 width = h.width, rows = h.rows, id = 0;
     if(found != copies.end()) {  //(too small: let go, and made again larger; or two targets': copied whole again)
@@ -905,18 +928,17 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
     if(!id) id = backend->makeTexture(width * scale, rows * scale, nullptr);
     if(!id) return 0;
     if(width != h.width || rows != h.rows) taken = Vertex::taken(h.width, h.rows);
-    auto& copied = copies[key] = {id, width, rows, uses};
+    copies[key] = {id, width, rows, uses, {0, 0, -1, -1}, {0, 0, -1, -1}, h.next ? h.next->id : 0,
+                   h.next ? h.split : 0};
     Command c{Command::Kind::Copy, h.target->id};
     c.x = h.x, c.y = h.y, c.texture = id;
     c.width = std::min<u32>(width, h.target->stride - h.x), c.height = h.next ? h.split : rows;
     recorded.commands.push_back(c);
     statistics.copies++, statistics.copied += c.width * c.height;
-    if(h.next) {  //(the rest from the frame buffer below, whose changes this copy doesn't follow: taken whole again)
+    if(h.next) {  //(the rest from the frame buffer below, its rows from split on: the copy's second part)
       c.target = h.next->id, c.y = 0, c.height = h.rows - h.split, c.intoY = h.split;
       recorded.commands.push_back(c);
       statistics.copies++, statistics.copied += c.width * c.height;
-      auto& dirty = copied.dirty;
-      dirty[0] = h.x, dirty[1] = h.y, dirty[2] = h.x + h.width - 1, dirty[3] = h.y + h.rows - 1;
     }
     return id;
   }

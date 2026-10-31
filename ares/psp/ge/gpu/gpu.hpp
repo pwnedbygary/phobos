@@ -686,9 +686,14 @@ private:
   //an effect drawing again and again into one corner of the frame buffer it samples copies the corner, not the
   //picture, as Killzone's menu blurs a strip right of its picture 1,100 times a frame; and only where the PRIM's
   //texels meet it, so a PRIM reading one part of the frame buffer while those before it wrote another takes the copy
-  //as it is. A PRIM taking fewer rows or columns from the place takes them from it too (Vertex::taken()). At most
-  //MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release().)
-  struct Copied { u32 texture; u32 width, rows; u64 used; s32 dirty[4] = {0, 0, -1, -1}; };
+  //as it is. A PRIM taking fewer rows or columns from the place takes them from it too (Vertex::taken()). A copy
+  //whose rows run on into the frame buffer below is taken with both targets' changes: they're what its second part
+  //holds, in the second target's pixels (nextDirty), so the PRIMs after it until either changes take it as it is.
+  //At most MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release().)
+  struct Copied {
+    u32 texture; u32 width, rows; u64 used; s32 dirty[4] = {0, 0, -1, -1};
+    s32 nextDirty[4] = {0, 0, -1, -1}; u32 next = 0; u32 split = 0;  //(the target below, and where its part starts)
+  };
   std::map<std::tuple<u32, s32, s32>, Copied> copies;  //(target, x, y)
   auto changed(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;  //(Target::changes)
   //The PRIM's target, scissor and the extent of its corners drawn so far (none: left past right), given to the
