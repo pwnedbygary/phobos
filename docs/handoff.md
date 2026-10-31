@@ -35,6 +35,37 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: a render-to-texture copy from two frame buffers kept until either changes — God of War's 272 tiles take one copy a frame, not one a PRIM — 2026-10-31
+
+Branch `cursor/psp-stacked-copies-2b67`, from master `e51f1907`; docs/psp-core.md, part 121, has the evidence. Clean
+room: our code; no PPSSPP or JPCSP. Save states: unchanged (the renderer's copies aren't saved).
+- **Why**: the owner's save state at God of War: Chains of Olympus' door/ogre scene, the scene the high-resolution
+  performance work was waiting for (once the door opens and the Cyclops has burst through, the frames a second fall).
+  The game draws its picture into a small frame buffer and back over the screen in 272 tiles, and the picture's rows
+  run from one frame buffer into the one below, so each tile sampled a *two-part* texture (`Held::next`);
+  `textureFor()` reused the copy kept for a place only for a single-part texture and took a two-part one whole again for
+  every PRIM ("the second part's changes aren't followed"). At 1x that was 663.6 copies and 250.7 render passes a frame
+  (597,229 copies, 225,636 passes in 900 frames), a handful of places taken again and again, and the copies broke the
+  3D PRIMs' batching too: Mesh commands 296.7 a frame with them and 74.4 without.
+- **What**: `Copied` keeps `next`, `split` and `nextDirty` (the frame buffer below's changes, in its own pixels); each
+  target's changes reach a copy both as its own place and as its second part, for the PRIM's target and for the one
+  below; a two-part copy serves the PRIMs after it while neither target has changed where they read, and is taken whole
+  again when either has. A new test, "gpu render to texture from two frame buffers taken once for many PRIMs" (eight
+  PRIMs sampling one two-part texture, two copies where it took sixteen before; a draw between samples is seen; one
+  below the rows taken is not copied), and the existing stacked-texture test's writes between samples hold the picture
+  to the software renderer's.
+- **Measured** (host, llvmpipe, the save state and its press script; Vulkan fast): the pictures byte for byte the same
+  (12 PNGs at 1x, 5 at 5x) and the GE profile identical record for record; at 1x copies 678.5 → 9.3 a frame, render
+  passes 250.7 → 23.0, the same 700 frames 42.1 → 28.6 s (−32.0%); at 5x copies 663.6 → 8.4 a frame, the same 900
+  frames 511.5 → 451.6 s (−11.7%), the fight window's mean −16.3%. The pass count's cost on a tile-based GPU is the
+  reason for the change and is not measured on hardware; the RP6 was not run, and the other games that take two-part
+  copies were not swept.
+- **Checks**: `tests/psp/run-tests.sh` (the debug build with ASan and UBSan, lavapipe as CI runs it) on the snapshot:
+  669 groups, 0 failures, 1 skipped (the ordered-reads skip master has too); the new test passes there and fails with
+  master's renderer and the same test file (sixteen copies for eight samples); the clean snapshot's runner reproduced
+  the pre-change 1x PNGs and GE profile byte for byte; `git diff --check` clean. The APK was not built or run here;
+  CI's Android Build compiles the PSP core.
+
 ## Box art: downloaded from libretro's thumbnail server, on the Library's cards and a system's list — 2026-10-28
 
 Branch `library-art`, from master `ba2f65c0` (#318's merge). The third pull request of the Cartridge integration, in

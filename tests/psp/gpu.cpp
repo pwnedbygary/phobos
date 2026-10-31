@@ -1856,6 +1856,53 @@ static auto gpuStackedTexture() -> void {
   }
 }
 
+//A texture from two frame buffers, one below the other, taken once for the PRIMs after it while neither changes: the
+//frame buffer below's changes are heard as the one above's are (Copied::nextDirty), so God of War's 272 tiles — each
+//sampling the picture it shrank the screen into, which lies in two frame buffers — take one copy, not a copy each. A
+//draw into either frame buffer between samples is seen, and one below the rows the texture takes leaves it as it is.
+//The picture is the software renderer's, as the copies are the drawing's.
+static auto gpuStackedCopiesKept() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261013};
+  auto upper = randomSprites(random, 30, false), lower = randomSprites(random, 30, false);
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  GPU::Statistics before;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);  //(rows 0-47)
+    for(auto& one : upper) sprite(*s, one);
+    prepare(*s, 48 * 64 * 4, 3);  //(the next frame buffer, from row 48 on: its rows 0-15 the texture's rows 48-63)
+    for(auto& one : lower) sprite(*s, one);
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase, 64, 64, 64);
+    if(s == &hardware) before = stats(gpu);
+    for(u32 n = 0; n < 8; n++) sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});  //(the whole texture, 8 times)
+  }
+  CHECK(stats(gpu).copies - before.copies, 2u);  //(both its parts once, not a copy a PRIM)
+  CHECK(stats(gpu).finishes, before.finishes);
+  CHECK(apart(software, hardware), 0u);
+  auto between = stats(gpu);
+  for(System* s : {&software, &hardware}) {  //(a draw into the frame buffer above: both parts again)
+    prepare(*s, 0, 3);
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff00'ff00});
+    prepare(*s, 0x2'0000, 3);
+    sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
+  }
+  CHECK(stats(gpu).copies - between.copies >= 1, true);  //(the picture's change seen, not served as it was)
+  CHECK(apart(software, hardware), 0u);
+  between = stats(gpu);
+  for(System* s : {&software, &hardware}) {  //(one below the rows it takes there: it serves as it is)
+    prepare(*s, 48 * 64 * 4, 3);
+    sprite(*s, {{{0, 0, 0, 32}, {0, 0, 64, 36}}, 0xff00'ff00});  //(rows 32-35, past the 16 the texture takes there)
+    prepare(*s, 0x2'0000, 3);
+    sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
+  }
+  CHECK(stats(gpu).copies - between.copies, 0u);
+  CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //A texture decoded again before the GPU has the first copy's texels (its bytes rewritten between two sprites, which
 //has the GE let the first go): each copy's texels are kept until the run that puts them on the GPU, without a copy of
 //its own (the sanitizers would catch the first one's read after it was let go), and the picture is the software
@@ -6206,6 +6253,7 @@ auto gpuTests() -> Tests {
     {"gpu rows past a texture's frame buffer held at its last only where that can't change the picture", gpuHeldRows},
     {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
     {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
+    {"gpu render to texture from two frame buffers taken once for many PRIMs", gpuStackedCopiesKept},
     {"gpu a texture decoded again before the GPU has the first: its texels kept till then", gpuTexelsKept},
     {"gpu a finish puts back only the pages drawn in, not memory's newer bytes between", gpuBetweenPages},
     {"gpu a PRIM it refuses among the drawing threads: drawn in order, the GPU's pages kept", gpuRefusedAmongThreads},

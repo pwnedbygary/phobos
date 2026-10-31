@@ -401,7 +401,12 @@ accurate mode they're decoded from memory again, a finish each.
 **A texture running into the frame buffer below** (part 63): its pages one target's and then, from a page on,
 another's, of the same row width and format, which begins on a row of the first, the first owning none of the second's
 pages (whose newest pixels would be its own then): copied in two parts, each from its own target, the rows from the
-second's address on from its first rows, and taken whole each time (the second part's changes aren't followed).
+second's address on from its first rows. Both targets' changes reach the copy (part 121): the second's in the copy's
+`nextDirty`, in its own pixels, so the copy serves the PRIMs after it while neither target has changed where they read
+(the first's changes as for any other copy), and is taken whole again once either has. Before part 121 it was taken
+again for every PRIM that sampled it: God of War's 272 tiles, each sampling the picture it shrank the screen into —
+which lies in two frame buffers — made 663.6 copies and 250.7 render passes a frame, and 8.0 copies and 20.5 passes
+  after.
 Midnight Club 3's menu samples its frame buffer at VRAM 0 as a texture 512 rows tall, and its filter reaches row 272,
 the next frame buffer's first, which the PRIM is drawing into: refused, it was decoded from memory, a finish every
 frame. The texture is the GPU's copy of each target's pixels as they were before the PRIM, as for any texture a PRIM
