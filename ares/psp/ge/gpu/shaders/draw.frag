@@ -56,6 +56,10 @@ layout(constant_id = 18) const uint FLAT = 0u;
 //index its bits are (1: a 16-bit frame buffer's, in TEXELS' format; 2: an 8888 one's), CLUT_FORMAT's shift, mask and
 //offset taken as texture.cpp's texelFrom() takes them, looked up in its palette (palettes' row push.palette names)
 layout(constant_id = 19) const uint INDEXED = 0u;
+//Fast mode's 3D above 1x (the GPU-transforming pipelines): the texture sampled with the GPU's own linear filter, one
+//texture fetch a pixel instead of the GE's four weighed in sixteenths - a step away from the GE's filtering, taken
+//for a tiled GPU's fill rate at 5x. Elsewhere, and at 1x, the GE's own, as texelFetch.
+layout(constant_id = 20) const uint FASTFILTER = 0u;
 
 layout(push_constant) uniform Push {
   vec2 scale;
@@ -179,6 +183,18 @@ uvec4 sampleTexture(vec2 at, bool linear) {
   if(isnan(at.x)) held.x = 0.0;
   if(isnan(at.y)) held.y = 0.0;
   if(!linear) return fetch(inside(int(floor(held.x)), width, heldU), inside(int(floor(held.y)), height, heldV));
+  //(fast mode's 3D above 1x: the GPU's own linear filtering, fast mode's approximation of the GE's - held where the GE
+  //holds, wrapped where it wraps, so the sampler's repeat only ever wraps a four's own taps; a texture taken from a
+  //frame buffer (TEXELS, INDEXED) and a copy's rows and columns (taken) keep the GE's texelFetch path)
+  if(FASTFILTER != 0u && TEXELS == 4u && INDEXED == 0u && push.textureScale == 1u
+     && (vertexFlags >> 8 & 0xfffffu) == 0u && push.resolution > 1u) {
+    vec2 size = vec2(float(width), float(height));
+    if(heldU) held.x = clamp(held.x, 0.5, size.x - 0.5);
+    if(heldV) held.y = clamp(held.y, 0.5, size.y - 0.5);
+    if(!heldU) held.x -= size.x * floor(held.x / size.x);
+    if(!heldV) held.y -= size.y * floor(held.y / size.y);
+    return uvec4(texture(texels, held / size) * 255.0 + 0.5);
+  }
   ivec2 base = ivec2(floor(held * 256.0)) - 128;
   uint u0 = inside(base.x >> 8, width, heldU), u1 = inside((base.x >> 8) + 1, width, heldU);
   uint v0 = inside(base.y >> 8, height, heldV), v1 = inside((base.y >> 8) + 1, height, heldV);

@@ -767,12 +767,15 @@ struct VulkanBackend : GPU::Backend {
   auto pipelineFor(const GPU::Pipeline& k) -> VkPipeline {
     if(auto found = pipelineCache_.find(k); found != pipelineCache_.end()) return found->second;
     if(k.transformed && !transformModule) return pipelineCache_[k] = VK_NULL_HANDLE;
-    u32 constants[20] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
+    //(the 21st, FASTFILTER: above 1x, the fast renderer samples with the GPU's own linear filter, all of its draws
+    //alike so that a PRIM drawn among the GPU-transformed meshes and one drawn apart still come out the same;
+    //'transforms' is the fast renderer's own GPU-transform capability: the accurate renderer's is false)
+    u32 constants[21] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
-                         k.blending, k.term, k.flat, k.indexed};
-    VkSpecializationMapEntry entries[20];
-    for(u32 n = 0; n < 20; n++) entries[n] = {n, n * 4, 4};
-    VkSpecializationInfo specialization{20, entries, sizeof(constants), constants};
+                         k.blending, k.term, k.flat, k.indexed, transforms ? 1u : 0u};
+    VkSpecializationMapEntry entries[21];
+    for(u32 n = 0; n < 21; n++) entries[n] = {n, n * 4, 4};
+    VkSpecializationInfo specialization{21, entries, sizeof(constants), constants};
     //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written: declared never
     //above the depth rasterized, which is then a step and a half above the GE's (draw.vert's ABOVE), where the
     //device clamps the depth and the corners' depths are the GE's 0-65535, as 3D's are held; else undeclared, the
@@ -2594,10 +2597,13 @@ struct VulkanBackend : GPU::Backend {
     if(vk.vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
       return error = "no descriptor pool", false;
     }
-    auto samplerInfo = made<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);  //(texelFetch's: unused)
-    samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_NEAREST;
+    //(texelFetch ignores the filter and the address mode, so the GE's own paths are as they were; fast mode's 3D above
+    //1x samples with this sampler (draw.frag's FASTFILTER), the GPU's linear filter, the shader holding or wrapping
+    //the coordinates itself, so the address mode only ever has the four's own taps)
+    auto samplerInfo = made<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
+    samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_LINEAR;
     samplerInfo.addressModeU = samplerInfo.addressModeV = samplerInfo.addressModeW =
-      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      VK_SAMPLER_ADDRESS_MODE_REPEAT;
     if(vk.vkCreateSampler(device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS) return error = "no sampler", false;
     if(!make(paletteImage, 512, PaletteRows, VK_FORMAT_R8G8B8A8_UNORM,
              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {

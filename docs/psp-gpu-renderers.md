@@ -103,8 +103,11 @@ One vertex shader and one fragment shader (`ares/psp/ge/gpu/shaders`, GLSL compi
 `shaders.hpp` keeps the SPIR-V and the sources' hash, and `tests/psp/run-tests.sh` checks it). The fragment shader
 does the GE's pixel pipeline up to blending, in the GE's own whole numbers where it can (as `texture.cpp` and
 `pixel.cpp` do it): the texel looked up with `texelFetch` and filtered as the GE filters (four texels weighed in
-sixteenths, wrapped or clamped at the GE's sizes, not by the GPU's filtering), the texture function (doubled, with or
-without alpha), specular shine, the alpha test, fog and the color test; then the parts of blending that depend on the
+sixteenths, wrapped or clamped at the GE's sizes, not by the GPU's filtering) — except above 1x in fast mode, where a
+decoded texture's linear filter is the GPU's own (one filtered fetch a pixel, a step away from the GE's sixteenths,
+taken for a tile-based GPU's fill rate: part 122), 1x, the accurate mode and a copy of a frame buffer keeping the GE's
+exactly —, the texture function (doubled, with or without alpha), specular shine, the alpha test, fog and the color
+test; then the parts of blending that depend on the
 pixel alone, dithering and the frame buffer's format where the GPU won't blend after, and the logic operations the GPU
 can't do.
 
@@ -792,12 +795,15 @@ the design; none of its code is used, copied or translated.
   compile the same expression apart in the two: fast mode's corners alone, by a float's rounding.
 - **The filter chosen once a triangle**, as the GE chooses it: `draw.frag` takes the texels a pixel covers from the
   texture coordinates straight across the screen (`vertexTexels`, `noperspective`), whose steps are the triangle's
-  own texels to its pixels: the GE's ratio exactly, for a triangle the GE didn't cut.
+  own texels to its pixels: the GE's ratio exactly, for a triangle the GE didn't cut. Above 1x the linear filter so
+  chosen is the GPU's own for a decoded texture (one filtered fetch a pixel; part 122), a step from the GE's
+  sixteenths; at 1x, in the accurate mode and for a copy of a frame buffer it is the GE's exactly.
 - **The GPU's own blending throughout**: nothing read in the shader, no rasterization order asked for (as on
   Qualcomm's driver without it, part 49: 8888 blends with the PSP's source term, 16-bit frame buffers keeping 8 bits
   between blends, blended pixels not dithered).
-- **Anything else as Vulkan (accurate)**: 2D (through mode), 3D sprites, lines and points, the texture path and
-  render to texture, the frame buffers on the GPU, presenting and upscaling.
+- **Anything else as Vulkan (accurate)**: 2D (through mode), 3D sprites, lines and points, the texture path (a
+  decoded texture's linear filtering above 1x excepted: the GPU's own, part 122) and render to texture, the frame
+  buffers on the GPU, presenting and upscaling.
 - **The start-up check** draws 3D triangles in perspective (smooth, half lit, some textured, four PRIMs of six)
   through the GPU's transform against the software renderer: at most one pixel in 50 more than 8 levels apart. Where
   that part alone fails (or the triangles never reached the GPU's transform), the check runs again with the GE

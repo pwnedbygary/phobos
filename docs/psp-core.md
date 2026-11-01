@@ -21063,3 +21063,84 @@ renderer's cost, not the emulated machine's.
 
 Kept outside the repository: the owner's save state (not in the repository), the press script, the runs' frames,
 reports and profiles, the copies' and passes' counters used beside the repository's statistics build, and the probes.
+
+## Part 122: Vulkan fast mode's textures filtered by the GPU above 1x — the phone's 5x frame 15.93 → 14.07 ms, the pictures a step from the GE's
+
+At 5x the frames a second fall even in Vulkan (fast) on a tile-based GPU: the fragment shader filters every textured
+pixel as the GE filters — four `texelFetch` taps weighed in sixteenths, wrapped or clamped at the GE's sizes — and at
+2400x1360 that is 3.3 M pixels a frame each paying four fetches and their weights. The owner accepted a step away
+from the GE's filtering above 1x in fast mode, and this part takes it: the GPU's own linear filter, one fetch a pixel.
+
+### Why
+
+- **Where the 5x frame goes on a tiler.** The phone measured below (nubia NX769J, Adreno 750, the max clocks its Game
+  Space's mode gives), `PHOBOS_GPU_STATS=time`, the owner's save state at Chains of Olympus' door, 300 frames: Mesh
+  6.02, Draw 1.91, Copy 0.39, Move 0.58, Readback 0.40 ms of GPU a frame, the rest under 0.2 each. The fast mode's 3D
+  — Mesh — is the fill at 5x: the scene's primitives shaded over the resolution's square.
+- **The filter is exact on purpose.** The shader filters as `texture.cpp` filters: a pixel's middle in the sixteenths
+  the GE steps coordinates in, four `fetch()`es (the palette lookup among them for an indexed texture) and the
+  sixteenths' weights. That is what makes the accurate mode's pictures the software renderer's, and it is four
+  fetches and six multiplies a pixel on a GPU whose own sampler does it in one.
+
+### The change
+
+- **`draw.frag`**: a 21st specialization constant, `FASTFILTER` — 1 for the fast renderer's pipelines, 0 for the
+  accurate mode's and for a driver that wouldn't take fast mode's transform shader (the backend's `transforms`).
+  Where it is set, `push.resolution > 1`, and the texture is a decoded 8888 one (`TEXELS == 4`, not `INDEXED`,
+  `textureScale == 1`, no taken rows or columns), the linear filter is the sampler's own: the coordinates are held
+  where the GE holds them and wrapped where it wraps, so the sampler's repeat only ever wraps the filter's own four
+  taps, and one `texture()` gives the pixel. Every other path is the code it was: 1x, the accurate mode, copies of a
+  frame buffer and paletted textures keep the GE's filtering exactly.
+- **`vulkan.cpp`**: the constant (`transforms`), and the sampler `VK_FILTER_LINEAR` with
+  `VK_SAMPLER_ADDRESS_MODE_REPEAT`. `texelFetch` ignores both, so every exact path is as it was, and the fast path is
+  the sampler's only user.
+- **`shaders.hpp`** regenerated with the pinned glslang 16.6.0 (Khronos's release, its SHA-256 checked), as
+  `.github/scripts/check-psp-shaders.sh` requires.
+- **The gate is the renderer's, not a pipeline's.** The first cut used the pipeline key's `transformed` (fast mode's
+  3D) and failed "gpu fast mode's small 3D PRIMs among its meshes": the PRIMs drawn among the GPU-transformed meshes
+  approximated, the same PRIMs drawn apart did not, 2,291 and 40,595 pixels apart at 2x. The approximation must not
+  depend on whether a PRIM happened to be meshed, so the constant is the backend's `transforms` and every fast-mode
+  draw above 1x approximates alike (the test passes again).
+
+### Evidence
+
+- **The phone** (nubia NX769J, Adreno 750, Android 16, the stock driver, Game Space's max clocks with cpu7 pinned at
+  3398 MHz in every run; the owner's save state, press script and 5x): 900 frames, three runs a side, interleaved:
+  **15.93 → 14.07 ms a frame (62.8 → 71.1 fps, -11.7%)**. At 1x: 6.85 ms both ways. `PHOBOS_GPU_STATS=time`, 300
+  frames: Mesh **6.02 → 4.22** ms a frame (-30%), GPU total 9.63 → 7.81 (-19%); Draw, Copy, Move, Upload, Readback and
+  Depth unchanged.
+- **The host** (RADV, RX 9070 XT), the same 300-frame 5x runs: Mesh 1.25 → 0.74 ms a frame (-41%), GPU total 3.11 →
+  2.59 (-17%). The host's frame time barely moves (15.20 → 15.08 ms median over five runs): the desktop runner's
+  read-back presenting, which the app does not do, dominates it.
+- **Pictures**: at 1x the PNGs are byte for byte the same, and the accurate mode's 5x PNGs are byte for byte the same;
+  in fast mode at 5x they differ where the GPU's 8-bit filter weights and the GE's sixteenths disagree — mean absolute
+  difference 0.27-0.62 of 255, at most 76, on 50-76% of a frame's pixels. Geometry, colour, lighting, blending and
+  depth are untouched; what moves is the texels' rounding.
+- **With part 121**, the phone's 5x frame has gone 18.36 → 15.93 → 14.07 ms a frame for the same scene (54 → 71 fps at
+  the max clocks).
+
+### Checks
+
+- `tests/psp/run-tests.sh` (the debug build with ASan and UBSan, RADV as CI runs it): **669 groups, 0 failures**.
+- `compile.sh --check`: the sources' hash, and every module what glslang 16.6.0 compiles them to, byte for byte — the
+  CI's PSP Shaders workflow's conditions.
+- `git diff --check` clean. The APK was not built or run here: CI's Android Build compiles the PSP core.
+
+### Not run
+
+- The RP6 — the target's tiler is the point of the change; the phone is the nearest Adreno.
+- A library-wide 5x fast-mode picture sweep: the change touches every fast-mode 3D draw above 1x, and the save state's
+  pictures are not a library.
+- The independent review: the pull request is a draft.
+
+### Limits
+
+The approximation is fast mode's alone, above 1x: the accurate mode, 1x, copies of frame buffers and paletted textures
+keep the GE's filtering exactly, and the accurate mode's pictures remain the software renderer's. The step is the
+filter's rounding alone, not any geometry, colour, lighting, blending or depth work. Whether its seams show in
+motion, and how the RP6's Adreno 740 prices it, are unmeasured.
+
+### Scratch
+
+Kept outside the repository: the owner's save state, the press script, the runs' frames, reports and GPU statistics,
+the phone's and the host's measurements, and the runners built for the comparison.
