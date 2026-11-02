@@ -212,6 +212,7 @@ auto GPU::check(std::string& error) -> bool {
       scene3d(0xc000);
       //(six triangles a PRIM, enough vertices for mesh() to take them: lit and unlit in turn, the last textured)
       static_assert(6 * 3 >= MeshLeast);
+      static_assert(6 * 3 >= MeshLeastNative);
       for(u32 group = 0; group < solids.size() / 6; group++) {
         std::vector<Corner3> corners;
         for(u32 n = group * 6; n < group * 6 + 6; n++) {
@@ -224,12 +225,13 @@ auto GPU::check(std::string& error) -> bool {
       }
       c[GE::LightingEnable] = 0;
     }
-    //(fast mode's own 3D among the GPU's: two triangles a PRIM, below MeshLeast, lit and unlit in turn, the third
+    //(fast mode's own 3D among the GPU's: two triangles a PRIM, below both thresholds, lit and unlit in turn, the third
     //textured, the fourth lit with its shine kept apart; then six triangles, one with a corner nearer than the near
     //plane, which the GE cuts and draws among the rest)
     if(screens) {
       scene3d(0xa'0000);
       static_assert(2 * 3 < MeshLeast);
+      static_assert(2 * 3 < MeshLeastNative);
       for(u32 group = 0; group < 4; group++) {
         std::vector<Corner3> corners;
         for(u32 n = group * 2; n < group * 2 + 2; n++) {

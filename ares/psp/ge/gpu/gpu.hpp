@@ -509,7 +509,8 @@ struct GPU : GE::Renderer {
   std::unique_ptr<Backend> backend;
   std::function<void(const std::string&)> report;  //what went wrong (once); stderr's "PSP GPU:" if none
   bool reported = false;
-  //Vulkan (fast) (docs/psp-gpu-renderers.md): 3D PRIMs' triangles transformed, lit and clipped by the GPU (mesh()),
+  //Vulkan (fast) (docs/psp-gpu-renderers.md): 3D PRIMs' triangles transformed and lit by the GPU (mesh()), the GE
+  //still culling them and cutting them at the near plane,
   //the GPU's own blending throughout; else Vulkan (accurate)
   bool fast = false;
   //Fast mode's 3D triangles the GE put on the screen drawn among the meshes (screenTriangle(); tests compare without)
@@ -718,10 +719,13 @@ private:
   static constexpr u32 MostVertices = 1 << 18;
   static constexpr u32 MostTold = 8;  //(Target::told's)
   static constexpr u32 MeshLeast = 16;  //(the fewest vertices a PRIM meshes() takes has, above 1x)
-  //(At 1x the GPU has the headroom to transform, light and clip small PRIMs too, and the GE's own CPU work is the
-  //frame's cost: a PRIM of fewer than this many vertices is still meshed there. Above 1x the frame is the GPU's fill,
-  //and each small PRIM's settings' block and draw cost more than its few vertices save, so MeshLeast stays.)
+  //(At 1x the GPU has the headroom to transform and light small PRIMs too (the GE still culls them and cuts them at
+  //the near plane), and the GE's own CPU work is the frame's cost: a PRIM of this many vertices or more is meshed
+  //there. Above 1x the frame is the GPU's fill, and a small PRIM's settings' block and draw cost more than its few
+  //vertices save, so MeshLeast stays. 7 keeps the start-up check's six-vertex PRIMs on the GE's path and its
+  //eighteen-vertex ones on the GPU's (check.cpp asserts both).)
   static constexpr u32 MeshLeastNative = 7;
+  static_assert(MeshLeastNative < MeshLeast);
 
   auto targetFor(const GE::PixelState& p, const GE::Region& region, u32& column, u32& row) -> Target*;
   auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts = 1, u32 left = 0, u32 right = ~0u)

@@ -776,12 +776,13 @@ the design; none of its code is used, copied or translated.
 - **Skinning, lighting and mapping are the block's to say**, not the pipeline's: as constants they multiplied the
   pipelines (Peace Walker made dozens more, 5 ms a frame of compiling over a 300-frame run on Turnip). The pipeline
   key has only what the GPU's fixed stages need, and FLAT.
-- **Left to the GE**, as in the accurate mode: a PRIM of fewer than 16 vertices (`GPU::MeshLeast`: each PRIM costs
-  its settings' block, and a skinned one's bones differ from PRIM to PRIM; Peace Walker draws 5,000 PRIMs a frame of
-  three triangles each, which the GPU's way made slower) — at 1x, where the GPU has the headroom and the GE's own CPU
-  work is the frame's cost, fewer than 7 (`GPU::MeshLeastNative`, part 123) —; clear mode (each triangle's stencil from
-  its own last corner); and a PRIM whose pipeline the driver won't make (`Backend::drawable()`, asked before anything's
-  recorded).
+- **Left to the GE**, as in the accurate mode: a PRIM of fewer than 16 vertices above 1x (`GPU::MeshLeast`: a meshed
+  PRIM costs its settings' block, reused where the next PRIM's settings are the same, and a skinned one's bones differ
+  from PRIM to PRIM; Peace Walker draws 5,000 PRIMs a frame of three triangles each, which the GPU's way made slower,
+  part 53), and fewer than 7 at 1x (`GPU::MeshLeastNative`, part 123: there the GPU has the headroom and the GE's own
+  CPU work is the frame's cost, so the GPU's transform is the cheaper side — part 53's scene is the one to watch);
+  clear mode (each triangle's stencil from its own last corner); and a PRIM whose pipeline the driver won't make
+  (`Backend::drawable()`, asked before anything's recorded).
 - **The GE's own 3D triangles among the meshes** (`GPU::screenTriangle()`, docs/psp-core.md, part 92): those of a
   PRIM left to the GE, and a mesh's cut at the near plane, are recorded as models placed already (`Model::OnScreen`:
   the GE's place, depth, clip w, q, fog, coordinates, colors and flags), with the PRIM's state as its meshes take it,

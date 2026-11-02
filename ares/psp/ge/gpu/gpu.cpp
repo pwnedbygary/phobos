@@ -1511,7 +1511,8 @@ auto GPU::triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex&
   emit(v, 3);
 }
 
-//Fast mode's 3D triangles the GE transformed, lit and clipped itself (a PRIM of fewer than MeshLeast vertices, or a
+//Fast mode's 3D triangles the GE transformed, lit and clipped itself (a PRIM below the threshold meshes() takes
+//(MeshLeast, or MeshLeastNative at 1x), or a
 //mesh's triangle cut at the near plane), drawn among the meshes: as transform.vert takes a vertex the GE put on the
 //screen (Model::OnScreen), which is draw.vert's arithmetic on the same numbers, with the PRIM's state as its meshes
 //take it (FLAT's colors are the last corner's, as triangleAt() made every corner's). So a PRIM's meshes and the small
@@ -1653,13 +1654,14 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
 //takes a flat triangle's colors from. Its settings are a block of the run's (transformed()) each of its vertices
 //names, so that PRIMs the GPU draws alike are one draw, whatever their matrices. What the GE does that this doesn't:
 //step colors and fog as it steps them; choose the filter once a triangle (draw.frag chooses it at each pixel). Not
-//taken: a PRIM of fewer than MeshLeast vertices (each PRIM costs its settings' block, a skinned one's bones
-//differing from PRIM to PRIM, which a few vertices' transform on the CPU costs less than: Peace Walker draws 5,000
-//PRIMs a frame of three triangles each); clear mode (each triangle's stencil from its own last corner: triangle());
+//taken: a PRIM below the threshold meshes() takes (MeshLeast, or MeshLeastNative at 1x; each PRIM costs its
+//settings' block, a skinned one's bones differing from PRIM to PRIM, which a few vertices' transform on the CPU costs
+//less than above 1x: Peace Walker draws 5,000 PRIMs a frame of three triangles each); clear mode (each triangle's stencil from its own last corner: triangle());
 //and one whose pipeline the driver won't make.
 auto GPU::meshes(GE&, const GE::Transform&, u32 count) -> bool {
+  if(!fast || !backend->transforms) return false;
   u32 least = backend->scale == 1 ? MeshLeastNative : MeshLeast;
-  if(!fast || !backend->transforms || count < least) return false;
+  if(count < least) return false;
   if(!drawing) return true;
   if(state.pipeline.clear) return false;
   return meshDrawable();

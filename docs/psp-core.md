@@ -21066,47 +21066,60 @@ reports and profiles, the copies' and passes' counters used beside the repositor
 
 ## Part 123: Vulkan fast mode meshes the smallest 3D PRIMs at 1x — the GE's own work falls, +3 to +5% on the two save states, the 5x threshold unchanged
 
-Part 122 took the GE's four-tap texture filtering off the fill above 1x. This one moves work off the other side of the
-frame: at 1x, where a fast-mode frame is the GE's own CPU work, the smallest 3D PRIMs are transformed, lit and clipped
-by the GPU as well.
+At 1x, where a fast-mode frame is the GE's own CPU work, the smallest 3D PRIMs are transformed and lit by the GPU as
+well: the GE still culls them and cuts them at the near plane, but every corner's transform and lighting moves off the
+CPU there.
 
 ### Why
 
-- **The GE thread is the 1x frame.** On the RP6, God of War: Ghost of Sparta's title screen at 1x, with the core's GE
-  on its own thread: **8.40 ms a frame on the GE side** (vertex transforms and lighting, the GE timing charge, GPU
-  command recording) against **3.39 ms** on the emulation thread (the JIT, kernel and audio). A host -O3 profile puts
-  `GE::light` at 7.3% and `GE::transformAll` at 6.7% of the whole profile.
-- **What the CPU keeps.** `GPU::mesh()` takes a 3D PRIM of 16 vertices or more (`MeshLeast`); below that the GE
-  transforms, lights and clips it itself (`screenTriangle()`), because each meshed PRIM costs its 1,168-byte settings
-  block and the GPU's draw. At 1x the GPU is nearly idle (its work is 1.6 ms a frame in that scene), so the block is
-  the cheaper side; above 1x the frame is the GPU's fill, and the block and its draws are not.
+- **The GE side is the 1x frame.** On the RP6, God of War: Ghost of Sparta's title screen at 1x, with the core's GE on
+  its own thread (`--ge-thread on`): **8.40 ms a frame on the GE side** (vertex transforms and lighting, the GE timing
+  charge, command recording) against **3.39 ms** on the emulation thread (the JIT, kernel and audio); the same frame
+  single-threaded is 9.6 ms. A host -O3 profile puts `GE::light` at 7.3% and `GE::transformAll` at 6.7% of the whole
+  profile.
+- **What the CPU keeps.** `GPU::meshes()` takes a 3D PRIM of 16 vertices or more above 1x (`MeshLeast`); below that the
+  GE transforms, lights and culls it itself (`screenTriangle()`), to save a meshed PRIM's settings block and the GPU's
+  draw. At 1x the GPU is nearly idle (1.6 ms of work a frame in that scene), so the block is all the saving is worth;
+  above 1x the frame is the GPU's fill, and there the block and its draws cost more than the few vertices save.
 
 ### The change
 
-- **`MeshLeastNative = 7`** (gpu.hpp) and `mesh()` takes `backend->scale == 1 ? MeshLeastNative : MeshLeast`
-  (gpu.cpp): at 1x a 3D PRIM of 7 vertices or more is meshed, above 1x the threshold stays 16. The start-up check's
-  PRIMs (six vertices drawn apart) stay below 7, so the check and its tests are unchanged.
+- **`MeshLeastNative = 7`** (gpu.hpp) beside `MeshLeast = 16`, and `meshes()` takes
+  `backend->scale == 1 ? MeshLeastNative : MeshLeast` (gpu.cpp): at 1x a 3D PRIM of 7 vertices or more is meshed,
+  above 1x the threshold stays 16. The check's `static_assert`s cover both: its six-vertex PRIMs stay on the GE's path
+  at 1x and its eighteen-vertex ones on the GPU's.
+- **The lines the start-up check draws** are the same six-vertex PRIMs, so the check's behaviour is unchanged; a new
+  test, "gpu fast mode's smallest 3D PRIMs: twelve vertices meshed at 1x, left to the GE above", pins the threshold:
+  twelve vertices are meshed at 1x (one `Mesh` begun, nothing screened) and left to the GE at 2x (nothing meshed, a
+  triangle screened).
 
 ### Evidence (RP6, 300 frames, the deterministic save states)
 
 - God of War: Ghost of Sparta, title, 1x: 104.70, 105.12, 104.33 -> 108.93, 110.36, 109.39 fps (**+4.6%**).
 - God of War: Chains of Olympus, door, 1x: 86.28, 86.33 -> 88.59, 89.28 fps (**+3.1%**).
-- Chains of Olympus, door, 5x: 31.02 -> 30.83 ms (0.6%, the same behaviour as master by construction).
-- A boot sweep of eight games with the 7 threshold at 1x: Peace Walker +15%, Daxter +10%, Burnout Legends +6%,
-  Tekken 6 +5%, Army of Two +3%, Chains of Olympus +1%, Ghost of Sparta and Killzone ~0; at 5x the same threshold
-  regressed Killzone Liberation by 8.4%, Burnout by 3.0% and Army of Two by 2.6% — which is why it is 1x's alone.
+- Chains of Olympus, door, 5x: 31.02 -> 30.83 ms (0.6%): the committed code leaves the threshold at 16 above 1x, so
+  the behaviour there is master's, and this is run-to-run noise.
+- A boot sweep of eight games with **the threshold at 7 at every scale** (an experiment, not this commit) at 1x:
+  Peace Walker +15%, Daxter +10%, Burnout Legends +6%, Tekken 6 +5%, Army of Two +3%, Chains of Olympus +1%, Ghost of
+  Sparta and Killzone ~0; the same experiment at 5x regressed Killzone Liberation 8.4%, Burnout 3.0% and Army of Two
+  2.6% — the reason the change stays at 1x.
 
 ### Checks
 
-- `tests/psp/run-tests.sh`: the suite follows (the change is a threshold; the check's six-vertex PRIMs and the
-  meshes-against-apart tests stay on their side of it).
+- `tests/psp/run-tests.sh`: the suite follows on this commit; the new test above passes on its own (1 group, 0
+  failures).
+- `git diff --check` clean.
 
 ### Limits
 
-Only the two save states are timed at 1x; the boot sweep's scenes are light. Peace Walker's gameplay scene, the one
-docs/psp-core.md part 92 measured as slower with small PRIMs meshed, was not re-measured: its +15% there is a boot
-scene, and a 1x gameplay sweep is the next check.
+- Only the two save states are timed at 1x; the boot sweep's scenes are light.
+- **Part 53's counterexample is in the newly meshed range and is not re-measured**: Peace Walker's 5,000 skinned PRIMs
+  a frame are three triangles each (9 vertices), and there the GPU's way cost more than the GE's own (part 53). Part
+  53's numbers predate the settings-block design, but a 1x gameplay measurement of that scene is the next check.
+- `scale == 1` is a proxy for "the GPU has headroom", not proof: a window-filling present (1080p from a 480x272
+  picture), read-backs or a fill-heavy scene can still leave the GPU the frame's bound at 1x, and meshing then adds
+  the settings block and vertices to the bound side. The RP6's 1.6 ms is one scene at 1x.
 
 ### Scratch
 
-Kept outside the repository: the runners (master and the change), the boot sweep's reports, and the save state's runs.
+Kept outside the repository: the runners (master and the change), the boot sweep's reports, and the save states' runs.

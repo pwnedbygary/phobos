@@ -525,7 +525,8 @@ static auto gpuFastRules() -> void {
   }
 }
 
-//Fast mode's PRIMs of fewer than MeshLeast vertices (the GE transforms them) between its meshes (the GPU transforms
+//Fast mode's PRIMs below the threshold mesh() takes (MeshLeast, or MeshLeastNative at 1x; the GE transforms them)
+//between its meshes (the GPU transforms
 //them), in one setting after another (smooth and flat shading, a texture filtered and not, fog, lighting with its
 //shine kept apart), each setting's first mesh with a triangle cut at the near plane (which the GE cuts and draws among
 //its runs), into a frame buffer 128 pixels wide and one 480 wide (a target whose scale to the GPU's -1 to 1 isn't a
@@ -635,6 +636,71 @@ static auto gpuScreenMeshes() -> void {
         CHECK(draws[1][setting], 1u);
         CHECK(draws[0][setting] >= 8, true);
       }
+    }
+  }
+  gpu->resolution(1);
+}
+
+//Fast mode's smallest 3D PRIMs: one of 12 vertices (four triangles) is meshed at 1x (GPU::MeshLeastNative) and left
+//to the GE above it (GPU::MeshLeast), the PRIM the two thresholds exist for.
+static auto gpuMeshNative() -> void {
+  GPU* gpu = renderer() ? fastRenderer() : nullptr;
+  if(!gpu) return;
+  if(!gpu->backend->transforms) return skip("vulkan-transforms", "the driver didn't take transform.vert");
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  struct Corner { float u, v; u32 color; float normal[3], at[3]; };  //(vertex type 0x1ff)
+  auto scene = [&](System& s, u32 width, u32 height) {
+    auto& c = s.ge.commands;
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = width, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::DepthBufferPointer] = 0x10'0000, c[GE::DepthBufferWidth] = width;
+    c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = (width - 1) | (height - 1) << 10;
+    c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff, c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 5;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+    s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+    s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+    c[GE::ViewportXScale] = f24(width / 2.0f), c[GE::ViewportYScale] = f24(height / -2.0f);
+    c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - width / 2) << 4, c[GE::OffsetY] = (2048 - height / 2) << 4;
+    c[GE::TextureMappingEnable] = 0, c[GE::FogEnable] = 0, c[GE::LightingEnable] = 0;
+    //(two quads 4 vertices each: 12 vertices, four triangles, inside the view)
+    const float quad[2][4][3] = {
+      {{-0.8f, -0.6f, -2.0f}, {0.2f, -0.6f, -2.0f}, {0.2f, 0.6f, -2.0f}, {-0.8f, 0.6f, -2.0f}},
+      {{-0.4f, -0.8f, -3.0f}, {0.6f, -0.8f, -3.0f}, {0.6f, 0.4f, -3.0f}, {-0.4f, 0.4f, -3.0f}},
+    };
+    std::vector<Corner> corners;
+    for(u32 q = 0; q < 2; q++) for(u32 n = 0; n < 4; n++) {
+      corners.push_back({float(n), float(q), 0xff20'4060 + n * 0x101010, {0, 0, 1},
+                         {quad[q][n][0], quad[q][n][1], quad[q][n][2]}});
+    }
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(u32 word : {bitsOf(corner.u), bitsOf(corner.v), corner.color, bitsOf(corner.normal[0]),
+                      bitsOf(corner.normal[1]), bitsOf(corner.normal[2]), bitsOf(corner.at[0]), bitsOf(corner.at[1]),
+                      bitsOf(corner.at[2])}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, corners.size());
+  };
+  for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) return;
+    gpu->resolution(scale);
+    gpu->screenMeshes = true;
+    System hardware;
+    hardware.ge.setRenderer(gpu);
+    auto before = stats(gpu);
+    scene(hardware, 64, 48);
+    auto after = stats(gpu);
+    hardware.ge.setRenderer(nullptr);
+    if(scale == 1) {
+      CHECK(after.meshes > before.meshes, true);       //(the GPU transformed the 12 vertices: MeshLeastNative)
+      CHECK(after.screened == before.screened, true);  //(not among the GE's own triangles)
+    } else {
+      CHECK(after.meshes == before.meshes, true);      //(MeshLeast: 12 is below 16)
+      CHECK(after.screened > before.screened, true);
     }
   }
   gpu->resolution(1);
@@ -819,7 +885,8 @@ struct RecordingBackend : GPU::Backend {
 };
 
 //3D quads two units square side by side six units before the camera (vertex type 0x1ff, each quad's u and v 0 to 1),
-//one PRIM of triangles into prepare()'s frame buffer: fast mode's mesh at 3 quads or more, else the GE's own.
+//one PRIM of triangles into prepare()'s frame buffer: fast mode's mesh at 3 quads or more above 1x (2 or more at
+//1x, where the threshold is lower), else the GE's own.
 static auto quads3D(System& s, u32 quads) -> void {
   auto f24 = [](float value) { return bitsOf(value) >> 8; };
   auto& c = s.ge.commands;
@@ -4701,7 +4768,7 @@ static auto gpuStencilAlphaWays() -> void {
 //the last one's keeps them (`keptSettings`), its own rectangle noted all the same (two sprites alike, leaving the
 //alpha behind, then white blended in by it over the second's alone), and one blending by it sets it first all the
 //same (part 100: two sprites alike blending by it, the first beside what lags, the second over it); and in fast mode
-//a PRIM of fewer vertices than MeshLeast is drawn among the meshes (screenTriangle()), one leaving the alpha behind
+//a PRIM below the threshold mesh() takes is drawn among the meshes (screenTriangle()), one leaving the alpha behind
 //noted (a quad's depth fails over the nearer half), one blending by it after another leaving it behind set first.
 //Every byte the software renderer's. At 1x and 2x, in either mode.
 static auto stencilAlphaPaths(GPU* gpu) -> void {
@@ -6269,6 +6336,7 @@ auto gpuTests() -> Tests {
     {"gpu sprites taking less of one copy: one draw, the software renderer's pixels, filtered as from copies of what "
      "each takes", gpuTakenInOneDraw},
     {"gpu fast mode's small 3D PRIMs among its meshes: one draw, the pixels as drawn apart", gpuScreenMeshes},
+    {"gpu fast mode's smallest 3D PRIMs: twelve vertices meshed at 1x, left to the GE above", gpuMeshNative},
     {"gpu fast mode's 3D held to the rows it takes of a larger copy, placed by the GE and in a mesh", gpuTakenRowsHeld},
     {"gpu a texture the backend couldn't make: the next PRIM alike still draws with its own", gpuKeptAfterFailedTexture},
     {"gpu settings kept only while every input of them is the same: each changed alone, the next PRIM's its own",
