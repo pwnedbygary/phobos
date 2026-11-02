@@ -35,7 +35,7 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-## PSP Vulkan: fast mode's textures filtered by the GPU above 1x — 5x on the phone 15.93 → 14.07 ms a frame — 2026-11-01
+## PSP Vulkan: fast mode's textures filtered by the GPU above 1x — 5x on the RP6 28.50 → 24.89 ms a frame, the phone 15.93 → 14.07 — 2026-11-01
 
 Branch `cursor/psp-fast-filter-2b67`, from master `d3604ebe0`; docs/psp-core.md, part 122, has the evidence. Clean
 room: our code; no PPSSPP or JPCSP. Save states: unchanged (the renderer's filtering isn't saved).
@@ -43,26 +43,32 @@ room: our code; no PPSSPP or JPCSP. Save states: unchanged (the renderer's filte
   four `texelFetch` taps weighed in sixteenths — and at 5x that runs once for each of the 3.3 M filled pixels a frame
   (2400x1360). The owner accepted a step away from the GE's filtering above 1x in fast mode: the GPU's own linear
   filter, one filtered fetch a pixel.
-- **What**: `draw.frag` gains a 21st specialization constant, `FASTFILTER` (the fast renderer's GPU-transform
-  capability). Where it is set and `push.resolution > 1` and the texture is a decoded 8888 one (not a copy of a
-  target, not paletted, no taken rows or columns), the linear filter is the GPU's sampler: one `texture()` a pixel,
-  with the GE's own coordinates (held where the GE holds them, wrapped where it wraps, so the sampler's repeat only
-  ever wraps the filter's own taps). `vulkan.cpp` passes the constant and makes the sampler linear and repeating
-  (`texelFetch` ignores both, so every exact path is as it was). `shaders.hpp` regenerated with the pinned glslang
-  16.6.0 (its SHA-256 checked); part 122 in docs/psp-core.md; the renderer doc's shader paragraph and fast-mode
-  bullets.
-- **Measured** (host, RADV; phone, Adreno 750, Game Space max clocks, cpu7 pinned at 3398 MHz): host `PHOBOS_GPU_STATS`
-  Mesh 1.25 → 0.74 ms a frame (-41%), GPU total 3.11 → 2.59 (-17%). Phone, 900 frames, three a side: 5x 15.93 →
-  14.07 ms a frame (62.8 → 71.1 fps, -11.7%); 1x 6.85 ms both ways with the PNGs byte identical; the accurate mode's
-  5x PNGs byte identical; fast mode's 5x PNGs differ only by the filter's rounding (mean 0.27-0.62 of 255, max 76 on
-  50-76% of pixels). With part 121, the phone's 5x frame has gone 18.36 → 15.93 → 14.07 ms.
-- **Checks**: `tests/psp/run-tests.sh` (debug, ASan and UBSan, RADV as CI runs it): 669 groups, 0 failures. The first
-  gate (the per-pipeline `transformed` flag) failed "gpu fast mode's small 3D PRIMs among its meshes" at 2x — meshed
-  PRIMs approximated while PRIMs drawn apart did not — so the gate is the renderer's, every fast-mode draw above 1x
-  approximating alike; `compile.sh --check`; `git diff --check` clean.
-- **Not run**: the RP6 (the target's tiler is the point of the change), a library-wide 5x fast-mode picture sweep, and
-  the independent review (this is a draft). No change at 1x or in the accurate mode: the approximation is fast-mode's
-  above 1x alone.
+- **What**: `draw.frag` gains a 21st specialization constant, `FASTFILTER` (the fast renderer's mode: the backend's
+  `filter`, frozen at device creation). Where it is set, `push.resolution > 1`, the texture is a decoded 8888 one (not
+  a copy of a target, not paletted, no taken rows or columns) and the picture the GPU holds is the GE's whole texture
+  (`textureSize(texels, 0)`), the linear filter is the GPU's sampler: one `textureLod()` a pixel, with the GE's own
+  coordinates (held where the GE holds them, wrapped where it wraps, so the sampler's repeat only ever wraps the
+  filter's own taps). A picture a decode holds short keeps the GE's filter, as does everything else (1x, the accurate
+  mode, copies, palettes). `vulkan.cpp` passes the constant, makes the sampler linear and repeating, and gives the
+  stencil's `R8_UINT` picture a NEAREST sampler of its own (valid usage forbids filtering integer formats).
+  `shaders.hpp` regenerated with the pinned glslang 16.6.0; part 122 in docs/psp-core.md; the renderer doc's shader
+  paragraph and fast-mode bullets.
+- **Measured**: the RP6 (Retroid Pocket 6, Adreno 740, the final build, cpu7 3187 MHz), 900 frames, three a side:
+  5x **28.50 → 24.89 ms a frame (-12.7%, 35.1 → 40.2 fps)**; GPU kinds at 5x Mesh 10.52 → 7.26 (-31%), total 17.55 →
+  14.23 (-19%), Draw 4.48 → 4.42; 1x PNGs byte identical. Host RADV, final build: Mesh 1.30 → 0.79 ms a frame (-39%),
+  GPU total 3.00 → 2.53 (-16%) (those runs shared the machine, so no wall time is quoted). Phone
+  (Adreno 750, Game Space max clocks), 900 frames, three a side, on the build before the whole-picture gate: 5x
+  15.93 → 14.07 ms a frame (62.8 → 71.1 fps, -11.7%); 1x 6.85 ms both ways with the PNGs byte identical; the accurate
+  mode's 5x PNGs byte identical; Lumines (2D) 5x byte identical with the gate; the 3D pictures differ by the filter's
+  rounding (mean 0.27-0.69 of 255) and by whole pixels where the texel tips an alpha or color test. With part 121 the
+  phone's 5x frame has gone 18.36 → 15.93 → 14.07 ms.
+- **Checks**: `tests/psp/run-tests.sh` 669 groups, 0 failures on the final tree;
+  "gpu fast mode's small 3D PRIMs among its meshes" passes; `compile.sh --check`; `git diff --check` clean. The
+  independent review of the first build returned NEEDS CHANGES — the picture's size, the constant's source, 2D points
+  and lines, the integer stencil's sampler, a test of the path — all but the test are fixed here.
+- **Not run**: the phone's re-measure on the whole-picture build (its numbers are the pre-gate build's), a
+  library-wide 5x fast-mode sweep, and a test that exercises the fast path (next commit). No change at 1x or in the
+  accurate mode.
 
 ## PSP Vulkan: a render-to-texture copy from two frame buffers kept until either changes — God of War's 272 tiles take one copy a frame, not one a PRIM — 2026-10-31
 

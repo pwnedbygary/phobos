@@ -299,6 +299,10 @@ struct GPU : GE::Renderer {
     bool reads = false, readsInOrder = false, readsBlending = false, readsApart = true;
     //Fast mode's 3D (mesh()): whether the GPU transforms vertices itself (the driver took transform.vert)
     bool transforms = false;
+    //draw.frag's FASTFILTER: the fast renderer above 1x samples a whole texture with the GPU's own linear filter
+    //(part 122). The renderer's mode, not the start-up check's outcome: `transforms` is turned off if the check fails
+    //after pipelines have been made, and a pipeline's specialization constants cannot change once made.
+    bool filter = false;
     //Whether it moves pixels from one target into another (Command::Move: the driver took move.frag's pipelines), and
     //into another's depth (parts 2: move.frag's DEPTH build's; else a finish puts them in memory first, for the depth
     //to be filled from there: GPU::begin(). System::startRenderer() turns it off as the start-up check fails it.)

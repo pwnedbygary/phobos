@@ -21085,22 +21085,33 @@ from the GE's filtering above 1x in fast mode, and this part takes it: the GPU's
 ### The change
 
 - **`draw.frag`**: a 21st specialization constant, `FASTFILTER` — 1 for the fast renderer's pipelines, 0 for the
-  accurate mode's and for a driver that wouldn't take fast mode's transform shader (the backend's `transforms`).
-  Where it is set, `push.resolution > 1`, and the texture is a decoded 8888 one (`TEXELS == 4`, not `INDEXED`,
-  `textureScale == 1`, no taken rows or columns), the linear filter is the sampler's own: the coordinates are held
-  where the GE holds them and wrapped where it wraps, so the sampler's repeat only ever wraps the filter's own four
-  taps, and one `texture()` gives the pixel. Every other path is the code it was: 1x, the accurate mode, copies of a
-  frame buffer and paletted textures keep the GE's filtering exactly.
-- **`vulkan.cpp`**: the constant (`transforms`), and the sampler `VK_FILTER_LINEAR` with
+  accurate mode's (the backend's `filter`: the renderer's mode, frozen when the device is made). Where it is set,
+  `push.resolution > 1`, the texture is a decoded 8888 one (`TEXELS == 4`, not `INDEXED`, `textureScale == 1`, no
+  taken rows or columns) and **the picture is the GE's whole texture** (`textureSize(texels, 0) == ivec2(width,
+  height)`), the linear filter is the sampler's own: the coordinates are held where the GE holds them and wrapped
+  where it wraps, so the sampler's repeat only ever wraps the filter's own four taps, and one `textureLod()` gives
+  the pixel. Every other path is the code it was: 1x, the accurate mode, copies of a frame buffer, paletted textures
+  and a picture a decode holds short keep the GE's filtering exactly.
+- **`vulkan.cpp`**: the constant (the backend's `filter`), and the sampler `VK_FILTER_LINEAR` with
   `VK_SAMPLER_ADDRESS_MODE_REPEAT`. `texelFetch` ignores both, so every exact path is as it was, and the fast path is
-  the sampler's only user.
+  the sampler's only user. The stencil's `R8_UINT` picture takes a second sampler, `VK_FILTER_NEAREST` and
+  `CLAMP_TO_EDGE`: Vulkan's valid usage forbids any filter on an integer format (it was bound to the shared one
+  before; `texelFetch` made it harmless, but the layers would have said so).
 - **`shaders.hpp`** regenerated with the pinned glslang 16.6.0 (Khronos's release, its SHA-256 checked), as
   `.github/scripts/check-psp-shaders.sh` requires.
 - **The gate is the renderer's, not a pipeline's.** The first cut used the pipeline key's `transformed` (fast mode's
   3D) and failed "gpu fast mode's small 3D PRIMs among its meshes": the PRIMs drawn among the GPU-transformed meshes
   approximated, the same PRIMs drawn apart did not, 2,291 and 40,595 pixels apart at 2x. The approximation must not
-  depend on whether a PRIM happened to be meshed, so the constant is the backend's `transforms` and every fast-mode
-  draw above 1x approximates alike (the test passes again).
+  depend on whether a PRIM happened to be meshed, so the constant is the renderer's and every fast-mode draw above 1x
+  whose picture is whole approximates alike (the test passes again).
+- **The picture must be whole.** The sampler normalizes by the GE's texture size (`push.textureSize`), but a decoded
+  picture can be shorter: `decoded->rows` is the rows memory has (gpu.cpp's `memoryRows()`, and a `part` decode's
+  rows), so a 512-row texture whose picture holds 100 rows would be sampled at row v·100/512 instead of v. The exact
+  path is safe because `fetch()` clamps to `textureSize(texels, 0)`; the sampler is not, and the first build (without
+  that check) shifted and scaled Lumines' title logo at 5x — mean 8.25 of 255, 18.9% of its pixels at frame 600 of
+  1,200, with the same `at` on both paths, so the stepped 2D coordinates were not the cause (measured: with the
+  whole-picture gate the pictures are byte-identical again, and 2D stays in). A short picture keeps the GE's filter;
+  on the phone the change took Mesh 6.02 → 4.22 ms a frame and left Draw 1.91 → 1.89.
 
 ### Evidence
 
@@ -21108,37 +21119,56 @@ from the GE's filtering above 1x in fast mode, and this part takes it: the GPU's
   3398 MHz in every run; the owner's save state, press script and 5x): 900 frames, three runs a side, interleaved:
   **15.93 → 14.07 ms a frame (62.8 → 71.1 fps, -11.7%)**. At 1x: 6.85 ms both ways. `PHOBOS_GPU_STATS=time`, 300
   frames: Mesh **6.02 → 4.22** ms a frame (-30%), GPU total 9.63 → 7.81 (-19%); Draw, Copy, Move, Upload, Readback and
-  Depth unchanged.
-- **The host** (RADV, RX 9070 XT), the same 300-frame 5x runs: Mesh 1.25 → 0.74 ms a frame (-41%), GPU total 3.11 →
-  2.59 (-17%). The host's frame time barely moves (15.20 → 15.08 ms median over five runs): the desktop runner's
-  read-back presenting, which the app does not do, dominates it.
-- **Pictures**: at 1x the PNGs are byte for byte the same, and the accurate mode's 5x PNGs are byte for byte the same;
-  in fast mode at 5x they differ where the GPU's 8-bit filter weights and the GE's sixteenths disagree — mean absolute
-  difference 0.27-0.62 of 255, at most 76, on 50-76% of a frame's pixels. Geometry, colour, lighting, blending and
-  depth are untouched; what moves is the texels' rounding.
+  Depth unchanged. **That build predates the whole-picture gate**: where its scene's pictures are whole the path and
+  the numbers are this part's; where a decode holds rows short, the exact path takes them and the win is smaller by
+  that much — the re-measure is pending (see Not run).
+- **The RP6** (Retroid Pocket 6, Snapdragon 8 Gen 2, Adreno 740, Android 13, the stock driver; the same save state
+  and press script, the final build, cpu7 pinned at 3187 MHz in every run): 900 frames, three runs a side,
+  interleaved: **28.50 → 24.89 ms a frame (35.1 → 40.2 fps, -12.7%)**. `PHOBOS_GPU_STATS=time`, 150 frames: Mesh
+  **10.52 → 7.26** ms a frame (-31%), GPU total 17.55 → 14.23 (-19%); Draw 4.48 → 4.42. At 1x the PNGs are byte for
+  byte the same.
+- **The host** (RADV, RX 9070 XT), the final build's 300-frame 5x runs: Mesh **1.30 → 0.79 ms a frame (-39%)**, GPU
+  total 3.00 → 2.53 (-16%). Those runs shared the machine with another job, so no wall time is quoted here; clean
+  host runs before the gate showed the wall all but unchanged (the desktop runner's read-back presenting, which the
+  app does not do, dominates it).
+- **Pictures**: at 1x byte for byte; the accurate mode's 5x byte for byte; Lumines (2D) at 5x byte for byte with the
+  gate; in fast mode at 5x Chains of Olympus differs by mean 0.27-0.69 of 255, PSNR 46-53 dB, with whole pixels
+  changing where the filtered texel tips an alpha or color test either side of its threshold (its largest channel
+  difference was 104; the weights' rounding alone is smaller). Geometry, colour, lighting, blending and depth are
+  untouched.
 - **With part 121**, the phone's 5x frame has gone 18.36 → 15.93 → 14.07 ms a frame for the same scene (54 → 71 fps at
   the max clocks).
 
 ### Checks
 
-- `tests/psp/run-tests.sh` (the debug build with ASan and UBSan, RADV as CI runs it): **669 groups, 0 failures**.
-- `compile.sh --check`: the sources' hash, and every module what glslang 16.6.0 compiles them to, byte for byte — the
-  CI's PSP Shaders workflow's conditions.
+- `tests/psp/run-tests.sh` (the debug build with ASan and UBSan, RADV as CI runs it): **669 groups, 0 failures** on
+  the final tree, its shader check included.
+- "gpu fast mode's small 3D PRIMs among its meshes" passes with the final tree (the apart/meshed gate).
+- `compile.sh --check`: the sources' hash and every module what glslang 16.6.0 compiles them to, byte for byte.
 - `git diff --check` clean. The APK was not built or run here: CI's Android Build compiles the PSP core.
+- **The independent review** of the first build returned NEEDS CHANGES with five findings: the picture's size (above),
+  the constant's mutable source (`transforms`, now the backend's `filter`, frozen at creation), 2D points and lines
+  (which its exclusion missed; the whole-picture gate covers them as it does 2D sprites), the integer stencil's
+  filtered sampler (its own NEAREST sampler now), and a test of the path (still to come). All but the test are in this
+  commit.
 
 ### Not run
 
-- The RP6 — the target's tiler is the point of the change; the phone is the nearest Adreno.
-- A library-wide 5x fast-mode picture sweep: the change touches every fast-mode 3D draw above 1x, and the save state's
-  pictures are not a library.
-- The independent review: the pull request is a draft.
+- The phone's re-measure on the whole-picture build (the phone's numbers above are the pre-gate build's; the RP6's
+  are the final build's).
+- A library-wide 5x fast-mode picture sweep: six games were checked, where the 3D ones differed only in the filter's
+  rounding; Lumines was the outlier that found the picture-size bug.
+- A test that exercises the fast path (the review's fifth finding): a 2x/3x 3D textured test with a non-uniform
+  texture, and a short-picture case, are the next commit.
+- The APK was not built or run here.
 
 ### Limits
 
-The approximation is fast mode's alone, above 1x: the accurate mode, 1x, copies of frame buffers and paletted textures
-keep the GE's filtering exactly, and the accurate mode's pictures remain the software renderer's. The step is the
-filter's rounding alone, not any geometry, colour, lighting, blending or depth work. Whether its seams show in
-motion, and how the RP6's Adreno 740 prices it, are unmeasured.
+The approximation is fast mode's alone, above 1x, and only for a picture the GPU holds whole: the accurate mode, 1x,
+copies of frame buffers, paletted textures and short pictures keep the GE's filtering exactly, and the accurate
+mode's pictures remain the software renderer's. What moves is the filter's weights' rounding, and a whole pixel
+wherever an alpha or color test sits at its threshold. Whether its seams show in motion, and how the RP6's Adreno 740
+prices it, are unmeasured.
 
 ### Scratch
 
