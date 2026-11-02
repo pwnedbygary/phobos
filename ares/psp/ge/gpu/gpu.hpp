@@ -717,7 +717,11 @@ private:
   //pixels are six each)
   static constexpr u32 MostVertices = 1 << 18;
   static constexpr u32 MostTold = 8;  //(Target::told's)
-  static constexpr u32 MeshLeast = 16;  //(the fewest vertices a PRIM meshes() takes has)
+  static constexpr u32 MeshLeast = 16;  //(the fewest vertices a PRIM meshes() takes has, above 1x)
+  //(At 1x the GPU has the headroom to transform, light and clip small PRIMs too, and the GE's own CPU work is the
+  //frame's cost: a PRIM of fewer than this many vertices is still meshed there. Above 1x the frame is the GPU's fill,
+  //and each small PRIM's settings' block and draw cost more than its few vertices save, so MeshLeast stays.)
+  static constexpr u32 MeshLeastNative = 7;
 
   auto targetFor(const GE::PixelState& p, const GE::Region& region, u32& column, u32& row) -> Target*;
   auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts = 1, u32 left = 0, u32 right = ~0u)

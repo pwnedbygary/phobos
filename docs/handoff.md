@@ -35,6 +35,24 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: fast mode meshes the smallest 3D PRIMs at 1x — +4.6% on Ghost of Sparta and +3.1% on Chains of Olympus at 1x, the 5x threshold unchanged — 2026-11-02
+
+Branch `cursor/psp-mesh-native-2b67`, from master `d3604ebe0`; docs/psp-core.md, part 123, has the evidence. Clean
+room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: at 1x a fast-mode frame is the GE's own CPU work (RP6, Ghost of Sparta's title: 8.40 ms on the GE side
+  against 3.39 ms on the emulation thread). PRIMs of fewer than 16 vertices are transformed, lit and clipped by the GE
+  itself to save the GPU's per-PRIM settings blocks; at 1x the GPU is nearly idle, so that saving is not worth it.
+- **What**: `GPU::MeshLeastNative` (7) and `mesh()` takes it while `backend->scale == 1`; above 1x `MeshLeast` stays
+  16, where the frame is the GPU's fill. The start-up check's six-vertex PRIMs stay below the threshold, so its tests
+  are unchanged.
+- **Measured** (RP6, 300 frames, save states): Ghost of Sparta title 1x 104.7 -> 109.6 fps (+4.6%), Chains of Olympus
+  door 1x 86.3 -> 88.9 (+3.1%), Chains of Olympus 5x unchanged (31.02 -> 30.83 ms). A boot sweep at 1x with the 7
+  threshold: Peace Walker +15%, Daxter +10%, Burnout +6%, Tekken 6 +5%; at 5x the same threshold lost Killzone 8.4%,
+  Burnout 3.0% and Army of Two 2.6% — the reason it is 1x-only.
+- **Checks**: `tests/psp/run-tests.sh` follows; `git diff --check`.
+- **Not run**: a 1x gameplay sweep (the two save states are the only heavy 1x scenes timed), and Peace Walker's
+  gameplay scene, the one part 92 found slower with small PRIMs meshed.
+
 ## PSP Vulkan: a render-to-texture copy from two frame buffers kept until either changes — God of War's 272 tiles take one copy a frame, not one a PRIM — 2026-10-31
 
 Branch `cursor/psp-stacked-copies-2b67`, from master `e51f1907`; docs/psp-core.md, part 121, has the evidence. Clean

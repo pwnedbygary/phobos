@@ -778,8 +778,10 @@ the design; none of its code is used, copied or translated.
   key has only what the GPU's fixed stages need, and FLAT.
 - **Left to the GE**, as in the accurate mode: a PRIM of fewer than 16 vertices (`GPU::MeshLeast`: each PRIM costs
   its settings' block, and a skinned one's bones differ from PRIM to PRIM; Peace Walker draws 5,000 PRIMs a frame of
-  three triangles each, which the GPU's way made slower); clear mode (each triangle's stencil from its own last
-  corner); and a PRIM whose pipeline the driver won't make (`Backend::drawable()`, asked before anything's recorded).
+  three triangles each, which the GPU's way made slower) — at 1x, where the GPU has the headroom and the GE's own CPU
+  work is the frame's cost, fewer than 7 (`GPU::MeshLeastNative`, part 123) —; clear mode (each triangle's stencil from
+  its own last corner); and a PRIM whose pipeline the driver won't make (`Backend::drawable()`, asked before anything's
+  recorded).
 - **The GE's own 3D triangles among the meshes** (`GPU::screenTriangle()`, docs/psp-core.md, part 92): those of a
   PRIM left to the GE, and a mesh's cut at the near plane, are recorded as models placed already (`Model::OnScreen`:
   the GE's place, depth, clip w, q, fog, coordinates, colors and flags), with the PRIM's state as its meshes take it,

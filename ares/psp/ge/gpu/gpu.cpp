@@ -1658,7 +1658,8 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
 //PRIMs a frame of three triangles each); clear mode (each triangle's stencil from its own last corner: triangle());
 //and one whose pipeline the driver won't make.
 auto GPU::meshes(GE&, const GE::Transform&, u32 count) -> bool {
-  if(!fast || !backend->transforms || count < MeshLeast) return false;
+  u32 least = backend->scale == 1 ? MeshLeastNative : MeshLeast;
+  if(!fast || !backend->transforms || count < least) return false;
   if(!drawing) return true;
   if(state.pipeline.clear) return false;
   return meshDrawable();
