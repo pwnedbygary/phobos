@@ -190,6 +190,7 @@ struct VulkanBackend : GPU::Backend {
   VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
   VkSampler sampler = VK_NULL_HANDLE;
+  VkSampler stencilSampler = VK_NULL_HANDLE;  //(for the stencil's R8_UINT picture: an integer format's sampler must not filter)
   VkShaderModule vertexModule = VK_NULL_HANDLE, fragmentModule = VK_NULL_HANDLE;
   VkShaderModule fragmentDepthModule = VK_NULL_HANDLE;  //(draw.frag's DEPTHS build)
   VkShaderModule fragmentUndeclaredModule = VK_NULL_HANDLE;  //(and without its declaration: GPU::undeclared())
@@ -351,6 +352,7 @@ struct VulkanBackend : GPU::Backend {
       if(fragmentDepthModule) vk.vkDestroyShaderModule(device, fragmentDepthModule, nullptr);
       if(fragmentUndeclaredModule) vk.vkDestroyShaderModule(device, fragmentUndeclaredModule, nullptr);
       if(sampler) vk.vkDestroySampler(device, sampler, nullptr);
+      if(stencilSampler) vk.vkDestroySampler(device, stencilSampler, nullptr);
       if(descriptorPool) vk.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
       if(pipelineLayout) vk.vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
       if(setLayout) vk.vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
@@ -767,12 +769,16 @@ struct VulkanBackend : GPU::Backend {
   auto pipelineFor(const GPU::Pipeline& k) -> VkPipeline {
     if(auto found = pipelineCache_.find(k); found != pipelineCache_.end()) return found->second;
     if(k.transformed && !transformModule) return pipelineCache_[k] = VK_NULL_HANDLE;
-    u32 constants[20] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
+    //(the 21st, FASTFILTER: above 1x, the fast renderer samples a whole decoded texture with the GPU's own linear
+    //filter, all of its draws alike so that a PRIM drawn among the GPU-transformed meshes and one drawn apart still
+    //come out the same. The renderer's mode, not `transforms`: that can be turned off after the start-up check, and
+    //a pipeline's constants cannot change.)
+    u32 constants[21] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
-                         k.blending, k.term, k.flat, k.indexed};
-    VkSpecializationMapEntry entries[20];
-    for(u32 n = 0; n < 20; n++) entries[n] = {n, n * 4, 4};
-    VkSpecializationInfo specialization{20, entries, sizeof(constants), constants};
+                         k.blending, k.term, k.flat, k.indexed, filter ? 1u : 0u};
+    VkSpecializationMapEntry entries[21];
+    for(u32 n = 0; n < 21; n++) entries[n] = {n, n * 4, 4};
+    VkSpecializationInfo specialization{21, entries, sizeof(constants), constants};
     //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written: declared never
     //above the depth rasterized, which is then a step and a half above the GE's (draw.vert's ABOVE), where the
     //device clamps the depth and the corners' depths are the GE's 0-65535, as 3D's are held; else undeclared, the
@@ -1034,7 +1040,7 @@ struct VulkanBackend : GPU::Backend {
       return false;
     }
     VkDescriptorImageInfo images[2] = {{sampler, moveColors.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                       {sampler, moveStencils.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+                                       {stencilSampler, moveStencils.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     VkWriteDescriptorSet writes[2];
     for(u32 n = 0; n < 2; n++) {
       writes[n] = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
@@ -2594,11 +2600,22 @@ struct VulkanBackend : GPU::Backend {
     if(vk.vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
       return error = "no descriptor pool", false;
     }
-    auto samplerInfo = made<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);  //(texelFetch's: unused)
-    samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_NEAREST;
+    //(texelFetch ignores the filter and the address mode, so the GE's own paths are as they were; fast mode's above 1x
+    //samples a whole picture with this sampler (draw.frag's FASTFILTER), the GPU's linear filter, the shader holding
+    //or wrapping the coordinates itself, so the address mode only ever has the four's own taps. The stencil's R8_UINT
+    //picture takes stencilSampler, which an integer format's valid usage requires unfiltered.)
+    auto samplerInfo = made<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
+    samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_LINEAR;
     samplerInfo.addressModeU = samplerInfo.addressModeV = samplerInfo.addressModeW =
-      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      VK_SAMPLER_ADDRESS_MODE_REPEAT;
     if(vk.vkCreateSampler(device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS) return error = "no sampler", false;
+    //(the stencil's picture is R8_UINT, which Vulkan's valid usage forbids any filter on (even where texelFetch ignores
+    //it): its own sampler, nearest and held, as an integer image's must be)
+    samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.addressModeU = samplerInfo.addressModeV = samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if(vk.vkCreateSampler(device, &samplerInfo, nullptr, &stencilSampler) != VK_SUCCESS) {
+      return error = "no stencil sampler", false;
+    }
     if(!make(paletteImage, 512, PaletteRows, VK_FORMAT_R8G8B8A8_UNORM,
              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
       return error = "no palettes' picture", false;
@@ -2653,6 +2670,7 @@ struct VulkanBackend : GPU::Backend {
       }
       transforms = transformModule != VK_NULL_HANDLE;
     }
+    filter = fast;
     auto cacheInfo = made<VkPipelineCacheCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO);
     //(a session before's pipelines, where they're whole and this device's and driver's: Kept, and the driver's own
     //header)
