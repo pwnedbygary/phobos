@@ -1511,9 +1511,9 @@ auto GPU::triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex&
   emit(v, 3);
 }
 
-//Fast mode's 3D triangles the GE transformed, lit and clipped itself (a PRIM below the threshold meshes() takes
-//(MeshLeast, or MeshLeastNative at 1x), or a
-//mesh's triangle cut at the near plane), drawn among the meshes: as transform.vert takes a vertex the GE put on the
+//Fast mode's 3D triangles the GE transformed, lit and clipped itself (a PRIM below the threshold meshes() takes,
+//MeshLeast or MeshLeastNative at 1x, or a mesh's triangle cut at the near plane), drawn among the meshes: as
+//transform.vert takes a vertex the GE put on the
 //screen (Model::OnScreen), which is draw.vert's arithmetic on the same numbers, with the PRIM's state as its meshes
 //take it (FLAT's colors are the last corner's, as triangleAt() made every corner's). So a PRIM's meshes and the small
 //PRIMs between them are one draw where their settings are the same: Army of Two and Ghost of Sparta alternate between

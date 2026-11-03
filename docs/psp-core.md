@@ -21067,16 +21067,17 @@ reports and profiles, the copies' and passes' counters used beside the repositor
 ## Part 123: Vulkan fast mode meshes the smallest 3D PRIMs at 1x — the GE's own work falls, +3 to +5% on the two save states, the 5x threshold unchanged
 
 At 1x, where a fast-mode frame is the GE's own CPU work, the smallest 3D PRIMs are transformed and lit by the GPU as
-well: the GE still culls them and cuts them at the near plane, but every corner's transform and lighting moves off the
-CPU there.
+well: the GE still works out every corner's clip position to cull them and cut them at the near plane, but the
+drawing transform and lighting move off the CPU there.
 
 ### Why
 
 - **The GE side is the 1x frame.** On the RP6, God of War: Ghost of Sparta's title screen at 1x, with the core's GE on
-  its own thread (`--ge-thread on`): **8.40 ms a frame on the GE side** (vertex transforms and lighting, the GE timing
-  charge, command recording) against **3.39 ms** on the emulation thread (the JIT, kernel and audio); the same frame
-  single-threaded is 9.6 ms. A host -O3 profile puts `GE::light` at 7.3% and `GE::transformAll` at 6.7% of the whole
-  profile.
+  its own thread (`--ge-thread on`), the GE thread's CPU time is **8.40 ms a frame** (vertex transforms and lighting,
+  the GE timing charge, command recording) and the emulation thread's **3.39 ms** (the JIT, kernel and audio). Those are
+  two threads' CPU times in a run that hands work between them, not two halves of one frame: the same frame
+  single-threaded is 9.6 ms, and the split run is slower than it, so the two are not added. They say which side carries
+  the work. A host -O3 profile puts `GE::light` at 7.3% and `GE::transformAll` at 6.7% of the whole profile.
 - **What the CPU keeps.** `GPU::meshes()` takes a 3D PRIM of 16 vertices or more above 1x (`MeshLeast`); below that the
   GE transforms, lights and culls it itself (`screenTriangle()`), to save a meshed PRIM's settings block and the GPU's
   draw. At 1x the GPU is nearly idle (1.6 ms of work a frame in that scene), so the block is all the saving is worth;
@@ -21089,9 +21090,10 @@ CPU there.
   above 1x the threshold stays 16. The check's `static_assert`s cover both: its six-vertex PRIMs stay on the GE's path
   at 1x and its eighteen-vertex ones on the GPU's.
 - **The lines the start-up check draws** are the same six-vertex PRIMs, so the check's behaviour is unchanged; a new
-  test, "gpu fast mode's smallest 3D PRIMs: twelve vertices meshed at 1x, left to the GE above", pins the threshold:
-  twelve vertices are meshed at 1x (one `Mesh` begun, nothing screened) and left to the GE at 2x (nothing meshed, a
-  triangle screened).
+  test, "gpu fast mode's smallest 3D PRIMs: seven and twelve vertices meshed at 1x, left to the GE above", pins the
+  threshold: a PRIM of twelve vertices (four triangles) and one of seven (two, and a corner past them: the fewest
+  vertices `meshes()` takes at 1x) are each meshed at 1x with nothing screened, and left to the GE at 2x with nothing
+  meshed and their triangles screened.
 
 ### Evidence (RP6, 300 frames, the deterministic save states)
 
@@ -21106,8 +21108,8 @@ CPU there.
 
 ### Checks
 
-- `tests/psp/run-tests.sh`: the suite follows on this commit; the new test above passes on its own (1 group, 0
-  failures).
+- `tests/psp/run-tests.sh`: **670 groups, 0 failures** on this tree (one more than master, the new test); the new test
+  alone passes (1 group).
 - `git diff --check` clean.
 
 ### Limits
@@ -21115,7 +21117,7 @@ CPU there.
 - Only the two save states are timed at 1x; the boot sweep's scenes are light.
 - **Part 53's counterexample is in the newly meshed range and is not re-measured**: Peace Walker's 5,000 skinned PRIMs
   a frame are three triangles each (9 vertices), and there the GPU's way cost more than the GE's own (part 53). Part
-  53's numbers predate the settings-block design, but a 1x gameplay measurement of that scene is the next check.
+  53's numbers predate the block's reuse (part 92), but a 1x gameplay measurement of that scene is the next check.
 - `scale == 1` is a proxy for "the GPU has headroom", not proof: a window-filling present (1080p from a 480x272
   picture), read-backs or a fill-heavy scene can still leave the GPU the frame's bound at 1x, and meshing then adds
   the settings block and vertices to the bound side. The RP6's 1.6 ms is one scene at 1x.

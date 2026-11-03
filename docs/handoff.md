@@ -40,19 +40,22 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 Branch `cursor/psp-mesh-native-2b67`, from master `d3604ebe0`; docs/psp-core.md, part 123, has the evidence. Clean
 room: our code; no PPSSPP or JPCSP. Save states: unchanged.
 - **Why**: at 1x a fast-mode frame is the GE's own CPU work (RP6, Ghost of Sparta's title, the GE on its own thread:
-  8.40 ms on the GE side against 3.39 ms on the emulation thread; 9.6 ms single-threaded). PRIMs below the mesh
+  8.40 ms of GE-thread CPU against 3.39 ms on the emulation thread; 9.6 ms single-threaded — the split run's threads
+  hand work between them, so those two are not added). PRIMs below the mesh
   threshold are transformed, lit and culled by the GE itself to save a meshed PRIM's settings block; at 1x the GPU is
   nearly idle (1.6 ms a frame), so that saving is not worth it.
 - **What**: `GPU::MeshLeastNative` (7) and `meshes()` takes it while `backend->scale == 1`; above 1x `MeshLeast` stays
   16, where the frame is the GPU's fill. check.cpp's `static_assert`s now cover both thresholds, and a new test
-  ("gpu fast mode's smallest 3D PRIMs: twelve vertices meshed at 1x, left to the GE above") pins the behaviour: 12
-  vertices meshed at 1x, left to the GE at 2x. The GE still culls and cuts them at the near plane; only the transform
-  and lighting move.
+  ("gpu fast mode's smallest 3D PRIMs: seven and twelve vertices meshed at 1x, left to the GE above") pins the
+  behaviour: PRIMs of 12 vertices (four triangles) and of 7 (the fewest that meshes at 1x) are meshed at 1x and left to
+  the GE at 2x. The GE still works out every corner's clip position to cull them and cut them at the near plane; only
+  the drawing transform and lighting move.
 - **Measured** (RP6, 300 frames, save states): Ghost of Sparta title 1x 104.7 -> 109.6 fps (+4.6%), Chains of Olympus
   door 1x 86.3 -> 88.9 (+3.1%), Chains of Olympus 5x unchanged (31.02 -> 30.83 ms). The boot sweep that shaped the
   threshold was run with 7 at every scale: at 1x Peace Walker +15%, Daxter +10%, Burnout +6%, Tekken 6 +5%; at 5x the
   same experiment lost Killzone 8.4%, Burnout 3.0% and Army of Two 2.6% — the reason the change is 1x-only.
-- **Checks**: `tests/psp/run-tests.sh` follows; the new test passes on its own; `git diff --check`.
+- **Checks**: `tests/psp/run-tests.sh` on this tree: 670 groups, 0 failures (the new test alone, 1 group);
+  `git diff --check` clean.
 - **Not run**: a 1x gameplay sweep; Peace Walker's gameplay scene (part 53's 9-vertex skinned PRIMs, the known slow
   case) and any scene where the GPU is the bound at 1x despite the resolution.
 
