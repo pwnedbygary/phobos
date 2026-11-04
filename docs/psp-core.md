@@ -21063,3 +21063,81 @@ renderer's cost, not the emulated machine's.
 
 Kept outside the repository: the owner's save state (not in the repository), the press script, the runs' frames,
 reports and profiles, the copies' and passes' counters used beside the repository's statistics build, and the probes.
+
+## Part 122: the GE thread's memory model answers by the range — God of War's high-resolution frames stop paying a byte and a target at a time
+
+The GE on its own thread is the one way the emulation's GE work can run beside its CPU work, and at high resolution it
+was unusable: at 5x, God of War: Ghost of Sparta's title ran 147 ms a frame with the option on against 37 ms with it
+off. The cost was not the GE's work but its memory model's handover checks, which walked a range a byte at a time and
+every drawn target for each byte.
+
+### Why
+
+- **The model answers "may these bytes have changed?" for the thread's handovers.** With the GE on its own thread,
+  every access to a page the render GE may still change asks `GeModel::dirty(first, last)` before going on: the model
+  keeps the pages the GPU drew, the software renderer drew, the puts not yet reported and (above 1x) the rectangles the
+  targets' hulls reach, and `dirty()` decides whether a byte range needs its record first.
+- **It walked the range a byte at a time, and the targets inside each byte.** `dirtyBytes()` looped every byte of the
+  32-byte piece it was given and, for each byte the GPU had rasterized, looped every target calling `hull.reaches(byte)`
+  — O(bytes x targets). Above 1x the hull path is on (`scaled`), so a texture-decode or a VRAM-sized transfer asked a
+  question whose cost grew with both the range and the number of targets.
+- **Only the threaded path asks it.** With the GE on the emulation thread the handovers don't exist, which is why the
+  option's cost was invisible in every single-threaded measurement.
+- **Measured.** On the RP6 (Adreno 740) at 5x, the owner's GoS title state, 300 frames: the model's checks took 91.12% of
+  the sampled CPU time in a host profile taken with the GE on its thread (107,620,805 calls of `dirtyBytes`), and the
+  option ran 8.92-8.98 frames a second on a desktop host against 63-65 without it.
+
+### The change
+
+- **One answer a 32-byte piece, at the older of its places** (`GeModel::dirty()`): a piece's bytes may be written at two
+  places (`whole` and `part`); the piece asks with `min(whole, part)`, the older place the bytes of that piece can have,
+  so the answer is at worst a piece that says dirty where one of its bytes is not, never clean where one is.
+- **The range, not the bytes** (`GeModel::dirtyBytes()`): the bytes the GPU rasterized since a place are asked for with
+  `gpu.newerThan(first, last, cx)` (one range check) and the hulls with one `hull.reaches(first, last)` for each target
+  whose `hullAt` is recent (a range check), instead of per byte. Where the old loop returned dirty on the first byte
+  beyond that test, the new one returns dirty on the first range or target that may reach one; where it found none, it
+  returns clean. Every answer that was dirty stays dirty (the range checks widen what may be dirty, and the piece's place
+  is never newer than the byte's), so no handover is skipped that the old code made: the emulated machine and its
+  picture are the same.
+- **Nothing else changes.** The model's records, its puts and hulls, the handovers themselves and the emulation's
+  timing are untouched: the part is how the same question is answered.
+
+### Evidence
+
+- **Host (AMD RX 9070 XT, Vulkan fast, GoS title state, 300 frames, 3 interleaved pairs; means from the runs' reports,
+  seconds / frames):** frames a second, single thread base 65.19/63.11/63.86, fix 66.73/64.64/63.92 (mean frame times
+  15.34/15.84/15.66 -> 14.99/15.47/15.65 ms: noise, the change is not in the single-threaded path); GE thread base
+  8.95/8.92/8.98, fix 66.54/67.08/70.35 (111.79/112.10/111.41 -> 15.03/14.91/14.21 ms, 7.5x). The 91% profile above is
+  the same build's before.
+- **RP6 (Adreno 740, the same state, 5x, 3 interleaved pairs; mean frame times from the frozen reports, seconds / 300
+  frames):** single thread base 36.72/36.76/36.53 ms, fix 36.73/36.75/36.65 ms; GE thread base
+  146.85/146.99/146.87 ms, fix 32.00/32.02/32.06 ms (4.6x, and 14.6% more frames a second than the same build's single thread). The
+  reports' `waiting ms a frame` is 20.3-20.7 in every configuration: the runner reads each frame's screen back.
+- **The picture unchanged.** Frame 300 of the threaded runs, base against fix, byte for byte: host
+  `c7e4ecfffb67181d05524439906fa9c02102deeb6f83a9fa3d63facc0d1b501d` (the presented 1920x1088 picture), RP6
+  `063816a9279771761ced56ad0017a9cfc766df8f97edf53b33c24768ca9851fe` (1920x1088, the presented picture; both PNGs and their capture reports are
+  frozen in `psp-perf-hires/analysis/gefix-evidence/rp6-pngs/`).
+- **The answer itself checked independently.** The reviewer's own differential harness (base header against this one,
+  in its scratch) ran 4,000 randomized model states and 240,000 random queries: 0 under-reports (no range called clean
+  that the base called dirty), 409 over-reports, and a `min` -> `max` mutant of the piece rule was caught 1,474 times,
+  so the harness has teeth.
+- **Checks:** `tests/psp/run-tests.sh` on this snapshot, `PHOBOS_TESTS_GE_THREAD=On PHOBOS_TESTS_ONLY=thread`: the
+  thread groups alone, every machine's GE on its own thread, log and test binary hash in the frozen evidence; and the
+  full suite (669 groups, 0 failures) as `run-tests.sh` runs it, log likewise frozen. Those machines' `checkChanged()`
+  aborts the run on any model under-report. `git diff --check` clean.
+
+### Limits
+
+- **The option only.** With the GE on the emulation thread the change answers nothing new: it fixes the cost of
+  "GE Thread: On", not a default-path speedup. It is not made a default here. Other titles measured earlier in the
+  session with threading on (single runs, not frozen for this record and not re-measured) were slower with it: that is
+  the threaded schedule's overhead, unchanged by this part. God of War at 5x is the scene the option was blocked on,
+  and now gains.
+- **Not run:** PPSSPP as a comparison; the library sweep remeasured after this change; the APK (CI's Android Build
+  compiles the PSP core on every pull request). The RP6's per-run temperatures were not captured; run-manifest.txt says what was and was not recorded for them.
+
+### Scratch
+
+Kept outside the repository, on the NVMe mount: the runs' logs, reports and PNGs (`psp-perf-hires/analysis/gefix-evidence/`),
+the frozen snapshot and manifest (`psp-perf-hires/analysis/gefix-snapshot/`), the host builds, and the reviewer's harness
+and ledger (`psp-perf-hires/analysis/review-ledger.md`).
