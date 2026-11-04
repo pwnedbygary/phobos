@@ -143,6 +143,7 @@ namespace ares {
   auto setPspThreadPlacement(bool enabled) -> void;
   // The GE timed as a real PSP's (its core's "GE Timing" "PSP", as a game starts), or by Sony's peak rates ("Fast").
   auto setPspGeTiming(bool psp) -> void;
+  auto setPspFastFileIo(bool fast) -> void;
   // What the PSP's core has to tell the user, once (its Vulkan renderer couldn't start, or stopped): taken, and put
   // in the log; empty if nothing.
   auto takePspNotice() -> std::string;

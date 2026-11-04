@@ -21214,3 +21214,76 @@ allowed.
 Kept outside the repository, on the NVMe mount: the two APKs and their SHA-256s, the instrumented diagnostic build's
 logs (the swapchain, acquire and present breakdown), the interleaved runs' logs, stats and screenshots, the frozen
 snapshot and its manifest (`psp-perf-hires/analysis/swapfix-snapshot/`).
+
+## Part 126: the devices' time taken out — an experimental option "File I/O" "Fast", whose loads, saves and installs run at the host's speed, in every renderer
+
+The kernel charges every file request the time the PSP's devices took to serve it: the UMD drive's top rate,
+1,375,000 bytes a second, and the memory stick's 4,000,000, plus 100 microseconds for the request (async.cpp). That is
+what makes a game's loading screen last about as long as on a PSP (part 106's spirit for the GE), and it is also what
+made the owner's Peace Walker data install take tens of minutes: 0.96 MB/s of memstick writes, measured, while the
+same folder takes 159 MB/s from a plain host write. This is the option to take that time out.
+
+### The option
+
+- **"File I/O"**: "PSP", the default and every PSP's own time, or "Fast", the experimental one: no device time at all.
+  `Kernel::fastFileIo` (kernel.hpp) is taken at the next power on from `System::fastFileIo` (system.hpp, system.cpp's
+  option), and two places read it: `asyncDuration()` returns 0 instead of the request's microseconds plus its bytes at
+  the device's rate (async.cpp), so an asynchronous request is done at the cycle it is made; and `fileWait()` returns
+  at once (io.cpp), so a synchronous call moves its bytes and doesn't wait. The bytes still move, the results are
+  still kept and taken as before: only the waiting goes.
+- **No renderer is involved**: it is the kernel's, so it holds in Software, Vulkan and Vulkan fast alike, as the owner
+  asked. The machine, its memory and its save states are the same; what changes is how long file requests take, and so
+  what a game that counts on a request's time (io.cpp records GTA's disc streaming doing so) or on a wait's end does —
+  which is the point, and why it is opt-in and experimental. (The one state interaction found in review — a state made
+  under "PSP" with a request pending loaded under "Fast" — is fixed: the checks bound their waits by the PSP's time,
+  and a test covers it.)
+- **The app**: "PSP Fast File I/O", a switch in Settings → Emulation's PlayStation Portable section and the game's PSP
+  menu (Components.kt; `PspStartSettings.fastFileIo`; "Restart to Apply", as it is taken at the next power on); its
+  text says what it does and that it is experimental. `PhobosCore.setPspFastFileIo` through the JNI to the runner's
+  atomic, which tells the core its option as a game starts (`PhobosRunner.cpp`: `PSP: file I/O Fast`).
+- **The runner**: `--file-io psp|fast` (the core's option), named in the report as `"file io"` (runner.cpp, README).
+
+### Evidence
+
+- **The tests** (`tests/psp/async.cpp`): a new group, "files no device time (File I/O Fast)", with `fastFileIo` set:
+  a 4000-byte memory stick read's request is due at the cycle it is made and takes **0 microseconds** where the
+  PSP's timing takes **1100**; a 1000-byte write **0** where it takes **350**; a 2750-byte disc read **0** where it
+  takes **2100**; the bytes and results are the same. Both engines. A second group, "files a PSP-timed state loads
+  under File I/O Fast", makes a state with a request still pending under "PSP" and loads it under "Fast": it loads,
+  round-trips, and its request comes in — the save-state checks bound their waits by the PSP's own time
+  (`Kernel::asyncDurationPsp()`), whatever the option says. `tests/psp/ares/system.cpp` also checks the option reaches
+  the kernel at the next power on ("File I/O Fast reaches the kernel", and back). The whole host suite is run after
+  these changes; its result is in the snapshot's evidence.
+- **The host runner, repeated and interleaved** (an unpaced debug host build, Vulkan fast at Native): three
+  interleaved pairs each, run twice (36 reports, frozen), of Peace Walker's first 6000 and 1500 frames and Ghost of
+  Sparta's 900. Their own `result.seconds`, six runs a side, medians: **Peace Walker 6000: PSP 6.807 s against Fast
+  6.849** (Fast 0.6% longer); **1500: 1.594 against 1.589** (Fast 0.3% shorter); **Ghost of Sparta 900: 2.333 against
+  2.378** (Fast 1.9% longer) — all inside run-to-run noise either way, so no wall-time difference is claimed. (The
+  first set's first runs were warm-up — 10.05 s against 9.04 on Peace Walker's 6000 — and are in the series their
+  medians ignore. One earlier single pair had read −16%; repeating it interleaved showed that was the same warm-up,
+  not the option.) These segments are timing/cutscene-paced and the runner is unpaced, so its time doesn't show what a wait
+  costs: the emulated machine fast-forwards idle rather than waiting it out in real time. The pairs are psp-then-fast
+  within each round, not ABBA; with no difference claimed that isn't a bias this part rests on.
+- **The device, where waits are real time**: the app's boot-to-first-content A/B (three interleaved pairs, Peace
+  Walker, PSP against Fast, through a scratch instrumented build's debug property) was 26.9/26.1/23.9 s against
+  24.0/25.0/25.4 s — within noise, because the boot is cutscene-paced too, and it isn't claimed as a speedup. What the
+  device does show is that the option reaches the core: the scratch build logged `PSP: file I/O Fast from
+  debug.phobos.psp.fileio` (pid and time in the frozen log), then `PSP: file I/O Fast` as the game started. (The
+  release app's switch is the same option through the same JNI; it is code-reviewed and its wiring tested, not
+  exercised by this screenshot.)
+- **The one measurement not yet taken**: an install or a save on the device, where the PSP's waits are paced in real
+  time. Peace Walker's data install wrote 0.96 MB/s under the PSP's timing in an earlier session (the owner's; the
+  same folder takes 159 MB/s from a plain host write — context for why the option exists, not this part's measurement).
+  Re-running it under "Fast" is the next rig, and until it is run no speedup figure is claimed.
+
+### Limits
+
+- **No install or save measured on the device yet.** The one obvious rig, Peace Walker's data install, was not re-run
+  under this option; the 0.96 MB/s install and the 159 MB/s host write are the owner's/earlier context for why the
+  option exists, not this part's measurement.
+- **Games that count on a request's time can differ** (io.cpp's note on GTA's streaming): experimental, off by
+  default, and the default behaves exactly as before (same values and path).
+- It is taken at the next power on, not live, like "GE Timing"; the app's "Restart to Apply" says so. And "file
+  requests" is what it says: it also removes what the UMD activate and a PSMF movie's header read wait
+  (`asyncDuration`), and the bounds a loaded state's checks use (now the PSP's time regardless, above). The runner's
+  numbers above are within noise and this part claims no speedup from them; no PPSSPP comparison is made.

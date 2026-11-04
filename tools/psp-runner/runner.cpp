@@ -40,6 +40,9 @@
 //    --pipeline-cache FILE      the Vulkan renderer's pipelines kept in FILE between runs, as the app keeps them
 //    --ge-timing psp|fast       the GE's time: as the owner's PSP took it (psp, the default), or Sony's peak rates
 //                                (fast) (the core's option "GE Timing")
+//    --file-io psp|fast         file requests' time: as the disc and memory stick take it (psp, the default), or none
+//                                at all (fast, experimental: loads, saves and installs at the host's speed) (option
+//                                "File I/O")
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //    --trace-savedata           each savedata request and its answer, a line with its frame: the mode, the game's
@@ -471,7 +474,7 @@ auto main(int argc, char** argv) -> int {
   std::string geThread;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
-  bool lateFrames = false, gePspTiming = true;
+  bool lateFrames = false, gePspTiming = true, fastFileIo = false;
   std::string pipelineCache, frameTimesFile;
   fs::path reportFile;
   u32 startTime = 0, screenStopsAt = 0;
@@ -526,6 +529,14 @@ auto main(int argc, char** argv) -> int {
         return 1;
       }
       gePspTiming = timing == "psp";
+    }
+    else if(option == "--file-io") {
+      auto io = next();
+      if(io != "psp" && io != "fast") {
+        std::fprintf(stderr, "--file-io is psp or fast\n");
+        return 1;
+      }
+      fastFileIo = io == "fast";
     }
     else if(option == "--pipeline-cache") pipelineCache = next();
     else if(option == "--memory-stick") memoryStick = next();
@@ -660,6 +671,7 @@ auto main(int argc, char** argv) -> int {
   if(resolution) PlayStationPortable::option("Resolution", std::to_string(resolution).c_str());
   if(lateFrames) PlayStationPortable::option("Late Frames", "true");
   PlayStationPortable::option("GE Timing", gePspTiming ? "PSP" : "Fast");
+  PlayStationPortable::option("File I/O", fastFileIo ? "Fast" : "PSP");
   if(!pipelineCache.empty()) PlayStationPortable::option("Pipeline Cache", pipelineCache.c_str());
 
   auto& psp = ares::PlayStationPortable::system;
@@ -1132,6 +1144,7 @@ auto main(int argc, char** argv) -> int {
         << ", \"ge threads\": " << number(geThreads, geThreads)
         << ", \"late frames\": " << (lateFrames ? "true" : "false")
         << ", \"ge timing\": " << (gePspTiming ? "\"psp\"" : "\"fast\"")
+        << ", \"file io\": " << (fastFileIo ? "\"fast\"" : "\"psp\"")
         << ", \"frames\": " << number(framesGiven, frames)
         << ", \"start time\": " << number(startTimeGiven, startTime) << ", \"load state\": " << text(loadState.string())
         << ", \"presses\": " << presses.size() << ", \"script\": " << text(script.string())

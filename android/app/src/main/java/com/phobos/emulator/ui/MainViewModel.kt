@@ -634,6 +634,11 @@ class MainViewModel(
         settingsStore.setPspGeTiming(psp)
         PhobosCore.setPspGeTiming(psp)
     }
+    /** File requests at the host's speed rather than the PSP's devices' (experimental): taken as a game starts. */
+    fun setPspFastFileIo(fast: Boolean) = viewModelScope.launch {
+        settingsStore.setPspFastFileIo(fast)
+        PhobosCore.setPspFastFileIo(fast)
+    }
     /** What a controller's right stick does in a PSP game: [PspRightStick], read by every stick move. */
     fun setPspRightStick(choice: PspRightStick) = viewModelScope.launch { settingsStore.setPspRightStick(choice) }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
@@ -2212,6 +2217,7 @@ class MainViewModel(
             PhobosCore.setPspGraphicsOverlap(PspGraphicsOverlap.forCore(settings.value.pspGraphicsOverlap))
             PhobosCore.setPspThreadPlacement(settings.value.pspThreadPlacement)
             PhobosCore.setPspGeTiming(settings.value.pspGeTiming)
+            PhobosCore.setPspFastFileIo(settings.value.pspFastFileIo)
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -3310,7 +3316,7 @@ class MainViewModel(
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
             val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution,
                 currentSettings.pspDrawingThreads, currentSettings.pspGeTiming,
-                graphicsOverlap = currentSettings.pspGraphicsOverlap)
+                graphicsOverlap = currentSettings.pspGraphicsOverlap, fastFileIo = currentSettings.pspFastFileIo)
             _pspStartSettings.value = pspStart.takeIf { effectiveSystem == LaunchSystems.PSP }
             // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
             PhobosCore.setPspDrawingThreads(pspStart.drawingThreads)
@@ -3324,6 +3330,8 @@ class MainViewModel(
             PhobosCore.setPspThreadPlacement(currentSettings.pspThreadPlacement)
             // How long the GE takes over its work: as a real PSP's GE (the default), or by Sony's peak rates.
             PhobosCore.setPspGeTiming(pspStart.geTiming)
+            // File requests at the host's speed rather than a PSP's devices' (experimental).
+            PhobosCore.setPspFastFileIo(pspStart.fastFileIo)
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.
             val pspFonts = PspFonts.folder(context.filesDir)
