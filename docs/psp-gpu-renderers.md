@@ -793,6 +793,12 @@ the design; none of its code is used, copied or translated.
 - **The filter chosen once a triangle**, as the GE chooses it: `draw.frag` takes the texels a pixel covers from the
   texture coordinates straight across the screen (`vertexTexels`, `noperspective`), whose steps are the triangle's
   own texels to its pixels: the GE's ratio exactly, for a triangle the GE didn't cut.
+- **The rasterizer's depth** (part 124): a fast-mode pipeline whose key's `depths()` says the depth decides the test
+  or is written takes no `gl_FragDepth` (`draw.frag`'s DEPTHS build, which the accurate mode keeps), so the GPU may
+  test the depth before the fragment shader runs and reject overdraw's layers early. The depth tested and written is the rasterizer's
+  interpolated depth, not the GE's floored 16-bit one: its last 1/65536 is given up and z-fighting within it can
+  settle another way (2.8% of Ghost of Sparta's title pixels at 5x differ from the GE-floored-depth picture, master's
+  fast mode, 0.13% by more than 8 levels). A depth read back is the rasterizer's too (`Backend::depthBuild()` reports 0 for fast mode's pipelines).
 - **The GPU's own blending throughout**: nothing read in the shader, no rasterization order asked for (as on
   Qualcomm's driver without it, part 49: 8888 blends with the PSP's source term, 16-bit frame buffers keeping 8 bits
   between blends, blended pixels not dithered).

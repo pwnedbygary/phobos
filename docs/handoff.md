@@ -35,6 +35,28 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: fast mode tests and writes the rasterizer's depth — the early depth test returns, -13.2% on Ghost of Sparta at 5x — 2026-11-03
+
+Branch `cursor/psp-fast-depth-2b67`, from master `d3604ebe0`; docs/psp-core.md, part 124, has the evidence. Clean
+room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: at 5x the depth test and write are the GPU's biggest cost (RP6, Ghost of Sparta title, medians of three:
+  44.1 ms; depth test and write off, attachment kept: 28.6 ms). Every depth-using pipeline compiles `draw.frag`'s
+  DEPTHS build, which writes `gl_FragDepth` and so may keep the GPU from testing depth before the shader runs.
+- **What**: the backend remembers fast mode; `pipelineFor()` gives fast mode's depth pipelines the non-DEPTHS
+  fragment module, with ABOVE 0 and the pipeline's depth test/write unchanged; the accurate mode keeps DEPTHS.
+  `depthBuild()` reports 0 for them.
+- **Measured** (RP6, 300 frames, medians): Ghost of Sparta title 5x 44.13 -> 38.30 ms (-13.2%), Chains of Olympus
+  door 5x 31.89 -> 28.05 (-12.0%), Ghost of Sparta 1x 9.88 -> 9.53 (-3.5%); Vulkan accurate at 5x unchanged
+  (28.77 -> 28.76 fps) and byte-identical.
+- **Trade**: fast mode's pictures differ where the GE's floored 16-bit depth's last fraction decided: 2.83% of the
+  title's pixels, 0.13% by more than 8 levels, largest channel delta 47; fast mode's depth read-backs are the
+  rasterizer's.
+- **Checks**: `tests/psp/run-tests.sh` on this tree: 669 groups, 0 failures (three depth-exactness groups now run on
+  the accurate renderer alone, and `gpuDepthBuilds` pins fast mode's `depthBuild()` at 0; `gpuDepthEarly` and
+  `gpuDepthOutside` already run fractional 2D depths in fast mode; a dedicated fast fractional-depth/read-back test is
+  the next check); `git diff --check` clean.
+- **Not run**: a library-level picture sweep in fast mode; only the two save states and the title frame compared.
+
 ## PSP Vulkan: a render-to-texture copy from two frame buffers kept until either changes — God of War's 272 tiles take one copy a frame, not one a PRIM — 2026-10-31
 
 Branch `cursor/psp-stacked-copies-2b67`, from master `e51f1907`; docs/psp-core.md, part 121, has the evidence. Clean

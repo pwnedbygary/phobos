@@ -276,7 +276,8 @@ later layout gets another number):
   nothing is counted or timed, and nothing about what's drawn or how changes with it on.
   `PHOBOS_GPU_STATS=draws` adds, besides those, one CSV line a draw beside the report, `<report>.draws.csv`:
   `ms`, `triangles`, `target`, `scale`, `pass` (the render pass it ran in), `pipeline` (a fingerprint of the
-  pipeline key's fields), `writes_depth` (the shader writes the depth and does the GE's range test), `shown` and
+  pipeline key's fields), `writes_depth` (the shader writes the depth and does the GE's range test; 0 in fast mode,
+  whose depth is the rasterizer's), `shown` and
   `copied` (the target's state when the draw was recorded), and `draw times`, the same times in 24 log-spaced buckets
   whose `buckets low ms` are their lower bounds (1.024 us doubling). A draw whose timestamps were skipped (a pool the
   device wouldn't make, or the record cap) has an empty `ms`, not 0. The per-draw timestamps are a sync point each, so

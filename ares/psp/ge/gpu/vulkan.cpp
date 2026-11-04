@@ -183,6 +183,7 @@ struct VulkanBackend : GPU::Backend {
   VkPhysicalDeviceProperties chosen{};  //(the device's: a kept pipeline cache's owner, pipelineData())
   VkFormat depthFormat = VK_FORMAT_UNDEFINED;
   VkRenderPass renderPass = VK_NULL_HANDLE;
+  bool fast = false;  //(Vulkan (fast): its depth is the rasterizer's, not draw.frag's: part 124)
   VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
   VkDescriptorSetLayout frameLayout = VK_NULL_HANDLE;  //(set 1 of draws: a target's Target::frame)
   VkDescriptorSetLayout transformLayout = VK_NULL_HANDLE;  //(set 2: fast mode's Transformed blocks, Slot::transforms)
@@ -260,7 +261,7 @@ struct VulkanBackend : GPU::Backend {
   struct Squeeze { u32 readback, width, height; };
   std::vector<Squeeze> squeezes;
   //(the last finish()'s read backs of depths alone, Readback's parts 2: readback n's, its width and height; and the
-  //GE's 16-bit depths readDepth() made of one)
+  //depths readDepth() made of one, the GE's 16-bit ones, or fast mode's rasterizer depths, part 124)
   std::vector<Squeeze> depthReads;
   std::vector<u16> depthsRead;
   std::vector<VkBufferImageCopy> rows;
@@ -778,7 +779,13 @@ struct VulkanBackend : GPU::Backend {
     //device clamps the depth and the corners' depths are the GE's 0-65535, as 3D's are held; else undeclared, the
     //depth rasterized at the GE's: Backend::depthBuild())
     bool depths = k.depths(), declared = depths && depthClamp && !k.outside;
-    u32 above = declared;
+    //(fast mode's depth: draw.frag's DEPTHS build writes gl_FragDepth, and a shader that writes the depth may keep the
+    //GPU from testing it before it runs, so every overdraw layer's shader runs. Fast mode takes the rasterizer's depth
+    //instead, its pipelines still testing and writing it, and the early test with it: 13% of the frame at 5x on Ghost
+    //of Sparta, with the GE's floored 16-bit depth's last fraction given up (2.8% of the title's pixels differ, 0.13%
+    //by more than 8 levels).)
+    bool shaderDepths = depths && !fast;
+    u32 above = declared && shaderDepths;
     VkSpecializationMapEntry aboveEntry{0, 0, 4};
     VkSpecializationInfo vertexSpecialization{1, &aboveEntry, sizeof(above), &above};
     //(fast mode's 3D: transform.vert, taking the GE's vertices)
@@ -786,7 +793,8 @@ struct VulkanBackend : GPU::Backend {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
        k.transformed ? transformModule : vertexModule, "main", &vertexSpecialization},
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
-       !depths ? fragmentModule : declared ? fragmentDepthModule : fragmentUndeclaredModule, "main", &specialization}};
+       !shaderDepths ? fragmentModule : declared ? fragmentDepthModule : fragmentUndeclaredModule, "main",
+       &specialization}};
     using V = GPU::Vertex;
     using M = GPU::Model;
     VkVertexInputBindingDescription binding{0, k.transformed ? u32(sizeof(M)) : u32(sizeof(V)),
@@ -1383,7 +1391,8 @@ struct VulkanBackend : GPU::Backend {
                               u64(key.depthCompare) << 24 | u64(key.reads) << 32 | u64(key.blending) << 40 |
                               u64(key.textured) << 48 | u64(key.alphaTest) << 56 | u64(key.stencilTest) << 57 |
                               u64(key.blend) << 58;
-            record.writesDepth = key.depths();
+            //(the DEPTHS shader's: fast mode's depth is the rasterizer's, its shader writing none, part 124)
+            record.writesDepth = !fast && key.depths();
             auto foundTarget = targetImages.find(c.target);
             if(foundTarget != targetImages.end()) {
               record.shown = foundTarget->second.shown, record.copied = foundTarget->second.copied;
@@ -2325,6 +2334,7 @@ struct VulkanBackend : GPU::Backend {
   //cached: the pipelines a session before made, as pipelineData() gave them)
   auto create(PFN_vkGetInstanceProcAddr getInstanceProcAddr, std::string& error, bool fast,
               const std::vector<u8>& cached) -> bool {
+    this->fast = fast;
     if(!getInstanceProcAddr) {  //(none from the host: the system's loader)
       #if !defined(_WIN32)  //(Windows' host always hands its own over)
       #if defined(__APPLE__)
