@@ -35,6 +35,43 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: a swapchain presented as it is — the app stops making a swapchain a frame, Chains of Olympus reaches 59.94 at 5x and Ghost of Sparta comes close — 2026-11-04
+
+Branch `cursor/psp-swapchain-suboptimal-2b67`, from `cursor/psp-fast-depth-2b67` (part 124); docs/psp-core.md, part
+125, has the evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged (a window's swapchain is not
+part of one).
+- **Why**: the Android surface of the app's landscape SurfaceView reports the panel's rotation as its
+  `currentTransform`, while the renderer makes its swapchain with `preTransform = IDENTITY` and lets the compositor
+  turn the picture; Adreno calls every present on such a swapchain `VK_SUBOPTIMAL_KHR`. The renderer took that for
+  "make the swapchain again" in both `acquire()` and `present()`, so every frame dropped the old swapchain and made a
+  new one, on the RP6. In the frozen full diagnostic log the title-screen windows took 60 makes a window and
+  830-1011 ms of makes (13.8-16.9 ms a make), 13.84-16.86 ms of `acquire()` setup against 0.00-0.01 ms in
+  `vkAcquireNextImageKHR`, and frames of 36.7-38.7 at 23.73-27.43 ms (the whole log: 5.4-16.9 ms a make, 325-1011 ms a
+  window) while the app's overlay read 40-41% CPU and 56-57% GPU: the blocked make serialised them.
+- **What**: suboptimal presents and acquisitions are presented as they are and no longer rebuild; `rebuild` is set
+  only by `VK_ERROR_OUT_OF_DATE_KHR`, a lost surface or device, a changed window, or a real surface change, which a new
+  `stale()` decides from the surface's `currentExtent`/offered formats against the swapchain's `imageExtent`/`imageFormat`
+  (not its transform, the compositor's to do). `swapRebuilt` counts makes since the last clean present (a `VK_SUCCESS`
+  clears it) and stops past eight, so a surface that always says suboptimal cannot loop. No rendering command, shader,
+  target, pass or read-back changes: the emulated machine, its timing and its save states are untouched.
+- **Evidence**: RP6, God of War: Ghost of Sparta's title at 5x, 3 interleaved pairs, the app's own Emulation Stats:
+  before **38.7/38.6/37.9 fps** (24.40/24.09/25.19 ms), after **56.2/59.0/57.9 fps** (17.92/15.16/17.23 ms). Chains of
+  Olympus' title at 5x, 2 pairs: before **49.0/48.0 fps** (18.87/18.81 ms), after **60.0/60.0 fps** (9.48/9.85 ms, its
+  `Over20ms` 0), so Chains of Olympus reaches the display's 59.94 and Ghost of Sparta comes close. Screenshots of both
+  titles' frames (GoS and Chains of Olympus, before and after) show the same geometry (the non-black region
+  7,0-1912,1079 in both), orientation and crop; they are not a pixel-for-pixel comparison (different emulated moments,
+  and the app's HUD). A diagnostic build carrying this policy made no swapchain at all after its first rebuild (one
+  window change: two makes, 14.86 ms; 37 further acquisition windows at `acquire` setup 0.00 ms, frames 52.0-60.0) where
+  the one before it made 60 a window (830-1011 ms in its title-screen windows). `tests/psp/run-tests.sh`: 669 groups,
+  0 failures; `git diff --check` clean.
+- **Limits**: the swapchain is still made with `preTransform = IDENTITY` and the compositor still rotates (a
+  pre-rotated render is the fuller fix, not attempted); only the two God of War titles were measured, not the library
+  nor save-state loading; the builds measured are local release APKs signed with the repository's release keystore,
+  updated in place over the CI build; no PPSSPP comparison is made here.
+- **Review**: independent review of the change, the neutrality argument (swapchain lifetime only), the interleaved
+  device evidence and the frozen snapshot under `psp-perf-hires/analysis/swapfix-snapshot/`; verdict recorded in the
+  commit message and the ledger once given.
+
 ## PSP Vulkan: fast mode tests and writes the rasterizer's depth — the early depth test returns, -13.2% on Ghost of Sparta at 5x — 2026-11-03
 
 Branch `cursor/psp-fast-depth-2b67`, from master `d3604ebe0`; docs/psp-core.md, part 124, has the evidence. Clean
