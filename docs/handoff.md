@@ -35,6 +35,23 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP tests: the File I/O option's check powers the machine first — 2026-11-05
+
+Branch `cursor/psp-ares-fileio-test-2b67`, from `cursor/psp-wrapped-texture-2b67` (part 130). Clean room: our code; no
+PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: "PSP as an ares system" (tests/psp/ares/run-tests.sh) has failed on every PR since part 126, at
+  tests/psp/ares/system.cpp:195 "File I/O Fast reaches the kernel". The check set the option and loaded the system but
+  never powered the machine, and the option is taken at the next power on (System::power reads System::fastFileIo into
+  Kernel::fastFileIo) — so the kernel still had the default. The app and the runner power after setting the option, as
+  the check intended to test.
+- **What**: the check calls `root->power()` after each load (default, Fast, back to PSP), so each machine is powered with
+  the option as set.
+- **Evidence**: tests/psp/ares/run-tests.sh against the tree before the change: 423 checks, 1 failed (the File I/O line);
+  with it: 423 checks, 0 failed. The whole system suite (tests/psp/run-tests.sh) passes too.
+- **Limits**: the test and its evidence are the host's; no device or app figure is involved.
+- **Review**: independent review of the change and the two test runs; verdict in the commit message and the ledger once
+  given.
+
 ## PSP Vulkan: a texture that runs round VRAM's end is decoded — 2026-11-05
 
 Branch `cursor/psp-wrapped-texture-2b67`, from `cursor/psp-sw-fours-2b67` (part 128); docs/psp-core.md, part 130, has the

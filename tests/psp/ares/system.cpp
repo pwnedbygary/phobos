@@ -188,15 +188,20 @@ auto fileIoOption() -> void {
   std::printf("the option \"File I/O\" at power on\n");
   Node::System root;
   if(!CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads")) return;
+  root->power();  //(the option is taken at the next power on, so the machine is powered between each)
   CHECK(!psp.kernel.fastFileIo, "File I/O PSP by default");
   root->unload();
   PlayStationPortable::option("File I/O", "Fast");
-  if(CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads with File I/O Fast"))
+  if(CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads with File I/O Fast")) {
+    root->power();
     CHECK(psp.kernel.fastFileIo, "File I/O Fast reaches the kernel");
+  }
   root->unload();
   PlayStationPortable::option("File I/O", "PSP");
-  if(CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads with File I/O PSP"))
+  if(CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads with File I/O PSP")) {
+    root->power();
     CHECK(!psp.kernel.fastFileIo, "File I/O PSP reaches the kernel");
+  }
   root->unload();
 }
 
