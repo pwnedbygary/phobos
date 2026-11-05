@@ -162,6 +162,49 @@ static auto gpuSprites() -> void {
   }
 }
 
+//A texture whose bytes run past VRAM's end and round to its start: the GPU takes the PRIMs that sample it (its texture
+//decoded from the wrapped bytes) rather than refusing them to the software renderer, which would leave the GPU's target
+//holding older pixels. The same texture addressed through VRAM's other plain copy (the second, two sizes on) is brought
+//home and taken too; one laid in RAM so that it runs past RAM's end stays the software renderer's, as it was — a span
+//outside VRAM isn't decoded. (Their pictures aren't compared with the software renderer's: how the two sample a wrapped
+//texture's texels already differed before this, so the check is that the GPU draws them at all.)
+static auto gpuWrappedTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261105};
+  constexpr u32 textureBytes = 32 * 32 * 4, offset = Memory::VRAMSize - 128;  //(one row to VRAM's end: the rest wrap)
+  for(u32 address : {Memory::VRAMBase + offset, Memory::VRAMBase + 2 * Memory::VRAMSize + offset}) {
+    auto before = stats(gpu);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(u32 byte = 0; byte < textureBytes; byte++) {
+        s->memory.write(1, Memory::VRAMBase + (offset + byte) % Memory::VRAMSize, u8(byte * 0x9e37'79b9));
+      }
+      texture(*s, address, 32, 32, 32);
+      for(auto& one : randomSprites(random, 60, true)) sprite(*s, one);
+    }
+    if(!(stats(gpu).draws > before.draws)) std::printf("  the wrapped texture at %08x: no draw reached the GPU\n", address);
+    CHECK(stats(gpu).draws > before.draws, true);
+    hardware.ge.setRenderer(nullptr);
+  }
+  //(a span outside VRAM that wraps is left alone: the GPU takes none of it, as before; the check keeps that path honest)
+  auto before = stats(gpu);
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  u32 ramEnd = 0x0800'0000 + 64_MiB - 128;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(u32 n = 0; n < 32 * 32; n++) s->memory.write(4, ramEnd + n * 4, u32(n * 0x9e37'79b9));
+    texture(*s, ramEnd, 32, 32, 32);
+    for(auto& one : randomSprites(random, 60, true)) sprite(*s, one);
+  }
+  if(stats(gpu).draws > before.draws) std::printf("  a wrapped RAM texture: draws reached the GPU\n");
+  CHECK(stats(gpu).draws, before.draws);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //A frame buffer drawn, then sampled by sprites drawing into another: the texture taken from the GPU's own picture
 //(a copy on the GPU, not a read back), and the result the software renderer's.
 static auto gpuRenderToTexture() -> void {
@@ -6248,6 +6291,7 @@ auto gpuTests() -> Tests {
     {"gpu sprites against the software renderer", gpuSprites},
     {"gpu the stencil as each 16-bit format keeps it: 5650's tests against 0, clears and replaces", gpuStencilFormats},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
+    {"gpu wrapped texture against the software renderer", gpuWrappedTexture},
     {"gpu anti-aliased lines against the software renderer", gpuSmoothLines},
     {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
