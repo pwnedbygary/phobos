@@ -21131,3 +21131,86 @@ the largest channel delta 47.
 ### Scratch
 
 Kept outside the repository: the runners (master and the change), the PNGs compared, and the save state's runs.
+
+## Part 125: the swapchain presented as it is — a surface that calls every present suboptimal no longer costs a swapchain a frame
+
+A surface can say a presented frame was suboptimal: shown, but not by the cheapest path it offers. The renderer took
+that for "make the swapchain again", and on the Android device this was found on a landscape SurfaceView over a
+portrait screen said it every frame: a swapchain was made a frame, and the app's frames ran no faster than that make
+allowed.
+
+### Why
+
+- **The surface's transform is not the swapchain's.** The SurfaceView's surface reports the panel's
+  `currentTransform` (a rotation) while the swapchain is made with `preTransform = IDENTITY`, the compositor turning
+  the picture where the screen is turned (`makeSwapchain()`'s comment). Some drivers call every present on such a
+  swapchain `VK_SUBOPTIMAL_KHR` because a rotation could have been saved in the render, and Adreno does.
+- **Suboptimal meant "make it again".** `acquire()` returned `rebuild = true` on an `VK_SUBOPTIMAL_KHR` acquisition,
+  and `present()` set it on a suboptimal present, so the next run dropped the swapchain and made a new one. A swapchain
+  a frame, with the emulation thread blocked in it while the frame's own GPU work waited for the next run: in the
+  frozen full diagnostic log, the **title-screen windows took 60 makes a window and 830-1011 ms of makes (13.8-16.9 ms
+  a make)**; the log's earlier 60-fps phase 492-637 ms (8.2-10.6 ms a make); the whole log 5.4-16.9 ms a make and
+  325-1011 ms a window. (An earlier short capture of the same build: 887-902 ms a window, 14.79-15.03 ms of
+  `acquire()` setup.)
+- **Measured, on the RP6, in an instrumented build.** God of War: Ghost of Sparta's title at 5x: the title-screen
+  windows of the frozen full log spent **13.84-16.86 ms in `acquire()`'s setup and 0.00-0.01 ms in
+  `vkAcquireNextImageKHR` itself**, with **60 swapchain makes a window**; the frames were 36.7-38.7 a second at
+  23.73-27.43 ms. The app's own overlay in the A screenshots read **40-41% CPU and 56-57% GPU** (615 MHz), so neither
+  was the limit: the blocked make is what serialised them.
+- **It is the app's alone.** The headless runner presents on no window and so makes no swapchain; no runner comparison
+  is claimed here.
+
+### The change
+
+- **Suboptimal is presented as it is.** Neither `acquire()`'s `VK_SUBOPTIMAL_KHR` nor `present()`'s makes the swapchain
+  again. `VK_ERROR_OUT_OF_DATE_KHR` still does, before the next run (such an image cannot be shown); a lost surface or
+  device is handled as before.
+- **A real surface change still rebuilds at once.** A new `stale()` compares the surface's `currentExtent` (or the
+  window's size where the surface has none) with the swapchain's `imageExtent`, and the formats the surface offers
+  with the swapchain's `imageFormat`. Where either has really changed, a suboptimal present rebuilds the swapchain; a
+  transform the compositor does is not such a change, and `stale()` says why in its comment.
+- **A budget, so a surface that always says so cannot loop.** `swapRebuilt` counts swapchains made since the last
+  frame presented without complaint (`VK_SUCCESS` clears it); past eight, a suboptimal report no longer rebuilds.
+- **Nothing else changes.** No rendering command, shader, target, pass or read-back changes; the emulated machine, its
+  timing and its save states are untouched: this is the lifetime of a window's swapchain only. (The captures are not a
+  pixel-for-pixel comparison: they are at different emulated moments and show the app's HUD, which differs by design.)
+
+### Evidence
+
+- **RP6, God of War: Ghost of Sparta's title at 5x, 3 interleaved pairs** (install A before the change, launch, read
+  the app's own Emulation Stats, force-stop; then B after it, the same; frames a second and the app's own average
+  frame time): A **38.7/38.6/37.9 fps** (24.40/24.09/25.19 ms), B **56.2/59.0/57.9 fps** (17.92/15.16/17.23 ms).
+- **The same, Chains of Olympus' title at 5x, 2 pairs:** A **49.0/48.0 fps** (18.87/18.81 ms), B **60.0/60.0 fps**
+  (9.48/9.85 ms, its `Over20ms` count 0). Chains of Olympus reaches the display's 59.94; Ghost of Sparta gets close
+  (56.2-59.0).
+- **The instrumented builds** (local diagnostic builds, not part of this change; full logs frozen): before, in its
+  title-screen windows, 60 swapchain makes a window (830-1011 ms; whole log 325-1011 ms), `acquire` setup 13.84-16.86 ms
+  a call against 0.00-0.01 ms in `vkAcquireNextImageKHR`, frames 36.7-38.7 at 23.73-27.43 ms (whole log 5.42-16.86 ms
+  a call). With a build carrying this policy, after the first rebuild (one window change: two makes, 14.86 ms) no
+  swapchain was made at all in any of the 37 further acquisition windows (`acquire` setup 0.00 ms), and the frames ran
+  52.0-60.0, the last eight 56.0-60.0 at 15.9-18.4 ms (the logging costs a frame time or two: the shipped build's A/B
+  above is the record).
+- **Pictures.** Screenshots of both titles, before and after (GoS and Chains of Olympus), show the same geometry (the
+  non-black region's bounding box is 7,0-1912,1079 in both), the same orientation and the same crop. They are not a
+  pixel-for-pixel comparison (see above); the app's overlay in the A screenshots also reads 40-41% CPU and 56-57% GPU
+  against 39-46% and 76-78% in the B ones, its GPU clock 615 MHz against 680 MHz.
+- **Checks:** `tests/psp/run-tests.sh` on this snapshot: 669 groups, 0 failures. (The tests draw no window: the
+  swapchain path is measured on the device, as above.) `git diff --check` clean.
+
+### Limits
+
+- The swapchain is still made with `preTransform = IDENTITY` and the compositor still rotates. Rendering pre-rotated (a
+  swapchain made with the surface's transform, the present pass turned to match) is the fuller fix and is not
+  attempted here; a present's cost in the diagnostic varied between runs (0.03-6.65 ms a run) and is not claimed
+  here.
+- Only the two God of War titles were exercised; the library, and save-state loading, are not re-measured. The
+  measurements are of local release builds signed with the repository's release keystore, updated in place over the
+  CI build (its data kept), not of the CI artifact.
+- The frame times above are the app's own Emulation Stats (a second of frames), not the runner's; no PPSSPP
+  comparison is made here.
+
+### Scratch
+
+Kept outside the repository, on the NVMe mount: the two APKs and their SHA-256s, the instrumented diagnostic build's
+logs (the swapchain, acquire and present breakdown), the interleaved runs' logs, stats and screenshots, the frozen
+snapshot and its manifest (`psp-perf-hires/analysis/swapfix-snapshot/`).
