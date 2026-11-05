@@ -121,6 +121,29 @@ evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
   RP6 A/B is pending and no device figure is claimed.
 - **Review**: independent review of the change, the reproduction's pictures, the cross-state comparisons and the frozen
   snapshot; verdict in the commit message and the ledger once given.
+## PSP Vulkan fast: meshes take a PRIM of three triangles, not sixteen vertices — 2026-11-05
+
+Branch `cursor/psp-fast-meshleast-2b67`, from `cursor/psp-sw-fours-2b67` (part 128); docs/psp-core.md, part 129, has the
+evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: fast mode GPU-transforms a 3D PRIM only when its vertex count makes the per-PRIM settings block worthwhile
+  (`MeshLeast`, 16 vertices). Games drawing thousands of small PRIMs (God of War: 2.87M primitives in 200 frames of its
+  training state, 2.6% of them at least that big) kept the transform/lighting/clip work on the CPU.
+- **What**: `MeshLeast` is 9 — a PRIM of three triangles or more becomes a mesh — so the CPU no longer transforms it.
+  Fast mode only: accurate mode has no GPU transform, and the software renderer doesn't mesh.
+- **Evidence**: host runner, -O2, Vulkan fast at 5x, 400 frames, three interleaved runs a side: God of War: Ghost of
+  Sparta 79.6 -> 82.1 fps (+3.2%), Chains of Olympus 87.4 -> 89.4 (+2.3%), Super Stardust 101.4 -> 101.9 (+0.5%),
+  Killzone 89.0 -> 89.7 (+0.9%); single runs at 8x: God of War 63.3 -> 70.9 (+12.1%), Peace Walker 84.9 -> 84.8.
+  Four more states, single runs at 5x: Burnout 94.6 -> 93.5 (-1.1%), Colin McRae 41.0 -> 41.3, Gundam 56.1 -> 56.2,
+  Peace Walker 97.6 -> 98.6. Pictures: largest channel difference 0-9 levels, the 9 being one Killzone pixel
+  (0.000048% of its frame); otherwise no channel over 8. The whole host suite is 672 groups, 0 failures.
+- **The RP6 A/B** (done): GoS training state, Vulkan fast 5x, two interleaved rounds a side, twelve one-second samples
+  a round: AvgFrameTime median 12.72/12.73 ms with MeshLeast 16 against 12.46/12.15 ms with 9 — **12.73 -> 12.30 ms,
+  -3.3%** — the same scene in both builds (the game area of their captures is identical, 0 of its pixels differ; the
+  whole capture's 0.10-0.16% is the status overlay and touch-control rows), both paced at 60 fps so that is headroom.
+- **Limits**: the RP6 figure is one scene of one game; the rest are host runs, mostly single, and no device figure is
+  claimed for them. Fast mode only; other modes untouched in picture and speed.
+- **Review**: independent review of the change, the pictures' differences, the speed and the frozen snapshot; verdict
+  recorded in the commit message and the ledger once given.
 
 ## PSP software renderer: texels read where they are, and smaller batches shared out — 2026-11-04
 
