@@ -1172,6 +1172,9 @@ struct Kernel {
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   bool gePspTiming = true;  //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", its default,
                             //geTime()); power() leaves it
+  //file requests take no device time (option "File I/O" "Fast", experimental; the default, "PSP", charges them the
+  //disc's and memory stick's rates, async.cpp and io.cpp); power() leaves it
+  bool fastFileIo = false;
   mutable u64 geReachAt = 0;  //when (cycles) a PSP's GE's front end would have got through what it was last given
   bool geSignalDue = false; //with the PSP's timing, the list met a SIGNAL, its interrupt taken from geReachAt on, the
                             //GE waiting there (geRun())
@@ -1282,6 +1285,10 @@ struct Kernel {
   auto geExactLimit(const GeLimit& limit) -> u64;
   auto geIndex(u32 id) const -> s32;
   auto geTime(u64 commands) -> void;
+  //The PSP's time for a request of so many bytes on the disc or the memory stick, whatever the option "File I/O"
+  //says: what a save state's checks bound their waits by (serialization.cpp), so a state made under "PSP" loads
+  //under "Fast" too (asyncDuration() alone would give 0 there, and a pending request would look impossible).
+  auto asyncDurationPsp(bool onDisc, u64 bytes) const -> u64;
   auto geResume() -> void;
   auto geOwe(f64 clocks) -> void;
   auto geDriven(u64 cpuCycles) -> void;

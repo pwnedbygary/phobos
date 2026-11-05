@@ -182,6 +182,29 @@ auto nodeTree() -> void {
   root->unload();
 }
 
+//(option "File I/O": "PSP" by default, "Fast" taken at the next power on — the kernel's flag follows the option,
+//and back — so the app's switch and the runner's flag have a way into the core that is checked on both sides.)
+auto fileIoOption() -> void {
+  std::printf("the option \"File I/O\" at power on\n");
+  Node::System root;
+  if(!CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads")) return;
+  root->power();  //(the option is taken at the next power on, so the machine is powered between each)
+  CHECK(!psp.kernel.fastFileIo, "File I/O PSP by default");
+  root->unload();
+  PlayStationPortable::option("File I/O", "Fast");
+  if(CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads with File I/O Fast")) {
+    root->power();
+    CHECK(psp.kernel.fastFileIo, "File I/O Fast reaches the kernel");
+  }
+  root->unload();
+  PlayStationPortable::option("File I/O", "PSP");
+  if(CHECK(PlayStationPortable::load(root, "[Sony] PlayStation Portable"), "the PSP loads with File I/O PSP")) {
+    root->power();
+    CHECK(!psp.kernel.fastFileIo, "File I/O PSP reaches the kernel");
+  }
+  root->unload();
+}
+
 //A program run from its own folder, which stands for its disc; its picture through to the front end; the controls.
 auto program(const fs::path& programs, bool recompile) -> void {
   std::printf("a homebrew program in the drive, run a frame at a time\n");
@@ -1354,6 +1377,7 @@ auto main() -> int {
   PlayStationPortable::option("GE Timing", "Fast");
   names();
   nodeTree();
+  fileIoOption();
   drawingThreads();
   geThreadAndPspTiming();
   presentedFrame();

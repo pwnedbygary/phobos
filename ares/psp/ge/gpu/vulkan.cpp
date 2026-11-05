@@ -183,6 +183,7 @@ struct VulkanBackend : GPU::Backend {
   VkPhysicalDeviceProperties chosen{};  //(the device's: a kept pipeline cache's owner, pipelineData())
   VkFormat depthFormat = VK_FORMAT_UNDEFINED;
   VkRenderPass renderPass = VK_NULL_HANDLE;
+  bool fast = false;  //(Vulkan (fast): its depth is the rasterizer's, not draw.frag's: part 124)
   VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
   VkDescriptorSetLayout frameLayout = VK_NULL_HANDLE;  //(set 1 of draws: a target's Target::frame)
   VkDescriptorSetLayout transformLayout = VK_NULL_HANDLE;  //(set 2: fast mode's Transformed blocks, Slot::transforms)
@@ -260,7 +261,7 @@ struct VulkanBackend : GPU::Backend {
   struct Squeeze { u32 readback, width, height; };
   std::vector<Squeeze> squeezes;
   //(the last finish()'s read backs of depths alone, Readback's parts 2: readback n's, its width and height; and the
-  //GE's 16-bit depths readDepth() made of one)
+  //depths readDepth() made of one, the GE's 16-bit ones, or fast mode's rasterizer depths, part 124)
   std::vector<Squeeze> depthReads;
   std::vector<u16> depthsRead;
   std::vector<VkBufferImageCopy> rows;
@@ -284,6 +285,9 @@ struct VulkanBackend : GPU::Backend {
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
   VkExtent2D swapExtent{};
+  VkFormat swapFormat = VK_FORMAT_UNDEFINED;  //(its imageFormat, and the surface's formats changed: rebuild says so)
+  u32 swapRebuilt = 0;  //(swapchains made since a frame was last presented without complaint: a surface that calls
+                        //every present suboptimal is not remade forever, see stale())
   std::vector<Swapped> swapImages;
   //(swapchains, their images, and surfaces let go of after a run never ended, timedOut: held, the window still
   //connected to its surface, till every run has ended, then destroyed: releaseHeld())
@@ -778,7 +782,13 @@ struct VulkanBackend : GPU::Backend {
     //device clamps the depth and the corners' depths are the GE's 0-65535, as 3D's are held; else undeclared, the
     //depth rasterized at the GE's: Backend::depthBuild())
     bool depths = k.depths(), declared = depths && depthClamp && !k.outside;
-    u32 above = declared;
+    //(fast mode's depth: draw.frag's DEPTHS build writes gl_FragDepth, and a shader that writes the depth may keep the
+    //GPU from testing it before it runs, so every overdraw layer's shader runs. Fast mode takes the rasterizer's depth
+    //instead, its pipelines still testing and writing it, and the early test with it: 13% of the frame at 5x on Ghost
+    //of Sparta, with the GE's floored 16-bit depth's last fraction given up (2.8% of the title's pixels differ, 0.13%
+    //by more than 8 levels).)
+    bool shaderDepths = depths && !fast;
+    u32 above = declared && shaderDepths;
     VkSpecializationMapEntry aboveEntry{0, 0, 4};
     VkSpecializationInfo vertexSpecialization{1, &aboveEntry, sizeof(above), &above};
     //(fast mode's 3D: transform.vert, taking the GE's vertices)
@@ -786,7 +796,8 @@ struct VulkanBackend : GPU::Backend {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
        k.transformed ? transformModule : vertexModule, "main", &vertexSpecialization},
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
-       !depths ? fragmentModule : declared ? fragmentDepthModule : fragmentUndeclaredModule, "main", &specialization}};
+       !shaderDepths ? fragmentModule : declared ? fragmentDepthModule : fragmentUndeclaredModule, "main",
+       &specialization}};
     using V = GPU::Vertex;
     using M = GPU::Model;
     VkVertexInputBindingDescription binding{0, k.transformed ? u32(sizeof(M)) : u32(sizeof(V)),
@@ -1383,7 +1394,8 @@ struct VulkanBackend : GPU::Backend {
                               u64(key.depthCompare) << 24 | u64(key.reads) << 32 | u64(key.blending) << 40 |
                               u64(key.textured) << 48 | u64(key.alphaTest) << 56 | u64(key.stencilTest) << 57 |
                               u64(key.blend) << 58;
-            record.writesDepth = key.depths();
+            //(the DEPTHS shader's: fast mode's depth is the rasterizer's, its shader writing none, part 124)
+            record.writesDepth = !fast && key.depths();
             auto foundTarget = targetImages.find(c.target);
             if(foundTarget != targetImages.end()) {
               record.shown = foundTarget->second.shown, record.copied = foundTarget->second.copied;
@@ -1794,9 +1806,11 @@ struct VulkanBackend : GPU::Backend {
       info.swapchainCount = 1, info.pSwapchains = &swapchain, info.pImageIndices = &image;
       VkResult shown = vk.vkQueuePresentKHR(queue, &info);
       presented = shown == VK_SUCCESS || shown == VK_SUBOPTIMAL_KHR;
-      if(shown == VK_SUBOPTIMAL_KHR || shown == VK_ERROR_OUT_OF_DATE_KHR) rebuild = true;
+      if(shown == VK_ERROR_OUT_OF_DATE_KHR) rebuild = true;  //(made again before the next run: it can't be shown)
       else if(shown == VK_ERROR_SURFACE_LOST_KHR) dropSurface();
       else if(shown == VK_ERROR_DEVICE_LOST) return lost = true, false;
+      else if(shown == VK_SUCCESS) swapRebuilt = 0;  //(the frames before this one's presentation ended the last remake)
+      else if(shown == VK_SUBOPTIMAL_KHR && swapRebuilt < 8 && stale()) rebuild = true;
     }
     if(!waits) return true;
     began = Clock::now();
@@ -2129,7 +2143,7 @@ struct VulkanBackend : GPU::Backend {
     if(vk.vkCreateSwapchainKHR(device, &info, nullptr, &swapchain) != VK_SUCCESS) {
       return swapchain = VK_NULL_HANDLE, -1;
     }
-    swapExtent = extent;
+    swapExtent = extent, swapFormat = format.format;
     if(!makePresentPass(format.format)) return -1;
     vk.vkGetSwapchainImagesKHR(device, swapchain, &count, nullptr);
     std::vector<VkImage> chained(count);
@@ -2151,12 +2165,40 @@ struct VulkanBackend : GPU::Backend {
     return 1;
   }
 
+  //Whether the surface no longer matches the swapchain: its size, or a format it offers that the swapchain's isn't.
+  //(Not its transform: the swapchain is made with preTransform IDENTITY where the surface allows that, the compositor
+  //turning the picture where the screen is turned, and some drivers call every present on such a swapchain suboptimal
+  //because a rotation could be saved: that is no reason to make it again, and taking it for one made a swapchain a
+  //frame, a tenth of a second of GPU time each, on the Android device this was found on.)
+  auto stale() -> bool {
+    if(!swapchain || !surface) return true;
+    VkSurfaceCapabilitiesKHR capabilities;
+    if(vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &capabilities) != VK_SUCCESS) return true;
+    VkExtent2D extent = capabilities.currentExtent;
+    #if defined(__ANDROID__)
+    if(extent.width == 0xffff'ffff) {
+      extent = {u32(ANativeWindow_getWidth((ANativeWindow*)shownOn)),
+                u32(ANativeWindow_getHeight((ANativeWindow*)shownOn))};
+    }
+    #endif
+    if(extent.width != swapExtent.width || extent.height != swapExtent.height) return true;
+    u32 count = 0;
+    vk.vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &count, nullptr);
+    if(!count) return true;
+    std::vector<VkSurfaceFormatKHR> formats(count);
+    vk.vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &count, formats.data());
+    //(a surface offering one format that is VK_FORMAT_UNDEFINED takes any: the swapchain's is one of them)
+    if(formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) return false;
+    for(auto& format : formats) if(format.format == swapFormat) return false;
+    return true;
+  }
+
   //A swapchain image to present on, acquired for the slot's run (its semaphore signalled as it's ready): false
   //where there's none (no window, no size yet, a tenth of a second without one) or presenting has been given up.
   auto acquire(Slot& slot, u32& image) -> bool {
     if(!presents() || !shownOn) return false;
     for(u32 attempt = 0; attempt < 2; attempt++) {
-      if(rebuild) dropSwapchain();
+      if(rebuild) swapRebuilt++, dropSwapchain();
       if(!surface && !makeSurface()) return giveUp();
       if(!swapchain) {
         s32 outcome = makeSwapchain();
@@ -2166,7 +2208,12 @@ struct VulkanBackend : GPU::Backend {
       VkResult result = vk.vkAcquireNextImageKHR(device, swapchain, AcquireTimeout, slot.acquired, VK_NULL_HANDLE,
                                                  &image);
       if(result == VK_SUCCESS) return true;
-      if(result == VK_SUBOPTIMAL_KHR) return rebuild = true, true;  //(acquired: shown, then made again)
+      //(acquired: shown; made again only where the surface has really changed, or once in a while for one that keeps
+      //saying so — stale() above says why its transform alone is not a change)
+      if(result == VK_SUBOPTIMAL_KHR) {
+        if(swapRebuilt < 8 && stale()) rebuild = true;
+        return true;
+      }
       if(result == VK_ERROR_OUT_OF_DATE_KHR) { rebuild = true; continue; }
       if(result == VK_ERROR_SURFACE_LOST_KHR) return dropSurface(), false;  //(made again at the next present)
       if(result == VK_ERROR_DEVICE_LOST) lost = true;
@@ -2325,6 +2372,7 @@ struct VulkanBackend : GPU::Backend {
   //cached: the pipelines a session before made, as pipelineData() gave them)
   auto create(PFN_vkGetInstanceProcAddr getInstanceProcAddr, std::string& error, bool fast,
               const std::vector<u8>& cached) -> bool {
+    this->fast = fast;
     if(!getInstanceProcAddr) {  //(none from the host: the system's loader)
       #if !defined(_WIN32)  //(Windows' host always hands its own over)
       #if defined(__APPLE__)

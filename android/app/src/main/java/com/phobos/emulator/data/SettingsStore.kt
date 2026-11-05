@@ -290,6 +290,9 @@ data class EmulatorSettings(
     /** The GE takes the time a real PSP's took over the same work (the core's "GE Timing" "PSP", the default), not
      *  Sony's peak rates ("Fast"). */
     val pspGeTiming: Boolean = true,
+    /** File requests take no device time (the core's "File I/O" "Fast", experimental): loads, saves and installs at
+     *  the host's speed, not a PSP's disc's and memory stick's. Off (the default): as a real PSP's devices take. */
+    val pspFastFileIo: Boolean = false,
     /** What a controller's right stick does in a PSP game. */
     val pspRightStick: PspRightStick = PspRightStick.OFF,
     val arcadeRomsPath: String = "",
@@ -433,6 +436,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val PSP_GRAPHICS_OVERLAP = intPreferencesKey("psp_graphics_overlap")
         val PSP_THREAD_PLACEMENT = booleanPreferencesKey("psp_thread_placement")
         val PSP_GE_TIMING = booleanPreferencesKey("psp_ge_timing")
+        val PSP_FAST_FILE_IO = booleanPreferencesKey("psp_fast_file_io")
         val PSP_RIGHT_STICK = stringPreferencesKey("psp_right_stick")
         val ZX_TAPE_AUTO = booleanPreferencesKey("zx_tape_auto")
         val BUSY_WAIT_PACING = booleanPreferencesKey("busy_wait_pacing")
@@ -676,6 +680,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             pspGraphicsOverlap = safeGet(PSP_GRAPHICS_OVERLAP, 0),
             pspThreadPlacement = safeGet(PSP_THREAD_PLACEMENT, false),
             pspGeTiming = safeGet(PSP_GE_TIMING, true),
+            pspFastFileIo = safeGet(PSP_FAST_FILE_IO, false),
             pspRightStick = enumOrDefault(safeGetString(PSP_RIGHT_STICK, ""), PspRightStick.OFF),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
@@ -928,6 +933,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setPspGraphicsOverlap(mode: Int) = dataStore.edit { it[PSP_GRAPHICS_OVERLAP] = mode }
     suspend fun setPspThreadPlacement(enabled: Boolean) = dataStore.edit { it[PSP_THREAD_PLACEMENT] = enabled }
     suspend fun setPspGeTiming(psp: Boolean) = dataStore.edit { it[PSP_GE_TIMING] = psp }
+    suspend fun setPspFastFileIo(fast: Boolean) = dataStore.edit { it[PSP_FAST_FILE_IO] = fast }
     suspend fun setPspRightStick(choice: PspRightStick) = dataStore.edit { it[PSP_RIGHT_STICK] = choice.name }
     suspend fun setZxTapeAuto(enabled: Boolean) = dataStore.edit { it[ZX_TAPE_AUTO] = enabled }
     suspend fun setBusyWaitPacing(enabled: Boolean) = dataStore.edit { it[BUSY_WAIT_PACING] = enabled }

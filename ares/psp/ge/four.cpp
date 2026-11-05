@@ -242,15 +242,12 @@ alwaysinline auto GE::texelsFour(const Look& look, bool linear, s32x4 live, cons
     //Each right texel just after its left one (not repeated round, nor held at the edge): the two read at once.
     //(Lanes not live read the first two texels, which a texture at least two wide has.)
     s32x4 top = pickLanes(live, v[0] * width + u[0], s32x4{}), bottom = pickLanes(live, v[1] * width + u[0], s32x4{});
-    u64 upper[4], lower[4];
-    for(u32 n = 0; n < 4; n++) {
-      std::memcpy(&upper[n], t.decoded + top[n], 8);
-      std::memcpy(&lower[n], t.decoded + bottom[n], 8);
-    }
-    topLeft = u32x4{u32(upper[0]), u32(upper[1]), u32(upper[2]), u32(upper[3])};
-    topRight = u32x4{u32(upper[0] >> 32), u32(upper[1] >> 32), u32(upper[2] >> 32), u32(upper[3] >> 32)};
-    bottomLeft = u32x4{u32(lower[0]), u32(lower[1]), u32(lower[2]), u32(lower[3])};
-    bottomRight = u32x4{u32(lower[0] >> 32), u32(lower[1] >> 32), u32(lower[2] >> 32), u32(lower[3] >> 32)};
+    //(each lane's two texels read where they are: a lane not live reads the first two, which a texture two wide has)
+    topLeft = u32x4{t.decoded[top[0]], t.decoded[top[1]], t.decoded[top[2]], t.decoded[top[3]]};
+    topRight = u32x4{t.decoded[top[0] + 1], t.decoded[top[1] + 1], t.decoded[top[2] + 1], t.decoded[top[3] + 1]};
+    bottomLeft = u32x4{t.decoded[bottom[0]], t.decoded[bottom[1]], t.decoded[bottom[2]], t.decoded[bottom[3]]};
+    bottomRight = u32x4{t.decoded[bottom[0] + 1], t.decoded[bottom[1] + 1], t.decoded[bottom[2] + 1],
+                        t.decoded[bottom[3] + 1]};
   } else {
     topLeft = gather(u[0], v[0]), topRight = gather(u[1], v[0]);
     bottomLeft = gather(u[0], v[1]), bottomRight = gather(u[1], v[1]);
@@ -260,11 +257,25 @@ alwaysinline auto GE::texelsFour(const Look& look, bool linear, s32x4 live, cons
   //filtered() has four in 64: a channel times sixteenths stays below 4096, so none spills into the next, and each
   //shift's spill from the next is masked off.
   constexpr u32 Two = 0x00ff'00ff;
+  //(the filter's arithmetic in 16-bit lanes: each lane's two channels sit side by side as 16-bit values, so a channel
+  //times sixteenths stays below 4096, and the multiplies are the host's 16-bit ones, two channels a lane at once)
+  using u16x8 = u16 __attribute__((vector_size(16)));
+  auto spread = [](u32x4 value) -> u16x8 {
+    return u16x8{u16(value[0]), u16(value[0]), u16(value[1]), u16(value[1]), u16(value[2]), u16(value[2]),
+                 u16(value[3]), u16(value[3])};
+  };
+  auto wide = [](u32x4 value) -> u16x8 { u16x8 lanes; std::memcpy(&lanes, &value, sizeof(lanes)); return lanes; };
+  auto narrow = [](u16x8 lanes) -> u32x4 { u32x4 value; std::memcpy(&value, &lanes, sizeof(value)); return value; };
+  constexpr u16x8 Bytes = {0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff};
   u32x4 across = u32x4(u[2]), down = u32x4(v[2]);
+  u16x8 acrossWide = spread(across), acrossLess = spread(u32x4{} + 16 - across);
+  u16x8 downWide = spread(down), downLess = spread(u32x4{} + 16 - down);
   auto blend = [&](u32x4 topLeft, u32x4 topRight, u32x4 bottomLeft, u32x4 bottomRight) -> u32x4 {
-    u32x4 upper = (topLeft * (16 - across) + topRight * across) >> 4 & Two;
-    u32x4 lower = (bottomLeft * (16 - across) + bottomRight * across) >> 4 & Two;
-    return (upper * (16 - down) + lower * down) >> 4 & Two;
+    u16x8 topLeftWide = wide(topLeft), topRightWide = wide(topRight);
+    u16x8 bottomLeftWide = wide(bottomLeft), bottomRightWide = wide(bottomRight);
+    u16x8 upper = (topLeftWide * acrossLess + topRightWide * acrossWide) >> 4 & Bytes;
+    u16x8 lower = (bottomLeftWide * acrossLess + bottomRightWide * acrossWide) >> 4 & Bytes;
+    return narrow((upper * downLess + lower * downWide) >> 4 & Bytes);
   };
   u32x4 redBlue = blend(topLeft & Two, topRight & Two, bottomLeft & Two, bottomRight & Two);
   u32x4 greenAlpha = blend(topLeft >> 8 & Two, topRight >> 8 & Two, bottomLeft >> 8 & Two, bottomRight >> 8 & Two);
@@ -281,7 +292,8 @@ alwaysinline auto GE::combineFour(const Look& look, s32x4 (&color)[4], const s32
   s32x4 out[3];
   switch(look.function) {
   case 0:
-    for(u32 n = 0; n < 3; n++) out[n] = (color[n] + 1) * texel[n] * twice >> 8;
+    //(the doubled texture's own scaling is the shift's (down is 7 then, 8 otherwise): a shift, not a multiply)
+    for(u32 n = 0; n < 3; n++) out[n] = (color[n] + 1) * texel[n] >> down;
     break;
   case 1:
     for(u32 n = 0; n < 3; n++) {

@@ -363,7 +363,16 @@ auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer,
   rows = std::min({rows, t.height, 512u});
   u32 low, high;
   textureBytes(t, rows, low, high);
-  if(!memory.reaches(low, high - low)) return;
+  //(a span that wraps VRAM's first copy's end, which Memory::reaches() refuses: decoded afresh in fillDecoded(). Only
+  // that copy's: a texture at one of VRAM's plain mirror copies is brought to the first, and a span outside VRAM that
+  // wraps stays as it was — not decoded here.)
+  if(!memory.reaches(low, high - low)) {
+    u32 physical = t.address & 0x1fff'ffff;
+    if(physical - Memory::VRAMBase >= Memory::VRAMWindow ||
+       ((physical - Memory::VRAMBase) / Memory::VRAMSize & 1)) return;
+    fillDecoded(look, rows, boxOf);
+    return;
+  }
   if(u32 first, last; vramSpan(low, high - low, first, last)) {
     TexelRows texels{first, last};
     u32 seen = (t.address & 0x1fff'ffff) - Memory::VRAMBase;
@@ -535,6 +544,49 @@ auto GE::fillDecoded(Look& look, u32 rows, const std::function<auto () -> TexelB
   rows = std::min({rows, t.height, 512u});
   u32 low, high;
   textureBytes(t, rows, low, high);
+  if(!memory.reaches(low, high - low)) {
+    //(The GE on its own thread: the render GE's reads are watched against the emulation thread's model, and a wrapped
+    // span's second run (VRAM's start) reads pages the model's reach for this PRIM doesn't declare — so a wrapped
+    // texture stays the software renderer's there, as before, rather than tripping the model.)
+    if(versioned()) return;
+    //(the bytes run round VRAM's end: gathered from its two runs into one linear image, then decoded afresh for this
+    // PRIM — not kept in the cache, whose watching and in-place reading both follow pointer()-reachable spans)
+    if(t.swizzled || t.format >= 8) return;
+    u32 pitch = t.bufferWidth * TexelBits[t.format] / 8;
+    u64 span = u64(rows) * pitch;
+    if(!pitch || span > (64_MiB)) return;
+    std::vector<u8> bytes(span);
+    u32 offset = ((t.address & 0x1fff'ffff) - Memory::VRAMBase) % Memory::VRAMSize;  //(a plain copy, brought home)
+    u64 firstRun = std::min<u64>(span, Memory::VRAMSize - offset);
+    auto gather = [&](u32 at, u64 size, u8* out) {
+      Reading reading{*this, at, u32(size)};
+      const u8* base = reading.pointer(at, u32(size));
+      if(base) { std::memcpy(out, base, size); return; }
+      for(u64 n = 0; n < size; n += 4) {
+        u32 part = u32(std::min<u64>(4, size - n));
+        u32 value = part == 4 ? reading.read(4, at + u32(n))
+                  : part == 2 ? reading.read(2, at + u32(n)) : reading.read(1, at + u32(n));
+        std::memcpy(out + n, &value, part);
+      }
+    };
+    gather(Memory::VRAMBase + offset, firstRun, bytes.data());
+    if(span > firstRun) gather(Memory::VRAMBase, span - firstRun, bytes.data() + firstRun);
+    TextureKey wrappingKey{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), t.swizzled, 0, 0, 0, 0, 0};
+    if(t.format >= 4 && t.format < 8) {
+      wrappingKey.clutFormat = t.clutFormat, wrappingKey.clutShift = t.clutShift, wrappingKey.clutMask = t.clutMask,
+      wrappingKey.clutOffset = t.clutOffset, wrappingKey.clutHash = clutHash;
+    }
+    auto fresh = std::make_shared<Decoded>();
+    fresh->key = wrappingKey;
+    fresh->rows = rows;
+    fresh->right = std::min<u32>(t.width, 512);
+    fresh->texels.resize(u64(fresh->right) * rows);
+    decodeRows(t, clut, bytes.data(), t.address, fresh->right, 0, rows, fresh->texels.data(), 0, fresh->right);
+    look.decoded = fresh;
+    t.decoded = fresh->texels.data(), t.decodedWidth = fresh->right;
+    t.decodedRows = rows, t.decodedTop = 0, t.decodedLeft = 0, t.decodedRight = fresh->right;
+    return;
+  }
   bool indexed = t.format >= 4 && t.format < 8;
   TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), t.swizzled, 0, 0, 0, 0, 0};
   if(indexed) key.clutFormat = t.clutFormat, key.clutShift = t.clutShift, key.clutMask = t.clutMask,

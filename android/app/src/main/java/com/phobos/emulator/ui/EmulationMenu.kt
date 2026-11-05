@@ -461,13 +461,14 @@ private fun PspSection(viewModel: MainViewModel, settings: EmulatorSettings, onR
     val started by viewModel.pspStartSettings.collectAsState()
     val chosen = PspStartSettings.of(
         settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads, settings.pspGeTiming,
-        graphicsOverlap = settings.pspGraphicsOverlap,
+        graphicsOverlap = settings.pspGraphicsOverlap, fastFileIo = settings.pspFastFileIo,
     )
     MenuSection("PlayStation Portable") {
         PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
         PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
         PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
         PspGeTimingItem(settings.pspGeTiming) { viewModel.setPspGeTiming(it) }
+        PspFastFileIoItem(settings.pspFastFileIo) { viewModel.setPspFastFileIo(it) }
         // (PspGraphicsOverlapItem not offered till On is faster than Off on the RP6)
         if (started?.runsAs(chosen) == false) {
             ListItem(

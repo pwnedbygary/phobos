@@ -989,6 +989,8 @@ alwaysinline auto GPU::kept(const GE::Look& look) const -> bool {
               (c[GE::MaskAlpha] ^ k.maskAlpha) | (target->id ^ k.target) | (target->stride ^ k.stride) |
               (target->height ^ k.rows) | (column ^ k.column) | (row ^ k.row) | (shade ^ k.shade) |
               (filter ^ k.filter);
+  //(fast mode's reads16 needs no field of its own: the frame buffer's format is in the pixel state the bytes above
+  //compare, and the rest of its condition (fast, the resolution) doesn't change between two PRIMs)
   u32 flags = u32(look.textured != k.textured) | u32(t.clampU != k.clampU) | u32(t.clampV != k.clampV) |
               u32(look.withAlpha != k.withAlpha) | u32(look.doubled != k.doubled) | u32(backend->reads != k.reads) |
               u32(backend->readsBlending != k.readsBlending) | u32(backend->dualSource != k.dualSource) |
@@ -1030,8 +1032,13 @@ auto GPU::settings(const GE::Look& look) -> void {
   auto doubled = [](u32 factor) { return factor == 6 || factor == 8 || factor == 9; };
   bool unlike = p.blend && (p.blendOperation == 5 || p.format < 3 ||
                             (p.blendOperation < 3 && (doubled(p.blendSource) || doubled(p.blendDestination))));
-  bool reading = backend->reads && (partial || (!p.clear && ((p.logicOp && p.logic != 3) || unlike ||
-                                                             (p.blend && backend->readsBlending))));
+  //(Fast mode's 16-bit frame buffers are read in the shader too: the GPU's blending keeps 8 bits between blends and
+  //doesn't dither, so on a 5551 or 4444 picture (Peace Walker's title and cutscenes among them) its noise came out as
+  //speckle, worse the higher the resolution. Everything else in fast mode still blends with the GPU's units: an 8888
+  //frame buffer, most 3D games' scenes, is unchanged.)
+  bool reads16 = fast && p.format < 3;
+  bool reading = (backend->reads || reads16) && (partial || (!p.clear && ((p.logicOp && p.logic != 3) || unlike ||
+                                                                        (p.blend && (backend->readsBlending || reads16)))));
   if(reading) {
     k.reads = 1, k.blending = 8, s.push.writeMask = p.writeMask;
     k.quantize = p.format < 3 ? p.format : 4;  //(each write narrowed to the format, so what's read is memory's)
@@ -1175,7 +1182,10 @@ auto GPU::settings(const GE::Look& look) -> void {
     //0's color is the destination's factor too, without dual-source blending)
     bool weighs = k.destinationFactor == SourceColor || k.destinationFactor == OneMinusSourceColor;
     if(k.blend && k.sourceFactor == One && k.operation <= ReverseSubtract && !weighs) k.term = k.operation + 1;
-    k.dither = p.dither && !k.logicOp && (!k.blend || k.term);
+    //(fast mode doesn't dither above 1x: the PSP's dither is one value a PSP pixel, so an upscaled picture would
+    //show it as a checker of whole pixel blocks; the narrowing keeps whole steps instead, as PPSSPP's upscaled
+    //pictures do. The accurate mode dithers at every scale, the PSP's own way.)
+    k.dither = p.dither && !k.logicOp && (!k.blend || k.term) && !(fast && resolution() > 1);
     if(!k.blend && !k.logicOp && p.format < 3) k.quantize = p.format;
   }
   for(u32 row = 0; row < 4; row++) {
@@ -1403,7 +1413,7 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
   //pass, after whose start the one before's are seen: the render pass's dependency. Fast mode's meshes, which enter
   //no box, read nothing: Backend::reads is off there.)
   bool barrier = false;
-  if(backend->reads && !backend->readsInOrder) {
+  if(!backend->readsInOrder && (backend->reads || (fast && target->format < 3))) {
     if(boxesTarget != state.target) boxes.clear(), boxesTarget = state.target;
     if(state.pipeline.reads) {
       for(auto& b : boxes) barrier |= box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3];
@@ -1505,7 +1515,7 @@ auto GPU::triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex&
     }
   }
   if(fast && screenMeshes && screenable && !through && backend->transforms && !backend->reads &&
-     !state.pipeline.clear && screenTriangle(v)) {
+     target->format >= 3 && !state.pipeline.clear && screenTriangle(v)) {
     return;
   }
   emit(v, 3);
@@ -1659,6 +1669,7 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
 //and one whose pipeline the driver won't make.
 auto GPU::meshes(GE&, const GE::Transform&, u32 count) -> bool {
   if(!fast || !backend->transforms || count < MeshLeast) return false;
+  if(target->format < 3) return false;  //(reads16: a 16-bit frame buffer is read in the shader, not GPU-blended)
   if(!drawing) return true;
   if(state.pipeline.clear) return false;
   return meshDrawable();

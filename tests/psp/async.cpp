@@ -768,6 +768,99 @@ static auto asyncInstall() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//The option "File I/O" "Fast": no device time at all. An asynchronous request is done at the cycle it's made (its
+//result waiting for the events to catch up, its bytes landing then), and a synchronous read or write doesn't wait:
+//a 4000-byte read from the memory stick, 1000 bytes written there and 2750 from the disc take no microseconds, where
+//the PSP's timing takes 1100, 350 and 2100. Both engines.
+static auto fastFileIo() -> void {
+  HostFolder stick;
+  stick.put("DATA.BIN", text(10000));
+  auto image = disc_image::makeIso({{"DISC.BIN", std::vector<u8>(8192, 5)}});
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.kernel.fastFileIo = true;
+    m.kernel.mount("ms0", stick.path.string());
+    m.kernel.disc = discFrom(image.bytes);
+    //(an asynchronous read: due at the cycle it's made, the events finishing it there)
+    u32 file = m.call("sceIoOpen", {m.string("ms0:/DATA.BIN"), 0x0001, 0});
+    m.system.memory.fill(Buffer, 0, 4000);
+    CHECK(m.call("sceIoReadAsync", {file, Buffer, 4000}), 0);
+    CHECK(m.kernel.files[file].asyncDoneAt, m.kernel.cycles);
+    CHECK(m.call("sceIoPollAsync", {file, R}), 1);  //(still pending until the events)
+    advance(m, m.kernel.cycles);
+    CHECK(m.system.memory.readString(Buffer, 4) == "abcd", true);
+    CHECK(m.call("sceIoPollAsync", {file, R}), 0);
+    CHECK(result64(m, R), 4000);
+    m.system.memory.fill(Buffer, 0, 4000);
+    //(synchronous calls: time taken by the instructions around them alone)
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    auto time = [&](Assembler& a, u32 offset) { a.call("sceKernelGetSystemTimeLow"); store(a, offset); };
+    auto io = [&](Assembler& a, const char* name, u32 file, u32 data, u32 size, u32 offset) {
+      a.put(addu(a0, file, zero)); a.li(a1, data); a.li(a2, size);
+      a.call(name);
+      store(a, offset);
+    };
+    Assembler main{m, 0x0880'1000};
+    auto open = [&](const char* path, u32 flags, u32 into) {
+      main.li(a0, m.string(path)); main.li(a1, flags); main.li(a2, 0777);
+      main.call("sceIoOpen");
+      main.put(addu(into, v0, zero));
+    };
+    open("ms0:/DATA.BIN", 0x0001, s0);
+    open("ms0:/OUT.BIN", 0x0202, s1);  //PSP_O_WRONLY | PSP_O_CREAT
+    open("disc0:/DISC.BIN", 0x0001, s2);
+    time(main, 0x00); io(main, "sceIoRead", s0, Buffer, 4000, 0x20); time(main, 0x04);
+    time(main, 0x08); io(main, "sceIoWrite", s1, Buffer, 1000, 0x24); time(main, 0x0c);
+    time(main, 0x10); io(main, "sceIoRead", s2, Buffer + 0x2000, 2750, 0x28); time(main, 0x14);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    auto took = [&](u32 from, u32 microseconds) {  //(fast: the instructions' own sub-microsecond time alone)
+      u32 elapsed = word(m, R + from + 4) - word(m, R + from);
+      return microseconds ? (elapsed == microseconds || elapsed == microseconds + 1) : (elapsed <= 1);
+    };
+    CHECK(word(m, R + 0x20) == 4000 && took(0x00, 0), true);
+    CHECK(word(m, R + 0x24) == 1000 && took(0x08, 0), true);
+    CHECK(stick.get("OUT.BIN") == text(1000), true);
+    CHECK(word(m, R + 0x28) == 2750 && took(0x10, 0), true);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//(option "File I/O" "Fast": a state made under "PSP" with a request still pending loads under "Fast" — the state's
+//checks bound their waits by the PSP's time whatever the option says (Kernel::asyncDurationPsp()), or a request due
+//by the PSP's time would look impossible and the state be refused — and the request still comes in.)
+static auto fastFileIoState() -> void {
+  auto image = disc_image::makeIso({{"DISC.BIN", std::vector<u8>(65536, 4)}});
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.kernel.disc = discFrom(image.bytes);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("disc0:/DISC.BIN")); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceIoOpen");
+    main.put(addu(s0, v0, zero));
+    main.put(addu(a0, s0, zero)); main.li(a1, Buffer); main.li(a2, 65536);
+    main.call("sceIoReadAsync");
+    main.put(addu(a0, s0, zero)); main.li(a1, R + 0x10);
+    main.call("sceIoWaitAsync");
+    main.li(t0, R); main.put(sw(v0, 0x20, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency / 100);  //10 ms of the read's 48
+    CHECK(m.kernel.exited, false);
+    auto state = saveState(m);
+    KernelMachine fast;  //("Fast": the pending request's due time is the PSP's, the bound the state needs)
+    fast.system.recompiler.enabled = recompile;
+    fast.kernel.fastFileIo = true;
+    fast.kernel.disc = discFrom(image.bytes);
+    CHECK(loadState(fast, state), true);
+    CHECK(saveState(fast) == state, true);
+    fast.kernel.run(Kernel::CPUFrequency / 10);
+    CHECK(fast.kernel.exited, true);
+    CHECK(result64(fast, R + 0x10), 65536);
+    CHECK(word(fast, Buffer) == 0x0404'0404 && word(fast, Buffer + 65532) == 0x0404'0404, true);
+  }
+}
+
 auto asyncTests() -> Tests {
   return {{"async files called directly", asyncCalls}, {"async files from a damaged image", asyncDamaged},
           {"async files LittleBigPlanet's install", asyncInstall},
@@ -775,7 +868,9 @@ auto asyncTests() -> Tests {
           {"async files two waiters", asyncTwoWaiters}, {"async files callback takes the result", asyncCallbackTakes},
           {"async files ioctl timing", asyncIoctlTiming}, {"async files state", asyncState},
           {"async PGD reads", pgdAsyncReads},
-          {"files synchronous reads wait", syncWaits}, {"files synchronous wait state", syncWaitState}};
+          {"files synchronous reads wait", syncWaits}, {"files synchronous wait state", syncWaitState},
+          {"files no device time (File I/O Fast)", fastFileIo},
+          {"files a PSP-timed state loads under File I/O Fast", fastFileIoState}};
 }
 
 }

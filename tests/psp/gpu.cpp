@@ -162,6 +162,55 @@ static auto gpuSprites() -> void {
   }
 }
 
+//A texture whose bytes run past VRAM's end and round to its start: the GPU takes the PRIMs that sample it (its texture
+//decoded from the wrapped bytes) rather than refusing them to the software renderer, which would leave the GPU's target
+//holding older pixels. The same texture addressed through VRAM's other plain copy (the second, two sizes on) is brought
+//home and taken too; one laid in RAM so that it runs past RAM's end stays the software renderer's, as it was — a span
+//outside VRAM isn't decoded. (Their pictures aren't compared with the software renderer's: how the two sample a wrapped
+//texture's texels already differed before this, so the check is that the GPU draws them at all.)
+static auto gpuWrappedTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  //(Mesa's llvmpipe, the CI's software Vulkan, takes no PRIM with a wrapping texture: the decode's gathered image is
+  //not uploaded there (its older builds), so there is nothing to check on it; a hardware GPU and newer lavapipe are)
+  if(gpu->backend->name().find("llvmpipe") != std::string::npos) {
+    std::printf("  the wrapped texture's sprites: llvmpipe, skipped\n");
+    return;
+  }
+  std::mt19937 random{20261105};
+  constexpr u32 textureBytes = 32 * 32 * 4, offset = Memory::VRAMSize - 128;  //(one row to VRAM's end: the rest wrap)
+  for(u32 address : {Memory::VRAMBase + offset, Memory::VRAMBase + 2 * Memory::VRAMSize + offset}) {
+    auto before = stats(gpu);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(u32 byte = 0; byte < textureBytes; byte++) {
+        s->memory.write(1, Memory::VRAMBase + (offset + byte) % Memory::VRAMSize, u8(byte * 0x9e37'79b9));
+      }
+      texture(*s, address, 32, 32, 32);
+      for(auto& one : randomSprites(random, 60, true)) sprite(*s, one);
+    }
+    if(!(stats(gpu).draws > before.draws)) std::printf("  the wrapped texture at %08x: no draw reached the GPU\n", address);
+    CHECK(stats(gpu).draws > before.draws, true);
+    hardware.ge.setRenderer(nullptr);
+  }
+  //(a span outside VRAM that wraps is left alone: the GPU takes none of it, as before; the check keeps that path honest)
+  auto before = stats(gpu);
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  u32 ramEnd = 0x0800'0000 + 64_MiB - 128;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(u32 n = 0; n < 32 * 32; n++) s->memory.write(4, ramEnd + n * 4, u32(n * 0x9e37'79b9));
+    texture(*s, ramEnd, 32, 32, 32);
+    for(auto& one : randomSprites(random, 60, true)) sprite(*s, one);
+  }
+  if(stats(gpu).draws > before.draws) std::printf("  a wrapped RAM texture: draws reached the GPU\n");
+  CHECK(stats(gpu).draws, before.draws);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //A frame buffer drawn, then sampled by sprites drawing into another: the texture taken from the GPU's own picture
 //(a copy on the GPU, not a read back), and the result the software renderer's.
 static auto gpuRenderToTexture() -> void {
@@ -2816,7 +2865,8 @@ static auto gpuDepthUnused() -> void {
 //their corners 1000.2 to 1000.8 over 1000, have the GE's depth, those rounded down, 1000 at every pixel, so each of
 //the eight comparisons, each over a strip of its own, comes out as the GE's: equal, at most and at least draw them,
 //less and greater don't (the GPU's own depth, a fraction above, would pass greater and fail equal). And a triangle
-//writing such depths, over which the comparison of equal takes a sprite at 1000. In either mode.
+//writing such depths, over which the comparison of equal takes a sprite at 1000. In the accurate mode: fast mode's
+//depth is the rasterizer's (part 124), the GE's flooring gone, so it can't meet the GE's comparisons there.
 static auto depthSteps(GPU* gpu) -> void {
   System software, hardware;
   hardware.ge.setRenderer(gpu);
@@ -2856,10 +2906,7 @@ static auto depthSteps(GPU* gpu) -> void {
   hardware.ge.setRenderer(nullptr);
 }
 static auto gpuDepthSteps() -> void {
-  if(!renderer()) return;
-  for(GPU* gpu : {renderer(), fastRenderer()}) {
-    if(gpu) depthSteps(gpu);
-  }
+  if(auto gpu = renderer()) depthSteps(gpu);  //(the accurate mode's: part 124)
 }
 
 //A SPIR-V module's execution modes for the depth (OpExecutionMode's: DepthReplacing 12, DepthGreater 14, DepthLess 15,
@@ -3174,7 +3221,9 @@ static auto gpuDepthBuilds() -> void {
     for(u8 transformed : {0, 1}) for(u8 outside : {0, 1}) for(u8 written : {0, 1}) for(u8 n = 0; n < 8; n++) {
       if(transformed && !gpu->backend->transforms) continue;
       k.transformed = transformed, k.outside = outside, k.depthTest = 1, k.depthCompare = n, k.depthWrite = written;
-      u32 expected = k.depths() && gpu->backend->depthClamp && !outside ? 3 : 0, made = gpu->backend->depthBuild(k);
+      //(fast mode's depth is the rasterizer's (part 124): no DEPTHS build, so 0 for every key)
+      u32 expected = !gpu->fast && k.depths() && gpu->backend->depthClamp && !outside ? 3 : 0;
+      u32 made = gpu->backend->depthBuild(k);
       if(made != expected && wrong++ < 4) {
         std::printf("  %s%s%s, comparison %u%s: made %u, not %u\n", gpu->fast ? "fast" : "accurate",
                     transformed ? ", 3D" : "", outside ? ", outside" : "", n, written ? ", written" : "", made,
@@ -4148,7 +4197,8 @@ static auto gpuDepthOrders() -> void {
 //    its last 16 (the rows of its own it draws no depth but memory's): a finish either way, which puts both frame
 //    buffers' pixels in memory (a target's own pixels don't go into its depth).
 //Every byte of VRAM the software renderer's but the depth buffer's, and every depth the screen has (GPU::depthOf()),
-//at 1x and 2x, in either mode, with the picture's pixels moved into the depth on the GPU (no finish). Where the GPU
+//at 1x and 2x, in the accurate mode (fast mode's depth is the rasterizer's, part 124), with the picture's pixels moved
+//into the depth on the GPU (no finish). Where the GPU
 //can't move them (Backend::depthMoves off), they're put in memory first only where the PRIM's test reads them (GPU::
 //begin()): one finish for the sprite at 65534, one for the quad over the picture and two for the second picture, every
 //byte and depth the software renderer's in those, the clear and the sprite always true; none in the rest, whose depth
@@ -4288,10 +4338,7 @@ static auto depthCurrent(GPU* gpu) -> void {
   gpu->resolution(1);
 }
 static auto gpuDepthCurrent() -> void {
-  if(!renderer()) return;
-  for(GPU* gpu : {renderer(), fastRenderer()}) {
-    if(gpu) depthCurrent(gpu);
-  }
+  if(auto gpu = renderer()) depthCurrent(gpu);  //(the accurate mode's: fast mode's depth is the rasterizer's, part 124)
 }
 
 //Other frame buffers' pixels as the depth, in every pair of formats (GPU::moveIntoDepth()): a picture drawn on the GPU
@@ -4567,7 +4614,9 @@ static auto stencilAlpha(GPU* gpu) -> void {
         CHECK(blended(8, 44), 0u);
       }
       CHECK(stats(gpu).alphas - before.alphas, 2u);
-      if(gpu->fast && gpu->backend->transforms) CHECK(stats(gpu).meshes > before.meshes, true);
+      //(fast mode's meshes take 8888 targets only: a 16-bit one is read in the shader for its blending's sake, and
+      //a mesh reads nothing, so it draws none there and the picture is the software renderer's even so)
+      if(gpu->fast && gpu->backend->transforms && format == 3) CHECK(stats(gpu).meshes > before.meshes, true);
       hardware.ge.setRenderer(nullptr);
     }
   }
@@ -4806,10 +4855,49 @@ static auto gpuStencilAlphaPaths() -> void {
   }
 }
 
+//Fast mode doesn't dither above 1x (k.dither needs resolution() == 1 there): the PSP's dither is one value a PSP
+//pixel, so an upscaled picture would show it as a checker of blocks. The accurate mode dithers at every scale. A
+//dithered solid sprite narrowed into a 5551 frame buffer, drawn with the GE's dither on and off: the pictures differ
+//at 1x in both modes; at 2x they differ in the accurate mode and are the same in fast mode.
+static auto gpuFastDitherAbove1x() -> void {
+  if(!renderer()) return;
+  auto picture = [&](GPU* gpu, bool dither) {
+    System hardware;
+    hardware.ge.setRenderer(gpu);
+    prepare(hardware, 0, 1);  //(5551: a write is narrowed, and the dither goes in the term)
+    auto& c = hardware.ge.commands;
+    c[GE::Dither0] = 0x7f80, c[GE::Dither0 + 1] = 0x3c4d;
+    c[GE::Dither0 + 2] = 0xe1a5, c[GE::Dither0 + 3] = 0x96b2;
+    c[GE::DitherEnable] = dither;
+    //(a channel mid-step: 0x0f of 0xff is 1.875 of a 5-bit step, so a matrix value moves it a whole one)
+    for(u32 n = 0; n < 4; n++) {
+      u32 color = 0xff000000 | (0x0f + n * 4) << 16 | (0x1f - n * 4) << 8 | (0x0f + n * 2);
+      sprite(hardware, {{{0, 0, float(n * 16), 0}, {0, 0, float(n * 16 + 16), 48}}, color});
+    }
+    c[GE::DitherEnable] = 0;
+    hardware.ge.settleAll();
+    hardware.ge.setRenderer(nullptr);
+    std::vector<u8> vram(Memory::VRAMSize);
+    std::memcpy(vram.data(), hardware.memory.vram.data(), Memory::VRAMSize);
+    return vram;
+  };
+  for(u32 scale : {1u, 2u}) {
+    for(GPU* gpu : {renderer(), fastRenderer()}) {
+      if(!gpu) continue;
+      gpu->resolution(scale);
+      bool same = picture(gpu, true) == picture(gpu, false);
+      bool ditheredAboveEveryScale = gpu != fastRenderer();  //(the accurate mode dithers at 2x too)
+      CHECK(same, !(ditheredAboveEveryScale || scale == 1));
+      gpu->resolution(1);
+    }
+  }
+}
+
 //A depth buffer read as a texture through VRAM's depth views (Cars Race-O-Rama takes its race's depth through a
 //palette into the alpha its sky is blended by): the depth the GPU drew, put into memory first, each texel the
 //software renderer's, through the fourth copy (the depths in order) and the second (rearranged); put once, the second
-//read finding memory has it, and again once more depth is drawn. At 1x and 2x, in either mode.
+//read finding memory has it, and again once more depth is drawn. At 1x and 2x, in the accurate mode (fast mode's
+//depth is the rasterizer's, part 124: a read back there is that, not the GE's floored value these compare).
 static auto depthAsTexture(GPU* gpu) -> void {
   for(u32 scale : {1u, 2u}) {
     gpu->resolution(scale);
@@ -4892,15 +4980,15 @@ static auto depthChanges(GPU* gpu) -> void {
   hardware.ge.setRenderer(nullptr);
 }
 static auto gpuDepthAsTexture() -> void {
-  if(!renderer()) return;
-  for(GPU* gpu : {renderer(), fastRenderer()}) {
-    if(gpu) depthAsTexture(gpu), depthChanges(gpu);
-  }
+  //(the accurate mode's: fast mode's depth is the rasterizer's (part 124), and a depth read back there is that, not the
+  //GE's floored value these compare)
+  if(auto gpu = renderer()) depthAsTexture(gpu), depthChanges(gpu);
 }
 
 //The GE's depths as a GPU's depth formats keep them, and back (GPU::depthToFloat() and the rest: a backend's uploads
-//and read backs): all 65,536 the same again from D32, and from D24 whether the GPU rounded a fragment's 65,536ths to
-//nearest or down, its top byte whatever it is. No GPU needed.
+//and read backs; fast mode's read backs are the rasterizer's depth, part 124): all 65,536 the same again from D32, and
+//from D24 whether the GPU rounded a fragment's 65,536ths to nearest or down, its top byte whatever it is. No GPU
+//needed.
 static auto gpuDepthFormats() -> void {
   u32 wrong = 0;
   for(u32 z = 0; z < 65536; z++) {
@@ -6209,6 +6297,7 @@ auto gpuTests() -> Tests {
     {"gpu sprites against the software renderer", gpuSprites},
     {"gpu the stencil as each 16-bit format keeps it: 5650's tests against 0, clears and replaces", gpuStencilFormats},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
+    {"gpu wrapped texture against the software renderer", gpuWrappedTexture},
     {"gpu anti-aliased lines against the software renderer", gpuSmoothLines},
     {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
@@ -6298,6 +6387,7 @@ auto gpuTests() -> Tests {
     {"gpu the frame buffer's alpha as its stencil has it, each other way a PRIM leaves it behind", gpuStencilAlphaWays},
     {"gpu the frame buffer's alpha as its stencil has it, on settings kept and fast mode's small PRIMs among the meshes",
      gpuStencilAlphaPaths},
+    {"gpu fast mode doesn't dither above 1x: a 16-bit picture the same with the GE's dither on or off, where the accurate mode dithers at every scale", gpuFastDitherAbove1x},
     {"gpu a depth buffer read as a texture through VRAM's depth views: the depth it drew put into memory first",
      gpuDepthAsTexture},
     {"gpu depths as the depth formats keep them, and back: all 65,536 the same again", gpuDepthFormats},

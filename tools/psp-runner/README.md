@@ -84,6 +84,10 @@ the runner refuses anything else):
   which games' lists take a PSP 4 to 12 times longer than (part 103). The report names it; a
   `--ge-profile` file made with `psp` carries its flag, and geprof.py says so. `--ge-thread on` works
   with either: with `psp` the game's thread gets the GE's times as with the thread off (part 111).
+- `--file-io psp|fast` — file requests' time (the core's option "File I/O"): `psp` (the default)
+  charges them the disc's and memory stick's rates, as a PSP's devices take, so loads and installs
+  last about as long as on a PSP; `fast` (experimental) charges them none at all: loads, saves and
+  installs run at the host's speed. The report names it.
 - `--pipeline-cache FILE` — the Vulkan renderer's pipelines kept in `FILE` between runs (the core's
   option "Pipeline Cache"), as the app keeps them: a second run starts with the first's, made at once.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and
@@ -276,7 +280,8 @@ later layout gets another number):
   nothing is counted or timed, and nothing about what's drawn or how changes with it on.
   `PHOBOS_GPU_STATS=draws` adds, besides those, one CSV line a draw beside the report, `<report>.draws.csv`:
   `ms`, `triangles`, `target`, `scale`, `pass` (the render pass it ran in), `pipeline` (a fingerprint of the
-  pipeline key's fields), `writes_depth` (the shader writes the depth and does the GE's range test), `shown` and
+  pipeline key's fields), `writes_depth` (the shader writes the depth and does the GE's range test; 0 in fast mode,
+  whose depth is the rasterizer's), `shown` and
   `copied` (the target's state when the draw was recorded), and `draw times`, the same times in 24 log-spaced buckets
   whose `buckets low ms` are their lower bounds (1.024 us doubling). A draw whose timestamps were skipped (a pool the
   device wouldn't make, or the record cap) has an empty `ms`, not 0. The per-draw timestamps are a sync point each, so

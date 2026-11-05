@@ -148,10 +148,12 @@ struct GPU : GE::Renderer {
     //looked up in the palette Push::palette names; 0 none
     u8 indexed;
     //Where the depth decides (depths()), a 2D PRIM with a corner's depth past the GE's 0-65535 (through mode's float
-    //positions, each pixel's held there: draw.frag): its pipeline writes the depth as the GE's alone has it,
-    //undeclared and rasterized at the GE's (vulkan.cpp's pipelineFor(); emit())
+    //positions, each pixel's held there: draw.frag): in the accurate mode its pipeline writes the depth as the GE's
+    //alone has it, undeclared and rasterized at the GE's (vulkan.cpp's pipelineFor(); emit()); in fast mode no
+    //pipeline's depth is the GE's (part 124), so it only splits the key there
     u8 outside;
-    //(draw.frag's DEPTHS build: the depth decides the test, or is written)
+    //(the depth decides the test, or is written: draw.frag's DEPTHS build in the accurate mode, fast mode's
+    //rasterizer depth instead, part 124)
     auto depths() const -> bool { return depthWrite || (depthTest && depthCompare > 1); }
     auto operator==(const Pipeline& other) const -> bool { return !std::memcmp(this, &other, sizeof(Pipeline)); }
     struct Hash {  //(of its bytes: the backend's pipelines are found by it, as meshDrawable()'s)
@@ -313,10 +315,10 @@ struct GPU : GE::Renderer {
     //Whether a move draws the stencil with the colors (move.frag's EXPORT build, with stencilExport): a move between
     //frame buffers of other row widths, which leaves the pixels it doesn't reach, needs it (movable())
     bool moveExport = false;
-    //Whether it clamps the depth rather than clipping by it (the device's depthClamp): the depth-writing pipelines'
-    //depth is rasterized above the GE's then (draw.vert), the depth written declared never above it (draw.frag),
-    //where the corners' depths are the GE's (depthBuild()); and a 2D depth past 0-65535 is drawn, held there as the GE
-    //holds it, not cut away
+    //Whether it clamps the depth rather than clipping by it (the device's depthClamp): in the accurate mode the
+    //depth-writing pipelines' depth is rasterized above the GE's then (draw.vert), the depth written declared never
+    //above it (draw.frag), where the corners' depths are the GE's (depthBuild()); in fast mode there is no such
+    //declaration (part 124). And a 2D depth past 0-65535 is drawn, held there as the GE holds it, not cut away
     bool depthClamp = false;
     //Whether it takes another target's depth from image to image (Command::Depth: a copy of the depth alone), where
     //the device's such copy leaves the stencil, each frame buffer's own (vulkan.cpp's depthAloneProbe()); else through
@@ -401,7 +403,7 @@ struct GPU : GE::Renderer {
     //shader declared never to write a depth above the one rasterized (draw.frag's DEPTHS), 2 that rasterized a step
     //and a half above the GE's (draw.vert's ABOVE), which the declaration's proof needs; both where the device clamps
     //the depth and the corners' depths are the GE's (Pipeline::outside), else neither, as the GE's depth has it alone
-    //(the tests')
+    //(the tests') — and 0 for every key in fast mode, whose depth is the rasterizer's, no DEPTHS build (part 124)
     virtual auto depthBuild(const Pipeline& k) -> u32 { (void)k; return 0; }
     //The pipelines made so far, as the driver keeps them, for the next session to start with (System's "Pipeline
     //Cache": the GPU::vulkan() of a game's next start); none where it has nothing to say
@@ -410,8 +412,9 @@ struct GPU : GE::Renderer {
     virtual auto finish(const Recorded& recorded) -> bool = 0;  //run, and everything waited for
     //Readback n of the last finish(): its 8888s and stencils (none for one at more than 1), a row after another
     virtual auto read(u32 n, const u32*& colors, const u8*& stencil) -> bool = 0;
-    //Readback n of the last finish(), of a target's depths alone (parts 2): each pixel's as the GE's 16-bit depth, a
-    //row after another, width x height of them
+    //Readback n of the last finish(), of a target's depths alone (parts 2): each pixel's as it was written, the GE's
+    //16-bit depth in the accurate mode, the rasterizer's in fast mode (part 124), a row after another, width x height
+    //of them
     virtual auto readDepth(u32 n, const u16*& depths, u32& width, u32& height) -> bool {
       (void)n, (void)depths, (void)width, (void)height;
       return false;
@@ -558,11 +561,14 @@ struct GPU : GE::Renderer {
   auto copiesKept() const -> u32 { return copies.size(); }  //(render-to-texture copies on the GPU: the tests')
   //(the tests': the depth of the frame buffer at VRAM's offset address, stride pixels a row, in GE format, as its
   //target holds it after what's recorded so far: its depth buffer's rows filled so far, height of them, width each,
-  //waited for, nothing else changed; false where there's no such target or depth)
+  //waited for, nothing else changed; false where there's no such target or depth. Fast mode's depth is the
+  //rasterizer's, part 124: what comes back there is that, mapped as a depth, not the GE's floored value)
   auto depthOf(u32 address, u32 stride, u32 format, std::vector<u16>& depths, u32& width, u32& height) -> bool;
   //The GE's 16-bit depth as a GPU's depth format keeps it, and back (a backend's uploads and read backs): D32 in
   //65,536ths, as draw.frag's DEPTHS writes it; D24 those rounded to nearest, taken back whichever way the GPU rounded
-  //the fragment's depth into it
+  //the fragment's depth into it. Fast mode's depth is the rasterizer's (part 124): a read back is that value mapped
+  //the same way, up to two 1/65536 steps above the GE's floored one (the rasterizer's z / 65535, mapped with 65,536),
+  //never below; a depth moved from memory's is the GE's still
   static auto depthToFloat(u16 z) -> f32 { return z * (1.0f / 65536); }
   static auto depthFromFloat(f32 value) -> u16 {
     value = value * 65536 + 0.5f;
