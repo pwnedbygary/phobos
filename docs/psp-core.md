@@ -21450,3 +21450,41 @@ past its end — keeps the old behaviour.
 - A wrapping texture is decoded for each PRIM that takes it, not cached; that is the rare case (this one), and it is what
   the GPU's own copy replaces as soon as it draws into that area.
 - The app's device A/B is pending; the host evidence is the runner, the software renderer's pictures and the suite.
+
+## Part 132: the software renderer's texture filter in 16-bit lanes, and its doubled texture's scaling as a shift
+
+The software renderer draws on the CPU, and at -O2 the build before this one spent 76.57% of its run in
+`triangleFours<3u>`, 10.20% of the whole run in the bilinear texture filter's three blend lines (four.cpp:262 4.72%,
+:263 3.00%, :264 2.48%): 8-bit channels multiplied by weights of sixteenths, two channels to a 32-bit lane. The values never leave 16 bits (a channel times sixteenths stays below
+4,096, and two of those added below 8,192), so the multiplies are done in 16-bit lanes now, two channels a lane at once,
+on the host's own 16-bit multiply — and the texture function's doubled scaling (modulate with DOUBLED) became the shift it
+is instead of a multiply.
+
+### The change (ge/four.cpp)
+
+- `texelsFour()`'s `blend()` takes the same numbers in 16-bit lanes: each lane's two channels spread into its two 16-bit
+  halves, multiplied and added with the weights held the same way, shifted down by four and masked with the byte masks
+  0x00ff after each stage, as the 32-bit version's masks did, so nothing spills from one channel into the next. Each lane
+  is the number it was: the pictures are byte for byte what they were.
+- `combineFour()`'s modulate (function 0) uses `>> down` (7 where the texture is doubled, 8 where it isn't) for what was
+  `* twice >> 8`: the same operation, a shift instead of a multiply.
+
+### Evidence
+
+- **Speed**: host runner, an -O2 build of it, GoS's training state (God of War: Ghost of Sparta), 600 frames, Software
+  renderer, Native: four runs a side interleaved, the build before it against this one's: **99.53 -> 100.66 fps (+1.13%)**
+  (base 98.67/99.43/99.64/99.80, candidate 100.47/100.87/100.73/100.59; the runner sources both `v2.4.0-450-g8faa137b8e64`).
+- **The profile**: both -O2 builds profiled over the same 900-frame run (`perf`, srcline): before, `triangleFours<3u>`
+  76.57% with the filter's blend lines at 10.20%; after, 75.46% with those lines now 2.66% (four.cpp:276 0.81%, :280
+  0.58%, :281 0.39%, :277 0.31%, :278 0.30%, :282 0.27%).
+- **Pictures**: byte-identical at 200 frames of GoS's, Peace Walker's and Chains of Olympus's training states (PNG
+  SHA-256 7bd66f19..., cef22492..., 1e268eb7... both builds).
+- **The tests**: the whole host suite, the software renderer's pictures still compared exactly.
+
+### Limits
+
+- The measurement is the host runner's, a desktop x86-64 CPU, where a 16-bit vector multiply is one instruction and the
+  32-bit one two; on ARM64 both are one, so the app's gain may be smaller, and the device A/B is pending with no device
+  figure claimed.
+- One state of one game for speed; the other two states for exactness.
+- Exactness is unchanged: every picture is the software renderer's, byte for byte.
