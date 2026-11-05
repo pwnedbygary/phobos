@@ -242,15 +242,12 @@ alwaysinline auto GE::texelsFour(const Look& look, bool linear, s32x4 live, cons
     //Each right texel just after its left one (not repeated round, nor held at the edge): the two read at once.
     //(Lanes not live read the first two texels, which a texture at least two wide has.)
     s32x4 top = pickLanes(live, v[0] * width + u[0], s32x4{}), bottom = pickLanes(live, v[1] * width + u[0], s32x4{});
-    u64 upper[4], lower[4];
-    for(u32 n = 0; n < 4; n++) {
-      std::memcpy(&upper[n], t.decoded + top[n], 8);
-      std::memcpy(&lower[n], t.decoded + bottom[n], 8);
-    }
-    topLeft = u32x4{u32(upper[0]), u32(upper[1]), u32(upper[2]), u32(upper[3])};
-    topRight = u32x4{u32(upper[0] >> 32), u32(upper[1] >> 32), u32(upper[2] >> 32), u32(upper[3] >> 32)};
-    bottomLeft = u32x4{u32(lower[0]), u32(lower[1]), u32(lower[2]), u32(lower[3])};
-    bottomRight = u32x4{u32(lower[0] >> 32), u32(lower[1] >> 32), u32(lower[2] >> 32), u32(lower[3] >> 32)};
+    //(each lane's two texels read where they are: a lane not live reads the first two, which a texture two wide has)
+    topLeft = u32x4{t.decoded[top[0]], t.decoded[top[1]], t.decoded[top[2]], t.decoded[top[3]]};
+    topRight = u32x4{t.decoded[top[0] + 1], t.decoded[top[1] + 1], t.decoded[top[2] + 1], t.decoded[top[3] + 1]};
+    bottomLeft = u32x4{t.decoded[bottom[0]], t.decoded[bottom[1]], t.decoded[bottom[2]], t.decoded[bottom[3]]};
+    bottomRight = u32x4{t.decoded[bottom[0] + 1], t.decoded[bottom[1] + 1], t.decoded[bottom[2] + 1],
+                        t.decoded[bottom[3] + 1]};
   } else {
     topLeft = gather(u[0], v[0]), topRight = gather(u[1], v[0]);
     bottomLeft = gather(u[0], v[1]), bottomRight = gather(u[1], v[1]);

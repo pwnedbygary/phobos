@@ -21361,3 +21361,44 @@ undithered noise came out as a dense black speckle, worse the more resolution th
 - A state loaded with a Vulkan renderer can show a frame that isn't memory's (both Vulkan modes, before this part
   too: its own bug, recorded in docs/handoff.md, not this change's).
 - No PPSSPP comparison is made here.
+
+## Part 128: software renderer's texel reads where they are, and smaller batches shared out among the drawing threads
+
+The software renderer draws on the CPU, so its speed is the host's: on the RP6 it's the slowest of the three profiles on
+heavy 3D. Two things in its four-pixels-at-a-time path cost more than they need to, and both keep every pixel exact:
+a bilinear-filtered read copied each lane's two texels into 64-bit words and shifted them apart to rebuild the four
+lanes' left and right texels, and a batch of fewer than 8192 pixels was drawn on the GE's thread alone, so many of
+the small batches a 3D game makes never shared the work out.
+
+### The change (ge/four.cpp, ge/ge.hpp)
+
+- **Texel reads where they are**: `texelsFour()`'s bilinear path reads each lane's left and right texel with a 32-bit
+  load where they are (`t.decoded[top[n]]`, `t.decoded[top[n] + 1]`) instead of reading the pair as a 64-bit word,
+  copying four of them to an array and shifting them apart to fill the vectors. A lane not live still reads the first
+  two, which a texture two wide has, as before.
+- **Smaller batches shared out**: `Drawing::shared`, the pixel count below which a batch is drawn on the GE's thread
+  alone, goes from 8192 to 2048. A batch with fewer pixels than that is still drawn on one thread; the batches a 3D
+  game makes of its small triangles now reach the drawing threads instead of waiting their turn on one.
+
+### Evidence
+
+- **Speed, host runner, an -O2 build of it** (the runner's script with only its CXXFLAGS line changed, frozen with
+  this snapshot), **GoS's training state (God of War: Ghost of Sparta, 600 frames)**: three runs a side, taken in turn
+  (base, candidate, base, candidate, base, candidate), the build before it against this one's: **96.6 fps -> 98.67 fps
+  (+2.1%)** medians; the runs were 96.60/96.05/96.64 against 98.24/99.31/98.67, so the win is the medians', not one
+  run's (the base runs spread 0.59 of a frame, the candidate's 1.07: up to about a frame a side).
+- **Pictures**: byte-identical at 600 frames of GoS's training state (`1cd209c5…` for the frame-000600 PNG both
+  builds) and at 200 frames of Peace Walker's, Chains of Olympus's and GoS's own (`cef22492…`, `1e268eb7…`,
+  `7bd66f19…`).
+- **The profile that pointed at them**: at `-O2` the software renderer spent 77% of its time in `triangleFours<3u>`,
+  with the bilinear gather's vector rebuilding and the per-lane texel reads among the top lines (`four.cpp`'s
+  64-bit pair copies and shifts).
+- **The tests**: the whole host suite after the change, the software renderer's pictures still compared exactly.
+
+### Limits
+
+- The measurement is the host runner's (unpaced, a desktop CPU); the app's device A/B (RP6) is to be run when the
+  device is next free, and is not claimed here.
+- One scene of one game at Native and two other states for exactness; other titles aren't measured.
+- The exactness is unchanged: every picture is the software renderer's, byte for byte, and the threaded drawing keeps
+  its band order (only when a batch is shared out changed, not how).

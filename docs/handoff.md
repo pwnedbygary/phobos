@@ -35,6 +35,28 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP software renderer: texels read where they are, and smaller batches shared out — 2026-11-04
+
+Branch `cursor/psp-sw-fours-2b67`, from `cursor/psp-vulkan-fast16-2b67` (part 127); docs/psp-core.md, part 128, has the
+evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: the software renderer draws on the CPU, so on mobile it's the slowest profile on heavy 3D. At `-O2` 77% of
+  its time is `triangleFours<3u>`; two of its costs were needless: a bilinear read rebuilt each lane's left and right
+  texels by copying 64-bit pairs to an array and shifting them apart, and a batch below `Drawing::shared` (8192 pixels)
+  was drawn on the GE's thread alone, so many small 3D batches never shared out.
+- **What**: (1) `texelsFour()`'s bilinear path reads each lane's two texels with 32-bit loads where they are; a lane not
+  live reads the first two, which a texture two wide has, as before. (2) `Drawing::shared` goes to 2048 pixels.
+- **Evidence**: host runner, an -O2 build (the script's CXXFLAGS line changed and frozen with the snapshot), GoS training
+  state 600 frames, three runs a side taken in turn (base, candidate, base, candidate, base, candidate): 96.6 -> 98.67
+  fps medians (+2.1%; runs 96.60/96.05/96.64 against 98.24/99.31/98.67 (spreads 0.59 and 1.07 fps)). Pictures byte-identical: GoS's training state
+  at 600 frames (`1cd209c5…`) and at 200 (`7bd66f19…`), Peace Walker's and Chains of Olympus's at 200 (`cef22492…`,
+  `1e268eb7…`). The whole host suite passes with the software
+  renderer's pictures still compared exactly.
+- **Limits**: host measurement only; the RP6 A/B is pending the device (blocked on its lock screen at this entry), and
+  no device figure is claimed. One scene of one game at Native for the speed; other titles not measured. Exactness
+  unchanged — pictures byte for byte, and the threaded drawing's band order as it was.
+- **Review**: independent review of the change, the exact pictures, the speed medians and the frozen snapshot; verdict
+  recorded in the commit message and the ledger once given.
+
 ## PSP Vulkan fast: its 16-bit frame buffers read in the shader, no dither above 1x — Peace Walker's title and cutscenes drawn clean at 5x — 2026-11-04
 
 Branch `cursor/psp-vulkan-fast16-2b67`, from `cursor/psp-fast-io-2b67` (part 126); docs/psp-core.md, part 127, has the
