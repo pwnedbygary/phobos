@@ -35,6 +35,28 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP software renderer: the texture filter in 16-bit lanes, the doubled texture as a shift — 2026-11-05
+
+Branch `cursor/psp-sw-opt2-2b67`, from `cursor/psp-ares-fileio-test-2b67` (part 131); docs/psp-core.md, part 132, has the
+evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: the software renderer is the CPU rasterizer; at -O2 the build before spent 76.57% of its run in
+  triangleFours<3u> and 10.20% in the bilinear filter's three blend lines (four.cpp:262 4.72%, :263 3.00%, :264 2.48%) —
+  8-bit channels times weights of sixteenths, two channels to a 32-bit lane. Those values never leave 16 bits, so the
+  multiplies are the host's 16-bit ones now, two channels a lane at once; the doubled scaling became the shift it is.
+- **What**: texelsFour()'s blend() takes the same numbers in 16-bit lanes (masked with 0x00ff after each stage, so no
+  channel spills into the next); combineFour()'s modulate uses `>> down` (7 doubled, 8 not) instead of `* twice >> 8`.
+  Every picture is byte for byte what it was.
+- **Evidence**: host runner, -O2 build, GoS's training state 600 frames, Software renderer, Native, four runs a side
+  interleaved: 99.53 -> 100.66 fps (+1.13%; base 98.67/99.43/99.64/99.80, candidate 100.47/100.87/100.73/100.59). The
+  -O2 profile over 900 frames: before 76.57% in triangleFours<3u> with the filter's blend lines at 10.20%, after 75.46%
+  with those lines 2.66%.
+  Pictures byte-identical at 200 frames of GoS's, Peace Walker's and Chains of Olympus's training states (7bd66f19...,
+  cef22492..., 1e268eb7... both builds). The whole host suite passes with the software pictures exact.
+- **Limits**: host x86-64 measurement (16-bit vector multiply one instruction there, the 32-bit one two; on ARM64 both
+  are one, so the app's gain may be smaller; the RP6 A/B is pending, no device figure claimed). One state for speed.
+- **Review**: independent review of the change, the exact pictures, the speed and the frozen snapshot; verdict in the
+  commit message and the ledger once given.
+
 ## PSP tests: the File I/O option's check powers the machine first — 2026-11-05
 
 Branch `cursor/psp-ares-fileio-test-2b67`, from `cursor/psp-wrapped-texture-2b67` (part 130). Clean room: our code; no

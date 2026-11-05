@@ -257,11 +257,25 @@ alwaysinline auto GE::texelsFour(const Look& look, bool linear, s32x4 live, cons
   //filtered() has four in 64: a channel times sixteenths stays below 4096, so none spills into the next, and each
   //shift's spill from the next is masked off.
   constexpr u32 Two = 0x00ff'00ff;
+  //(the filter's arithmetic in 16-bit lanes: each lane's two channels sit side by side as 16-bit values, so a channel
+  //times sixteenths stays below 4096, and the multiplies are the host's 16-bit ones, two channels a lane at once)
+  using u16x8 = u16 __attribute__((vector_size(16)));
+  auto spread = [](u32x4 value) -> u16x8 {
+    return u16x8{u16(value[0]), u16(value[0]), u16(value[1]), u16(value[1]), u16(value[2]), u16(value[2]),
+                 u16(value[3]), u16(value[3])};
+  };
+  auto wide = [](u32x4 value) -> u16x8 { u16x8 lanes; std::memcpy(&lanes, &value, sizeof(lanes)); return lanes; };
+  auto narrow = [](u16x8 lanes) -> u32x4 { u32x4 value; std::memcpy(&value, &lanes, sizeof(value)); return value; };
+  constexpr u16x8 Bytes = {0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff};
   u32x4 across = u32x4(u[2]), down = u32x4(v[2]);
+  u16x8 acrossWide = spread(across), acrossLess = spread(u32x4{} + 16 - across);
+  u16x8 downWide = spread(down), downLess = spread(u32x4{} + 16 - down);
   auto blend = [&](u32x4 topLeft, u32x4 topRight, u32x4 bottomLeft, u32x4 bottomRight) -> u32x4 {
-    u32x4 upper = (topLeft * (16 - across) + topRight * across) >> 4 & Two;
-    u32x4 lower = (bottomLeft * (16 - across) + bottomRight * across) >> 4 & Two;
-    return (upper * (16 - down) + lower * down) >> 4 & Two;
+    u16x8 topLeftWide = wide(topLeft), topRightWide = wide(topRight);
+    u16x8 bottomLeftWide = wide(bottomLeft), bottomRightWide = wide(bottomRight);
+    u16x8 upper = (topLeftWide * acrossLess + topRightWide * acrossWide) >> 4 & Bytes;
+    u16x8 lower = (bottomLeftWide * acrossLess + bottomRightWide * acrossWide) >> 4 & Bytes;
+    return narrow((upper * downLess + lower * downWide) >> 4 & Bytes);
   };
   u32x4 redBlue = blend(topLeft & Two, topRight & Two, bottomLeft & Two, bottomRight & Two);
   u32x4 greenAlpha = blend(topLeft >> 8 & Two, topRight >> 8 & Two, bottomLeft >> 8 & Two, bottomRight >> 8 & Two);
@@ -278,7 +292,8 @@ alwaysinline auto GE::combineFour(const Look& look, s32x4 (&color)[4], const s32
   s32x4 out[3];
   switch(look.function) {
   case 0:
-    for(u32 n = 0; n < 3; n++) out[n] = (color[n] + 1) * texel[n] * twice >> 8;
+    //(the doubled texture's own scaling is the shift's (down is 7 then, 8 otherwise): a shift, not a multiply)
+    for(u32 n = 0; n < 3; n++) out[n] = (color[n] + 1) * texel[n] >> down;
     break;
   case 1:
     for(u32 n = 0; n < 3; n++) {
