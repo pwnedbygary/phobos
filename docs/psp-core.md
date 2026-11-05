@@ -21480,6 +21480,51 @@ the small batches a 3D game makes never shared the work out.
 - The exactness is unchanged: every picture is the software renderer's, byte for byte, and the threaded drawing keeps
   its band order (only when a batch is shared out changed, not how).
 
+## Part 129: fast mode's meshes take a PRIM of three triangles, not sixteen vertices
+
+Fast mode hands a 3D PRIM to the GPU to transform when it has enough vertices for the per-PRIM settings block the GPU's
+shader reads to be worth it: `MeshLeast`, 16 vertices (a PRIM of two triangles is six; three, nine). Games that draw
+thousands of small PRIMs — God of War: Ghost of Sparta, 2,867,230 primitives in 200 frames of its training state, of
+which only 75,115 (2.6%) were at least that big — kept most of their transform, lighting and clip work on the CPU.
+
+`MeshLeast` is 9 now: a PRIM of three triangles or more (the GPU takes triangles, so nine vertices and up) becomes a
+mesh, and the CPU no longer transforms it. Its pictures are the same but for the GPU's rounding against the CPU's,
+which fast mode already allows: at frame 150 of the eight states timed, no channel differs by more than eight but for
+one pixel of Killzone's, one of whose channels differs by nine (0.000048% of that frame's pixels), and the tests that
+compare fast mode's pictures keep their expectations.
+
+### Evidence
+
+- **Speed**, host runner at -O2, interleaved three runs a side (base then candidate, three rounds), Vulkan fast at 5x,
+  400 frames: God of War: Ghost of Sparta's training state **79.6 -> 82.1 fps (+3.2%)**, Chains of Olympus's
+  **87.4 -> 89.4 (+2.3%)**, Super Stardust's 101.4 -> 101.9 (+0.5%), Killzone's 89.0 -> 89.7 (+0.9%). Single runs at
+  8x: God of War **63.3 -> 70.9 (+12.1%)**, Peace Walker 84.9 -> 84.8 (-0.1%). Single runs across four more states at
+  5x: Burnout Legends 94.6 -> 93.5 (-1.1%), Colin McRae 41.0 -> 41.3 (+0.7%), Gundam vs. Gundam 56.1 -> 56.2 (+0.2%),
+  Peace Walker 97.6 -> 98.6 (+1.0%). The counts the first paragraph quotes — 2,867,230 primitives in 200 frames, 75,115
+  (2.6%) at the old threshold — are the runner's own `gpu:` line, frozen as gpu-stats.txt.
+- **Pictures**: on frame 150 of those eight states, at 5x, the largest difference a channel shows is three levels
+  (God of War: Ghost of Sparta, Chains of Olympus), eight (Super Stardust), nine (Killzone — one pixel, one channel) or
+  none (Burnout Legends, Colin McRae, Gundam, Peace Walker). Apart from that one Killzone pixel, no channel differs by
+  more than eight.
+- **The tests**: the whole host suite, 672 groups, 0 failures, including fast mode's picture comparisons.
+- **The RP6**: God of War: Ghost of Sparta's training state, Vulkan fast at 5x, twelve one-second samples a round, two
+  rounds a side interleaved (baseline, candidate, baseline, candidate): AvgFrameTime's median **12.72 and 12.73 ms** with
+  MeshLeast 16 against **12.46 and 12.15 ms** with 9 — **12.73 -> 12.30 ms, -3.3%** on average. Both are paced at 60 fps
+  (the paced interval is 16.7 ms), so the frame time is the headroom the change buys; the two builds' screenshots of the
+  game area are identical (0 of their pixels differ on the crop x150-1250, y400-1040; the whole capture differs in 0.10-0.16%
+  of its pixels, all of them in the app's status overlay and touch-control rows, which are redrawn per capture), so the
+  same scene was measured. One of the candidate rounds had more
+  frames over 20 ms (26 against 15-16): the medians are the figure quoted.
+
+### Limits
+
+- The RP6 figure is one scene of one game (the training state, fast at 5x); the other titles are host runs, single runs
+  for most, and no device figure is claimed for them. The RP6's two rounds a side leave the run-to-run spread wider than
+  the host's interleaved runs; the medians are quoted.
+- Fast mode only: the accurate mode has no GPU transform (`meshes()` needs `Backend::transforms`, which it doesn't
+  ask for), and the software renderer doesn't use it either, so their pictures and speed are untouched.
+- The pictures differ by the GPU's transform rounding, as they already do for PRIMs at 16 vertices and above; fast mode
+  is the mode for that, not the accurate one.
 ## Part 130: a texture that runs round VRAM's end is decoded, not left to the software renderer
 
 The hardware renderer takes a PRIM only when its texture is decoded (GPU::begin() refuses one whose texture has no
