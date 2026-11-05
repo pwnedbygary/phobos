@@ -723,7 +723,7 @@ private:
   //pixels are six each)
   static constexpr u32 MostVertices = 1 << 18;
   static constexpr u32 MostTold = 8;  //(Target::told's)
-  static constexpr u32 MeshLeast = 16;  //(the fewest vertices a PRIM meshes() takes has)
+  static constexpr u32 MeshLeast = 9;  //(the fewest vertices a PRIM meshes() takes has)
 
   auto targetFor(const GE::PixelState& p, const GE::Region& region, u32& column, u32& row) -> Target*;
   auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts = 1, u32 left = 0, u32 right = ~0u)
