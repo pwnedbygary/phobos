@@ -35,6 +35,32 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: a texture that runs round VRAM's end is decoded — 2026-11-05
+
+Branch `cursor/psp-wrapped-texture-2b67`, from `cursor/psp-sw-fours-2b67` (part 128); docs/psp-core.md, part 130, has the
+evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: the GPU renderer takes a PRIM only with its texture decoded; a 512x512 8888 texture at VRAM offset 0x154000
+  runs 0xAC000 bytes past VRAM's end and wraps, which Memory::reaches() refuses, so GE::decode() gave up. After a save
+  state load the GPU holds no copy of it, so GPU::begin() refused the full-screen PRIMs sampling it and the GE drew them
+  with the software renderer into memory while the GPU's target kept stale pixels — Peace Walker's slot-1 state showed
+  the mixed-renderer frame as a static 16.89% corruption.
+- **What**: decode() lets a wrapping span through to fillDecoded() — only VRAM's first plain copy's or a plain mirror
+  copy's (normalized to the first); fillDecoded() gathers the two VRAM runs through Reading::pointer() into one linear
+  image, decodes it with decodeRows() and gives the Look the texels, not adding it to the cache (whose watching and
+  in-place decoding assume a reachable span). Plain row layouts only; a wrapped span outside VRAM stays as it was.
+- **Evidence**: Peace Walker slot-1 state, host runner, Vulkan 1x: frames 10, 14 and 60 byte-identical to the software
+  renderer's (0.0% > 8, mean 0.000, max 0; before: 16.89%, mean 23.55, max 206), with the runner's "the Vulkan renderer
+  draws" line. Eight other states' Vulkan-vs-software differences are identical to the baseline build's to the digit
+  (Killzone 4.150/1.324/115, Peace Walker slot 0 2.148/0.646/25, ...). The new test covers VRAM's first plain copy, its
+  second, and a RAM-wrapped span (left as it was). Speed on that state, host runner, Vulkan 1x,
+  120 frames, three runs a side interleaved: 543.6 fps against 165.1 without the fix (+229.3%; the PRIMs were the
+  software renderer's every frame before). A new test, "gpu wrapped texture against the software renderer", fails on the
+  build before the change (the GPU takes none of the PRIMs) and passes with it; the whole host suite passes.
+- **Limits**: plain (unswizzled, non-DXT) layouts only; a wrapping texture is decoded per PRIM rather than cached; the
+  RP6 A/B is pending and no device figure is claimed.
+- **Review**: independent review of the change, the reproduction's pictures, the cross-state comparisons and the frozen
+  snapshot; verdict in the commit message and the ledger once given.
+
 ## PSP software renderer: texels read where they are, and smaller batches shared out — 2026-11-04
 
 Branch `cursor/psp-sw-fours-2b67`, from `cursor/psp-vulkan-fast16-2b67` (part 127); docs/psp-core.md, part 128, has the

@@ -21402,3 +21402,51 @@ the small batches a 3D game makes never shared the work out.
 - One scene of one game at Native and two other states for exactness; other titles aren't measured.
 - The exactness is unchanged: every picture is the software renderer's, byte for byte, and the threaded drawing keeps
   its band order (only when a batch is shared out changed, not how).
+
+## Part 130: a texture that runs round VRAM's end is decoded, not left to the software renderer
+
+The hardware renderer takes a PRIM only when its texture is decoded (GPU::begin() refuses one whose texture has no
+texels yet): a texture whose bytes run past VRAM's end and round to its start could not be decoded, so after a save state
+was loaded — where the GPU holds no copy of it — such a PRIM was drawn by the software renderer into memory while the
+GPU's target kept its stale pixels, a mixed-renderer frame. Peace Walker's slot-1 state showed it every frame: 16.89% of
+the picture wrong at frames 10, 14 and 60 (the texture there is a 512x512 8888 image at VRAM offset 0x154000, 1 MiB,
+running 0xAC000 bytes past the end).
+
+### The change (ge/texture.cpp)
+
+`GE::decode()` now lets a span that wraps VRAM's end through to `fillDecoded()` instead of giving up on it — only a span
+in VRAM's first plain copy, or in one of its plain mirror copies (even sizes on: odd ones are the rearranged depth
+views), normalized to the first. `fillDecoded()` gathers the two runs of the texture's bytes (each through
+`Reading::pointer()`, so VRAM's copies are read as they are) into one linear image, decodes it with `decodeRows()` and
+gives the Look its texels — without adding the copy to the texture cache, whose watching and in-place decoding both
+assume a span that `Memory::reaches()` can reach. It is decoded afresh for each PRIM that takes it; only the plain row
+layouts are gathered this way (unswizzled, not DXT), and every other span — a wrapped one outside VRAM, say in RAM and
+past its end — keeps the old behaviour.
+
+### Evidence
+
+- **The reproduction**: Peace Walker's slot-1 state (`analysis/cutscene-test/pw-state1.bin`), loaded in the host runner,
+  Vulkan at 1x: frames 10, 14 and 60 are byte-identical to the software renderer's (0.0% of pixels differ by more than
+  8, mean 0.000, max 0), where before the change 16.89% differed (mean 23.55, max 206). The runner says "the Vulkan
+  renderer draws" — the fix is the GPU drawing these PRIMs, not the software fallback.
+- **Speed on the scene**: the same state in the host runner, Vulkan at 1x, 120 frames, three runs a side interleaved:
+  **543.6 fps with the fix against 165.1 without** (+229.3%; the runs 562.4/543.4/543.6 against 165.1/165.4/164.9). The
+  frames were the software renderer drawing those full-screen PRIMs one pixel at a time every frame; the GPU drawing
+  them is what the fix gives back.
+- **A test now holds it there**: `gpu wrapped texture against the software renderer` (tests/psp/gpu.cpp) samples a
+  texture laid out to run round VRAM's end from VRAM's first plain copy and from its second, requiring the GPU to take
+  its PRIMs in both, and a texture laid in RAM so that it runs past RAM's end, requiring that one to stay the software
+  renderer's as it was. Built against the build before the change it fails on both VRAM cases ("no draw reached the
+  GPU"); with it, it passes.
+- **No other picture moved**: eight states (God of War: Ghost of Sparta, Peace Walker's own slot 0, Chains of Olympus,
+  Burnout Legends, Colin McRae, Killzone, Gundam vs. Gundam, Super Stardust) render with Vulkan and Vulkan fast exactly
+  as the baseline did: identical percentage/mean/max of difference from the software renderer, to the digit (e.g.
+  Killzone 4.150/1.324/115 both builds, Peace Walker slot 0 2.148/0.646/25 both).
+
+### Limits
+
+- Only the plain (unswizzled, not DXT) layouts, and only VRAM's plain copies; a swizzled wrapped texture, and a wrapped
+  span outside VRAM (RAM or the scratchpad past its end), keep the old behaviour — not decoded here (not met yet).
+- A wrapping texture is decoded for each PRIM that takes it, not cached; that is the rare case (this one), and it is what
+  the GPU's own copy replaces as soon as it draws into that area.
+- The app's device A/B is pending; the host evidence is the runner, the software renderer's pictures and the suite.
