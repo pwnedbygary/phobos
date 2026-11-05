@@ -35,6 +35,28 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: a wrapped texture stays the software renderer's with the GE on its own thread — 2026-11-05
+
+Branch `cursor/psp-wrap-threaded-2b67`, from `cursor/psp-sw-opt2-2b67` (part 132); docs/psp-core.md, part 133, has the
+evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: part 130's wrapped-texture decode runs on the render GE; with the GE on its own thread the render GE's reads
+  are watched against the emulation thread's model, whose G-interest for the PRIM is worked out with
+  `memory.pagesOf(low, high - low)` — which fails for a span that wraps — so reading the second run (from VRAM's start)
+  is outside it, and the release-mode system tests abort on the model's report.
+- **What**: fillDecoded()'s wrapping branch returns where the GE's reads are versioned (GE on its own thread), leaving
+  the wrapped texture to the software renderer there as before part 130. "GE Thread" off (the default) keeps the fix.
+- **Evidence**: the CI release-mode system-tests job aborted after part 130 with the model's report (frozen as
+  ci/model-abort-before-334.log: "the render GE read memory's page 04000 at record 534247, outside ... the model", then
+  Aborted); declaring both runs' pages in the model was tried and still aborted (ci/model-abort-before-declaration.log).
+  A second failure of the new test on llvmpipe ("no draw reached the GPU") is frozen too, now skipped there. The Peace
+  Walker slot-1 reproduction with this change is byte-identical to the frozen software reference at frames 10 and 60
+  (same SHA-256 61b6f710..., 0.0% > 8, mean 0.000, max 0, runner saying "the Vulkan renderer draws"); whole host suite
+  673/0, ares suite 423/0, release-mode suite 673/0, 1 skipped.
+- **Limits**: with the GE on its own thread a wrapped texture is still the software renderer's (that corruption can show
+  there); making the wrapped decode model-safe is future work. CI evidence is the release-mode job; no device figure.
+- **Review**: independent review of the change, the frozen CI failure, the reproduction and the tests; verdict in the
+  commit message and the ledger once given.
+
 ## PSP software renderer: the texture filter in 16-bit lanes, the doubled texture as a shift — 2026-11-05
 
 Branch `cursor/psp-sw-opt2-2b67`, from `cursor/psp-ares-fileio-test-2b67` (part 131); docs/psp-core.md, part 132, has the

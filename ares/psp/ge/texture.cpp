@@ -545,6 +545,10 @@ auto GE::fillDecoded(Look& look, u32 rows, const std::function<auto () -> TexelB
   u32 low, high;
   textureBytes(t, rows, low, high);
   if(!memory.reaches(low, high - low)) {
+    //(The GE on its own thread: the render GE's reads are watched against the emulation thread's model, and a wrapped
+    // span's second run (VRAM's start) reads pages the model's reach for this PRIM doesn't declare — so a wrapped
+    // texture stays the software renderer's there, as before, rather than tripping the model.)
+    if(versioned()) return;
     //(the bytes run round VRAM's end: gathered from its two runs into one linear image, then decoded afresh for this
     // PRIM — not kept in the cache, whose watching and in-place reading both follow pointer()-reachable spans)
     if(t.swizzled || t.format >= 8) return;
