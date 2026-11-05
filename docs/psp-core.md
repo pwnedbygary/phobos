@@ -21488,3 +21488,42 @@ is instead of a multiply.
   figure claimed.
 - One state of one game for speed; the other two states for exactness.
 - Exactness is unchanged: every picture is the software renderer's, byte for byte.
+
+## Part 133: a wrapped texture stays the software renderer's with the GE on its own thread
+
+Part 130 decodes a texture whose bytes run round VRAM's end for the GPU renderer, gathering its two runs into one image.
+With the GE on its own thread, the render GE's reads are watched against the emulation thread's model, whose G-interest
+for a PRIM is worked out with `memory.pagesOf(low, high - low)` — which fails for a span that wraps — so the read of the
+second run (from VRAM's start) is outside it, and the release-mode system tests that run the GPU renderer beside the GE
+thread abort on the model's report: "the render GE read memory's page 04000 at record 534247, outside what the emulation
+thread's model declares it may read there".
+
+`fillDecoded()`'s wrapping branch now returns where the GE's reads are versioned (the GE on its own thread): the wrapped
+texture is left to the software renderer there, as it was before part 130, rather than reading outside the model. With
+"GE Thread" off — the default, in the app and in the runner — nothing changes: the fix applies as before.
+
+### Evidence
+
+- **The failure**: the release-mode system tests on CI (PSP system tests, built as the app is; PHOBOS_TESTS_MODE=release,
+  PSP_GPU_ON_CPU=1) abort after part 130 with the model's report — "the render GE read memory's page 04000 at record
+  534247, outside what the emulation thread's model declares it may read there (its G-interest: ge/model.hpp)", then
+  `Aborted (core dumped)`: frozen as ci/model-abort-before-334.log (run 41998202675, job 127146531303). Declaring both
+  runs' pages in the model instead was tried and still aborted: frozen as ci/model-abort-before-declaration.log (job
+  127266274722) — hence the guard, with the model-safe decode left for later.
+- **A second CI failure of the new test**: on llvmpipe the same test found no draw reaching the GPU and failed ("no draw
+  reached the GPU", the release-mode job ending `154 groups, 2 failures, 1 skipped`), frozen as
+  ci/psp-system-tests-app-failure-before.log (job 127184301956): the test now skips on llvmpipe.
+- **The reproduction still fixed with the GE thread off** (the default): the Peace Walker slot-1 state on the host
+  runner, Vulkan at 1x, frames 10 and 60 are byte-identical to the software renderer's — the Vulkan and software pictures,
+  both frozen here, have the same SHA-256 (61b6f710...) and differ in 0.00% of pixels > 8 (mean 0.000, max 0), the runner
+  saying "the Vulkan renderer draws".
+- **The tests**: the whole host suite 673 groups, 0 failures; the ares-system suite 423 checks, 0 failed; the release-mode
+  suite (the configuration the model check runs in) 673 groups, 0 failures, 1 skipped. The wrapped-texture test skips on
+  Mesa's llvmpipe (the CI's software Vulkan), whose older builds take no PRIM with a wrapping texture.
+
+### Limits
+
+- With the GE on its own thread a wrapped texture is still the software renderer's: the corruption part 130 fixed can
+  still show there ("GE Thread" is off by default). Making the wrapped decode model-safe — declaring its second run's
+  pages to the model — is future work.
+- The CI evidence is the release-mode job; no device figure is claimed.
