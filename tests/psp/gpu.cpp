@@ -4565,7 +4565,9 @@ static auto stencilAlpha(GPU* gpu) -> void {
         CHECK(blended(8, 44), 0u);
       }
       CHECK(stats(gpu).alphas - before.alphas, 2u);
-      if(gpu->fast && gpu->backend->transforms) CHECK(stats(gpu).meshes > before.meshes, true);
+      //(fast mode's meshes take 8888 targets only: a 16-bit one is read in the shader for its blending's sake, and
+      //a mesh reads nothing, so it draws none there and the picture is the software renderer's even so)
+      if(gpu->fast && gpu->backend->transforms && format == 3) CHECK(stats(gpu).meshes > before.meshes, true);
       hardware.ge.setRenderer(nullptr);
     }
   }
@@ -4801,6 +4803,44 @@ static auto gpuStencilAlphaPaths() -> void {
   if(!renderer()) return;
   for(GPU* gpu : {renderer(), fastRenderer()}) {
     if(gpu) stencilAlphaPaths(gpu);
+  }
+}
+
+//Fast mode doesn't dither above 1x (k.dither needs resolution() == 1 there): the PSP's dither is one value a PSP
+//pixel, so an upscaled picture would show it as a checker of blocks. The accurate mode dithers at every scale. A
+//dithered solid sprite narrowed into a 5551 frame buffer, drawn with the GE's dither on and off: the pictures differ
+//at 1x in both modes; at 2x they differ in the accurate mode and are the same in fast mode.
+static auto gpuFastDitherAbove1x() -> void {
+  if(!renderer()) return;
+  auto picture = [&](GPU* gpu, bool dither) {
+    System hardware;
+    hardware.ge.setRenderer(gpu);
+    prepare(hardware, 0, 1);  //(5551: a write is narrowed, and the dither goes in the term)
+    auto& c = hardware.ge.commands;
+    c[GE::Dither0] = 0x7f80, c[GE::Dither0 + 1] = 0x3c4d;
+    c[GE::Dither0 + 2] = 0xe1a5, c[GE::Dither0 + 3] = 0x96b2;
+    c[GE::DitherEnable] = dither;
+    //(a channel mid-step: 0x0f of 0xff is 1.875 of a 5-bit step, so a matrix value moves it a whole one)
+    for(u32 n = 0; n < 4; n++) {
+      u32 color = 0xff000000 | (0x0f + n * 4) << 16 | (0x1f - n * 4) << 8 | (0x0f + n * 2);
+      sprite(hardware, {{{0, 0, float(n * 16), 0}, {0, 0, float(n * 16 + 16), 48}}, color});
+    }
+    c[GE::DitherEnable] = 0;
+    hardware.ge.settleAll();
+    hardware.ge.setRenderer(nullptr);
+    std::vector<u8> vram(Memory::VRAMSize);
+    std::memcpy(vram.data(), hardware.memory.vram.data(), Memory::VRAMSize);
+    return vram;
+  };
+  for(u32 scale : {1u, 2u}) {
+    for(GPU* gpu : {renderer(), fastRenderer()}) {
+      if(!gpu) continue;
+      gpu->resolution(scale);
+      bool same = picture(gpu, true) == picture(gpu, false);
+      bool ditheredAboveEveryScale = gpu != fastRenderer();  //(the accurate mode dithers at 2x too)
+      CHECK(same, !(ditheredAboveEveryScale || scale == 1));
+      gpu->resolution(1);
+    }
   }
 }
 
@@ -6297,6 +6337,7 @@ auto gpuTests() -> Tests {
     {"gpu the frame buffer's alpha as its stencil has it, each other way a PRIM leaves it behind", gpuStencilAlphaWays},
     {"gpu the frame buffer's alpha as its stencil has it, on settings kept and fast mode's small PRIMs among the meshes",
      gpuStencilAlphaPaths},
+    {"gpu fast mode doesn't dither above 1x: a 16-bit picture the same with the GE's dither on or off, where the accurate mode dithers at every scale", gpuFastDitherAbove1x},
     {"gpu a depth buffer read as a texture through VRAM's depth views: the depth it drew put into memory first",
      gpuDepthAsTexture},
     {"gpu depths as the depth formats keep them, and back: all 65,536 the same again", gpuDepthFormats},

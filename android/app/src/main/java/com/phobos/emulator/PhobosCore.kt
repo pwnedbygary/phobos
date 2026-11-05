@@ -121,6 +121,9 @@ object PhobosCore {
     external fun setPspThreadPlacement(enabled: Boolean)
     /** The GE timed as a real PSP's (the core's "GE Timing" "PSP", as a game starts), or by Sony's peak rates. */
     external fun setPspGeTiming(psp: Boolean)
+    /** File requests at the host's speed rather than a PSP's devices' (the core's "File I/O" "Fast", experimental,
+     *  as a game starts). */
+    external fun setPspFastFileIo(fast: Boolean)
     /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */
     external fun takePspNotice(): String
     /** The number of the PSP's system dialog waiting for the player (util/PspDialogs.kt); 0 for none. */

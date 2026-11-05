@@ -84,6 +84,10 @@ the runner refuses anything else):
   which games' lists take a PSP 4 to 12 times longer than (part 103). The report names it; a
   `--ge-profile` file made with `psp` carries its flag, and geprof.py says so. `--ge-thread on` works
   with either: with `psp` the game's thread gets the GE's times as with the thread off (part 111).
+- `--file-io psp|fast` — file requests' time (the core's option "File I/O"): `psp` (the default)
+  charges them the disc's and memory stick's rates, as a PSP's devices take, so loads and installs
+  last about as long as on a PSP; `fast` (experimental) charges them none at all: loads, saves and
+  installs run at the host's speed. The report names it.
 - `--pipeline-cache FILE` — the Vulkan renderer's pipelines kept in `FILE` between runs (the core's
   option "Pipeline Cache"), as the app keeps them: a second run starts with the first's, made at once.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and

@@ -117,6 +117,8 @@ object PspGraphicsOverlap {
 /**
  * The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. [geTiming]: the
  * GE timed as a real PSP's (the core's "GE Timing"), which paces the game as a PSP does, not by Sony's peak rates.
+ * [fastFileIo]: file requests at the host's speed rather than a PSP's devices' (the core's "File I/O" "Fast",
+ * experimental), which shortens loads, saves and installs.
  */
 data class PspStartSettings(
     val renderer: Int,
@@ -124,11 +126,13 @@ data class PspStartSettings(
     val drawingThreads: Int,
     val geTiming: Boolean = true,
     val graphicsOverlap: Int = PspGraphicsOverlap.OFF,
+    val fastFileIo: Boolean = false,
 ) {
     /** Whether a game started with these runs as one started with [other] would: Resolution is the Vulkan renderer's alone. */
     fun runsAs(other: PspStartSettings): Boolean =
         renderer == other.renderer && drawingThreads == other.drawingThreads && geTiming == other.geTiming &&
-            graphicsOverlap == other.graphicsOverlap && (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
+            graphicsOverlap == other.graphicsOverlap && fastFileIo == other.fastFileIo &&
+            (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
 
     companion object {
         fun of(
@@ -137,9 +141,10 @@ data class PspStartSettings(
             drawingThreads: Int,
             geTiming: Boolean = true,
             graphicsOverlap: Int = PspGraphicsOverlap.OFF,
+            fastFileIo: Boolean = false,
         ) = PspStartSettings(
             PspRenderer.forCore(renderer), PspResolution.forCore(resolution), PspDrawingThreads.forCore(drawingThreads),
-            geTiming, graphicsOverlap = PspGraphicsOverlap.forCore(graphicsOverlap),
+            geTiming, graphicsOverlap = PspGraphicsOverlap.forCore(graphicsOverlap), fastFileIo = fastFileIo,
         )
     }
 }

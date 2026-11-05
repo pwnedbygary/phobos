@@ -36,7 +36,10 @@ auto load(Node::System& node, string name) -> bool {
 //Timing", "PSP" (the default, the owner's choice) for the GE to take the time the owner's PSP took over the same work
 //(docs/psp-core.md, part 106), or "Fast" for Sony's peak rates, which games' lists take a PSP 4 to 12 times longer
 //than (part 103); taken at the next power on (Kernel::geTime()). With "GE Thread" On, either way, the GE thread keeps
-//the GE's pipeline and the emulation thread its times (part 111, Kernel::GeRun).
+//the GE's pipeline and the emulation thread its times (part 111, Kernel::GeRun). "File I/O", "Fast" (the experimental
+//choice; the default, "PSP") for file requests to take no device time at all, instead of the disc's 1,375,000 bytes a
+//second and the memory stick's 4,000,000: loads, saves and installs run at the host's speed, not a PSP's
+//(Kernel::fastFileIo, async.cpp and io.cpp); taken at the next power on.
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -53,6 +56,7 @@ auto option(string name, string value) -> bool {
   if(name == "Pipeline Cache") system.pipelineCache = value;
   if(name == "Dialogs") system.dialogs = value.boolean();
   if(name == "GE Timing") system.gePspTiming = value != "Fast";
+  if(name == "File I/O") system.fastFileIo = value == "Fast";
   return true;
 }
 
@@ -642,6 +646,7 @@ auto System::power(bool reset) -> void {
   kernel.power();
   kernel.frontDialogs = dialogs;
   kernel.gePspTiming = gePspTiming;
+  kernel.fastFileIo = fastFileIo;
   cpu.dataCache.enabled = cpu.instructionCache.enabled = gePspTiming;  //(the CPU's traffic with RAM beside the GE:
                                                                          //Allegrex::Cache)
   //The devices are the system's to give: the memory stick here, the disc in startProgram(); none left from the game

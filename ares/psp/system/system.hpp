@@ -70,6 +70,9 @@ struct System {
   bool dialogs = false;          //the host shows the system's dialogs itself (option "Dialogs")
   bool gePspTiming = true;       //the GE takes a PSP's time, not Sony's peaks (option "GE Timing": "PSP", the
                                  //default, or "Fast")
+  bool fastFileIo = false;       //file requests take no device time (option "File I/O": "PSP", the default, or "Fast",
+                                 //experimental: loads, saves and installs at the host's speed); taken at the next
+                                 //power on (Kernel::fastFileIo)
   void* vulkanLoader = nullptr;  //the host's vkGetInstanceProcAddr (vulkanLoader()), none for the system's loader
   //The screen's picture: shown times the PSP's 480x272 each way, the GPU's read back at that size where it draws at
   //a higher resolution (at most MostShown: 1920x1088, a big window's), the software renderer's enlarged to it.

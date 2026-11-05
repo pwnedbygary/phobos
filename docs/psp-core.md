@@ -21214,3 +21214,191 @@ allowed.
 Kept outside the repository, on the NVMe mount: the two APKs and their SHA-256s, the instrumented diagnostic build's
 logs (the swapchain, acquire and present breakdown), the interleaved runs' logs, stats and screenshots, the frozen
 snapshot and its manifest (`psp-perf-hires/analysis/swapfix-snapshot/`).
+
+## Part 126: the devices' time taken out — an experimental option "File I/O" "Fast", whose loads, saves and installs run at the host's speed, in every renderer
+
+The kernel charges every file request the time the PSP's devices took to serve it: the UMD drive's top rate,
+1,375,000 bytes a second, and the memory stick's 4,000,000, plus 100 microseconds for the request (async.cpp). That is
+what makes a game's loading screen last about as long as on a PSP (part 106's spirit for the GE), and it is also what
+made the owner's Peace Walker data install take tens of minutes: 0.96 MB/s of memstick writes, measured, while the
+same folder takes 159 MB/s from a plain host write. This is the option to take that time out.
+
+### The option
+
+- **"File I/O"**: "PSP", the default and every PSP's own time, or "Fast", the experimental one: no device time at all.
+  `Kernel::fastFileIo` (kernel.hpp) is taken at the next power on from `System::fastFileIo` (system.hpp, system.cpp's
+  option), and two places read it: `asyncDuration()` returns 0 instead of the request's microseconds plus its bytes at
+  the device's rate (async.cpp), so an asynchronous request is done at the cycle it is made; and `fileWait()` returns
+  at once (io.cpp), so a synchronous call moves its bytes and doesn't wait. The bytes still move, the results are
+  still kept and taken as before: only the waiting goes.
+- **No renderer is involved**: it is the kernel's, so it holds in Software, Vulkan and Vulkan fast alike, as the owner
+  asked. The machine, its memory and its save states are the same; what changes is how long file requests take, and so
+  what a game that counts on a request's time (io.cpp records GTA's disc streaming doing so) or on a wait's end does —
+  which is the point, and why it is opt-in and experimental. (The one state interaction found in review — a state made
+  under "PSP" with a request pending loaded under "Fast" — is fixed: the checks bound their waits by the PSP's time,
+  and a test covers it.)
+- **The app**: "PSP Fast File I/O", a switch in Settings → Emulation's PlayStation Portable section and the game's PSP
+  menu (Components.kt; `PspStartSettings.fastFileIo`; "Restart to Apply", as it is taken at the next power on); its
+  text says what it does and that it is experimental. `PhobosCore.setPspFastFileIo` through the JNI to the runner's
+  atomic, which tells the core its option as a game starts (`PhobosRunner.cpp`: `PSP: file I/O Fast`).
+- **The runner**: `--file-io psp|fast` (the core's option), named in the report as `"file io"` (runner.cpp, README).
+
+### Evidence
+
+- **The tests** (`tests/psp/async.cpp`): a new group, "files no device time (File I/O Fast)", with `fastFileIo` set:
+  a 4000-byte memory stick read's request is due at the cycle it is made and takes **0 microseconds** where the
+  PSP's timing takes **1100**; a 1000-byte write **0** where it takes **350**; a 2750-byte disc read **0** where it
+  takes **2100**; the bytes and results are the same. Both engines. A second group, "files a PSP-timed state loads
+  under File I/O Fast", makes a state with a request still pending under "PSP" and loads it under "Fast": it loads,
+  round-trips, and its request comes in — the save-state checks bound their waits by the PSP's own time
+  (`Kernel::asyncDurationPsp()`), whatever the option says. `tests/psp/ares/system.cpp` also checks the option reaches
+  the kernel at the next power on ("File I/O Fast reaches the kernel", and back). The whole host suite is run after
+  these changes; its result is in the snapshot's evidence.
+- **The host runner, repeated and interleaved** (an unpaced debug host build, Vulkan fast at Native): three
+  interleaved pairs each, run twice (36 reports, frozen), of Peace Walker's first 6000 and 1500 frames and Ghost of
+  Sparta's 900. Their own `result.seconds`, six runs a side, medians: **Peace Walker 6000: PSP 6.807 s against Fast
+  6.849** (Fast 0.6% longer); **1500: 1.594 against 1.589** (Fast 0.3% shorter); **Ghost of Sparta 900: 2.333 against
+  2.378** (Fast 1.9% longer) — all inside run-to-run noise either way, so no wall-time difference is claimed. (The
+  first set's first runs were warm-up — 10.05 s against 9.04 on Peace Walker's 6000 — and are in the series their
+  medians ignore. One earlier single pair had read −16%; repeating it interleaved showed that was the same warm-up,
+  not the option.) These segments are timing/cutscene-paced and the runner is unpaced, so its time doesn't show what a wait
+  costs: the emulated machine fast-forwards idle rather than waiting it out in real time. The pairs are psp-then-fast
+  within each round, not ABBA; with no difference claimed that isn't a bias this part rests on.
+- **The device, where waits are real time**: the app's boot-to-first-content A/B (three interleaved pairs, Peace
+  Walker, PSP against Fast, through a scratch instrumented build's debug property) was 26.9/26.1/23.9 s against
+  24.0/25.0/25.4 s — within noise, because the boot is cutscene-paced too, and it isn't claimed as a speedup. What the
+  device does show is that the option reaches the core: the scratch build logged `PSP: file I/O Fast from
+  debug.phobos.psp.fileio` (pid and time in the frozen log), then `PSP: file I/O Fast` as the game started. (The
+  release app's switch is the same option through the same JNI; it is code-reviewed and its wiring tested, not
+  exercised by this screenshot.)
+- **The one measurement not yet taken**: an install or a save on the device, where the PSP's waits are paced in real
+  time. Peace Walker's data install wrote 0.96 MB/s under the PSP's timing in an earlier session (the owner's; the
+  same folder takes 159 MB/s from a plain host write — context for why the option exists, not this part's measurement).
+  Re-running it under "Fast" is the next rig, and until it is run no speedup figure is claimed.
+
+### Limits
+
+- **No install or save measured on the device yet.** The one obvious rig, Peace Walker's data install, was not re-run
+  under this option; the 0.96 MB/s install and the 159 MB/s host write are the owner's/earlier context for why the
+  option exists, not this part's measurement.
+- **Games that count on a request's time can differ** (io.cpp's note on GTA's streaming): experimental, off by
+  default, and the default behaves exactly as before (same values and path).
+- It is taken at the next power on, not live, like "GE Timing"; the app's "Restart to Apply" says so. And "file
+  requests" is what it says: it also removes what the UMD activate and a PSMF movie's header read wait
+  (`asyncDuration`), and the bounds a loaded state's checks use (now the PSP's time regardless, above). The runner's
+  numbers above are within noise and this part claims no speedup from them; no PPSSPP comparison is made.
+
+## Part 127: fast mode reads its 16-bit frame buffers — Peace Walker's title and cutscenes exact at 1x, its 5x pictures without the dither checker
+
+Fast mode's shortcut is the GPU's own blending: it keeps 8 bits between blends and doesn't dither, where a 16-bit
+frame buffer narrows each blend's result to the format, dithered, before the next one reads it. On an 8888 scene that
+is a step here and there; on a 5551 one — Peace Walker's title and its comic cutscenes among them — the GPU's
+undithered noise came out as a dense black speckle, worse the more resolution the picture is drawn at. The fix: a
+16-bit frame buffer's draws are read in the shader in fast mode too, as the accurate mode reads them, while every
+8888 target (most 3D games' scenes) keeps the GPU's blending and GPU-transformed meshes untouched.
+
+### Why
+
+- **The GPU's 16-bit blending keeps 8 bits and skips the dither.** Part 53's table has fast mode 40.4% identical to
+  the software renderer on Peace Walker's title (5551, dithered, additive noise over alpha blends), where accurate
+  mode is 100.0%. At 5x each of the PSP's dither steps is a block of the GPU's pixels, so what the accurate mode and
+  the software renderer show as a fine noise becomes, in fast mode, a heavy black speckle through the comic art and
+  the title: the owner's report of "black corruption" in the cutscenes.
+- **Measured, from boot, on the host runner**: fast mode against the software renderer was **18.3% to 32.0% of
+  pixels** with a channel more than 8 apart over frames 9250-11000 (the title and its transitions; per-channel, 8.0%
+  to 16.4%), against 0.00-0.01% for the accurate mode over the same frames. After this change those frames are
+  **0.00-0.01%**: the colors the GPU blended undithered (its 8 bits kept between blends) are the PSP's now, narrowed
+  and dithered as the software renderer has them at 1x. Above 1x this part also stops fast mode dithering (below):
+  the PSP's dither is one value a PSP pixel, so upscaled it would be a checker of blocks, where PPSSPP's upscaled
+  pictures don't dither.
+
+### The change (ge/gpu/gpu.cpp)
+
+- `reads16 = fast && p.format < 3` in `GPU::settings()`: a draw into a 16-bit frame buffer reads it as an input
+  attachment and blends in the shader with the PSP's whole-number terms, dither and narrowing, as the accurate mode
+  does (`reading`, `k.reads`, `k.quantize`).
+- A 16-bit target takes no fast-mode meshes (`meshes()`) or screen triangles: those pipelines read nothing by design
+  (they enter no box and need no barrier), so a mesh would GPU-blend and lose the fix; the PRIM draws through the
+  normal path instead. 8888 targets keep both unchanged.
+- `emit()` keeps the boxes and barriers for fast mode's reading draws as the accurate mode does
+  (`!backend->readsInOrder && (backend->reads || (fast && target->format < 3))`), so what was drawn before a reading
+  draw in the same pass is made visible to it.
+- And fast mode stops dithering above 1x (`k.dither` needs `resolution() == 1` there): the PSP's dither is one value
+  a PSP pixel, so drawn at more than one GPU pixel it becomes a checker of blocks, more visible the bigger the
+  picture; the accurate mode keeps it at every scale, the PSP's own way, and fast mode's narrowing keeps whole steps
+  instead, as PPSSPP's upscaled pictures keep them.
+
+### Evidence
+
+- **Pictures, host runner, from boot, final build against the software renderer at Native**, pixels with a channel
+  more than 8 apart (per-channel in brackets): frames 9250 0.01% (0.00%), 9500 0.01% (0.00%), 10000 0.00% (0.00%),
+  10250 0.01% (0.00%), 11000 0.00% (0.00%), 12000 0.00% (0.00%), 12500 1.68% (0.61%), 14000 4.25% (1.50%), 16000
+  2.07% (1.02%) — the last three the same as before, fast mode's own 3D interpolation approximations, which this
+  doesn't touch. The build before it, same frames: 18.59% (8.01%), 31.96% (16.37%), 18.30% (8.09%), 31.38% (16.27%),
+  27.08% (13.82%), then the same 0.00/1.68/4.25/2.07%. The accurate mode was 0.01% at 9500 and 10250 and 0.00% at
+  11000. All nine frames of each are frozen, and the comparison log.
+- **An 8888 game unchanged**: God of War: Ghost of Sparta's frame 900 is byte-identical between the previous fast
+  mode and this one (PNG SHA-256 both ways).
+- **Speed, host runner, unpaced debug build, medians of three truly interleaved runs a side** (part 126's frozen runner 142e8617 and this one's b5b8f280, base then new in each round): at Native, Peace Walker 3000 frames (title) **-2.8%** frames a second, 11000 frames (title and transitions) **-2.3%**, 16000 frames (training play) **-1.6%**; Ghost of Sparta 900 frames **-0.8%**. At 5x, Peace Walker 3000 **-0.7%**, 11000 **-4.4%**, 16000 **-1.7%**; Ghost of Sparta 900 **+0.2%** — reading a 16-bit frame buffer costs a few percent where the GPU would have blended it, and the 3D gameplay is within about 2%; the reports are frozen and the medians in their summary.
+- **The tests**: the whole host suite after the change (the GPU draw tests compare both modes against the software
+  renderer); its result is in the snapshot's evidence.
+- **The app, on the RP6, at 5x, Vulkan fast, the candidate APK (no property overrides)**: its logcat has the
+  startup lines (renderer "Vulkan (fast)", resolution 5x, pid 17492), and 60.0 fps with AvgFrameTime about 2 ms at
+  the title (1.5-2.3 ms in the frozen window, a few transients to 10 ms; 16.7 ms is the frame interval its HUD
+  shows). Its launch through the title and the first comic cutscenes
+  was captured every 8 seconds for about 200 seconds: every frame clean — the title's letters and clock,
+  Dr. Strangelove's card, Peace Walker's title, an in-game cutscene — with no speckle in any of them. The build
+  before it (the first candidate, sha256 bd4d97e5…: reads16 but not yet the dither rule), captured the same way,
+  drew its late frames as white-and-green noise with black speckle over them.
+
+### Limits
+
+- It reads 16-bit *frame buffers*, not 16-bit textures, and the fast mode's 3D interpolation, depth and vertex
+  approximations are untouched. The 8888 picture identity is at Native (1x); the no-dither rule above 1x applies to
+  every target fast mode draws, 8888 ones included, so "8888 untouched" means its GPU blending and GPU-transformed
+  meshes, not its 5x pixels.
+- The measured cost is the host runner's; the app's 16-bit menus and cutscenes at 5x are the capture above.
+- A state loaded with a Vulkan renderer can show a frame that isn't memory's (both Vulkan modes, before this part
+  too: its own bug, recorded in docs/handoff.md, not this change's).
+- No PPSSPP comparison is made here.
+
+## Part 128: software renderer's texel reads where they are, and smaller batches shared out among the drawing threads
+
+The software renderer draws on the CPU, so its speed is the host's: on the RP6 it's the slowest of the three profiles on
+heavy 3D. Two things in its four-pixels-at-a-time path cost more than they need to, and both keep every pixel exact:
+a bilinear-filtered read copied each lane's two texels into 64-bit words and shifted them apart to rebuild the four
+lanes' left and right texels, and a batch of fewer than 8192 pixels was drawn on the GE's thread alone, so many of
+the small batches a 3D game makes never shared the work out.
+
+### The change (ge/four.cpp, ge/ge.hpp)
+
+- **Texel reads where they are**: `texelsFour()`'s bilinear path reads each lane's left and right texel with a 32-bit
+  load where they are (`t.decoded[top[n]]`, `t.decoded[top[n] + 1]`) instead of reading the pair as a 64-bit word,
+  copying four of them to an array and shifting them apart to fill the vectors. A lane not live still reads the first
+  two, which a texture two wide has, as before.
+- **Smaller batches shared out**: `Drawing::shared`, the pixel count below which a batch is drawn on the GE's thread
+  alone, goes from 8192 to 2048. A batch with fewer pixels than that is still drawn on one thread; the batches a 3D
+  game makes of its small triangles now reach the drawing threads instead of waiting their turn on one.
+
+### Evidence
+
+- **Speed, host runner, an -O2 build of it** (the runner's script with only its CXXFLAGS line changed, frozen with
+  this snapshot), **GoS's training state (God of War: Ghost of Sparta, 600 frames)**: three runs a side, taken in turn
+  (base, candidate, base, candidate, base, candidate), the build before it against this one's: **96.6 fps -> 98.67 fps
+  (+2.1%)** medians; the runs were 96.60/96.05/96.64 against 98.24/99.31/98.67, so the win is the medians', not one
+  run's (the base runs spread 0.59 of a frame, the candidate's 1.07: up to about a frame a side).
+- **Pictures**: byte-identical at 600 frames of GoS's training state (`1cd209c5…` for the frame-000600 PNG both
+  builds) and at 200 frames of Peace Walker's, Chains of Olympus's and GoS's own (`cef22492…`, `1e268eb7…`,
+  `7bd66f19…`).
+- **The profile that pointed at them**: at `-O2` the software renderer spent 77% of its time in `triangleFours<3u>`,
+  with the bilinear gather's vector rebuilding and the per-lane texel reads among the top lines (`four.cpp`'s
+  64-bit pair copies and shifts).
+- **The tests**: the whole host suite after the change, the software renderer's pictures still compared exactly.
+
+### Limits
+
+- The measurement is the host runner's (unpaced, a desktop CPU); the app's device A/B (RP6) is to be run when the
+  device is next free, and is not claimed here.
+- One scene of one game at Native and two other states for exactness; other titles aren't measured.
+- The exactness is unchanged: every picture is the software renderer's, byte for byte, and the threaded drawing keeps
+  its band order (only when a batch is shared out changed, not how).

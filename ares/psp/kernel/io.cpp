@@ -800,7 +800,7 @@ auto Kernel::fileWaitRefused() const -> u32 {
 //priority, has run meanwhile to note it. An error returns at once.
 auto Kernel::fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void {
   result(value);
-  if(!current || s32(value) < 0) return;
+  if(fastFileIo || !current || s32(value) < 0) return;  //(option "File I/O" "Fast": nothing to wait for)
   current->waitCount = value;
   block(Wait::File, file, cycles + asyncDuration(onDisc, bytes));
 }

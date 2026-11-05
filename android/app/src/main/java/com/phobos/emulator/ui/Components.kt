@@ -275,6 +275,19 @@ fun PspGeTimingItem(checked: Boolean, onCheckedChange: (Boolean) -> Unit) = Sett
     onCheckedChange,
 )
 
+/**
+ * The PSP's file I/O timing: file requests take the disc's and memory stick's time, as a PSP's devices do (the default),
+ * or none at all ("Fast", experimental), so loads, saves and installs run at the host's speed.
+ */
+@Composable
+fun PspFastFileIoItem(checked: Boolean, onCheckedChange: (Boolean) -> Unit) = SettingsSwitchItem(
+    "PSP Fast File I/O",
+    "Experimental: loads, saves and installs skip the PSP's disc and memory stick timing and run at this " +
+        "device's speed. Off: as a real PSP's devices take",
+    checked,
+    onCheckedChange,
+)
+
 @Composable
 fun SettingsSwitchItem(title: String, description: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     ListItem(
