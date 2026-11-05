@@ -202,7 +202,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     if(t.wait == Wait::File) {
       u64 due = t.wakeAt;
       check(t.status == Status::Waiting && !t.callbacks && due);
-      check(due > cycles ? due - cycles <= asyncDuration(true, 64_MiB) : cycles - due < VblankCycles);
+      check(due > cycles ? due - cycles <= asyncDurationPsp(true, 64_MiB) : cycles - due < VblankCycles);
     }
     //a decode's wait (codec.cpp) is a moment's, with no callbacks: due within a frame, nor overdue by one
     if(t.wait == Wait::Codec) {
@@ -215,7 +215,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     //due likewise (and may be overdue by however long they ran: it ends as they're done)
     for(auto [wait, due] : {std::pair{t.wait, t.wakeAt}, std::pair{w.wait, w.wakeAt}}) {
       if(wait != Wait::Psmf) continue;
-      u64 longest = std::max<u64>(VblankCycles, asyncDuration(true, 16_MiB));
+      u64 longest = std::max<u64>(VblankCycles, asyncDurationPsp(true, 16_MiB));
       check(due && (due <= cycles || due - cycles <= longest));
     }
   };
@@ -841,7 +841,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   //had are let go of here as they are, nothing on the host changed: System::unserialize() keeps them, to put back if
   //the state is refused, and closes them once it has loaded.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
-  u64 longest = asyncDuration(true, 64_MiB);
+  u64 longest = asyncDurationPsp(true, 64_MiB);
   map(files, [&](OpenFile& open) {
     text(open.path);
     s(open.folder); s(open.flags); s(open.position);

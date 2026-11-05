@@ -1028,6 +1028,9 @@ namespace ares {
   static std::atomic<bool> pspThreadPlacement{false};
   // The GE timed as a real PSP's, not by Sony's peak rates (Settings' "PSP GE Timing", on by default).
   static std::atomic<bool> pspGeTiming{true};
+  // File requests at the host's speed rather than the PSP's disc's and memory stick's (the core's "File I/O" "Fast",
+  // experimental; Settings' "PSP Fast File I/O", off by default).
+  static std::atomic<bool> pspFastFileIo{false};
   // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
   static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;
@@ -3695,6 +3698,8 @@ else if (port->type() == "Keyboard") {
       ::ares::PlayStationPortable::option("GE Thread", pspGraphicsOverlap.load() == 1 ? "On" : "Off");
       LOGI("PSP: GE timing %s", pspGeTiming.load() ? "PSP" : "Fast");
       ::ares::PlayStationPortable::option("GE Timing", pspGeTiming.load() ? "PSP" : "Fast");
+      LOGI("PSP: file I/O %s", pspFastFileIo.load() ? "Fast" : "PSP");
+      ::ares::PlayStationPortable::option("File I/O", pspFastFileIo.load() ? "Fast" : "PSP");
       // The Vulkan renderer's pipelines kept between sessions, beside the N64's (the Vulkan cache folder, or saves').
       string pspCacheDir = vulkanCachePath;
       if (!pspCacheDir) pspCacheDir = savesPath;
@@ -4829,6 +4834,7 @@ else if (port->type() == "Keyboard") {
   auto setPspGraphicsOverlap(s32 mode) -> void { pspGraphicsOverlap = mode == 1 ? 1 : 0; }
   auto setPspThreadPlacement(bool enabled) -> void { pspThreadPlacement = enabled; }
   auto setPspGeTiming(bool psp) -> void { pspGeTiming = psp; }
+  auto setPspFastFileIo(bool fast) -> void { pspFastFileIo = fast; }
   auto takePspNotice() -> std::string {
     std::string text = (const char*)::ares::PlayStationPortable::notice();
     if (!text.empty()) addLog(LogLevel::Warn, {"PSP: ", text.c_str()});

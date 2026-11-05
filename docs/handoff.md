@@ -35,6 +35,40 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: an experimental "File I/O" "Fast" — loads, saves and installs at the host's speed, in every renderer — 2026-11-04
+
+Branch `cursor/psp-fast-io-2b67`, from `cursor/psp-swapchain-suboptimal-2b67` (part 125); docs/psp-core.md, part 126,
+has the evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged (the layout and the machine are not
+touched; only how long file requests take).
+- **Why**: the kernel charges every file request the PSP's device rates (the UMD's 1,375,000 bytes a second, the
+  memory stick's 4,000,000, plus 100 microseconds), so loading screens last about as long as on a PSP. The owner's
+  Peace Walker data install wrote at 0.96 MB/s (measured) while the same folder takes 159 MB/s from a host write: the
+  model was the time, with no way to ask for a faster one (PPSSPP-like loading) in the app.
+- **What**: a new core option "File I/O", "PSP" (the default, every PSP's time) or "Fast" (experimental, no device
+  time at all): `asyncDuration()` returns 0 and `fileWait()` returns at once (async.cpp, io.cpp), so an asynchronous
+  request is done as it is made and a synchronous call doesn't wait; the bytes and results are the same. It is the
+  kernel's, so it holds in Software, Vulkan and Vulkan fast alike; the app has "PSP Fast File I/O" (Settings →
+  Emulation → PlayStation Portable, and the game's PSP menu; Restart to Apply), and the runner `--file-io psp|fast`
+  with `"file io"` in its report.
+- **Evidence**: test groups prove the waiting goes (4000-byte memstick read 1100 → 0 µs; 1000-byte write 350 → 0;
+  2750-byte disc read 2100 → 0; both engines), that a state made under "PSP" with a request pending loads under
+  "Fast" (the checks bound waits by the PSP's own time, `Kernel::asyncDurationPsp()`), and that the option reaches
+  the kernel at the next power on (`tests/psp/ares/system.cpp`); the whole host suite is in the snapshot's evidence.
+  The host runner's own `result.seconds`, from three interleaved pairs run twice (36 frozen reports), medians six runs
+  a side: Peace Walker 6000 frames 6.807 against 6.849 s, 1500 frames 1.594 against 1.589, Ghost of Sparta 900 2.333
+  against 2.378 — within noise either way, so no wall-time difference is claimed: the runner is unpaced, so an
+  emulated wait's real time isn't wall time there, and an earlier single pair's −16% was first-run warm-up. On the device, the scratch build
+  logged `PSP: file I/O Fast` as a game started (frozen log); the app's boot-to-content A/B was within noise because
+  that boot is cutscene-paced (PSP 26.9/26.1/23.9 s, Fast 24.0/25.0/25.4 s), and nothing is claimed from it. The
+  install/save measurement, where waits are real time, is the next rig.
+- **Limits**: no install or save measured on the device yet (Peace Walker's data install is the rig, and until it is
+  run no speedup figure is claimed); a game that counts on a request's time (io.cpp's note on GTA's streaming) can
+  differ, which is why this is experimental and off by default; taken at the next power on, not live; "file requests"
+  also covers the UMD activate and PSMF header waits and the loaded state's bounds; no PPSSPP comparison is made.
+- **Review**: independent review of the change, the default's neutrality (the default behaves exactly as before, the
+  same values and path), the tests and the frozen snapshot; verdict recorded in the commit message and the ledger once
+  given.
+
 ## PSP Vulkan: a swapchain presented as it is — the app stops making a swapchain a frame, Chains of Olympus reaches 59.94 at 5x and Ghost of Sparta comes close — 2026-11-04
 
 Branch `cursor/psp-swapchain-suboptimal-2b67`, from `cursor/psp-fast-depth-2b67` (part 124); docs/psp-core.md, part

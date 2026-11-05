@@ -39,8 +39,16 @@ auto Kernel::asyncBusy(u32 file) const -> bool {
   return found != files.end() && found->second.async == OpenFile::Async::Pending;
 }
 
-//How long a request moving so many bytes takes on the disc or the memory stick, in cycles.
+//How long a request moving so many bytes takes on the disc or the memory stick, in cycles; none where the option
+//"File I/O" is "Fast" (fastFileIo): a request is done as it's made, the host's speed rather than the PSP's.
 auto Kernel::asyncDuration(bool onDisc, u64 bytes) const -> u64 {
+  if(fastFileIo) return 0;
+  return asyncDurationPsp(onDisc, bytes);
+}
+
+//The same in the PSP's own time, whatever the option says: a state's checks bound the waits they load by this
+//(serialization.cpp), so a state made under "PSP" and a pending request load under "Fast" as under "PSP".
+auto Kernel::asyncDurationPsp(bool onDisc, u64 bytes) const -> u64 {
   return RequestCycles + bytes * CPUFrequency / (onDisc ? DiscBytesPerSecond : StickBytesPerSecond);
 }
 
