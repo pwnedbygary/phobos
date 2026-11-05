@@ -21287,3 +21287,77 @@ same folder takes 159 MB/s from a plain host write. This is the option to take t
   requests" is what it says: it also removes what the UMD activate and a PSMF movie's header read wait
   (`asyncDuration`), and the bounds a loaded state's checks use (now the PSP's time regardless, above). The runner's
   numbers above are within noise and this part claims no speedup from them; no PPSSPP comparison is made.
+
+## Part 127: fast mode reads its 16-bit frame buffers — Peace Walker's title and cutscenes exact at 1x, its 5x pictures without the dither checker
+
+Fast mode's shortcut is the GPU's own blending: it keeps 8 bits between blends and doesn't dither, where a 16-bit
+frame buffer narrows each blend's result to the format, dithered, before the next one reads it. On an 8888 scene that
+is a step here and there; on a 5551 one — Peace Walker's title and its comic cutscenes among them — the GPU's
+undithered noise came out as a dense black speckle, worse the more resolution the picture is drawn at. The fix: a
+16-bit frame buffer's draws are read in the shader in fast mode too, as the accurate mode reads them, while every
+8888 target (most 3D games' scenes) keeps the GPU's blending and GPU-transformed meshes untouched.
+
+### Why
+
+- **The GPU's 16-bit blending keeps 8 bits and skips the dither.** Part 53's table has fast mode 40.4% identical to
+  the software renderer on Peace Walker's title (5551, dithered, additive noise over alpha blends), where accurate
+  mode is 100.0%. At 5x each of the PSP's dither steps is a block of the GPU's pixels, so what the accurate mode and
+  the software renderer show as a fine noise becomes, in fast mode, a heavy black speckle through the comic art and
+  the title: the owner's report of "black corruption" in the cutscenes.
+- **Measured, from boot, on the host runner**: fast mode against the software renderer was **18.3% to 32.0% of
+  pixels** with a channel more than 8 apart over frames 9250-11000 (the title and its transitions; per-channel, 8.0%
+  to 16.4%), against 0.00-0.01% for the accurate mode over the same frames. After this change those frames are
+  **0.00-0.01%**: the colors the GPU blended undithered (its 8 bits kept between blends) are the PSP's now, narrowed
+  and dithered as the software renderer has them at 1x. Above 1x this part also stops fast mode dithering (below):
+  the PSP's dither is one value a PSP pixel, so upscaled it would be a checker of blocks, where PPSSPP's upscaled
+  pictures don't dither.
+
+### The change (ge/gpu/gpu.cpp)
+
+- `reads16 = fast && p.format < 3` in `GPU::settings()`: a draw into a 16-bit frame buffer reads it as an input
+  attachment and blends in the shader with the PSP's whole-number terms, dither and narrowing, as the accurate mode
+  does (`reading`, `k.reads`, `k.quantize`).
+- A 16-bit target takes no fast-mode meshes (`meshes()`) or screen triangles: those pipelines read nothing by design
+  (they enter no box and need no barrier), so a mesh would GPU-blend and lose the fix; the PRIM draws through the
+  normal path instead. 8888 targets keep both unchanged.
+- `emit()` keeps the boxes and barriers for fast mode's reading draws as the accurate mode does
+  (`!backend->readsInOrder && (backend->reads || (fast && target->format < 3))`), so what was drawn before a reading
+  draw in the same pass is made visible to it.
+- And fast mode stops dithering above 1x (`k.dither` needs `resolution() == 1` there): the PSP's dither is one value
+  a PSP pixel, so drawn at more than one GPU pixel it becomes a checker of blocks, more visible the bigger the
+  picture; the accurate mode keeps it at every scale, the PSP's own way, and fast mode's narrowing keeps whole steps
+  instead, as PPSSPP's upscaled pictures keep them.
+
+### Evidence
+
+- **Pictures, host runner, from boot, final build against the software renderer at Native**, pixels with a channel
+  more than 8 apart (per-channel in brackets): frames 9250 0.01% (0.00%), 9500 0.01% (0.00%), 10000 0.00% (0.00%),
+  10250 0.01% (0.00%), 11000 0.00% (0.00%), 12000 0.00% (0.00%), 12500 1.68% (0.61%), 14000 4.25% (1.50%), 16000
+  2.07% (1.02%) — the last three the same as before, fast mode's own 3D interpolation approximations, which this
+  doesn't touch. The build before it, same frames: 18.59% (8.01%), 31.96% (16.37%), 18.30% (8.09%), 31.38% (16.27%),
+  27.08% (13.82%), then the same 0.00/1.68/4.25/2.07%. The accurate mode was 0.01% at 9500 and 10250 and 0.00% at
+  11000. All nine frames of each are frozen, and the comparison log.
+- **An 8888 game unchanged**: God of War: Ghost of Sparta's frame 900 is byte-identical between the previous fast
+  mode and this one (PNG SHA-256 both ways).
+- **Speed, host runner, unpaced debug build, medians of three truly interleaved runs a side** (part 126's frozen runner 142e8617 and this one's b5b8f280, base then new in each round): at Native, Peace Walker 3000 frames (title) **-2.8%** frames a second, 11000 frames (title and transitions) **-2.3%**, 16000 frames (training play) **-1.6%**; Ghost of Sparta 900 frames **-0.8%**. At 5x, Peace Walker 3000 **-0.7%**, 11000 **-4.4%**, 16000 **-1.7%**; Ghost of Sparta 900 **+0.2%** — reading a 16-bit frame buffer costs a few percent where the GPU would have blended it, and the 3D gameplay is within about 2%; the reports are frozen and the medians in their summary.
+- **The tests**: the whole host suite after the change (the GPU draw tests compare both modes against the software
+  renderer); its result is in the snapshot's evidence.
+- **The app, on the RP6, at 5x, Vulkan fast, the candidate APK (no property overrides)**: its logcat has the
+  startup lines (renderer "Vulkan (fast)", resolution 5x, pid 17492), and 60.0 fps with AvgFrameTime about 2 ms at
+  the title (1.5-2.3 ms in the frozen window, a few transients to 10 ms; 16.7 ms is the frame interval its HUD
+  shows). Its launch through the title and the first comic cutscenes
+  was captured every 8 seconds for about 200 seconds: every frame clean — the title's letters and clock,
+  Dr. Strangelove's card, Peace Walker's title, an in-game cutscene — with no speckle in any of them. The build
+  before it (the first candidate, sha256 bd4d97e5…: reads16 but not yet the dither rule), captured the same way,
+  drew its late frames as white-and-green noise with black speckle over them.
+
+### Limits
+
+- It reads 16-bit *frame buffers*, not 16-bit textures, and the fast mode's 3D interpolation, depth and vertex
+  approximations are untouched. The 8888 picture identity is at Native (1x); the no-dither rule above 1x applies to
+  every target fast mode draws, 8888 ones included, so "8888 untouched" means its GPU blending and GPU-transformed
+  meshes, not its 5x pixels.
+- The measured cost is the host runner's; the app's 16-bit menus and cutscenes at 5x are the capture above.
+- A state loaded with a Vulkan renderer can show a frame that isn't memory's (both Vulkan modes, before this part
+  too: its own bug, recorded in docs/handoff.md, not this change's).
+- No PPSSPP comparison is made here.

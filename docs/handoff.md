@@ -35,6 +35,41 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan fast: its 16-bit frame buffers read in the shader, no dither above 1x — Peace Walker's title and cutscenes drawn clean at 5x — 2026-11-04
+
+Branch `cursor/psp-vulkan-fast16-2b67`, from `cursor/psp-fast-io-2b67` (part 126); docs/psp-core.md, part 127, has the
+evidence. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged (a state loaded with a Vulkan renderer
+shows a frame that isn't memory's, its own pre-existing bug, next).
+- **Why**: fast mode blends with the GPU's own units, which keep 8 bits between blends and don't dither; on a 16-bit
+  frame buffer (5551/4444, Peace Walker's title and comic cutscenes among them) that noise came out as a dense black
+  speckle, worse the higher the resolution — the owner's "black corruption" in the cutscenes. From boot on the host
+  runner, fast mode was 18.3-32.0% of pixels with a channel more than 8 apart from the software renderer over frames 9250-11000
+  (accurate mode 0.00%).
+- **What**: a 16-bit frame buffer's draws are read in the shader in fast mode too (`reads16` in GPU::settings(): the
+  PSP's whole-number blending terms, dither and narrowing, as the accurate mode has them); a 16-bit target takes no
+  fast-mode meshes or screen triangles (their pipelines read nothing), and `emit()` keeps the reading draws' boxes
+  and barriers. 8888 targets — most 3D games' scenes — keep GPU blending and GPU-transformed meshes untouched. And
+  fast mode stops dithering above 1x (`k.dither` needs `resolution() == 1`): the PSP's dither per GPU pixel would be
+  a checker of blocks; the accurate mode keeps it at every scale.
+- **Evidence**: host runner from boot, final build against software, pixels with a channel more than 8 apart:
+  frames 9250 0.01%, 9500 0.01%, 10000 0.00%, 10250 0.01%, 11000 0.00%, 12000 0.00%, 12500 1.68%, 14000 4.25%,
+  16000 2.07% (per-channel 0.00-1.50%); the build before it 18.59/31.96/18.30/31.38/27.08% then the same 0.00/1.68/
+  4.25/2.07%; accurate 0.00-0.01%. All nine frames and the comparison log frozen. GoS's frame 900 byte-identical
+  before/after (8888 scene). Speed, unpaced host runner: Native PW 3000 -2.8%, 11000 -2.3%, 16000 -1.6%, GoS 900 -0.8%; 5x PW 3000 -0.7%, 11000 -4.4%, 16000 -1.7%, GoS 900 +0.2% (medians of three truly interleaved runs a side, part 126's frozen runner and this one's). On the RP6 at 5x, the candidate APK (no property
+  overrides; its logcat has renderer "Vulkan (fast)", resolution 5x, pid): its launch through title and first
+  cutscenes captured every 8 s for ~200 s was clean in every frame (60.0 fps; AvgFrameTime about 2 ms at the title (1.5-2.3 ms in the frozen window, a few transients to 10 ms)),
+  where the first candidate (sha256 bd4d97e5…, reads16 without the dither rule) drew its late frames as
+  white-and-green noise with black speckle. The whole
+  host suite is 672 groups, 0 failures.
+- **Limits**: 16-bit frame buffers only, not 16-bit textures; fast mode's 3D interpolation/depth/vertex
+  approximations are untouched; the 8888 byte-identity is at Native, and the no-dither rule above 1x takes in every
+  target fast mode draws (8888 included); the accurate mode dithers at every scale; speed figures are medians of three truly
+  interleaved runs each side; no PPSSPP comparison is made.
+- **Tests**: one GPU assertion relaxed to say what the change does — fast mode's meshes take 8888 targets only, and
+  the pictures are still the software renderer's exactly.
+- **Review**: independent review of the change, the 8888 path's neutrality (byte-identical frame), the 5x pictures,
+  the speed and the frozen snapshot; verdict recorded in the commit message and the ledger once given.
+
 ## PSP core: an experimental "File I/O" "Fast" — loads, saves and installs at the host's speed, in every renderer — 2026-11-04
 
 Branch `cursor/psp-fast-io-2b67`, from `cursor/psp-swapchain-suboptimal-2b67` (part 125); docs/psp-core.md, part 126,
