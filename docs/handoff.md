@@ -294,6 +294,37 @@ room: our code; no PPSSPP or JPCSP. Save states: unchanged.
   `gpuDepthOutside` already run fractional 2D depths in fast mode; a dedicated fast fractional-depth/read-back test is
   the next check); `git diff --check` clean.
 - **Not run**: a library-level picture sweep in fast mode; only the two save states and the title frame compared.
+## PSP GE thread: the memory model's handover checks answered by the range — God of War at 5x goes from 147 ms to 32 ms a frame with the option on — 2026-11-04
+
+Branch `cursor/psp-ge-model-range-2b67`, from master `d3604ebe`; docs/psp-core.md, part 122, has the evidence. Clean
+room: our code; no PPSSPP or JPCSP. Save states: unchanged (the model's records are the renderer's, not saved).
+- **Why**: the GE on its own thread was unusable above 1x. `GeModel::dirty()` (the question the thread's memory
+  handovers ask before touching a page) walked its range a byte at a time and every target inside each byte
+  (`hull.reaches(byte)`), O(bytes x targets) above 1x where the hull path is on. On God of War: Ghost of Sparta's title
+  state at 5x the model's checks took 91.12% of the sampled CPU in a host profile (107,620,805 calls of `dirtyBytes`),
+  the option ran 8.9 frames a second on the host against 65 single-threaded, and the RP6 ran it 146.9 ms a frame
+  against 36.7 without it.
+- **What**: `GeModel::dirty()` asks one place a 32-byte piece (`min(whole, part)`, the older of a piece's places, so a
+  piece may say dirty where one of its bytes is not, never clean where one is), and `dirtyBytes()` asks the range:
+  `gpu.newerThan(first, last, cx)` for the bytes the GPU rasterized, one `hull.reaches(first, last)` for each recent
+  target's hull, instead of a loop over every byte and every target. The answers only widen: no handover is skipped, so
+  the emulated machine, its timing and its picture are unchanged; only how the same question is answered.
+- **Evidence**: host, GoS title state, 300 frames, 3 interleaved pairs; frames a second: single thread base
+  65.19/63.11/63.86 against fix 66.73/64.64/63.92 (noise), GE thread base 8.95/8.92/8.98 against fix
+  66.54/67.08/70.35 (mean frame times 111.79/112.10/111.41 -> 15.03/14.91/14.21 ms). RP6 at 5x, mean frame times from
+  the frozen reports: single thread base 36.72/36.76/36.53 against fix 36.73/36.75/36.65 ms; GE thread base
+  146.85/146.99/146.87 against fix 32.00/32.02/32.06 ms (4.6x, 14.6% more frames a second than single). Frame 300 of the threaded runs,
+  base against fix, byte for byte: host `c7e4ecfffb67181d05524439906fa9c02102deeb6f83a9fa3d63facc0d1b501d`, RP6
+  `063816a9279771761ced56ad0017a9cfc766df8f97edf53b33c24768ca9851fe` (both PNGs and capture reports frozen). The
+  reviewer's independent differential harness (base header against this one): 4,000 randomized model states, 240,000
+  queries, 0 under-reports, 409 over-reports, and a `min` -> `max` mutant caught 1,474 times. `tests/psp/run-tests.sh`
+  with `PHOBOS_TESTS_GE_THREAD=On PHOBOS_TESTS_ONLY=thread`: 69 groups, 0 failures (every machine threaded); the full
+  suite: 669 groups, 0 failures.
+- **Limits**: the option only — the default path is untouched, and the titles measured earlier with threading on (single runs, not frozen for this record and not re-measured) stay slower
+  with it: the threaded schedule's cost, not this part's. PPSSPP not compared; the library not remeasured; APK left to CI.
+- **Review**: independent review of the diff, the answer's conservativeness (0 under-reports) and the evidence, against
+  a frozen snapshot and manifest under `psp-perf-hires/analysis/gefix-snapshot/`; verdict pending at the time of
+  writing, recorded in the commit message and in `psp-perf-hires/analysis/review-ledger.md` once given.
 
 ## PSP Vulkan: a render-to-texture copy from two frame buffers kept until either changes — God of War's 272 tiles take one copy a frame, not one a PRIM — 2026-10-31
 

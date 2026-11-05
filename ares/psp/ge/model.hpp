@@ -302,13 +302,10 @@ struct GeModel {
       for(u32 piece = from >> 5; piece <= to >> 5; piece++) {
         u32 low = std::max(from, piece << 5), high = std::min(to, (piece << 5) + 31);
         auto& p = written[piece];
-        if(!p.mask) {
-          if(dirtyBytes(low, high, p.whole, block, gpuMay, softwareMay, depthMay, putMay, hullMay)) return true;
-          continue;
-        }
-        for(u32 byte = low; byte <= high; byte++) {
-          if(dirtyBytes(byte, byte, cx(byte), block, gpuMay, softwareMay, depthMay, putMay, hullMay)) return true;
-        }
+        //(a piece's bytes written at more than one place take the older of them: one answer for the piece that may
+        //say dirty where one of its bytes is not, never clean where one is)
+        u64 cx = p.mask ? std::min(p.whole, p.part) : p.whole;
+        if(dirtyBytes(low, high, cx, block, gpuMay, softwareMay, depthMay, putMay, hullMay)) return true;
       }
     }
     return false;
@@ -326,12 +323,13 @@ struct GeModel {
     }
     bool puts = staleDepth && putMay, hulls = scaled && hullMay;
     if(!puts && !hulls) return false;
-    for(u32 byte = first; byte <= last; byte++) {
-      if(gpu.newest(byte) <= cx) continue;  //(not rasterized since it was written)
-      if(puts) return true;
-      for(auto& t : targets) {
-        if(t.hullAt > std::max(cx, finishKnown) && t.hull.reaches(byte)) return true;
-      }
+    //(the bytes rasterized since they were written, one range at a time: which of them a put waits for, or a
+    //rectangle of what the GPU drew reaches, then the bytes themselves are not walked one at a time)
+    if(!gpu.newerThan(first, last, cx)) return false;
+    if(puts) return true;
+    u64 cut = std::max(cx, finishKnown);
+    for(auto& t : targets) {
+      if(t.hullAt > cut && t.hull.reaches(first, last)) return true;
     }
     return false;
   }
