@@ -17,7 +17,8 @@ nothing about what is drawn; every mode is off unless the environment names it.
   only shares are quoted from it.
 - **`PHOBOS_GPU_STATS=draws`** — the same, plus one line a draw beside the report (`<report>.draws.csv`): `ms`,
   `triangles`, `target`, `scale`, `pass`, `pipeline` (a fingerprint of the pipeline key's fields), `writes_depth` (the
-  shader writes the depth and does the GE's range test), `shown`, `copied`. A draw whose timestamps were skipped has an
+  draw's shader writes `gl_FragDepth`; the GE's range test is in every build; 0 in fast mode, whose draw shaders write
+  no depth, part 124), `shown`, `copied`. A draw whose timestamps were skipped has an
   empty `ms`. At most 400,000 draws and 64 targets are recorded; a long run covers its first part only. The run itself
   pays about 2.5% (634.8 s against 619.1 s for 1,200 frames), so its absolute times are inflated and only shares are
   used.
@@ -28,8 +29,10 @@ ends, so a run the harness must kill keeps all but its last fifteen lines.
 ## What it does not measure
 
 - **Fragment coverage of Draw and Mesh.** Their `area` is `null`: a draw's triangles' coverage is not known without
-  asking the GPU. `writes_depth` marks the DEPTHS pipeline — the shader writes `gl_FragDepth` and does the range test —
-  which is a *precondition* for paying hidden fragments, not proof that any fragment is hidden.
+  asking the GPU. `writes_depth` marks the DEPTHS pipeline: the draw's shader writes `gl_FragDepth`, and the GE's
+  range test is in every build. In fast mode no draw's shader writes it (the depth is the rasterizer's, part 124), so
+  it is 0 for every draw there; copy.frag and move.frag still write their own depths, and they aren't draws. Either
+  way it is a *precondition* for paying hidden fragments, not proof that any fragment is hidden.
 - **The hidden-fragment share itself.** Not measured; the design for measuring it (occlusion queries on the same
   geometry, image-neutral) is written but unbuilt.
 - **The device.** Everything here is the host (lavapipe): a tile-based phone GPU prices fill, passes and bandwidth
@@ -43,8 +46,9 @@ From the heavy Chains of Olympus window (1,200 frames from boot, Vulkan fast, 5x
   1.2, Readback 1.0, Upload 0.3, Copy 0.07). The cost is inside the draws.
 - The draws go into two 512x512 PSP targets (2560x2560 at 5x, about 26 MB of colour each) that are both shown and
   copied: **97.8% of draw time between them**. Shown-only targets are negligible.
-- The DEPTHS pipelines are 80.7% of draw time (an upper bound, see above); the tail is small in count and large in
-  time (slowest 1% of draws 22.3% of draw time).
+- The DEPTHS pipelines are 80.7% of draw time (an upper bound, see above; measured before part 124 — fast mode's
+  draw shaders write no depth now, so that share reads 0 there); the tail is small in count and large in time (slowest
+  1% of draws 22.3% of draw time).
 - The blended and depth-write-off draws that break the opaque runs are **69.4% of draws**, sit almost entirely *after*
   the opaque block in the same pass and target (22,120 after, 1,520 between, 0 before), and are small-triangle,
   alpha-tested scene translucency and effects, not HUD. The interleaving is inherent to the content, so a pass-level

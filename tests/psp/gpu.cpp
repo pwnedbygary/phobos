@@ -2816,7 +2816,8 @@ static auto gpuDepthUnused() -> void {
 //their corners 1000.2 to 1000.8 over 1000, have the GE's depth, those rounded down, 1000 at every pixel, so each of
 //the eight comparisons, each over a strip of its own, comes out as the GE's: equal, at most and at least draw them,
 //less and greater don't (the GPU's own depth, a fraction above, would pass greater and fail equal). And a triangle
-//writing such depths, over which the comparison of equal takes a sprite at 1000. In either mode.
+//writing such depths, over which the comparison of equal takes a sprite at 1000. In the accurate mode: fast mode's
+//depth is the rasterizer's (part 124), the GE's flooring gone, so it can't meet the GE's comparisons there.
 static auto depthSteps(GPU* gpu) -> void {
   System software, hardware;
   hardware.ge.setRenderer(gpu);
@@ -2856,10 +2857,7 @@ static auto depthSteps(GPU* gpu) -> void {
   hardware.ge.setRenderer(nullptr);
 }
 static auto gpuDepthSteps() -> void {
-  if(!renderer()) return;
-  for(GPU* gpu : {renderer(), fastRenderer()}) {
-    if(gpu) depthSteps(gpu);
-  }
+  if(auto gpu = renderer()) depthSteps(gpu);  //(the accurate mode's: part 124)
 }
 
 //A SPIR-V module's execution modes for the depth (OpExecutionMode's: DepthReplacing 12, DepthGreater 14, DepthLess 15,
@@ -3174,7 +3172,9 @@ static auto gpuDepthBuilds() -> void {
     for(u8 transformed : {0, 1}) for(u8 outside : {0, 1}) for(u8 written : {0, 1}) for(u8 n = 0; n < 8; n++) {
       if(transformed && !gpu->backend->transforms) continue;
       k.transformed = transformed, k.outside = outside, k.depthTest = 1, k.depthCompare = n, k.depthWrite = written;
-      u32 expected = k.depths() && gpu->backend->depthClamp && !outside ? 3 : 0, made = gpu->backend->depthBuild(k);
+      //(fast mode's depth is the rasterizer's (part 124): no DEPTHS build, so 0 for every key)
+      u32 expected = !gpu->fast && k.depths() && gpu->backend->depthClamp && !outside ? 3 : 0;
+      u32 made = gpu->backend->depthBuild(k);
       if(made != expected && wrong++ < 4) {
         std::printf("  %s%s%s, comparison %u%s: made %u, not %u\n", gpu->fast ? "fast" : "accurate",
                     transformed ? ", 3D" : "", outside ? ", outside" : "", n, written ? ", written" : "", made,
@@ -4148,7 +4148,8 @@ static auto gpuDepthOrders() -> void {
 //    its last 16 (the rows of its own it draws no depth but memory's): a finish either way, which puts both frame
 //    buffers' pixels in memory (a target's own pixels don't go into its depth).
 //Every byte of VRAM the software renderer's but the depth buffer's, and every depth the screen has (GPU::depthOf()),
-//at 1x and 2x, in either mode, with the picture's pixels moved into the depth on the GPU (no finish). Where the GPU
+//at 1x and 2x, in the accurate mode (fast mode's depth is the rasterizer's, part 124), with the picture's pixels moved
+//into the depth on the GPU (no finish). Where the GPU
 //can't move them (Backend::depthMoves off), they're put in memory first only where the PRIM's test reads them (GPU::
 //begin()): one finish for the sprite at 65534, one for the quad over the picture and two for the second picture, every
 //byte and depth the software renderer's in those, the clear and the sprite always true; none in the rest, whose depth
@@ -4288,10 +4289,7 @@ static auto depthCurrent(GPU* gpu) -> void {
   gpu->resolution(1);
 }
 static auto gpuDepthCurrent() -> void {
-  if(!renderer()) return;
-  for(GPU* gpu : {renderer(), fastRenderer()}) {
-    if(gpu) depthCurrent(gpu);
-  }
+  if(auto gpu = renderer()) depthCurrent(gpu);  //(the accurate mode's: fast mode's depth is the rasterizer's, part 124)
 }
 
 //Other frame buffers' pixels as the depth, in every pair of formats (GPU::moveIntoDepth()): a picture drawn on the GPU
@@ -4809,7 +4807,8 @@ static auto gpuStencilAlphaPaths() -> void {
 //A depth buffer read as a texture through VRAM's depth views (Cars Race-O-Rama takes its race's depth through a
 //palette into the alpha its sky is blended by): the depth the GPU drew, put into memory first, each texel the
 //software renderer's, through the fourth copy (the depths in order) and the second (rearranged); put once, the second
-//read finding memory has it, and again once more depth is drawn. At 1x and 2x, in either mode.
+//read finding memory has it, and again once more depth is drawn. At 1x and 2x, in the accurate mode (fast mode's
+//depth is the rasterizer's, part 124: a read back there is that, not the GE's floored value these compare).
 static auto depthAsTexture(GPU* gpu) -> void {
   for(u32 scale : {1u, 2u}) {
     gpu->resolution(scale);
@@ -4892,15 +4891,15 @@ static auto depthChanges(GPU* gpu) -> void {
   hardware.ge.setRenderer(nullptr);
 }
 static auto gpuDepthAsTexture() -> void {
-  if(!renderer()) return;
-  for(GPU* gpu : {renderer(), fastRenderer()}) {
-    if(gpu) depthAsTexture(gpu), depthChanges(gpu);
-  }
+  //(the accurate mode's: fast mode's depth is the rasterizer's (part 124), and a depth read back there is that, not the
+  //GE's floored value these compare)
+  if(auto gpu = renderer()) depthAsTexture(gpu), depthChanges(gpu);
 }
 
 //The GE's depths as a GPU's depth formats keep them, and back (GPU::depthToFloat() and the rest: a backend's uploads
-//and read backs): all 65,536 the same again from D32, and from D24 whether the GPU rounded a fragment's 65,536ths to
-//nearest or down, its top byte whatever it is. No GPU needed.
+//and read backs; fast mode's read backs are the rasterizer's depth, part 124): all 65,536 the same again from D32, and
+//from D24 whether the GPU rounded a fragment's 65,536ths to nearest or down, its top byte whatever it is. No GPU
+//needed.
 static auto gpuDepthFormats() -> void {
   u32 wrong = 0;
   for(u32 z = 0; z < 65536; z++) {

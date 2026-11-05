@@ -21063,3 +21063,71 @@ renderer's cost, not the emulated machine's.
 
 Kept outside the repository: the owner's save state (not in the repository), the press script, the runs' frames,
 reports and profiles, the copies' and passes' counters used beside the repository's statistics build, and the probes.
+
+## Part 124: Vulkan fast mode tests and writes the rasterizer's depth — the early depth test returns, 13% of the 5x frame
+
+The two performance parts before this one, each in its own pull request, took the GE's four-tap filtering off the fill
+above 1x and meshed smaller PRIMs at 1x. This one is the frame's other end: the depth test and write, which at 5x cost
+more than any other part of the GPU's work.
+
+### Why
+
+The 5x frame's biggest GPU cost is the depth test and write themselves, not their memory traffic. On the RP6, God of
+War: Ghost of Sparta's title screen, 300 frames, medians of three runs: master 44.1 ms; with every pipeline's depth
+test and write off, the depth attachment still there, **28.6 ms** (-35%); the same picture's depth-format bytes halved
+(D32_S8 to D24_S8) and the depth store made DONT_CARE each changed nothing.
+
+The reason is in `draw.frag`: every pipeline whose key's `depths()` says the depth decides the test or is written
+compiles its DEPTHS build, which writes `gl_FragDepth = floor(depth) / 65536` so that two surfaces at one GE depth meet
+as the GE's do. A shader that
+writes the depth may keep the GPU from testing it before it runs, and every overdraw layer's shader runs.
+
+### The change
+
+- The Vulkan backend remembers whether it is the fast renderer (`create()`'s `fast`).
+- `pipelineFor()` takes the non-DEPTHS fragment module for fast mode's depth pipelines (`shaderDepths = depths &&
+  !fast`), and the vertex shader's ABOVE constant is 0 there; the pipeline's depth test and write state is unchanged,
+  the depth range test is in every build, and the accurate mode is untouched.
+- `depthBuild()` reports 0 for those pipelines: the depth is the rasterizer's.
+
+### Evidence (RP6, 300 frames, save states, medians)
+
+| | master | this | delta |
+|---|---|---|---|
+| Ghost of Sparta title, 5x, Vulkan fast | 44.13 ms | **38.30 ms** | **-13.2%** |
+| Chains of Olympus door, 5x, Vulkan fast | 31.89 ms | **28.05 ms** | **-12.0%** |
+| Ghost of Sparta title, 1x, Vulkan fast | 9.88 ms | 9.53 ms | -3.5% |
+| Ghost of Sparta title, 5x, Vulkan accurate | 28.77 fps | 28.76 fps | unchanged |
+
+The accurate mode's frame at 5x was byte-identical to master's; the fast mode's differs from master's fast mode
+(the GE-floored-depth picture) where that depth's last fraction decided: 59,143 of 2,088,960 pixels (2.83%), 2,693 of them (0.13%) by more than 8 levels,
+the largest channel delta 47.
+
+### Checks
+
+- `tests/psp/run-tests.sh` on this tree: **669 groups, 0 failures**.
+- Three depth-exactness groups (`gpuDepthSteps`, `gpuDepthCurrent`, `gpuDepthAsTexture`) now run on the accurate
+  renderer alone: they compare the GE's floored whole-number depth byte for byte, which fast mode no longer has. (The
+  depth views' reads already ran on the accurate renderer alone and compare no drawn depth.) `gpuDepthBuilds` now
+  asserts fast mode's `depthBuild()` is 0 for every key, so fast's reporting side of the trade is pinned; a
+  dedicated test of the trade (a fast fractional depth's comparisons, and its read-back) is the next check; the
+  existing fast-depth tests (gpuDepthEarly, gpuDepthOutside) already run fractional 2D depths in fast mode, but they
+  don't pin this trade's values.
+
+### Limits
+
+- Fast mode gives up the GE's floored depth's last 1/65536: surfaces within one GE depth may meet differently (the
+  picture difference above), and a depth read back in fast mode is the rasterizer's, not the GE's floored value.
+- The change is fast mode's alone; the accurate mode keeps the DEPTHS build and its early test off.
+- A fast-mode depth read back is the rasterizer's: the D32 path maps it with `GPU::depthFromFloat()`
+  (`value * 65536 + 0.5`, clamped) and the D24 path with `depthFrom24()`, and the rasterizer's depth is z / 65535, so
+  the mapped value can be up to two 1/65536 steps above the GE's floored one, never below. A depth moved into a target
+  from memory is the GE's still.
+- The earlier probes that halved the depth format's bytes (D32_S8 to D24_S8) and made the depth store DONT_CARE,
+  each changing nothing, ran from the scratch tree that has since been cleaned; their logs are not preserved. The
+  depth-off and no-`gl_FragDepth` runs this part rests on are recorded in the analysis folder's fast-depth-probe.md,
+  with their build logs beside it (build-probe.log, build-noz.log).
+
+### Scratch
+
+Kept outside the repository: the runners (master and the change), the PNGs compared, and the save state's runs.
