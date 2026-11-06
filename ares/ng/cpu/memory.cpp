@@ -566,10 +566,16 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   //REG_IRQACK
   if((address & 0x3e000e) == 0x3c000c) {
     if(lower) {
-      //acknowledging sets the pending flag; a 0 bit does not clear one (upstream's model)
-      if(data.bit(0)) lspc.irq.powerAcknowledge  = 1;
-      if(data.bit(1)) lspc.irq.timerAcknowledge  = 1;
-      if(data.bit(2)) lspc.irq.vblankAcknowledge = 1;
+      if(NeoGeo::Model::NeoGeoCD()) {
+        //Neo Geo CD: acknowledging sets the pending flag; a 0 bit does not clear it
+        if(data.bit(0)) lspc.irq.powerAcknowledge  = 1;
+        if(data.bit(1)) lspc.irq.timerAcknowledge  = 1;
+        if(data.bit(2)) lspc.irq.vblankAcknowledge = 1;
+      } else {
+        lspc.irq.powerAcknowledge  = data.bit(0);
+        lspc.irq.timerAcknowledge  = data.bit(1);
+        lspc.irq.vblankAcknowledge = data.bit(2);
+      }
     }
   }
 
