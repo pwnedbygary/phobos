@@ -46,7 +46,9 @@ class ArtSystemsTest {
 
     @Test fun anArcadeGameGoesByItsTitleInPhobossArcadeList() {
         val titles = arcadeTitles(File("src/main/assets/Database/Arcade.bml").readText())
-        assertEquals(18, titles.size)
+        // The list is ares's full Arcade database (the Neo Geo media definitions live in it too), not the old
+        // hand-kept 18-game list, so only assert that it parsed and that a known game kept its title.
+        assertTrue("the arcade database lists games", titles.size > 200)
         assertEquals("Champion Boxing", titles["chboxing"])
         assertEquals(listOf("Champion Boxing"), artLookups(ArtGame(GameKey("Arcade", "chboxing.zip")), titles))
         assertEquals(emptyList<String>(), artLookups(ArtGame(GameKey("Arcade", "unknown.zip")), titles))

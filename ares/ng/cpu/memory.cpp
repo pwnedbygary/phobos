@@ -1,35 +1,3 @@
-//uPD4990A serial RTC (Neo Geo ties c0/c1/c2 high => serial mode).
-//Protocol mirrors MAME's upd4990a: a 4-bit command is shifted in MSB-first on
-//CLK while STB is high and latched on STB rising edge. MODE_TIME_READ(3) loads
-//the calendar into the 48-bit shift register; MODE_SHIFT(1) clocks it out LSB-first.
-//MAME's src/devices/machine/upd1990a.cpp is license:BSD-3-Clause
-//copyright-holders:Curt Coder, hap; see "MAME (portions)" in LICENSE.
-static auto rtcClk() -> void {
-  auto& r = system.io.rtc;
-  u8 in = r.shiftReg[6] & 1;
-  r.shiftReg[6] >>= 1;
-  r.shiftReg[6] |= (r.din << 3);
-  if(r.command == 1) {  //MODE_SHIFT
-    const int max = 6;
-    for(int i = 0; i < max; i++) {
-      r.shiftReg[i] >>= 1;
-      if(i == max - 1) r.shiftReg[i] |= (in << 7);
-      else r.shiftReg[i] |= ((r.shiftReg[i + 1] << 7) & 0x80);
-    }
-    r.dataOut = r.shiftReg[0] & 1;
-  }
-}
-
-static auto rtcStb() -> void {
-  auto& r = system.io.rtc;
-  r.command = r.shiftReg[6] & 0x0f;
-  if(r.command == 3) {  //MODE_TIME_READ
-    for(int i = 0; i < 6; i++) r.shiftReg[i] = r.timeCounter[i];
-  } else if(r.command == 1) {  //MODE_SHIFT
-    r.dataOut = r.shiftReg[0] & 1;
-  }
-}
-
 auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
   //NEO-E0
   if(io.vectorSelect == 0) {
@@ -158,7 +126,12 @@ auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
   //backup RAM (MVS only)
   if(address <= 0xdfffff) {
-    if(NeoGeo::Model::NeoGeoMVS()) system.sram[address >> 1] = data;
+    if(NeoGeo::Model::NeoGeoMVS() && !system.io.sramLock) {
+      n16 word = system.sram[address >> 1];
+      if(upper) word.byte(1) = data.byte(1);
+      if(lower) word.byte(0) = data.byte(0);
+      system.sram[address >> 1] = word;
+    }
     return;
   }
 
@@ -221,19 +194,14 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 
   //REG_DIPSW
   if((address & 0xfe0080) == 0x300000 && lower) {
-    data.bit(0)   = 1;  //settings mode
-    data.bit(1)   = 1;  //0 = 1 chute; 1 = 2 chutes (TODO: Verify)
-    data.bit(2)   = 1;  //1 = normal controller; 0 = mahjong keyboard
-    data.bit(3,4) = 1;  //communication ID code
-    data.bit(5)   = 1;  //enable multiplayer
-    data.bit(6)   = 1;  //freeplay
-    data.bit(7)   = 1;  //freeze
+    data.byte(0) = system.dips.read("DSW");
   }
 
   //REG_SYSTYPE
   if((address & 0xfe0080) == 0x300080 && lower) {
+    if(NeoGeo::Model::NeoGeoMVS()) system.arcadeControls.poll();
     data.bit(6) = 0;  //0 = 2 slots; 1 = 4 or 6 slots
-    data.bit(7) = 1;  //test button
+    data.bit(7) = NeoGeo::Model::NeoGeoMVS() ? !system.arcadeControls.test->value() : 1;
   }
 
   //REG_SOUND
@@ -246,6 +214,7 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
     //Ensure coin line is up-to-date even for titles that never read REG_STATUS_B / REG_P1CNT.
     //Poll START/SELECT here (lightweight) so SELECT-as-coin works without a per-frame LSPC hook
     //that would run on the video thread and contend with audio.
+    if(NeoGeo::Model::NeoGeoMVS()) system.arcadeControls.poll();
     controllerPort1.pollCoin();
     controllerPort2.pollCoin();
     //coin bits are active-low: 0 = inserted. system.io.coin asserts them when
@@ -257,8 +226,8 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
     data.bit(3) = 1;     //coin 3 not inserted
     data.bit(4) = 1;     //coin 3 (dup) not inserted
     data.bit(5) = 0;  //0 = 4-slot; 1 = 6-slot
-    data.bit(6) = system.io.rtcTimePulse;  //RTC time pulse
-    data.bit(7) = system.io.rtc.dataOut;    //RTC data out (serial)
+    data.bit(6) = system.rtc.timePulse();
+    data.bit(7) = system.rtc.dataOut();
   }
 
   //REG_P2CNT
@@ -365,7 +334,7 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   //REG_DIPSW
   if((address & 0xfe0080) == 0x300000 && lower) {
-    //todo: kick watchdog
+    io.watchdog = 0;
   }
 
   //REG_SOUND
@@ -423,11 +392,7 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     u8 din = data.bit(0);
     u8 clk = data.bit(1);
     u8 stb = data.bit(2);
-    if(clk && !system.io.rtc.clk) rtcClk();   //rising edge of CLK
-    if(stb && !system.io.rtc.stb) rtcStb();   //rising edge of STB latches command
-    system.io.rtc.din = din;
-    system.io.rtc.clk = clk;
-    system.io.rtc.stb = stb;
+    system.rtc.write(din, clk, stb);
   }
 
   //REG_RESETCC1
@@ -601,9 +566,16 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   //REG_IRQACK
   if((address & 0x3e000e) == 0x3c000c) {
     if(lower) {
-      lspc.irq.powerAcknowledge  = data.bit(0);
-      lspc.irq.timerAcknowledge  = data.bit(1);
-      lspc.irq.vblankAcknowledge = data.bit(2);
+      if(NeoGeo::Model::NeoGeoCD()) {
+        //Neo Geo CD: acknowledging sets the pending flag; a 0 bit does not clear it
+        if(data.bit(0)) lspc.irq.powerAcknowledge  = 1;
+        if(data.bit(1)) lspc.irq.timerAcknowledge  = 1;
+        if(data.bit(2)) lspc.irq.vblankAcknowledge = 1;
+      } else {
+        lspc.irq.powerAcknowledge  = data.bit(0);
+        lspc.irq.timerAcknowledge  = data.bit(1);
+        lspc.irq.vblankAcknowledge = data.bit(2);
+      }
     }
   }
 

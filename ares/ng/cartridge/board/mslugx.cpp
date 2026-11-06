@@ -69,7 +69,7 @@ struct MSlugX : Interface {
     }
 
     if(lower && address >= 0x2ffff0 && address <= 0x2fffff)  {
-      romBank = data.bit(0, 3);
+      romBank = data.bit(0, 2);
     }
   }
 
@@ -77,16 +77,8 @@ struct MSlugX : Interface {
     return mrom[address];
   }
 
-  auto mromSize() -> u32 override {
-    return mrom.size();
-  }
-
   auto readC(n32 address) -> n8 override {
     return crom[address];
-  }
-
-  auto cromMask() -> u32 override {
-    return crom.mask();
   }
 
   auto readS(n32 address) -> n8 override {
@@ -105,6 +97,12 @@ struct MSlugX : Interface {
     romBank = 0;
     counter = 0;
     command = 0;
+  }
+
+  auto serialize(serializer& s) -> void override {
+    s(romBank);
+    s(counter);
+    s(command);
   }
 
   n8 romBank;

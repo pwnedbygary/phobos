@@ -1,3 +1,4 @@
+
 namespace ares::NeoGeo {
 
 APU apu;

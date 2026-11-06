@@ -1,3 +1,4 @@
+
 namespace ares::NeoGeo {
 
 LSPC lspc;
@@ -105,7 +106,8 @@ auto LSPC::main() -> void {
         animation.frame++;
       }
       if(irq.vblankAcknowledge && (!NeoGeo::Model::NeoGeoCD() || (system.io.irqMask2 & 0x030) == 0x030)) {
-        irq.vblankAcknowledge = 0;
+        //the CD's VBL line stays asserted while its enable bit is set (level-triggered)
+        if(!NeoGeo::Model::NeoGeoCD()) irq.vblankAcknowledge = 0;
         cpu.raise(CPU::Interrupt::Vblank);
       }
       if(timer.reloadOnVblank) {

@@ -1,5 +1,32 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Neo Geo CD ported onto upstream's Neo Geo refactor — 2026-11-06
+
+Branch `ng/upstream-refactor-2026-11` from master; finishes the Neo Geo half of the ares merge that PR #344 left
+deferred.
+
+- **Why**: upstream moved Neo Geo ROM assembly into `mia` (`Arcade.bml`) and decryption/protection into runtime
+  cartridge boards. After the merge Phobos's old medium still looked for the deleted `Neo Geo.bml`, so AES/MVS did
+  not load on a clean tree; on the phone it only worked because the app had an old database in its files directory.
+- **What**: upstream's medium and boards replace Phobos's medium (rom/cmc/sma/pvc/pcm2/k2k2/fatfury2/kof98/mslugx/
+  jockey-gp), and the app's bundled `Database` is refreshed on start (PR #345). Phobos's Neo Geo CD support (CDD/CDC/
+  DMA, CD sprite/fix decode, upload registers, CD state format) is ported onto the new system/cartridge API, together
+  with upstream's uPD4990A RTC, shared DIP switches and arcade controls. The Neo Geo core runs on Phobos's single
+  global scheduler: upstream's per-core `Scheduler` was only taken by cores that were migrated, and a local one
+  shadows the global instance and leaves the Z80/other threads unscheduled (the BIOS then hangs waiting for the sound
+  handshake).
+- **CD interrupt wiring**: the CD BIOS takes vblank on vector 2 and the timer on vector 1; its VBL line stays asserted
+  while its enable bit is set (level-triggered), and `REG_IRQACK` sets pending flags on a 1 and leaves them alone on a
+  0. Non-CD keeps the previous model.
+- **Verified on the RP6**: AES Alpha Mission II and Garou - Mark of the Wolves boot and render at 59.2 fps (Garou also
+  exercises the new runtime decryption); Neo Geo CD Real Bout Fatal Fury loads from CHD through `NOW LOADING` to the
+  title menu at 59.2 fps. Host: `tests/ngcd` 2835 checks/0 failures, `tests/psp` 675 groups/0, `tests/psp/ares`
+  423/0, the desktop all-core CMake build and 688 Android unit tests pass.
+- **Limits**: pad input beyond the AES coin counter was not verified end to end; the controller code is unchanged from
+  master, so Neo Geo button mapping is a separate follow-up rather than something this port changes. Saves on the CD
+  use the format Phobos already shipped (`v136`).
+
+
 ## PSP core: the device's slow operations, logged — 2026-11-06
 
 Branch `cursor/psp-slowops-present-2b67` from master (0f1b14f09, part 136 merged); docs/psp-core.md, part 137, has the

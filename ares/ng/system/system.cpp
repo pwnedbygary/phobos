@@ -1,6 +1,5 @@
+#include <ng/ng.hpp>
 #include <algorithm>
-#include <android/log.h>
-#include <cstdio>
 
 namespace ares::NeoGeo {
 
@@ -22,6 +21,44 @@ System system;
 #include "debugger.cpp"
 #include "serialization.cpp"
 
+auto RTC::main() -> void {
+  tick();
+  step(1);
+}
+
+auto RTC::step(u32 clocks) -> void {
+  Thread::step(clocks);
+  synchronize(cpu);
+}
+
+auto RTC::power() -> void {
+  uPD4990A::power();
+  Thread::create(32'768, std::bind_front(&RTC::main, this));
+}
+
+auto System::ArcadeControls::load(Node::Object parent) -> void {
+  port = parent->append<Node::Object>("Arcade");
+  device = port->append<Node::Object>("Controls");
+  coin[0] = device->append<Node::Input::Button>("Player 1 Coin");
+  coin[1] = device->append<Node::Input::Button>("Player 2 Coin");
+  service = device->append<Node::Input::Button>("Service");
+  test = device->append<Node::Input::Button>("Test");
+}
+
+auto System::ArcadeControls::unload() -> void {
+  for(auto& button : coin) button.reset();
+  service.reset();
+  test.reset();
+  device.reset();
+  port.reset();
+}
+
+auto System::ArcadeControls::poll() -> void {
+  for(auto& button : coin) platform->input(button);
+  platform->input(service);
+  platform->input(test);
+}
+
 auto System::game() -> string {
   if(cartridge.node) {
     return cartridge.title();
@@ -32,6 +69,11 @@ auto System::game() -> string {
 
 auto System::run() -> void {
   scheduler.enter();
+  while(watchdogReset) {
+    watchdogReset = false;
+    power(true);
+    scheduler.enter();
+  }
 }
 
 auto System::load(Node::System& root, string name) -> bool {
@@ -61,19 +103,9 @@ auto System::load(Node::System& root, string name) -> bool {
   node->setSerialize([this](bool save) -> serializer { return serialize(save); });
   node->setUnserialize(std::bind_front(&System::unserialize, this));
   root = node;
-  if(!node->setPak(pak = platform->pak(node))) { node.reset(); return false; }
+  if(!node->setPak(pak = platform->pak(node))) return false;
 
-  // Neo Geo cannot boot without a BIOS. The VFS attaches it from neogeo.zip
-  // (sp-e.sp1 / UniBIOS) or <home>/System/Neo Geo MVS/bios.rom. If neither is
-  // present, system.bios stays unallocated and the 68K crashes (SIGSEGV, null
-  // Memory::Readable) the moment it reads the reset vectors from 0xc00000.
-  // Fail clearly here instead of booting into a crash.
-  if(!pak->read("bios.rom")) {
-    __android_log_print(ANDROID_LOG_ERROR, "NeoGeo", "load: MVS/AES BIOS required — provide neogeo.zip (sp-e.sp1/UniBIOS) or System/Neo Geo MVS/bios.rom");
-    node.reset();
-    return false;
-  }
-
+  wram.allocate(64_KiB >> 1);
   if(NeoGeo::Model::NeoGeoCD()) {
     wram.allocate(2_MiB >> 1);
     spriteRam.allocate(4_MiB >> 1);
@@ -87,6 +119,13 @@ auto System::load(Node::System& root, string name) -> bool {
   }
 
   scheduler.reset();
+  for(auto& byte : rtc.data) byte = 0;
+  if(NeoGeo::Model::NeoGeoMVS()) {
+    if(auto fp = pak->read("time.rtc")) {
+      for(auto& byte : rtc.data) byte = fp->read();
+    }
+  }
+  rtc.load();
   cpu.load(node);
   apu.load(node);
   lspc.load(node);
@@ -95,6 +134,7 @@ auto System::load(Node::System& root, string name) -> bool {
   if(!NeoGeo::Model::NeoGeoCD()) cartridgeSlot.load(node);
   controllerPort1.load(node);
   controllerPort2.load(node);
+  if(NeoGeo::Model::NeoGeoMVS()) arcadeControls.load(node);
   if(!NeoGeo::Model::NeoGeoCD()) cardSlot.load(node);
   debugger.load(node);
   return true;
@@ -103,6 +143,7 @@ auto System::load(Node::System& root, string name) -> bool {
 auto System::unload() -> void {
   if(!node) return;
   save();
+  dips.unload();
   debugger.unload(node);
   cpu.unload();
   apu.unload();
@@ -112,6 +153,7 @@ auto System::unload() -> void {
   if(!NeoGeo::Model::NeoGeoCD()) cartridgeSlot.unload();
   controllerPort1.unload();
   controllerPort2.unload();
+  arcadeControls.unload();
   if(!NeoGeo::Model::NeoGeoCD()) cardSlot.unload();
   wram.reset();
   sram.reset();
@@ -124,6 +166,12 @@ auto System::unload() -> void {
 
 auto System::save() -> void {
   if(!node) return;
+  rtc.save();
+  if(NeoGeo::Model::NeoGeoMVS()) {
+    if(auto fp = pak->write("time.rtc")) {
+      for(auto byte : rtc.data) fp->write(byte);
+    }
+  }
   if(!NeoGeo::Model::NeoGeoCD()) {
     cartridge.save();
     cardSlot.save();
@@ -141,9 +189,7 @@ auto System::power(bool reset) -> void {
   if(auto fp = pak->read("bios.rom")) {
     bios.allocate(fp->size() >> 1);
     for(auto address : range(bios.size())) {
-      // Neo Geo BIOS dumps are MAME 16-bit word-swapped ROMs (the 68K-visible
-      // word is the little-endian pair of file bytes). Upstream reads them
-      // big-endian (readm), which makes the 68K execute a byte-swapped BIOS.
+      // Neo Geo BIOS dumps are MAME 16-bit word-swapped ROMs: read the little-endian pair.
       bios.program(address, fp->readl(2L));
     }
   }
@@ -169,6 +215,7 @@ auto System::power(bool reset) -> void {
     lspc.loadZoomy(fp->data(), fp->size());
   }
 
+  if(!reset) rtc.power();
   if(cartridge.node) cartridge.power();
   cardSlot.power(reset);
   cpu.power(reset);
@@ -179,17 +226,9 @@ auto System::power(bool reset) -> void {
 
   io = {};
 
-  //Neo Geo CD: the real BIOS's controller-type probe ($C0930C) never runs in
-  //this emulator's boot, so the four controller slot TYPE bytes stay 0 and the
-  //BIOS's input handler ($C09584/$C095D4) masks ALL controller input to zero —
-  //Start/D-pad never register in the CD Player menu, so the game can't boot.
-  //The libretro neocd core handles the same pads with a simple always-connected
-  //joystick model. Seed BOTH byte lanes of the controller-struct area
-  //($7D90-$7DAF at a5=$108000 → $10FD90-$10FDAF) with the joystick type (3):
-  //the 68k reads byte N from word N>>1's OTHER lane (even address → byte 1,
-  //odd → byte 0), so writing only one lane left the type bytes at 0 and the
-  //mask path still zeroed the input. The BIOS overwrites the held/edge/repeat
-  //fields every frame; only the type bytes matter and now always read 3.
+  //Neo Geo CD: the real BIOS's controller-type probe never runs, leaving the four controller slot
+  //TYPE bytes 0, and the BIOS's input handler masks all controller input to zero (Start/D-pad never
+  //register in the CD Player menu). Seed both byte lanes of the struct area with the joystick type (3).
   if(NeoGeo::Model::NeoGeoCD()) {
     for(u32 addr = 0x10fd90; addr <= 0x10fdae; addr += 2) {
       system.wram[addr >> 1].byte(0) = 3;
@@ -200,12 +239,8 @@ auto System::power(bool reset) -> void {
 
 auto System::readC(n32 address) -> n8 {
   if(NeoGeo::Model::NeoGeoCD()) {
-    //Sprite DRAM is a 16-bit word array; the 68K's byte stores land in the
-    //high lane at even addresses and the low lane at odd addresses (see
-    //CPU::write case 0), so byte @address lives in lane !(address&1). Reading
-    //lane (address&1) returned every word's bytes swapped — scrambled sprite
-    //pixels. (libretro neocd models the transfer area as a plain byte array
-    //byte@A -> sprRam[A], which is exactly this lane mapping.)
+    //Sprite DRAM is a 16-bit word array; the 68K's byte stores land in the high lane at even
+    //addresses and the low lane at odd addresses, so byte @address lives in lane !(address&1).
     return spriteRam.read(address >> 1).byte(!(address & 1));
   }
   return cartridge.readC(address);
@@ -226,24 +261,21 @@ auto System::readVB(n32 address) -> n8 {
   return cartridge.readVB(address);
 }
 
-//Diagnostic: dump the NGCD graphics memories as raw files under `dir` so the
-//HUD "black rectangle" bug can be inspected offline (are the HUD fix/sprite
-//tiles the untouched 0xFF fill, or a broken palette?).
+//Diagnostic: dump the NGCD graphics memories as raw files under `dir` (on-device HUD inspection).
 auto System::dumpNgGfx(const string& dir) -> void {
   if(!NeoGeo::Model::NeoGeoCD()) return;
   auto dump = [&](const char* name, const void* data, u32 bytes) -> void {
     string path = {dir, "/", name};
     FILE* fp = fopen(path.data(), "wb");
-    if(!fp) { __android_log_print(ANDROID_LOG_ERROR, "NeoGeo", "dumpNgGfx: cannot open %s", name); return; }
+    if(!fp) return;
     fwrite(data, 1, bytes, fp);
     fclose(fp);
   };
   dump("ng_spr.raw", (const u8*)system.spriteRam.data(), 4_MiB);
-  dump("ng_fix.raw", (const u8*)system.fixRam.data(),    128_KiB);
-  dump("ng_vram.raw",(const u8*)lspc.vram.data(),        68_KiB);
-  dump("ng_pram.raw",(const u8*)lspc.pram.data(),        16_KiB);
-  dump("ng_wram.raw",(const u8*)system.wram.data(),      2_MiB);
-  __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "dumpNgGfx: wrote ng_gfx files to %s", dir.data());
+  dump("ng_fix.raw", (const u8*)system.fixRam.data(), 128_KiB);
+  dump("ng_vram.raw", (const u8*)lspc.vram.data(), 68_KiB);
+  dump("ng_pram.raw", (const u8*)lspc.pram.data(), 16_KiB);
+  dump("ng_wram.raw", (const u8*)system.wram.data(), 2_MiB);
 }
 
-};
+}

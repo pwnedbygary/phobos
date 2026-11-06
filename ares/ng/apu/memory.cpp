@@ -1,13 +1,10 @@
 auto APU::read(n16 address) -> n8 {
   if(NeoGeo::Model::NeoGeoCD()) return ram[address];
   if(address <= 0x7fff) return cartridge.readM(address);
-  //the banks index the M ROM from its start (MAME adds 64KiB only because its region holds a copy of
-  //the first 64KiB ahead of the ROM); a bank reaches no further than 256KiB
-  u32 mask = (cartridge.mromSize() - 1) & 0x3ffff;
-  if(address <= 0xbfff) return cartridge.readM(((u32)rom.bankA << 14 & mask) | n14(address));
-  if(address <= 0xdfff) return cartridge.readM(((u32)rom.bankB << 13 & mask) | n13(address));
-  if(address <= 0xefff) return cartridge.readM(((u32)rom.bankC << 12 & mask) | n12(address));
-  if(address <= 0xf7ff) return cartridge.readM(((u32)rom.bankD << 11 & mask) | n11(address));
+  if(address <= 0xbfff) return cartridge.readM((u32)rom.bankA << 14 | n14(address));
+  if(address <= 0xdfff) return cartridge.readM((u32)rom.bankB << 13 | n13(address));
+  if(address <= 0xefff) return cartridge.readM((u32)rom.bankC << 12 | n12(address));
+  if(address <= 0xf7ff) return cartridge.readM((u32)rom.bankD << 11 | n11(address));
   if(address <= 0xffff) return ram[address & 0x7ff];
   unreachable;
 }
