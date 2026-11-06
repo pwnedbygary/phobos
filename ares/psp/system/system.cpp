@@ -984,7 +984,7 @@ auto System::startRenderer() -> void {
     }
     pipelineBytes = cached.size();
     gpu = GPU::vulkan(vulkanLoader, error, fast, cached);
-    pipelinesKept = gpu ? gpu->backend->pipelines : 0;
+    pipelinesKept = gpu ? gpu->backend->pipelines.load() : 0;
     //(where blending in the shader in rasterization order fails it, the check again with the draws that read apart:
     //each after a barrier, their overlapping primitives in draws of their own, which every GPU orders, and the
     //blending the GPU's own; where reading the frame buffer fails even so, or can't be trusted apart
@@ -996,7 +996,7 @@ auto System::startRenderer() -> void {
       std::filesystem::remove((const char*)pipelineCache, removed);
       gpu.reset(), error.clear(), pipelineBytes = 0;
       gpu = GPU::vulkan(vulkanLoader, error, fast);
-      pipelinesKept = gpu ? gpu->backend->pipelines : 0;
+      pipelinesKept = gpu ? gpu->backend->pipelines.load() : 0;
       passed = gpu && gpu->check(error);
     }
     //(fast mode's own 3D among the GPU's failing it alone: the check again with that drawn apart, the GPU still

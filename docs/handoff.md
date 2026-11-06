@@ -1,5 +1,36 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## PSP core: pipelines made off the frame — 2026-11-06
+
+Branch `cursor/psp-async-pipelines-2b67` from master (20dc932e2, part 135 merged); docs/psp-core.md, part 136, has the
+evidence and the correction to its first draft. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: the GPU renderer made a pipeline the first time a game drew with a state it hadn't used, and a phone's driver
+  compiles the shaders then, in that frame (tens to hundreds of ms on the RP6's Adreno) — a plausible shape of the "60 fps
+  but uneven" the owner saw. This machine's driver compiles in microseconds, so nothing here identifies that as the
+  desktop's 101/101/564 ms cluster (the first draft did: corrected).
+- **What**: creation moved to a worker thread; until a key's pipeline is made, `drawable()` is false for that state and the
+  PRIM is the software renderer's that frame (its picture exactly), then the GPU's. A key stays in hand from first meeting
+  until its cache entry is written (no duplicate creation, as the re-review's section 45 required); the VkPipelineCache is
+  used by one thread at a time (creation and `pipelineData()` share `pipelineCreateMutex_`); the counters are atomic; the
+  destructor joins the worker first. The start-up check and the tests stay synchronous; a new test holds the worker and
+  provokes the fallback deterministically (alpha-test state), then checks one pipeline made and the GPU's picture.
+- **Evidence**: host suites 675 groups/0 failures (the new test among them) and ares 423 checks/0 failed; a warmed-up frame
+  byte-identical (0 of 2,088,960 pixels); an instrumented build (reverted) counted 60+ worker-made pipelines against 17
+  synchronous (the start-up check's), 68 µs the first on RADV — the mechanism, not a host frame-time win: interleaved runs
+  give this branch 11.74–12.10 ms median against 11.50–11.62 for the same tree without it (the first draft's 12.47
+  baseline was a busier machine's; corrected), and `perf` finds no new hotspot (mutex under 0.05%). The APK builds.
+- **Device A/B (RP6, after the park)**: cold pipeline cache (the persisted cache deleted so the scene's pipelines are
+  compiled in the run), CoO's own slot 1 state, Vulkan fast 5x, 3 runs a side: the baseline's worst frame is **1349/1345/
+  1344 ms** with 1520/2015/1504 ms stalled in the first 15 s after the state loads; this branch's is **219/199/196 ms**
+  with 849/453/452 ms stalled — the part does what it is for on the phone (2-3x less stall time, worst frame ~7x
+  smaller). Warm cache (the owner's usual) both are smooth after load. Remaining ~200 ms stalls are the software fallback
+  for heavy PRIMs (next target), and the one ~92-97 ms stall both builds show after a warm-cache load is not pipeline work.
+- **Limits**: a not-yet-ready PRIM costs one software-drawn frame (correct pixels); the owner's adb-injected input runs
+  were discarded because injecting input itself stutters the frames.
+- **Review**: independent review of the change and the frozen snapshot; verdict in the commit message and the ledger
+  once given.
+
+
 ## PSP core: Vulkan is the fast renderer; the app and the runner have two renderers — 2026-11-06
 
 Branch `cursor/psp-vulkan-consolidation-2b67`, from master (df352ac19); docs/psp-core.md, part 135, has the evidence.

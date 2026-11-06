@@ -21052,6 +21052,37 @@ mash 240-380; the Cyclops comes through at ~390 and the fight runs to ~900), Vul
   as a comparison. No change is made to what is sampled or when: a copy is kept only where its targets' recorded
   changes say its content is what the copy already holds.
 
+### Device A/B (the RP6, the reviewer's blocker)
+
+The RP6 came back online after the park. The measurement: Chains of Olympus, the owner's own slot 1 state, Vulkan (fast)
+at 5x with `debug.phobos.psp.renderer 2`, `debug.phobos.psp.resolution 5` and `debug.phobos.psp.gpustats 1`; the app's
+per-second `Emulation Stats` (`LongestFrame` is the worst frame interval of the second) from logcat. Two windows: **EARLY**,
+the first 15 s after the state loads (a scene's pipelines being made), and **STEADY**, 40 s after a 25 s warm-up. Two
+cache states: **warm**, the persisted `psp_vulkan_pipeline_cache.bin` the owner had built up, and **cold**, that file
+deleted so every pipeline must be compiled in the run. Each run force-stops the app, loads the state and leaves the device
+alone (no injected input: adb input itself stutters the frame times, which the owner saw and called out).
+
+Cold cache, three runs a side, the baseline being master 20dc932e2 (this part absent):
+
+| run | early mean LongestFrame | early worst frame | stalled in early window | steady mean | steady worst |
+|---|---|---|---|---|---|
+| baseline 1 | 101.1 ms | **1349.2 ms** | 1520 ms | 19.5 ms | 26.4 ms |
+| baseline 2 | 128.6 ms | **1345.1 ms** | 2015 ms | 21.8 ms | 30.5 ms |
+| baseline 3 | 100.3 ms | **1344.4 ms** | 1504 ms | 20.2 ms | 29.0 ms |
+| this part 1 | 63.9 ms | 219.4 ms | 849 ms | 24.1 ms | 40.2 ms |
+| this part 2 | 41.9 ms | **198.6 ms** | 453 ms | 19.7 ms | 21.6 ms |
+| this part 3 | 41.8 ms | **195.8 ms** | 452 ms | 19.9 ms | 21.2 ms |
+
+So on the phone the part does what it is for: the worst frame when a scene's pipelines are first compiled falls from
+**~1.35 s to ~200 ms**, and the time stalled in the first 15 s falls from 1.5-2.0 s to 0.45-0.85 s (two to three times
+less). Warm cache (the owner's usual state — pipelines kept from earlier sessions) both builds are smooth after the
+load, within this protocol: 92-97 ms worst frame once, steady 19.7-20.2 ms mean; the async build's steady windows were
+clean (21.2-21.6 ms worst) against one baseline window with scene stalls (101.9 ms).
+
+What is left is the next target, not this part: the remaining ~200 ms stalls in the cold async runs are the software
+renderer drawing a heavy PRIM while its pipeline is compiled (the fallback trade), and the ~92-97 ms single stall both
+builds have after a warm-cache load is not pipeline creation at all (it is the same with and without this part).
+
 ### Limits
 
 The host's llvmpipe prices copies and passes unlike a tile-based GPU (it is a memcpy and it keeps no tiles), so the 5x
@@ -21812,3 +21843,68 @@ developer property; nothing the app offers reaches it.
   picture comparisons already encode it).
 - No device figure here: the properties make a device measurement possible, and the presentation work (vsync/present
   pacing) needs the phone to test.
+
+## Part 136: pipelines made off the frame
+
+The GPU renderer makes a graphics pipeline the first time a game draws with a state it hasn't used: a blend, a test, a
+format, a shader build. A driver compiles the shaders when the pipeline is made, and a phone's Adreno takes tens to
+hundreds of milliseconds over it — inside the frame that first meets the state. That is a plausible shape of the "60 fps
+but uneven" the owner saw: steady frames while a scene repeats, and a stall the first time it draws something new. The
+desktop showed such stalls too (a part-135 Chains of Olympus run had frames 101/101/564 ms long among 8 ms ones), though
+this machine's driver compiles in microseconds, so nothing here identifies that cluster as pipelines'.
+
+Now the pipelines are made off the frame. A key met the first time is handed to a worker thread; until its pipeline is
+made, `drawable()` says no for that state and the PRIM is the software renderer's that frame — the same path a PRIM takes
+when the GPU refuses it, so the picture is the software renderer's exactly (the reference every GPU picture is checked
+against), just drawn the slow way for that one frame. The next frame's the GPU's.
+
+Concurrency, as a reviewer required (its section 45):
+- a key stays **in hand** (pipelineQueued_) from the frame that first meets it until `makePipeline()` has written its
+  cache entry (or its VK_NULL_HANDLE) under the same mutex — so a PRIM drawn with the state while the driver makes it is
+  never handed over twice, and no second pipeline is made and leaked;
+- the VkPipelineCache is used by one thread at a time: creation and `pipelineData()` (the cache snapshot the system takes
+  every 600 frames and at unload) both take `pipelineCreateMutex_`; the pipeline/depth maps take `pipelineMutex_`;
+- the pipeline counters (`Backend::pipelines`, `pipelineMaking`) are atomic, since the system reads them while the worker
+  may be making one;
+- the destructor stops and joins the worker before device-idle and pipeline destruction.
+
+The start-up check and the tests ask for pipelines as they draw (`Backend::synchronousPipelines()`; the check saves and
+puts back the mode it found), so their pictures and counts are the GPU's from the first draw. A new test runs a GPU
+asynchronously: `Backend::holdPipelines()` holds the worker before it makes one, so the fallback frame is deterministic;
+the test draws a state the start-up check doesn't (alpha test), sees it drawn by the software renderer (its picture
+exactly), draws the same state again while the driver has it in hand, releases the worker, and checks exactly **one**
+pipeline was made, then that the state now draws on the GPU with the software renderer's picture — the harness rule that
+would catch the duplicate-creation bug.
+
+### Evidence
+
+- **Host suites**: `tests/psp/run-tests.sh` **675 groups, 0 failures** (the new test among them);
+  `tests/psp/ares/run-tests.sh` **423 checks, 0 failed**.
+- **Pictures**: a warmed-up frame (frame 300, fast 5x, resolution 5) is **byte-identical** to the same runner before this
+  part: 0 of 2,088,960 pixels differ.
+- **What the worker takes off the frame**: a local instrumented build (reverted before the snapshot) counted, in a run of
+  Chains of Olympus, **60+ pipelines made on the worker against 17 made synchronously** (the start-up check's); the first
+  worker one 68 µs on this machine's driver. That is the mechanism: on a phone's driver those 60 compiles are the stalls
+  this takes out of the frames; this machine's driver compiles too quickly to show a frame-time difference.
+- **Host frame times are not a win to claim**: interleaved runs of the same state (`--frame-times`, 1800 frames, 30
+  warm-up dropped) put this branch at 11.74–12.10 ms median against the same tree's before-figure 11.50–11.62 — within
+  the few per cent these two binaries wander (an earlier baseline measured 12.47 on a busier machine, which is why the
+  first draft of this part claimed a gain; the honest figure is no measurable host change, `perf` finding no new
+  hotspot and the mutex under 0.05%). The part's case is the 60 compiles a run moved off the frames, not host frame
+  times.
+- **The desktop app** at Vulkan 5x in a boot run no longer had the 101/101/564 ms cluster (longest 38 ms), but that
+  cluster was never proved to be pipeline work on this machine (its driver compiles in microseconds), so it is not
+  claimed as this part's win.
+- The app's release APK builds: `:app:assembleModernRelease` succeeded on this branch (`asyncpipe-apk.log`), the APK
+  frozen in the snapshot as `app-async-pipelines.apk` (33,316,064 bytes, SHA-256
+  `7292c551db07026b7b74389f83375d4c1656f7c1a3b205d49f171526b9de7bf7`); the before-A/B APK is the same task on
+  20dc932e2, `app-before-async.apk` (33,314,348 bytes, SHA-256
+  `7bc79a9119bc4066aedf3efc28647ab13a6f301835bd828001233b875e4ee10b`).
+
+### Limits
+
+- No device figure: the RP6 was offline throughout. The phone's driver compiles in the frame; that is where the part
+  should show, and part 135's `debug.phobos.psp.gpustats` property lets a device run count the worker's pipelines and
+  read the frame times.
+- A PRIM whose pipeline isn't ready is drawn by the software renderer that frame: correct pixels, one slow frame per new
+  state (a heavy PRIM's software draw is the cost). It cannot be avoided while keeping that frame's picture exact.
