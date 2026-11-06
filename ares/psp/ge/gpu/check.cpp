@@ -30,6 +30,16 @@
 
 auto GPU::check(std::string& error) -> bool {
   if(!ready()) return error = "it isn't ready", false;
+  //(the check counts the GPU's meshes and compares its pictures: its pipelines are made as it draws, not off the frame,
+  //so that every draw here is the GPU's (synchronousPipelines()) — the game's after it are the worker's)
+  struct Synchronous {
+    GPU::Backend* backend;
+    bool was;
+    Synchronous(GPU::Backend* backend): backend(backend), was(backend->synchronousPipelines()) {
+      backend->synchronousPipelines(true);
+    }
+    ~Synchronous() { backend->synchronousPipelines(was); }
+  } synchronous{backend.get()};
   struct Machine {
     Memory memory;
     GE ge{memory};

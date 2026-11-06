@@ -200,6 +200,23 @@ struct VulkanBackend : GPU::Backend {
   VkCommandPool commandPool = VK_NULL_HANDLE;
   std::unordered_map<GPU::Pipeline, VkPipeline, GPU::Pipeline::Hash> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
   std::unordered_map<GPU::Pipeline, u32, GPU::Pipeline::Hash> depthBuilds;  //(depthBuild()'s, as each was made)
+  //(Pipelines made off the frame: a key met the first time is handed to a worker, and until it's made the PRIM is the
+  //software renderer's that frame (drawable() false: the same path as a GPU that refuses a PRIM). A driver compiles a
+  //pipeline when it is made, tens to hundreds of milliseconds on a phone's, so making them as a game first meets each
+  //effect stalls its frame; the worker takes that out of the frame. The start-up check and the tests ask for them made
+  //as they go (synchronousPipelines()), so their pictures and counts are the GPU's from the first draw.)
+  bool synchronousPipelines_ = false;
+  std::mutex pipelineMutex_;  //(pipelineCache_, depthBuilds, the queue: any thread)
+  std::mutex pipelineCreateMutex_;  //(the VkPipelineCache is used by one thread at a time)
+  std::condition_variable pipelineReady_;
+  std::unordered_set<GPU::Pipeline, GPU::Pipeline::Hash> pipelineQueued_;  //(in hand: met, not yet in pipelineCache_)
+  std::vector<GPU::Pipeline> pipelineQueue_;
+  std::thread pipelineThread_;
+  bool pipelineQuit_ = false;
+  u32 pipelineInFlight_ = 0;  //(the worker's: taken from the queue, not yet made)
+  std::condition_variable pipelineMade_;  //(the tests wait on it: nothing left in hand)
+  bool pipelineHold_ = false;  //(a test's: the worker waits before making one, until released)
+  std::condition_variable pipelineHeld_;
   std::unordered_map<u32, Target> targetImages;
   std::unordered_map<u32, Texture> textureImages;  //0: a blank one, bound for untextured draws
   //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()), rather
@@ -307,6 +324,13 @@ struct VulkanBackend : GPU::Backend {
   static constexpr u64 AcquireTimeout = 100'000'000;  //(a tenth of a second: a frame not shown rather than stuck)
 
   ~VulkanBackend() override {
+    {
+      std::lock_guard lock{pipelineMutex_};
+      pipelineQuit_ = true;
+    }
+    pipelineReady_.notify_all();
+    pipelineHeld_.notify_all();
+    if(pipelineThread_.joinable()) pipelineThread_.join();
     if(!timedOut && device) {
       vk.vkDeviceWaitIdle(device);
       for(auto& [id, t] : targetImages) destroy(t);
@@ -769,10 +793,79 @@ struct VulkanBackend : GPU::Backend {
     return o < 6 ? ops[o] : VK_STENCIL_OP_KEEP;
   }
 
-  //The pipeline for a key: made the first time it's met, and kept (VK_NULL_HANDLE where the driver wouldn't).
+  auto synchronousPipelines(bool on) -> void override { synchronousPipelines_ = on; }
+  auto synchronousPipelines() const -> bool override { return synchronousPipelines_; }
+  auto holdPipelines(bool on) -> void override {
+    {
+      std::lock_guard lock{pipelineMutex_};
+      pipelineHold_ = on;
+    }
+    pipelineHeld_.notify_all();
+  }
+  auto waitPipelines() -> void override {
+    std::unique_lock lock{pipelineMutex_};
+    pipelineMade_.wait(lock, [&] { return pipelineQueue_.empty() && pipelineInFlight_ == 0; });
+  }
+
+  //(the worker: takes the keys met, makes their pipelines, keeps them; asleep otherwise. A key stays in hand — in
+  //pipelineQueued_ — until makePipeline() has put it in the cache, so a PRIM drawn with it while the driver makes it is
+  //not handed over a second time.)
+  auto pipelineWorker() -> void {
+    for(;;) {
+      GPU::Pipeline k;
+      {
+        std::unique_lock lock{pipelineMutex_};
+        pipelineReady_.wait(lock, [&] { return pipelineQuit_ || !pipelineQueue_.empty(); });
+        if(pipelineQuit_) return;
+        k = std::move(pipelineQueue_.back());
+        pipelineQueue_.pop_back();
+        pipelineInFlight_++;
+      }
+      if(!pipelineQuit_) {
+        std::unique_lock hold{pipelineMutex_};
+        pipelineHeld_.wait(hold, [&] { return pipelineQuit_ || !pipelineHold_; });
+      }
+      if(pipelineQuit_) {  //(a pipeline made after the device is done with would only wait: the destructor's join ends it)
+        std::lock_guard lock{pipelineMutex_};
+        pipelineInFlight_--;
+        pipelineMade_.notify_all();
+        return;
+      }
+      makePipeline(k);
+      {
+        std::lock_guard lock{pipelineMutex_};
+        pipelineInFlight_--;
+        pipelineMade_.notify_all();
+      }
+    }
+  }
+
+  //The pipeline for a key: made the first time it's met (on the worker, or as asked), and kept (VK_NULL_HANDLE where
+  //the driver wouldn't). VK_NULL_HANDLE too while the worker has it in hand and hasn't made it yet: that PRIM is the
+  //software renderer's this frame.
   auto pipelineFor(const GPU::Pipeline& k) -> VkPipeline {
-    if(auto found = pipelineCache_.find(k); found != pipelineCache_.end()) return found->second;
-    if(k.transformed && !transformModule) return pipelineCache_[k] = VK_NULL_HANDLE;
+    {
+      std::lock_guard lock{pipelineMutex_};
+      if(auto found = pipelineCache_.find(k); found != pipelineCache_.end()) return found->second;
+      if(!synchronousPipelines_) {
+        if(k.transformed && !transformModule) return pipelineCache_[k] = VK_NULL_HANDLE;
+        if(pipelineQueued_.insert(k).second) {
+          pipelineQueue_.push_back(k);
+          if(!pipelineThread_.joinable()) pipelineThread_ = std::thread([this] { pipelineWorker(); });
+          pipelineReady_.notify_one();
+        }
+        return VK_NULL_HANDLE;
+      }
+    }
+    return makePipeline(k);
+  }
+
+  //(the pipeline itself, with the driver's cache: one thread at a time)
+  auto makePipeline(const GPU::Pipeline& k) -> VkPipeline {
+    if(k.transformed && !transformModule) {
+      std::lock_guard lock{pipelineMutex_};
+      return pipelineCache_[k] = VK_NULL_HANDLE;
+    }
     //(the 21st, FASTFILTER: above 1x, the fast renderer samples a whole decoded texture with the GPU's own linear
     //filter, all of its draws alike so that a PRIM drawn among the GPU-transformed meshes and one drawn apart still
     //come out the same. The renderer's mode, not `transforms`: that can be turned off after the start-up check, and
@@ -884,20 +977,26 @@ struct VulkanBackend : GPU::Backend {
     info.pColorBlendState = &blend, info.pDynamicState = &dynamic;
     info.layout = pipelineLayout, info.renderPass = renderPass;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    auto start = std::chrono::steady_clock::now();
-    if(vk.vkCreateGraphicsPipelines(device, pipelineCache, 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
-      pipeline = VK_NULL_HANDLE;
+    {
+      std::lock_guard lock{pipelineCreateMutex_};
+      auto start = std::chrono::steady_clock::now();
+      if(vk.vkCreateGraphicsPipelines(device, pipelineCache, 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
+        pipeline = VK_NULL_HANDLE;
+      }
+      pipelineMaking += std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count();
+      pipelines++;
     }
-    pipelineMaking += std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::steady_clock::now() - start).count();
-    pipelines++;
+    std::lock_guard lock{pipelineMutex_};
     pipelineCache_[k] = pipeline;
     if(depths) depthBuilds[k] = (stages[1].module == fragmentDepthModule) | (above ? 2 : 0);
+    pipelineQueued_.erase(k);  //(out of hand now that it's the cache's)
     return pipeline;
   }
 
   auto depthBuild(const GPU::Pipeline& k) -> u32 override {
     if(!k.depths() || !pipelineFor(k)) return 0;
+    std::lock_guard lock{pipelineMutex_};
     auto found = depthBuilds.find(k);
     return found != depthBuilds.end() ? found->second : 0;
   }
@@ -2331,6 +2430,8 @@ struct VulkanBackend : GPU::Backend {
     return k;
   }
   auto pipelineData() -> std::vector<u8> override {
+    //(the worker may be making one: the VkPipelineCache is the driver's to use by one thread at a time)
+    std::lock_guard creating{pipelineCreateMutex_};
     size_t size = 0;
     if(lost || timedOut || !pipelineCache) return {};
     if(vk.vkGetPipelineCacheData(device, pipelineCache, &size, nullptr) != VK_SUCCESS || !size) return {};

@@ -8,6 +8,7 @@
 #include <optional>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 //The GE's hardware renderer (docs/psp-gpu-renderers.md): the GPU's own rasterizer, texture units and blending
@@ -339,8 +340,10 @@ struct GPU : GE::Renderer {
     //target, its drawing, its copies and its depth. 1, the PSP's own, draws its pixels alone (the exact native
     //mode); mostScale is the most its pictures' size allows (a target 512 of the PSP's pixels across).
     u32 scale = 1, mostScale = 1;
-    u64 pipelines = 0;        //made so far
-    u64 pipelineMaking = 0;   //nanoseconds the driver took making them
+    //(atomic: the pipeline worker makes them off the frame while the system counts them, every 600 frames and when the
+    //renderer goes)
+    std::atomic<u64> pipelines{0};        //made so far
+    std::atomic<u64> pipelineMaking{0};   //nanoseconds the driver took making them
     //(PHOBOS_GPU_STATS, a benchmark's: by command kind (the enum's order), the Commands recorded, the Pixels the
     //commands' rectangles cover (one rectangle a command: a kind that draws its rectangle several times over, as
     //Alpha and an upload's stencil do, counts it once; Draw and Mesh count none, their triangles' coverage not being
@@ -403,6 +406,15 @@ struct GPU : GE::Renderer {
     //Whether draws of this pipeline can be made (the driver took its shaders): fast mode's 3D asks before it records
     //one (mesh()), so that a driver refusing them leaves the GE to transform those PRIMs itself
     virtual auto drawable(const Pipeline&) -> bool { return true; }
+    //(the pipelines made as they're met rather than off the frame: the start-up check and the tests ask, so that their
+    //pictures and counts are the GPU's from the first draw; a game has them made on a worker, and a PRIM whose
+    //pipeline isn't ready yet is the software renderer's that frame; the check puts back what it found)
+    virtual auto synchronousPipelines(bool) -> void {}
+    virtual auto synchronousPipelines() const -> bool { return false; }
+    //(the tests': the pipeline worker waits before making one until released, so that a frame whose pipeline isn't ready
+    //is the software renderer's deterministically; and waits until it has made everything handed to it)
+    virtual auto holdPipelines(bool) -> void {}
+    virtual auto waitPipelines() -> void {}
     //How the pipeline of a key whose depth decides (Pipeline::depths()) was made, made first if it wasn't: 1 its
     //shader declared never to write a depth above the one rasterized (draw.frag's DEPTHS), 2 that rasterized a step
     //and a half above the GE's (draw.vert's ABOVE), which the declaration's proof needs; both where the device clamps

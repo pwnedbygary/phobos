@@ -32,6 +32,9 @@ static auto renderer() -> GPU* {
     tried = true;
     const char* wanted = std::getenv("PSP_GPU");
     if(!wanted || std::string(wanted) != "0") gpu = GPU::vulkan(nullptr, error);
+    //(the tests compare the GPU's pictures with the software renderer's from the first draw: its pipelines are made as
+    //it draws here, as a game's start-up check does, not on the worker)
+    if(gpu) gpu->backend->synchronousPipelines(true);
     if(gpu) std::printf("  on %s\n", gpu->backend->name().c_str());
   }
   if(!gpu) skip("vulkan", error);
@@ -160,6 +163,50 @@ static auto gpuSprites() -> void {
     CHECK(bytes, 0u);
     hardware.ge.setRenderer(nullptr);
   }
+}
+
+//The asynchronous renderer (a game's: the start-up check and the tests' own GPU ask for synchronous pipelines): a
+//PRIM whose pipeline isn't made yet is the software renderer's — its picture exactly — and the frame after it is the
+//GPU's; a key met again while the driver has it in hand is not handed over twice (one pipeline made, not two).
+static auto gpuAsyncPipelines() -> void {
+  if(!renderer()) return;  //(the driver's there and draws)
+  std::string error;
+  auto gpu = GPU::vulkan(nullptr, error, false);  //(asynchronous: the tests' shared one asks for synchronous)
+  CHECK(bool(gpu), true);
+  if(!gpu) return;
+  CHECK(gpu->check(error), true);  //(the start-up check's: the renderer's modes, as a game's renderer has them)
+  gpu->backend->holdPipelines(true);  //(the worker waits before making one: the fallback frame is deterministic)
+  auto made = gpu->backend->pipelines.load();
+  System software, hardware;
+  hardware.ge.setRenderer(gpu.get());
+  //(alpha test: a state the start-up check doesn't draw with, so the key's pipeline isn't made yet)
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    s->ge.commands[GE::AlphaTestEnable] = 1, s->ge.commands[GE::AlphaTest] = 4 | 0x80 << 16;  //(its alpha above 0x80)
+  }
+  Corners a{}, b{}, c{};
+  a.at[0][0] = 0, a.at[0][1] = 0, a.at[1][0] = 4, a.at[1][1] = 4, a.color = 0xff20'2040;
+  a.at[0][2] = 2, a.at[0][3] = 2, a.at[1][2] = 20, a.at[1][3] = 16;
+  b = a, b.color = 0xff80'4020, b.at[0][2] = 8, b.at[0][3] = 8, b.at[1][2] = 26, b.at[1][3] = 22;
+  c = a, c.color = 0xff20'8040, c.at[0][2] = 14, c.at[0][3] = 4, c.at[1][2] = 32, c.at[1][3] = 18;
+  //(the state's pipeline isn't made: the software renderer draws these PRIMs, its picture exactly)
+  sprite(software, a), sprite(hardware, a);
+  hardware.ge.settleAll(), software.ge.settleAll();
+  CHECK(apart(software, hardware), 0u);
+  //(the same state again while the driver has it in hand: still no pipeline in the cache, and no second one asked for)
+  sprite(software, b), sprite(hardware, b);
+  hardware.ge.settleAll(), software.ge.settleAll();
+  CHECK(apart(software, hardware), 0u);
+  CHECK(gpu->backend->pipelines.load() == made, true);  //(the worker is held before making it)
+  gpu->backend->holdPipelines(false);
+  gpu->backend->waitPipelines();
+  CHECK(gpu->backend->pipelines.load() == made + 1, true);  //(one pipeline for the state, not two)
+  //(and the same state now draws on the GPU, its picture the software renderer's)
+  sprite(software, c), sprite(hardware, c);
+  hardware.ge.settleAll(), software.ge.settleAll();
+  CHECK(apart(software, hardware), 0u);
+  CHECK(gpu->backend->pipelines.load() == made + 1, true);  //(kept: not made again)
+  hardware.ge.setRenderer(nullptr);
 }
 
 //A texture whose bytes run past VRAM's end and round to its start: the GPU takes the PRIMs that sample it (its texture
@@ -336,6 +383,7 @@ static auto fastRenderer() -> GPU* {
   static std::unique_ptr<GPU> gpu;
   std::string error;
   if(!gpu && renderer()) gpu = GPU::vulkan(nullptr, error, true);
+  if(gpu) gpu->backend->synchronousPipelines(true);  //(as the tests' own GPU: pictures and counts the GPU's from the first draw)
   if(!gpu && renderer()) skip("vulkan-fast", error.empty() ? "the fast renderer didn't start" : error);
   return gpu.get();
 }
@@ -3240,6 +3288,7 @@ static auto gpuDepthBuilds() -> void {
     auto plain = GPU::vulkan(nullptr, error, fast);
     CHECK(bool(plain), true);
     if(!plain) continue;
+    plain->backend->synchronousPipelines(true);
     plain->backend->depthClamp = false;
     CHECK(builds(plain.get()), 0u);
     depthEarly(plain.get(), false);
@@ -5627,12 +5676,14 @@ static auto gpuPipelineCache() -> void {
   auto start = GPU::vulkan(nullptr, error, false);
   CHECK((bool)start, true);
   if(!start) return;
+  start->backend->synchronousPipelines(true);
   size_t empty = start->backend->pipelineData().size();
   std::printf("  pipeline data: %zu bytes, a renderer's at its start %zu\n", data.size(), empty);
   bool sized = data.size() > empty;
   auto again = GPU::vulkan(nullptr, error, false, data);
   CHECK((bool)again, true);
   if(!again) return;
+  again->backend->synchronousPipelines(true);
   CHECK(again->backend->pipelineData().size() >= data.size(), true);
   CHECK(again->check(error), true);
   auto driver = data, uuid = data, cut = data, zeroed = data;
@@ -5644,6 +5695,7 @@ static auto gpuPipelineCache() -> void {
     auto other = GPU::vulkan(nullptr, error, false, left);
     CHECK((bool)other, true);
     if(!other) continue;
+    other->backend->synchronousPipelines(true);
     if(sized) CHECK(other->backend->pipelineData().size() < data.size(), true);
     CHECK(other->check(error), true);
   }
@@ -6345,6 +6397,8 @@ auto gpuTests() -> Tests {
     {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
     {"gpu fast mode: 3D transformed by the GPU, near the software renderer", gpuFast},
+    {"gpu the asynchronous renderer: a PRIM whose pipeline isn't made yet is the software renderer's, then the GPU's",
+     gpuAsyncPipelines},
     {"gpu fast mode: the GE's rules for which triangles are drawn", gpuFastRules},
     {"gpu fast mode: 3D the GPU transformed is taken by render to texture after", gpuFastMeshChanges},
     {"gpu blending in the shader against the software renderer", gpuBlending},

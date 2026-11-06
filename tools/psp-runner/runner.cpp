@@ -879,7 +879,7 @@ auto main(int argc, char** argv) -> int {
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
   psp.kernel.geFold(true);  //(with the GE on its thread, the stretches the CPU ended after its runs taken first)
 
-  u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
+  u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines.load() : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking.load() : 0;
   //(PHOBOS_GPU_STATS: the breakdown by command kind, taken before unloading lets the renderer go)
   u64 kindCommands[10]{}, kindPixels[10]{}, kindNanos[10]{};
   u32 targetsMade = 0, targetsShown = 0, targetsCopied = 0;
