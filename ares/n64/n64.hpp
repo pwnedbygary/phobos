@@ -11,6 +11,7 @@
 #include <nall/recompiler/generic/generic.hpp>
 #include <component/processor/sm5k/sm5k.hpp>
 #include <cstring>
+#include <component/arcade/dip-switches.hpp>
 #include <functional>
 #include <span>
 #include <vector>

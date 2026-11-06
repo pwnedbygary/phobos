@@ -93,7 +93,26 @@ auto Arcade::load(string location) -> LoadResult {
   if(manifest) {
     auto document = BML::unserialize(manifest);
     if(!document) return couldNotParseManifest;
-    return loadGeneric(location, document);
+    if(document["game/board"].string() == "snk/neogeo") {
+      auto arcadeManifest = manifest;
+      auto neoGeo = Medium::create("Neo Geo");
+      auto result = neoGeo->load(location);
+      if(result != successful) return result;
+      neoGeo->pak->setAttribute("arcade", "neogeo");
+      neoGeo->pak->append("arcade.bml", arcadeManifest);
+      neoGeo->pak->append("dips.bml", 0);
+      this->location = neoGeo->location;
+      this->manifest = arcadeManifest;
+      this->pak = neoGeo->pak;
+      Pak::load("dips.bml", ".dip");
+      return successful;
+    }
+    auto result = loadGeneric(location, document);
+    if(result == successful) {
+      pak->append("dips.bml", 0);
+      Pak::load("dips.bml", ".dip");
+    }
+    return result;
   }
 
   VsSystemDatabase vsDatabase;
@@ -107,7 +126,12 @@ auto Arcade::load(string location) -> LoadResult {
     if(manifest) {
       auto document = BML::unserialize(manifest);
       if(!document) return couldNotParseManifest;
-      return loadVs(location, document);
+      auto result = loadVs(location, document);
+      if(result == successful) {
+        pak->append("dips.bml", 0);
+        Pak::load("dips.bml", ".dip");
+      }
+      return result;
     }
   }
 
@@ -121,6 +145,27 @@ auto Arcade::loadGeneric(string location, Markup::Node& document) -> LoadResult 
   auto resolver = [&](string parent) -> Markup::Node {
     return BML::unserialize(manifestDatabaseArcade(parent));
   };
+
+  if(document["game/board"].string() == "sega/segae") {
+    auto rom = loadRoms(location, document, "maincpu", resolver);
+    if(!rom) return {invalidROM, assemblyError(rom)};
+    if(rom.data.empty()) return {invalidROM, "Ensure your ROM is in a MAME-compatible .zip format."};
+
+    auto key = loadRoms(location, document, "maincpu-key", resolver);
+    if(!key) return {invalidROM, assemblyError(key)};
+
+    this->location = location;
+    pak = std::make_shared<vfs::directory>();
+    pak->setAttribute("board", document["game/board"].string());
+    pak->setAttribute("name", document["game/name"].string());
+    pak->setAttribute("title", document["game/title"].string());
+    pak->setAttribute("cpu", document["game/cpu"].string());
+    pak->setAttribute("rotation", document["game/rotation"].string());
+    pak->append("manifest.bml", manifest);
+    pak->append("program.rom", rom.data);
+    if(!key.data.empty()) pak->append("cpu.key", key.data);
+    return successful;
+  }
 
   // Sega SG-1000 based arcade
   if(document["game/board"].string() == "sega/sg1000a") {
@@ -137,6 +182,7 @@ auto Arcade::loadGeneric(string location, Markup::Node& document) -> LoadResult 
     pak->setAttribute("name",   document["game/name" ].string());
     pak->setAttribute("title",  document["game/title"].string());
     pak->setAttribute("region", document["game/region"].string());
+    pak->setAttribute("cpu",    document["game/cpu"].string());
     pak->append("manifest.bml", manifest);
     pak->append("program.rom",  rom.data);
 
@@ -231,5 +277,6 @@ auto Arcade::loadVs(string location, Markup::Node& document) -> LoadResult {
 }
 
 auto Arcade::save(string location) -> bool {
+  Pak::save("dips.bml", ".dip");
   return true;
 }

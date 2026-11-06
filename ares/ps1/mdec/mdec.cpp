@@ -14,12 +14,17 @@ auto MDEC::unload() -> void {
   node.reset();
 }
 
-  auto MDEC::main() -> void {
+auto MDEC::main() -> void {
+  io.resetPending = 0;
+  processInput();
   if(io.mode == Mode::Idle) { step(128); return; }
 
-  if (io.mode == Mode::DecodeMacroblock) {
-    if(!decodeMacroblock()) {
+  if(io.mode == Mode::DecodeMacroblock) {
+    bool decoded = decodeMacroblock();
+    if(io.resetPending) return;
+    if(!decoded || status.remaining == 0) {
       io.mode = Mode::Idle;
+      processInput();
     }
   }
 
@@ -37,7 +42,9 @@ auto MDEC::power(bool reset) -> void {
   fifo.output.flush();
   status = {};
   io.mode = Mode::Idle;
+  io.resetPending = 0;
   io.offset = 0;
+  io.outputWord = 0;
   for(auto& v : block.luma) v = 0;
   for(auto& v : block.chroma) v = 0;
   for(auto& v : block.scale) v = 0;

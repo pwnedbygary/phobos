@@ -12343,6 +12343,42 @@ The plan rows "PC Engine CD boots", "Games load from where they are", "Firmware 
   about 2 s of offset left with the translated CHD), and the legacy APK on a device.
 - **Device setting:** `stay_on_while_plugged_in` was 7 before testing and is restored to 7 afterwards.
 
+## Upstream ares merge — 2026-11-06
+
+Branch `merge/upstream-ares-2026-11`, at the user's request: a merge commit of upstream ares
+`05232171d` (2026-11-06), 34 commits past the fork point `4cb8d92b4` (2026-09-22). How each overlap was
+resolved, for the next merge:
+
+- Desktop front end: Phobos deleted `desktop-ui`, `hiro` and `ruby`; upstream's edits to those files, and
+  its new desktop front-end files, stay deleted (as in the 2026-09 merge).
+- PlayStation: upstream's timing, serial-I/O, GPU, MDEC and CD-audio work taken. Upstream rewrote
+  `ares/ps1/peripheral/io.cpp`; Phobos's Ape Escape controller and memory-card workarounds in it are gone,
+  and the game was checked on the RP6 (boots and runs). `cdda.cpp` keeps Phobos's per-channel saturation
+  and fade envelope.
+- Screen: upstream's deinterlacing modes (Weave/Blend/Phosphor) taken, beside Phobos's passthrough
+  hand-off (`setPassthrough`, the N64 Vulkan scanout).
+- Neo Geo: **upstream's cartridge/arcade refactor was deferred**; the merged tree keeps Phobos's
+  CD-capable `ares/ng`. Upstream replaced the cartridge-board API (parametrised templates, arcade DIP
+  switches, the uPD4990A RTC module) with the Phobos CD code on top, and the first attempt left Neo Geo CD
+  on a white screen on the RP6 while AES cartridges played, so the CD port needs its own pass. Everything
+  else upstream (PS1, N64, SFC, GBA, media loading, mamedb tooling) is in; the 34 commits are listed in the
+  PR.
+- N64: upstream ends every JIT block by committing the PC; taken (Phobos's Count/Compare fix stays).
+- Media: upstream's MAME loader rewrite taken, with Phobos's sub-directory (basename) ROM matching kept and
+  its `mia::parentLocation()` fallback for parent archives.
+- Build: the top-level list gains `ares/component/arcade/dip-switches.cpp`,
+  `ares/component/rtc/upd4990a/upd4990a.cpp` and `ares/component/eeprom/parallel-flash/parallel-flash.cpp`;
+  `mia/resource/resource.hpp` (Phobos's stub) gains `PlayStation::DiscLogo`;
+  `mia/medium/neo-geo-crypt.hpp` stays (upstream moved that code into its deferred NG refactor).
+- `mia/Database/Neo Geo.bml` stays deleted (upstream removed it; Neo Geo uses `Arcade.bml`).
+- `tests/ngcd/run-tests.sh` links the two new components.
+
+Checked: desktop CMake build (every core), `tests/psp/run-tests.sh` 675/0, `tests/psp/ares/run-tests.sh`
+423/0, `tests/ngcd/run-tests.sh` 2835/0, the Android release build and its unit tests, and on the RP6 PS1
+(Ape Escape), N64 (Conker's Bad Fur Day) and Neo Geo CD (Real Bout Garou) boot at full speed, Neo Geo AES
+(Alpha Mission II) plays. Not yet: a device pass over the SFC/GB/GBA/2600 fixes, and the Neo Geo refactor
+port.
+
 ## Upstream ares merge — 2026-09-30
 
 Branch `merge/upstream-ares-2026-09`, at the user's request: a merge commit of upstream ares
