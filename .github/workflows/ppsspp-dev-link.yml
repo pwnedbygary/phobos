@@ -1,0 +1,63 @@
+#The link to PPSSPP's newest development Android build, on the ppsspp-dev branch as one HTML page: builds.ppsspp.org
+#publishes it as JSON whose file names have no URLs (and its download page builds them with JavaScript), which
+#Obtainium can't read; a page with the absolute link can be tracked. Nothing is rehosted: the link is PPSSPP's own.
+#It runs every half hour and only when PPSSPP has a new build; the branch holds one file, ppsspp-dev.html.
+name: PPSSPP dev build link
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ppsspp-dev-link
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Read PPSSPP's newest development build
+        run: |
+          set -euo pipefail
+          status=$(curl -fsSL --max-time 30 https://builds.ppsspp.org/meta/status.json)
+          desc=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["latest"]["description"])' <<<"$status")
+          file=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["latest"]["builds"]["Android"][0])' <<<"$status")
+          date=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["latest"]["date"])' <<<"$status")
+          url="https://builds.ppsspp.org/builds/${desc}/${file}"
+          {
+            echo '<!doctype html>'
+            echo '<html><head><meta charset="utf-8"><title>PPSSPP development build</title></head><body>'
+            echo "<p>PPSSPP development build, ${date}</p>"
+            echo "<p><a href=\"${url}\">PPSSPP ${desc} (${file})</a></p>"
+            echo '</body></html>'
+          } > /tmp/ppsspp-dev.html
+          echo "newest: ${desc} ${file}"
+          echo "DESC=${desc}" >> "$GITHUB_ENV"
+
+      - name: Publish it on ppsspp-dev, when it changed
+        run: |
+          set -euo pipefail
+          git fetch --depth 1 origin ppsspp-dev || true
+          if git show origin/ppsspp-dev:ppsspp-dev.html > /tmp/previous.html 2>/dev/null; then
+            if cmp -s /tmp/previous.html /tmp/ppsspp-dev.html; then
+              echo "unchanged: ${DESC}"
+              exit 0
+            fi
+          fi
+          git config user.name "Phobos Nightly"
+          git config user.email "nightly@phobos.local"
+          git checkout --orphan ppsspp-dev-next
+          git rm -rf --cached . > /dev/null 2>&1 || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp /tmp/ppsspp-dev.html ppsspp-dev.html
+          git add ppsspp-dev.html
+          git commit -m "PPSSPP development build ${DESC}"
+          git push --force origin ppsspp-dev-next:ppsspp-dev
