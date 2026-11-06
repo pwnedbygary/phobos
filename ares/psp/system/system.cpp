@@ -21,8 +21,10 @@ auto load(Node::System& node, string name) -> bool {
 //alone; "GE Threads", how many threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than
 //the host has cores, 1 for the GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait
 //their turn). Every count draws the very same pixels. "Renderer", who draws them: "Software" (the default, the exact
-//one), "Vulkan" (the GPU's, ge/gpu: docs/psp-gpu-renderers.md; also "Vulkan (accurate)") or "Vulkan (fast)" (the
-//GPU transforming 3D vertices itself and blending with its own units: close, much faster), taken at the next power
+//one), or "Vulkan" (the app's and the runner's one GPU renderer: its fast mode, ge/gpu: docs/psp-gpu-renderers.md, the
+//GPU transforming 3D vertices itself, filtering with its own units and blending itself: close, much faster; the core's
+//accurate mode, the CPU transforming and lighting and the shader blending, is "Vulkan (accurate)", the tests' and a
+//developer property's, and "Vulkan (fast)" is the same fast mode under its old name), taken at the next power
 //on. "Resolution", the
 //Vulkan renderer's internal resolution: 1 (the default), the PSP's own, the exact native mode, to 10 times it each
 //way, taken at the next load. "Renderer Check", "Fail" to have the Vulkan renderer's start-up check fail as if the
@@ -47,8 +49,11 @@ auto option(string name, string value) -> bool {
   if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
   if(name == "GE Thread") system.geThread = value == "On" ? "On" : "Off";
   if(name == "Renderer") {
-    system.renderer = value == "Vulkan" || value == "Vulkan (accurate)" ? "Vulkan"
-                    : value == "Vulkan (fast)" ? "Vulkan (fast)" : "Software";
+    //("Vulkan" is the GPU renderer's one mode now: the fast one. The core's older accurate mode is still there for the
+    //tests and a developer property, asked for by its name, "Vulkan (accurate)"; "Vulkan (fast)" is the old name of the
+    //same mode, kept for the runner's own commands.)
+    system.renderer = value == "Vulkan" || value == "Vulkan (fast)" ? "Vulkan (fast)"
+                    : value == "Vulkan (accurate)" ? "Vulkan" : "Software";
   }
   if(name == "Resolution") system.resolution = std::clamp<u64>(value.natural(), 1, 10);
   if(name == "Renderer Check") system.failCheck = value == "Fail";

@@ -24,16 +24,32 @@ class PspVideoTest {
     }
 
     @Test
-    fun rendererChoicesKeepTheSavedValues() {
-        assertEquals(listOf(0, 1, 2), PspRenderer.choices)
+    fun renderersAreSoftwareAndVulkan() {
+        // One Vulkan: the core's fast renderer. The accurate one is a developer property's, not Settings'.
+        assertEquals(listOf(0, 1), PspRenderer.choices)
         assertEquals(PspRenderer.SOFTWARE, PspRenderer.choices.first())
         assertEquals("Software (exact)", PspRenderer.label(PspRenderer.SOFTWARE))
-        assertEquals("Vulkan (accurate)", PspRenderer.label(1))  // a setting saved as Vulkan before fast came
-        assertEquals("Vulkan (fast)", PspRenderer.label(PspRenderer.VULKAN_FAST))
-        for (renderer in PspRenderer.choices) assertEquals(renderer, PspRenderer.forCore(renderer))
+        assertEquals("Vulkan", PspRenderer.label(PspRenderer.VULKAN))
+        assertEquals("Vulkan", PspRenderer.label(PspRenderer.VULKAN_FAST))  // a setting saved by the fast mode
+        assertEquals(PspRenderer.SOFTWARE, PspRenderer.forCore(PspRenderer.SOFTWARE))
+        assertEquals(2, PspRenderer.forCore(PspRenderer.VULKAN))             // the core's fast mode
+        assertEquals(2, PspRenderer.forCore(PspRenderer.VULKAN_FAST))        // a setting saved by the fast mode
         assertEquals(PspRenderer.SOFTWARE, PspRenderer.forCore(3))
         assertEquals(PspRenderer.SOFTWARE, PspRenderer.forCore(-1))
         for (renderer in PspRenderer.choices) assertTrue(PspRenderer.description(renderer).isNotEmpty())
+    }
+
+    @Test
+    fun aSavedRendererShowsAsTheTwoChoices() {
+        // Saved values from when Settings offered the accurate mode (1) and the fast mode (2) both show as Vulkan.
+        assertEquals(PspRenderer.SOFTWARE, PspRenderer.forDisplay(PspRenderer.SOFTWARE))
+        assertEquals(PspRenderer.VULKAN, PspRenderer.forDisplay(PspRenderer.VULKAN))
+        assertEquals(PspRenderer.VULKAN, PspRenderer.forDisplay(PspRenderer.VULKAN_FAST))
+        assertEquals(PspRenderer.SOFTWARE, PspRenderer.forDisplay(3))   // a value from elsewhere
+        assertEquals(PspRenderer.SOFTWARE, PspRenderer.forDisplay(-1))
+        // And a game started with either saved value is the same game.
+        assertEquals(PspStartSettings.of(PspRenderer.VULKAN, 5, 0), PspStartSettings.of(PspRenderer.VULKAN_FAST, 5, 0))
+        assertTrue(PspStartSettings.of(PspRenderer.VULKAN, 5, 0).renderer == 2)
     }
 
     @Test
@@ -62,14 +78,15 @@ class PspVideoTest {
         assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 4)))
         // The software renderer draws at Native whatever the resolution.
         assertTrue(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 4, 0)))
-        val vulkan = PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0)
-        assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 3, 0)))
-        assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 2, 0)))
+        val vulkan = PspStartSettings.of(PspRenderer.VULKAN, 2, 0)
+        assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 3, 0)))
+        // A saved fast choice (2) and a saved accurate one (1) are both Vulkan now: the same game.
+        assertTrue(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0)))
         // Graphics overlap: another way to run, with any renderer.
-        val overlapped = PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)
+        val overlapped = PspStartSettings.of(PspRenderer.VULKAN, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)
         assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0, graphicsOverlap = PspGraphicsOverlap.ON)))
         assertFalse(vulkan.runsAs(overlapped))
-        assertTrue(overlapped.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)))
+        assertTrue(overlapped.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 2, 0, graphicsOverlap = PspGraphicsOverlap.ON)))
         // As the core is told them: a value from elsewhere is its default.
         assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO), PspStartSettings.of(7, 0, 3))
         assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO, graphicsOverlap = PspGraphicsOverlap.OFF),

@@ -3682,20 +3682,44 @@ else if (port->type() == "Keyboard") {
       LOGI("PSP: system fonts %s%s", pspFontsPath ? "in " : "not given", (const char*)pspFontsPath);
       ::ares::PlayStationPortable::option("Fonts", pspFontsPath);
       ::ares::PlayStationPortable::option("Recompiler", "true");
-      // How many threads draw the GE's pictures: the setting's count, or 0 for all the cores but one (the core's own).
-      LOGI("PSP: drawing threads %d (0: all cores but one)", pspDrawingThreads.load());
-      ::ares::PlayStationPortable::option("GE Threads", string{pspDrawingThreads.load()});
-      // The renderer, and for Vulkan's the driver loadVulkan() loaded above (the user's custom one if it loaded).
+      // The settings as the app's own (a measurement run over adb may override them, below).
+      s32 threads = pspDrawingThreads.load();
       s32 renderer = pspRenderer.load();
-      const char* rendererName = renderer == 2 ? "Vulkan (fast)" : renderer == 1 ? "Vulkan" : "Software";
-      LOGI("PSP: renderer %s", rendererName);
+      s32 resolution = pspResolution.load();
+      s32 overlap = pspGraphicsOverlap.load() == 1 ? 1 : 0;
+      #if defined(__ANDROID__)
+      // (The measurement properties, set over adb as a game starts: debug.phobos.psp.renderer (0 software, 1 the core's
+      // accurate Vulkan mode, 2 its fast mode), .resolution (1-10), .gethreads (0-8), .geoverlap (0/1), and .gpustats
+      // (1: the GPU's statistics counters to the log, for frame-time work). A desktop has no adb, and no properties.)
+      char setting[PROP_VALUE_MAX] = {};
+      auto numberProperty = [&](const char* name, s32 low, s32 high) -> s32 {
+        if(__system_property_get(name, setting) <= 0) return -1;
+        s32 value = std::atoi(setting);
+        return value >= low && value <= high ? value : -1;
+      };
+      if(s32 given = numberProperty("debug.phobos.psp.gethreads", 0, 8); given >= 0) threads = given;
+      if(s32 given = numberProperty("debug.phobos.psp.renderer", 0, 2); given >= 0) renderer = given;
+      if(s32 given = numberProperty("debug.phobos.psp.resolution", 1, 10); given >= 0) resolution = given;
+      if(s32 given = numberProperty("debug.phobos.psp.geoverlap", 0, 1); given >= 0) overlap = given;
+      if(__system_property_get("debug.phobos.psp.gpustats", setting) > 0 && setting[0] && setting[0] != '0') {
+        setenv("PHOBOS_GPU_STATS", "1", 1);
+        LOGI("PSP: the GPU's statistics counters on (debug.phobos.psp.gpustats)");
+      }
+      #endif
+      // How many threads draw the GE's pictures: the setting's count, or 0 for all the cores but one (the core's own).
+      LOGI("PSP: drawing threads %d (0: all cores but one)", threads);
+      ::ares::PlayStationPortable::option("GE Threads", string{threads});
+      // The renderer, and for Vulkan's the driver loadVulkan() loaded above (the user's custom one if it loaded).
+      //(the core's "Vulkan" is its fast mode now; the accurate one is asked for by its own name, for a developer property)
+      const char* rendererName = renderer == 2 ? "Vulkan" : renderer == 1 ? "Vulkan (accurate)" : "Software";
+      LOGI("PSP: renderer %s%s", rendererName, renderer == 1 ? " (the accurate mode, a developer property)" : "");
       ::ares::PlayStationPortable::vulkanLoader(renderer ? phobos::host::vulkanLoader() : nullptr);
       ::ares::PlayStationPortable::option("Renderer", rendererName);
-      LOGI("PSP: resolution %dx", pspResolution.load());
-      ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      LOGI("PSP: resolution %dx", resolution);
+      ::ares::PlayStationPortable::option("Resolution", string{resolution});
       // The GE on a thread of its own: its pictures drawn while the game goes on (the same pictures either way).
-      LOGI("PSP: graphics overlap %s", pspGraphicsOverlap.load() == 1 ? "on" : "off");
-      ::ares::PlayStationPortable::option("GE Thread", pspGraphicsOverlap.load() == 1 ? "On" : "Off");
+      LOGI("PSP: graphics overlap %s", overlap == 1 ? "on" : "off");
+      ::ares::PlayStationPortable::option("GE Thread", overlap == 1 ? "On" : "Off");
       LOGI("PSP: GE timing %s", pspGeTiming.load() ? "PSP" : "Fast");
       ::ares::PlayStationPortable::option("GE Timing", pspGeTiming.load() ? "PSP" : "Fast");
       LOGI("PSP: file I/O %s", pspFastFileIo.load() ? "Fast" : "PSP");
@@ -4829,7 +4853,9 @@ else if (port->type() == "Keyboard") {
     pspFontsPath = path ? (string)path : "";
   }
   auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
-  auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 || renderer == 2 ? renderer : 0; }
+  //(0: the software renderer; anything else: Vulkan, the core's fast mode. A saved 1 meant the accurate mode before
+  //the app had one Vulkan; it is the fast one now. The accurate mode is asked for by a developer property only.)
+  auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 0 ? 0 : 2; }
   auto setPspResolution(s32 scale) -> void { pspResolution = std::clamp(scale, 1, 10); }
   auto setPspGraphicsOverlap(s32 mode) -> void { pspGraphicsOverlap = mode == 1 ? 1 : 0; }
   auto setPspThreadPlacement(bool enabled) -> void { pspThreadPlacement = enabled; }
