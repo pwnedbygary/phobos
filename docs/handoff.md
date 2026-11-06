@@ -12343,6 +12343,17 @@ The plan rows "PC Engine CD boots", "Games load from where they are", "Firmware 
   about 2 s of offset left with the translated CHD), and the legacy APK on a device.
 - **Device setting:** `stay_on_while_plugged_in` was 7 before testing and is restored to 7 afterwards.
 
+## The app's media databases refresh on start — 2026-11-06
+
+The ares media definitions the app ships (`android/app/src/main/assets/Database/*.bml`) are copied into the app's
+own `files/ares/Database` on first use, and `extractFolder` only wrote a file that was missing. A release that
+updated a `.bml` (the ares merge brought new `Arcade.bml`, `VsSystem.bml` and `Super Famicom Boards.bml` entries)
+therefore kept the old copy on every device that already had one, and the core kept reading stale media
+definitions - a Neo Geo game failed to load against the new loader while the same build worked on a fresh install.
+`Database` is now extracted with `overwrite = true` every start (a few small text files; `System`, which holds the
+user's own firmware, stays fill-only where empty). Verified on the RP6: each app start logs
+`Extracting asset: Database/...` for the whole folder, and a Neo Geo ROM loads against the updated database.
+
 ## Upstream ares merge — 2026-11-06
 
 Branch `merge/upstream-ares-2026-11`, at the user's request: a merge commit of upstream ares
