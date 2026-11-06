@@ -64,13 +64,14 @@ the runner refuses anything else):
   ends the same, only its host time differs
 - `--ge-threads N` — how many threads draw the GE's pictures (0, the default, for one
   fewer than the host's cores)
-- `--renderer NAME` — who draws them: `Software` (the default), `Vulkan` (or `Vulkan-accurate`),
-  the hardware renderer (docs/psp-gpu-renderers.md), or `Vulkan-fast`, its fast mode, which
-  transforms 3D on the GPU; on the system's Vulkan loader (on macOS, Homebrew's:
-  `DYLD_LIBRARY_PATH=/opt/homebrew/lib`). The summary then counts the GPU's work: draws, 3D PRIMs
-  transformed by the GPU (fast mode), hand-overs, waits, uploads, read-backs, copies, and the
-  milliseconds a frame the CPU waited for it. If Vulkan doesn't start, the run says why and the
-  software renderer draws.
+- `--renderer NAME` — who draws them: `Software` (the default) or `Vulkan`, the GPU's renderer as the
+  app has it — its fast mode, transforming and lighting 3D on the GPU (docs/psp-gpu-renderers.md;
+  `Vulkan-fast` is an alias for commands written before the modes became one) — on the system's
+  Vulkan loader (on macOS, Homebrew's: `DYLD_LIBRARY_PATH=/opt/homebrew/lib`). The core's accurate
+  Vulkan mode is not offered here: it is the tests' own (the GPU's C++ API), which the app's one
+  Vulkan mode replaced. The summary then counts the GPU's work: draws, 3D PRIMs transformed by the
+  GPU, hand-overs, waits, uploads, read-backs, copies, and the milliseconds a frame the CPU waited
+  for it. If Vulkan doesn't start, the run says why and the software renderer draws.
 - `--resolution N` — the Vulkan renderer's internal resolution: 1, the PSP's own (the default),
   to 10 times it each way. The frames, and so the PNGs, are read back from the GPU at up to 4 times
   the PSP's size (1920x1088), shrunk smoothly where it draws larger.

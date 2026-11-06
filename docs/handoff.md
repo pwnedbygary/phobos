@@ -1,5 +1,28 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## PSP core: Vulkan is the fast renderer; the app and the runner have two renderers — 2026-11-06
+
+Branch `cursor/psp-vulkan-consolidation-2b67`, from master (df352ac19); docs/psp-core.md, part 135, has the evidence.
+Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: the GPU renderer's accurate mode was offered first in Settings but is the slower one on every phone; the fast
+  mode is what the app's picture checks tolerate. Players asked for one Vulkan, called Vulkan.
+- **What**: the core's "Renderer" option's "Vulkan" is the fast mode now ("Vulkan (fast)" its old name, "Vulkan
+  (accurate)" for the tests and a developer property); the app, its desktop front end and the runner offer Software and
+  Vulkan only. The runner no longer offers the accurate mode (it is the tests' own GPU API), so runner runs match the
+  app's renderers. The measurement properties (`debug.phobos.psp.renderer`, `.resolution`, `.gethreads`, `.geoverlap`,
+  `.gpustats`) are honoured by the app at a game's start now; before, only the runner's own harness read them.
+- **Evidence**: both runner builds clean; `--renderer Vulkan` runs the GPU (report "Vulkan" on RADV), `Software` the
+  CPU, `Vulkan-accurate` refused; host suites and app/desktop builds pass; the app's unit tests (`testModernDebugUnitTest`)
+  pass — 688 tests, 0 failures — with the renderer tests updated for the two choices and the saved 1/2 migration. Frame-time baseline measured with
+  `--frame-times` on CoO state 0 (fast 5x median 12.47 ms, p99 14.88, 0.1% over 16.7; fast 1x 6.94; Software 1x 12.39):
+  the emulation's frames are smooth, so the device's unevenness is its presentation path, which the now-honoured
+  properties let a device session measure.
+- **Limits**: the accurate mode's code stays as the tests' reference until their comparisons move to the software
+  renderer; no device figure (the phone is offline); presentation pacing untested here.
+- **Review**: independent review of the change, the two-renderer runner and app, and the frozen snapshot; verdict in the
+  commit message and the ledger once given.
+
+
 ## Resume with another LLM — start here
 
 Repository: https://github.com/pwnedbygary/phobos, branch `master`.

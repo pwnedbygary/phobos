@@ -27,36 +27,49 @@ object PspDrawingThreads {
 /**
  * The PSP's "Renderer" setting: who draws a PSP game's pictures, handed to the core as its option "Renderer" as a
  * game starts. The software renderer, the default, draws them as the PSP does, exactly. The Vulkan renderer draws them
- * on the GPU (with the driver Settings' Driver Manager chose, or the system's) in one of two modes: accurate (the CPU
- * transforms and lights the vertices, and the shader blends where the driver allows: very close, most 2D exact at
- * Native), or fast (the GPU transforms and lights 3D itself and blends with its own units: very close, a little less
- * exact, and the fastest). A saved 1 is accurate, as Vulkan was before fast came. The core checks the GPU's pictures
- * against the software renderer's as the game starts, and draws with the software renderer, saying so once, where
- * they're wrong or the GPU stops answering.
+ * on the GPU (with the driver Settings' Driver Manager chose, or the system's): the GPU transforms and lights 3D itself,
+ * gives 16-bit pictures the shader's own reads, filters above Native with its own linear filter and blends with its own
+ * units — the fastest, very close, a little less exact than the software renderer. (The core's older accurate Vulkan
+ * mode, the CPU transforming and lighting and the shader blending, is still there for the tests and for a developer
+ * property, `debug.phobos.psp.renderer 1`; Settings no longer offers it.) A saved 1 meant accurate before this and a
+ * saved 2 fast: both are taken as the Vulkan renderer now. The core checks the GPU's pictures against the software
+ * renderer's as the game starts, and draws with the software renderer, saying so once, where they're wrong or the GPU
+ * stops answering.
  */
 object PspRenderer {
     const val SOFTWARE = 0
+    /** The Vulkan renderer (the core's fast mode: the GPU transforms, lights and blends). */
     const val VULKAN = 1
+    /** A saved choice from when Settings offered the core's accurate Vulkan mode as its own entry; taken as [VULKAN]. */
     const val VULKAN_FAST = 2
 
-    /** The choices Settings offers. */
-    val choices = listOf(SOFTWARE, VULKAN, VULKAN_FAST)
+    /** The choices Settings offers: the software renderer, or Vulkan. */
+    val choices = listOf(SOFTWARE, VULKAN)
 
     fun label(renderer: Int): String = when (renderer) {
-        VULKAN -> "Vulkan (accurate)"
-        VULKAN_FAST -> "Vulkan (fast)"
-        else -> "Software (exact)"
+        SOFTWARE -> "Software (exact)"
+        else -> "Vulkan"
     }
 
     /** What each choice does, for Settings. */
     fun description(renderer: Int): String = when (renderer) {
-        VULKAN -> "Vulkan (accurate) draws on the GPU as close to the PSP as it can: very close, most 2D exact at Native."
-        VULKAN_FAST -> "Vulkan (fast) also transforms and lights 3D on the GPU and blends with its own units: the fastest, very close, a little less exact."
-        else -> "Software (exact) draws every pixel as the PSP does."
+        SOFTWARE -> "Software (exact) draws every pixel as the PSP does."
+        else -> "Vulkan draws on the GPU: the fastest, very close, a little less exact than Software."
     }
 
-    /** What the core is told: one of [choices], anything else taken as the software renderer. */
-    fun forCore(renderer: Int): Int = if (renderer in choices) renderer else SOFTWARE
+    /** What the core is told: the software renderer's 0, or Vulkan's 2 (the core's fast mode); anything else Software.
+     * The core's accurate mode's 1 is not offered by Settings; a developer property asks for it. */
+    fun forCore(renderer: Int): Int = when (renderer) {
+        VULKAN, VULKAN_FAST -> 2
+        else -> SOFTWARE
+    }
+
+    /** A saved choice as Settings shows it: one of [choices] (a save from the accurate mode's day shows as Vulkan; a
+     * value from elsewhere as Software, as the core would be told). */
+    fun forDisplay(renderer: Int): Int = when (renderer) {
+        VULKAN, VULKAN_FAST -> VULKAN
+        else -> SOFTWARE
+    }
 }
 
 /**

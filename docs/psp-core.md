@@ -21759,3 +21759,56 @@ prices it, are unmeasured.
 
 Kept outside the repository: the owner's save state, the press script, the runs' frames, reports and GPU statistics,
 the phone's and the host's measurements, and the runners built for the comparison.
+
+## Part 135: Vulkan is the fast renderer; the app and the runner have two renderers
+
+The GPU renderer had two modes: accurate (the CPU transforming and lighting, the shader blending where the driver allows:
+the reference the tests compared the fast mode against) and fast (the GPU transforming, lighting and blending itself,
+with 16-bit pictures read in the shader and the GPU's own filtering above Native). Players were offered both, and the
+accurate one was the first in the list — the slower of the two on every phone — while the fast mode's pictures are the
+ones the app's checks tolerate.
+
+Now the app and the runner have two renderers: **Software**, and **Vulkan** — the fast renderer. The core still has the
+accurate mode, by its own name, for the tests that compare the fast renderer's pictures against a reference and for a
+developer property; nothing the app offers reaches it.
+
+### The change
+
+- **Core** (`ares/psp/system/system.cpp`, option "Renderer"): "Vulkan" is the fast mode now; "Vulkan (fast)" stays as its
+  old name, and "Vulkan (accurate)" asks for the accurate mode (tests, a developer property). Nothing else in the core
+  moved: the two modes are the same code as before.
+- **App**: Settings offers "Software (exact)" and "Vulkan" only; a saved 1 (the accurate mode's old entry) or 2 (the
+  fast mode's) shows as Vulkan and runs the fast renderer. The measurement properties the analysis scripts set
+  (`debug.phobos.psp.renderer`, `.resolution`, `.gethreads`, `.geoverlap`, `.gpustats`) are now read as a game starts:
+  before this they were ignored by the app, so measurement runs varied the Settings value, not the property (the
+  property path had only ever worked in the runner's own harness). `.renderer 1` remains the way to ask for the accurate
+  mode on a device.
+- **Desktop front end**: the same two renderers in its PSP settings, with the same migration of the saved value.
+- **Runner** (`tools/psp-runner`): `--renderer Software` or `--renderer Vulkan` (its fast renderer; `Vulkan-fast` is an
+  alias for commands written before the modes became one). The accurate mode is no longer offered there: it is the
+  tests' own (`GPU::vulkan()`), so runner runs and the app run the same two renderers. The report's `ran.renderer` says
+  `Vulkan` or `Software`.
+
+### Evidence
+
+- **The runner**: `--renderer Vulkan` runs the GPU renderer (`ran.renderer` "Vulkan", device "Vulkan: AMD Radeon RX 9070
+  XT (RADV GFX1201)"), `--renderer Software` the software renderer, and `Vulkan-accurate` is refused with
+  "--renderer: Software or Vulkan". Both builds (the default `-O1 -g` and the measurement `-O2 -g`) built clean.
+- **The tests**: `tests/psp/run-tests.sh` and `tests/psp/ares/run-tests.sh` on the branch (the logs are frozen with the
+  snapshot).
+- **The app and the desktop front end** built clean (the APK's gradle run; the desktop CMake target), and the app's unit
+  tests pass: `:app:testModernDebugUnitTest` **688 tests, 0 failures**, including the renderer choices' two values and a
+  saved-choice test (the old accurate entry's 1 and the fast one's 2 both show as Vulkan and start the same game).
+- **Frame times, the baseline the smoothness work starts from** (host runner, `--frame-times`, 1800 frames, after
+  warm-up): Chains of Olympus state 0 at fast 5x **median 12.47 ms, p90 13.57, p99 14.88, max 23.74, 0.1% of frames
+  over 16.7 ms**; fast 1x median 6.94 ms; Software 1x median 12.39 ms. The emulation's own frames are smooth on the host;
+  the device's presentation path is where the unevenness the owner saw has to come from, which the app's properties
+  (now read) let a device session measure.
+
+### Limits
+
+- The accurate mode's code is still in the core for the tests' reference; deleting it is a further part once those
+  comparisons move to the software renderer (the fast mode's tolerance is what the app's check allows, and the tests'
+  picture comparisons already encode it).
+- No device figure here: the properties make a device measurement possible, and the presentation work (vsync/present
+  pacing) needs the phone to test.

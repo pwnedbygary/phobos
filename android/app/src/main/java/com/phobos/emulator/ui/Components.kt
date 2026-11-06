@@ -549,7 +549,7 @@ fun PspRendererItem(current: Int, onSelect: (Int) -> Unit) {
     SettingsDropdownItem(
         title = "PSP Renderer",
         description = "Who draws a PSP game's pictures. ${PspRenderer.description(PspRenderer.forCore(current))} Vulkan uses the driver chosen in the Driver Manager; if it can't start or stops, the software renderer takes over and says so. Applies when a game starts.",
-        current = PspRenderer.forCore(current),
+        current = PspRenderer.forDisplay(current),
         options = PspRenderer.choices,
         label = PspRenderer::label,
         onSelect = onSelect,

@@ -31,8 +31,8 @@
 //                                every poll, as the PSP's plugin records them)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
 //    --ge-thread MODE           the GE on a thread of its own (option "GE Thread"): off (the default) or on
-//    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
-//                                system's Vulkan loader; the summary then gives the GPU renderer's counts)
+//    --renderer NAME            who draws them: Software (the default) or Vulkan (the GPU's fast renderer, the app's
+//                                one Vulkan mode; the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
 //                                frames (and PNGs) are then read back at up to 4 times the PSP's size
 //    --late-frames              the GPU's frames taken a frame or two late, nothing waited for each frame, as
@@ -664,10 +664,17 @@ auto main(int argc, char** argv) -> int {
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
   if(!geThread.empty()) PlayStationPortable::option("GE Thread", geThread == "on" || geThread == "On" ? "On" : "Off");
-  //(the core's names, "Vulkan (accurate)" and "Vulkan (fast)", as one word each for a shell)
-  if(renderer == "Vulkan-accurate") renderer = "Vulkan";
-  if(renderer == "Vulkan-fast") renderer = "Vulkan (fast)";
-  if(!renderer.empty()) PlayStationPortable::option("Renderer", renderer.c_str());
+  //The app's renderers, as the core has them: "Software", or "Vulkan" (its fast mode, the GPU's). The core's accurate
+  //mode is the tests' own (GPU::vulkan()), not the runner's; "Vulkan-fast" stays as an alias for commands written before
+  //the two Vulkan modes became the app's one.
+  if(renderer == "Vulkan-fast" || renderer == "Vulkan (fast)") renderer = "Vulkan";
+  if(!renderer.empty()) {
+    if(renderer != "Software" && renderer != "Vulkan") {
+      std::fprintf(stderr, "--renderer: Software or Vulkan, not \"%s\"\n", renderer.c_str());
+      return 1;
+    }
+    PlayStationPortable::option("Renderer", renderer.c_str());
+  }
   if(resolution) PlayStationPortable::option("Resolution", std::to_string(resolution).c_str());
   if(lateFrames) PlayStationPortable::option("Late Frames", "true");
   PlayStationPortable::option("GE Timing", gePspTiming ? "PSP" : "Fast");
@@ -902,7 +909,7 @@ auto main(int argc, char** argv) -> int {
   u64 geCapped = psp.kernel.geCapped, geSkipsRefused = psp.kernel.geSkipsRefused;  //(the CPU beside the GE's counts)
   u64 geRefusedInstructions = psp.kernel.geRefusedRun(), geInstructions = psp.kernel.geInstructions;
   //what ran, for the report, before unloading lets the renderer go
-  std::string ranRenderer = psp.gpu ? (psp.gpu->fast ? "Vulkan (fast)" : "Vulkan") : "Software";
+  std::string ranRenderer = psp.gpu ? "Vulkan" : "Software";
   std::string ranDevice = psp.gpu ? psp.gpu->backend->name() : "";
   bool gpuLost = psp.gpu && !psp.gpu->ready();  //(it stopped answering: the software renderer drew from then on)
   u32 ranResolution = psp.gpu ? psp.gpu->resolution() : 1, ranThreads = drawing.drawing.threads;
