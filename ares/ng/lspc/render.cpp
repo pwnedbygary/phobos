@@ -65,7 +65,6 @@ auto LSPC::render(n9 y) -> void {
       tileNumber = (tileNumber | (u32)attributes.bit(4,7) << 12) & 0x7fff;
     } else {
       tileNumber.bit(16,19) = attributes.bit(4,7);
-      if(auto mask = cartridge.cromMask()) tileNumber &= mask >> 7;  //wrap tile numbers like hardware (MAME masks the 26-bit gfx address)
     }
     if(vflip) row ^= 0xf;
     switch(animate * !animation.disable) {
@@ -122,38 +121,31 @@ auto LSPC::render(n9 y) -> void {
     }
   }
 
-  auto fixBank = (u32)cartridge.fixBankType() * (u32)cpu.io.fixSelect;
-  u32 garouOffsets[32] = {};
-  if(fixBank == 1) {
-    u32 garouBank = 0;
-    u32 k = 0;
-    u32 gy = 0;
-    while(gy < 32) {
-      if(vram[0x7500 + k] == 0x0200 && (u32)(vram[0x7580 + k] & 0xff00) == 0xff00) {
-        garouBank = (u32)vram[0x7580 + k] & 3;
-        garouOffsets[gy++] = garouBank;
+  u32 fixBankType = cartridge.fixBankType();
+  n2  fixBankRows[32] = {};
+  if(fixBankType == 1) {
+    n2 bank = 0;
+    for(u32 row = 0, k = 0; row < 32; k += 2) {
+      if(vram[0x7500 + k] == 0x0200 && (vram[0x7580 + k] & 0xff00) == 0xff00) {
+        bank = vram[0x7580 + k] & 3;
+        fixBankRows[row++] = bank;
       }
-      garouOffsets[gy++] = garouBank;
-      k += 2;
+      if(row < 32) fixBankRows[row++] = bank;
     }
   }
 
-  u32 row = y >> 3;
   for(u32 x : range(320)) {
-    u32 col = x >> 3;
-    n16 attributes  = vram[0x7000 + col * 0x20 + row];
-    n14 tileNumber  = attributes.bit( 0,11);
+    n16 attributes  = vram[0x7000 + (x >> 3) * 0x20 + (y >> 3)];
+    n12 tileNumber  = attributes.bit( 0,11);
     n4  palette     = attributes.bit(12,15);
     n13 pramAddress = io.pramBank << 12 | palette << 4;
-    if(fixBank == 1) {
-      tileNumber += 0x1000 * (garouOffsets[(row - 2) & 31] ^ 3);
+    n2  fixBank     = 0;
+    if(fixBankType == 1) fixBank = fixBankRows[(y >> 3) - 2 & 31] ^ 3;
+    if(fixBankType == 2) {
+      u32 column = x >> 3;
+      fixBank = (vram[0x7500 + ((y >> 3) - 1 & 31) + 32 * (column / 6)] >> (5 - column % 6) * 2 & 3) ^ 3;
     }
-    if(fixBank == 2) {
-      auto bankWord = (u32)vram[0x7500 + ((row - 1) & 31) + 32 * (col / 6)];
-      auto bank = ((bankWord >> ((5 - (col % 6)) * 2)) & 3) ^ 3;
-      tileNumber += 0x1000 * bank;
-    }
-    n19 tileAddress = tileNumber << 5 | x << 2 & 24 ^ 16 | y & 7;
+    n19 tileAddress = fixBank << 17 | tileNumber << 5 | x << 2 & 24 ^ 16 | y & 7;
     n8  tileData    = system.readS(tileAddress);
     n4  color       = tileData >> (x & 1) * 4;
     if(color) {

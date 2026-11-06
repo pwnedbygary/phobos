@@ -11,12 +11,11 @@ struct Interface {
   virtual auto readP(n1 upper, n1 lower, n24 address, n16 data) -> n16 { return data; }
   virtual auto writeP(n1 upper, n1 lower, n24 address, n16 data) -> void {}
   virtual auto readM(n32 address) -> n8 { return 0xff; }
-  virtual auto mromSize() -> u32 { return 0; }
   virtual auto readC(n32 address) -> n8 { return 0xff; }
   virtual auto readS(n32 address) -> n8 { return 0xff; }
   virtual auto readVA(n32 address) -> n8 { return 0xff; }
   virtual auto readVB(n32 address) -> n8 { return 0xff; }
-  virtual auto cromMask() -> u32 { return 0; }
+  virtual auto fixBankType() -> u32 { return 0; }
   virtual auto power() -> void {}
   virtual auto serialize(serializer&) -> void {}
 
@@ -24,8 +23,6 @@ struct Interface {
   auto load(Memory::Readable<n16>&, string name) -> bool;
   auto load(Memory::Writable<n8>&, string name) -> bool;
   auto save(Memory::Writable<n8>&, string name) -> bool;
-
-  n2 fixBankType = 0;  //0 = standard; 1 = Garou-style line banking; 2 = KOF2000-style tile banking
 
   Cartridge& cartridge;
 };

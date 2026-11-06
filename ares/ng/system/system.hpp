@@ -1,15 +1,33 @@
+struct RTC : uPD4990A, Thread {
+  auto main() -> void;
+  auto step(u32 clocks) -> void;
+  auto power() -> void;
+
+  //serialization.cpp
+  auto serialize(serializer&) -> void;
+};
+
 struct System {
   Node::System node;
   VFS::Pak pak;
+  Arcade::Dip dips;
   Memory::Readable<n16> bios;
   Memory::Readable<n16> srom;
   Memory::Writable<n16> wram;
   Memory::Writable<n16> sram;  //MVS only
-
   //Neo Geo CD only
-  Memory::Writable<n16> spriteRam;  // 4MiB
-  Memory::Writable<n8> pcmRam;     // 1MiB
-  Memory::Writable<n8> fixRam;     // 128KiB
+  Memory::Writable<n16> spriteRam;  //4MiB
+  Memory::Writable<n8> pcmRam;      //1MiB
+  Memory::Writable<n8> fixRam;      //128KiB
+  RTC rtc;
+
+  struct ArcadeControls {
+    Node::Object port, device;
+    Node::Input::Button coin[2], service, test;
+    auto load(Node::Object) -> void;
+    auto unload() -> void;
+    auto poll() -> void;
+  } arcadeControls;
 
   struct Debugger {
     //debugger.cpp
@@ -59,30 +77,18 @@ struct System {
     //$300000/$340000/$380000 is only returned when the selector is 0x00/0x12/0x1B
     //(libretro neocd controller1/2/3Handlers). This is what the CD BIOS sets.
     n8 ctrlSelector = 0;
-
     //Neo Geo CD upload control
     n3 uploadZone;
     n2 spriteUploadBank;
     n1 pcmUploadBank;
-    //Neo Geo CD $FF0004: VBL (0x030) and raster timer (0x300) interrupt enables. The BIOS turns VBL
-    //off while it loads, since its VBL handler points the transfer area at the Z80's RAM.
+    //Neo Geo CD $FF0004: VBL (0x030) and raster timer (0x300) interrupt enables.
     n16 irqMask2;
-    n32 rtcCounter;
-    n1 rtcTimePulse;
-    n1 coin = 0;        //MVS coin line held low (inserted). Driven by START (auto-credit) or a SELECT coin pulse.
-    n1 coinPulse = 0;   //oneshot coin pulse (active for a few frames) triggered by a SELECT press edge.
-    n32 coinPulseTimer = 0;  //counts down the active pulse duration in CPU instructions.
-
-    //uPD4990A serial RTC (MVS). Neo Geo ties c0/c1/c2 high => serial mode.
-    struct RTC {
-      enum : u32 { MODE_REGISTER_HOLD = 0, MODE_SHIFT = 1, MODE_TIME_SET = 2, MODE_TIME_READ = 3 };
-      u8 shiftReg[7] = {0};      //shiftReg[0..5] = 48-bit data; shiftReg[6] = latched 4-bit command
-      u8 timeCounter[6] = {0x00, 0x00, 0x00, 0x01, 0x11, 0x24};  //sec,min,hour,day,(month<<4|weekday),year (BCD: 2024-01-01 Mon)
-      u8 command = 0;            //latched command
-      u1 din = 0, clk = 0, stb = 0;
-      u1 dataOut = 0;            //serial data out (REG_STATUS_A bit 7)
-    } rtc;
+    n1 coin = 0;        //MVS coin line held low (inserted), driven by START/SELECT (ArcadeStick::pollCoin).
+    n1 coinPulse = 0;
+    n32 coinPulseTimer = 0;
   } io;
+
+  bool watchdogReset = false;
 
 private:
   struct Information {

@@ -2,6 +2,8 @@
 //started: 2021-05-18
 
 #include <ares/ares.hpp>
+#include <component/arcade/dip-switches.hpp>
+#include <component/rtc/upd4990a/upd4990a.hpp>
 #include <vector>
 
 #include <component/processor/m68000/m68000.hpp>
@@ -9,7 +11,8 @@
 #include "ymfm_opn.h"
 
 namespace ares::NeoGeo {
-auto enumerate() -> std::vector<string>;
+  #include <ares/inline.hpp>
+  auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

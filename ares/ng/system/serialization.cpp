@@ -1,4 +1,9 @@
-static const string SerializerVersion = "v134";
+auto RTC::serialize(serializer& s) -> void {
+  uPD4990A::serialize(s);
+  Thread::serialize(s);
+}
+
+static const string SerializerVersion = "v136";
 //Neo Geo CD states carry a format number of their own after the header, so a CD state from before a
 //CD-only change is refused instead of read misaligned, while AES and MVS states stay valid.
 //1: the Z80's 64KiB of RAM and its reset line, and the $FF0004 interrupt mask.
@@ -70,8 +75,7 @@ auto System::serialize(serializer& s, bool synchronize) -> void {
   s(io.ledLatch1);
   s(io.ledLatch2);
   s(io.ledData);
-  s(io.rtcCounter);
-  s(io.rtcTimePulse);
+  s(rtc);
   if(NeoGeo::Model::NeoGeoCD()) {
     s(io.irqMask2);
     s(io.ctrlSelector);
