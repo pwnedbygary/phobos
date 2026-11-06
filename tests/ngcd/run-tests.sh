@@ -22,6 +22,8 @@ object "$CXX" "$ROOT/ares/ares/memory/fixed-allocator.cpp" "${CXXFLAGS[@]}"
 object "$CXX" "$ROOT/nall/nall/nall.cpp" "${CXXFLAGS[@]}"
 object "$CXX" "$ROOT/ares/component/processor/m68000/m68000.cpp" "${CXXFLAGS[@]}"
 object "$CXX" "$ROOT/ares/component/processor/z80/z80.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$ROOT/ares/component/arcade/dip-switches.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$ROOT/ares/component/rtc/upd4990a/upd4990a.cpp" "${CXXFLAGS[@]}"
 for f in ymfm_opn ymfm_adpcm ymfm_ssg ymfm_misc; do
   object "$CXX" "$ROOT/thirdparty/ymfm/src/$f.cpp" "${CXXFLAGS[@]}"
 done

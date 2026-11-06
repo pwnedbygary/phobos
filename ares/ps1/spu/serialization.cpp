@@ -15,6 +15,8 @@ auto SPU::serialize(serializer& s) -> void {
   s(transfer.type);
   s(transfer.address);
   s(transfer.current);
+  s(transfer.samplePhase);
+  s(transfer.request);
   s(transfer.unknown_0);
   s(transfer.unknown_4_15);
 
@@ -167,6 +169,7 @@ auto SPU::serialize(serializer& s) -> void {
     s(v.envelope.exponential);
 
     s(v.counter);
+    s(v.keyOnDelay);
     s(v.pmon);
     s(v.non);
     s(v.eon);
@@ -176,6 +179,8 @@ auto SPU::serialize(serializer& s) -> void {
   }
 
   s(capture.address);
+  for(auto& half : unknown1dbc) s(half);
+  for(auto& half : unknown1e60) s(half);
 
   s(fifo);
 }

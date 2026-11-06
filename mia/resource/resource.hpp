@@ -17,6 +17,7 @@ namespace mia::Resource {
   namespace GameBoy { extern const Blob BootDMG0, BootDMG1, BootMGB; }
   namespace GameBoyColor { extern const Blob BootCGB0, BootCGB1; }
   namespace MegaDrive { extern const Blob TMSS, SVP; }
+  namespace PlayStation { extern const Blob DiscLogo; }
   namespace Mega32X { extern const Blob Vector, SH2BootM, SH2BootS; }
   namespace Nintendo64 { extern const Blob CIC6101, CIC6102, CIC6105, CIC7101, PIFSM5, PIFNTSC, PIFPAL; }
   namespace SuperFamicom {

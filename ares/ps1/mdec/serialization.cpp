@@ -13,7 +13,9 @@ auto MDEC::serialize(serializer& s) -> void {
   s(status.inputRequest);
 
   s((u32&)io.mode);
+  s(io.resetPending);
   s(io.offset);
+  s(io.outputWord);
 
   s(block.luma);
   s(block.chroma);

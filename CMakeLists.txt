@@ -92,6 +92,9 @@ set(ARES_SOURCES
     ares/component/processor/spc700/spc700.cpp
     ares/component/processor/v30mz/v30mz.cpp
     ares/component/processor/sm83/sm83.cpp
+    ares/component/arcade/dip-switches.cpp
+    ares/component/rtc/upd4990a/upd4990a.cpp
+    ares/component/eeprom/parallel-flash/parallel-flash.cpp
     ares/a26/a26.cpp
     ares/cv/cv.cpp
     ares/fc/fc.cpp
