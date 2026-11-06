@@ -1,6 +1,3 @@
-#if defined(__ANDROID__)
-#include <android/log.h>
-#endif
 
 namespace ares::NeoGeo {
 
@@ -24,10 +21,6 @@ auto APU::unload() -> void {
 }
 
 auto APU::main() -> void {
-#if defined(__ANDROID__)
-  static u64 steps = 0;
-  if((++steps & 0xfffff) == 0) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "z80: pc=%04x held=%d comm_out=%02x", (unsigned)PC, (int)held, (unsigned)communication.output);
-#endif
   if(held) return step(64);
 
   if(nmi.pending && nmi.enable) {

@@ -1,7 +1,4 @@
 #include <ng/ng.hpp>
-#if defined(__ANDROID__)
-#include <android/log.h>
-#endif
 
 namespace ares::NeoGeo {
 
@@ -20,10 +17,6 @@ auto Cartridge::connect() -> void {
   information = {};
   information.title = pak->attribute("title");
   information.board = pak->attribute("board");
-#if defined(__ANDROID__)
-  __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "cartridge: title=%s board=%s",
-    (const char*)information.title, (const char*)information.board);
-#endif
 
   if(Model::NeoGeoMVS()) system.dips.load(system.node, pak, {"DSW"}, 0, false, "arcade.bml");
 

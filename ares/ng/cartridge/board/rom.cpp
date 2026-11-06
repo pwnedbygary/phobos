@@ -1,6 +1,3 @@
-#if defined(__ANDROID__)
-#include <android/log.h>
-#endif
 struct Rom : Interface {
   using Interface::Interface;
 
@@ -18,13 +15,6 @@ struct Rom : Interface {
     Interface::load(srom, "static.rom");
     Interface::load(vromA, "voice-a.rom");
     Interface::load(vromB, "voice-b.rom");
-#if defined(__ANDROID__)
-    __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "board rom: p=%u m=%u c=%u s=%u vA=%u vB=%u p0=%02x%02x%02x%02x",
-      (unsigned)prom.size()*2, (unsigned)mrom.size(), (unsigned)crom.size(), (unsigned)srom.size(),
-      (unsigned)vromA.size(), (unsigned)vromB.size(),
-      prom.size()>1?prom[0].byte(1):0, prom.size()>1?prom[0].byte(0):0,
-      (crom.size()>1?(unsigned)crom[0]:0u), (crom.size()>1?(unsigned)crom[1]:0u));
-#endif
   }
 
   auto unload() -> void override {

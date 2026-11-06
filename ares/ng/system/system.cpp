@@ -1,6 +1,5 @@
 #include <ng/ng.hpp>
 #include <algorithm>
-#include <android/log.h>
 
 namespace ares::NeoGeo {
 
@@ -188,7 +187,6 @@ auto System::power(bool reset) -> void {
   }
 
   if(auto fp = pak->read("bios.rom")) {
-    __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "power: bios.rom %u bytes, model=%d", (unsigned)fp->size(), (int)information.model);
     bios.allocate(fp->size() >> 1);
     for(auto address : range(bios.size())) {
       // Neo Geo BIOS dumps are MAME 16-bit word-swapped ROMs: read the little-endian pair.
@@ -196,7 +194,6 @@ auto System::power(bool reset) -> void {
     }
   }
 
-  __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "power: bios words=%u cd=%d", (unsigned)bios.size(), (int)NeoGeo::Model::NeoGeoCD());
   //libretro neocd tells the CDZ's BIOS by these words at $C0006C; the front and top loaders have
   //single-speed drives
   if(NeoGeo::Model::NeoGeoCD()) {
