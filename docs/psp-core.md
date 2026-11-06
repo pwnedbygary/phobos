@@ -21908,3 +21908,53 @@ would catch the duplicate-creation bug.
   read the frame times.
 - A PRIM whose pipeline isn't ready is drawn by the software renderer that frame: correct pixels, one slow frame per new
   state (a heavy PRIM's software draw is the cost). It cannot be avoided while keeping that frame's picture exact.
+
+## Part 137: the device's slow operations, logged
+
+After part 136 (pipelines made off the frame) the owner's in-play unevenness remained, and the app's per-second
+`Emulation Stats` cannot say what a stalled frame was doing. This part makes the core say so on a device: with
+`debug.phobos.psp.slowlog` set over adb, the app routes the core's stderr to logcat (tag PhobosCoreLog), and the Vulkan
+backend writes a line for every operation that takes 5 ms or more:
+
+- `pipeline <us>`: a graphics pipeline made, the driver's compile time (the worker's, or the start-up check's),
+- `pipeline cache snapshot <us>`: the driver's pipeline cache copied for the next session (every 600 frames and at unload),
+- `GPU wait <us>`: a finish that waited for the GPU (read-backs, uploads, presents),
+- `swapchain acquire <us>`: waiting for a swapchain image.
+
+No behaviour changes: the lines are written only, the redirection only happens where the property says so, and Android is
+the only platform with the redirection (a desktop's stderr and stdout are their own, as before; the runner's benchmarks
+can set `PHOBOS_GPU_STATS` as they did). The redirection takes the core's **stdout as well as its stderr** (one pipe, so
+anything the core prints on a device reaches logcat); the diagnostic lines themselves are stderr's.
+
+### What it measured on the RP6 (Chains of Olympus, the owner's gameplay state, Vulkan fast 5x)
+- **Cold pipeline cache** (the persisted cache deleted, so the scene's pipelines are made), the primary run
+  (`device/diag137cold.*.log`): **36 pipeline creations**, the driver's compiles **15.3 ms to 202.5 ms** each, **3.41 s
+  of compile in all** over the first seconds; the first seconds after the load ran at 26/50/54/53 fps, their worst frames 277, 39, 38,
+  40 ms, then 19-25 ms as the last pipelines landed (steady afterwards: 19.2 ms mean worst frame, 20.9 ms the worst).
+  Across the other frozen cold runs (`diagCold`, `diagColdNice`, and the worker-placement variants `w_*`): **36 pipeline
+  creations every time**, 2.5-4.5 s of compile in all, the first compile 15-460 ms depending on the run and the worker's
+  placement (the 430-460 ms first ones are the all-cores nice-0/10 variants; the runs restricted to cores 0-3 or core 3
+  compiled the same 36 in ~2.5 s). A log may also carry one `pipeline cache snapshot` line, so the lines mentioning
+  "pipeline " can be 37 where the creations are 36; the creation counts and sums are the figures quoted. The logs and
+  their per-run figures are in `device/`, with the copies' provenance (same SHA-256 as the device pulls, per-line tables,
+  the extraction script) in `device/PROVENANCE.txt`, `device/tables/` and `evidence/extract-pipeline-lines.py`.
+- **Warm pipeline cache** (the owner's normal): **no pipeline compiles at all**; one `pipeline cache snapshot 5030 us`;
+  no `GPU wait` or `swapchain acquire` over 5 ms. Steady frames 19.2-19.3 ms mean worst frame, 21.3 ms the worst (the
+  game's own), the load second's 132 ms apart.
+- That the compiles are the cost, and not scheduling, present or fallback, was measured too (the scripts are in
+  psp-perf-hires/analysis/device-ab):
+  - pipeline worker placement/priority, five variants (nice 0 and 10; all cores, cores 0-3, core 3): the early-window
+    stall sum 209-223 ms and the worst frame 138-143 ms — **identical**, so the compile is not a CPU-scheduling matter
+    (these are the `w_*` runs above; their compile totals differ, 2.5-4.5 s, but the frames do not);
+  - present mode, mailbox against FIFO, three interleaved runs each: steady windows **equal** (worst 20.1-22.6 ms
+    mailbox, 20.4-28.9 ms FIFO) and mailbox's frame work is lower (10.2 ms against FIFO's 16.6 ms, which includes the
+    wait for the display) — mailbox stays;
+  - a measurement-only build (not this part) that dropped a refused PRIM instead of software-drawing it: in the same
+    protocol, the early worst frame 127-128 ms against 141-143 ms and the mean frame 8.9 ms against 10.2 ms, frames
+    17-18 ms against 23-25 ms — the fallback costs about 6 ms a frame while the pipelines are made but is not the worst
+    frame. Dropped: wrong pictures.
+- A state load is its own 200 ms (FileRead 80 ms, Unserialize 121 ms, the app's `LoadState Timing` line), outside play.
+### Limits
+One game and one state; the lines are only the operations longer than 5 ms; the redirection is Android's (the app), not
+the core's. The measurements point the next work at the number and cost of the pipelines a game's states need, not at
+scheduling or presenting.

@@ -1,5 +1,31 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## PSP core: the device's slow operations, logged — 2026-11-06
+
+Branch `cursor/psp-slowops-present-2b67` from master (0f1b14f09, part 136 merged); docs/psp-core.md, part 137, has the
+method, the device figures and the limits. Clean room: our code; no PPSSPP or JPCSP. Save states: unchanged.
+- **Why**: after part 136 the owner's in-play unevenness remained and `Emulation Stats` cannot say what a stalled frame
+  was doing. The device needed the core's own timing.
+- **What**: `debug.phobos.psp.slowlog` (over adb, as a game starts) routes the core's stdout and stderr to logcat
+  (PhobosCoreLog); the Vulkan backend logs every operation of 5 ms or more: `pipeline` (driver compile), `pipeline cache
+  snapshot`, `GPU wait`, `swapchain acquire`. No behaviour change; Android-only redirection; desktop and runner untouched.
+- **What the RP6 shows** (CoO gameplay state, fast 5x): cold pipeline cache, the primary run is **36 pipeline creations,
+  15.3-202.5 ms each, 3.41 s of compile** in the first seconds (26/50/54/53 fps, worst frames 277/39/38/40 ms, then 19-25 ms; steady
+  19.2 ms mean worst, 20.9 the worst); the other frozen cold runs are 36 pipelines each, 2.5-4.5 s of compile, first
+  compile 15-460 ms depending on run/placement. Warm cache: no compiles, one 5.03 ms cache snapshot, no GPU wait or
+  acquire over 5 ms, steady 19.2-19.3 ms mean worst (21.3 the worst). Closing the other hypotheses on the device: worker
+  placement/priority (five variants) identical on frames (early stall sum 209-223 ms, worst 138-143 ms) although their
+  compile totals differ; mailbox and FIFO steady windows equal (worst 20-29 ms each, mailbox's frame work 10.2 vs FIFO's
+  16.6 ms including the wait); dropping refused PRIMs instead of software-drawing saves ~6 ms a frame (worst 127-128 vs
+  141-143 ms) but not the worst frame (wrong pictures, not shipped); the pipeline cache path made unusable leaves the cold
+  stalls unchanged; state load is its own 200 ms outside play.
+- **Consequence**: the next work is the number and cost of the pipelines a game's states need (shader variants), not
+  scheduling or presenting.
+- **Limits**: one game/state; only >5 ms operations; redirection is the app's (Android).
+- **Review**: independent review of the change and the frozen snapshot; verdict in the commit message and the ledger
+  once given.
+
+
 ## PSP core: pipelines made off the frame — 2026-11-06
 
 Branch `cursor/psp-async-pipelines-2b67` from master (20dc932e2, part 135 merged); docs/psp-core.md, part 136, has the
