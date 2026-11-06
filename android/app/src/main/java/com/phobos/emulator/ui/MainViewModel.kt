@@ -3672,8 +3672,11 @@ class MainViewModel(
             root.mkdirs()
         }
 
-        // Extract directories
-        extractFolder("Database", File(root, "Database"))
+        // Extract directories. The databases are media definitions from the
+        // installed ares build and change when a release updates them, so they
+        // are refreshed every start; the System folder (BIOS and firmware the
+        // user put there) is only filled in where empty.
+        extractFolder("Database", File(root, "Database"), overwrite = true)
         extractFolder("System", File(root, "System"))
         
         // Also tell native where the home is
@@ -3723,7 +3726,7 @@ class MainViewModel(
         }
     }
 
-    private fun extractFolder(assetPath: String, destDir: File) {
+    private fun extractFolder(assetPath: String, destDir: File, overwrite: Boolean = false) {
         if (!destDir.exists()) {
             Log.d("Phobos", "Creating directory: ${destDir.absolutePath}")
             destDir.mkdirs()
@@ -3748,7 +3751,7 @@ class MainViewModel(
             if (isDir) {
                 extractFolder(subAssetPath, destFile)
             } else {
-                if (!destFile.exists()) {
+                if (overwrite || !destFile.exists()) {
                     Log.d("Phobos", "Extracting asset: $subAssetPath")
                     try {
                         context.assets.open(subAssetPath).use { input ->
