@@ -207,6 +207,10 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
   //REG_SOUND
   if((address & 0xfe0000) == 0x320000 && upper) {
     data.byte(1) = apu.communication.output;
+#if defined(__ANDROID__)
+    static u32 sounds = 0;
+    if((++sounds & 0xffff) == 0) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "68k sound read: out=%02x", (unsigned)apu.communication.output);
+#endif
   }
 
   //REG_STATUS_A
@@ -565,10 +569,15 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
   //REG_IRQACK
   if((address & 0x3e000e) == 0x3c000c) {
+#if defined(__ANDROID__)
+    static u32 acks = 0;
+    if(++acks <= 10) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "68k IRQACK write %u: %04x", acks, (unsigned)data);
+#endif
     if(lower) {
-      lspc.irq.powerAcknowledge  = data.bit(0);
-      lspc.irq.timerAcknowledge  = data.bit(1);
-      lspc.irq.vblankAcknowledge = data.bit(2);
+      //acknowledging sets the pending flag; a 0 bit does not clear one (upstream's model)
+      if(data.bit(0)) lspc.irq.powerAcknowledge  = 1;
+      if(data.bit(1)) lspc.irq.timerAcknowledge  = 1;
+      if(data.bit(2)) lspc.irq.vblankAcknowledge = 1;
     }
   }
 
@@ -613,6 +622,10 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
   //REG_NFF0002 (CDD/CDC control latch)
   if((address & 0xfffffe) == 0xff0002) {
+#if defined(__ANDROID__)
+    static u32 regs = 0;
+    if((++regs & 63) == 0) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "68k CDD reg2 write %u: %04x", regs, (unsigned)data);
+#endif
     cdd.reg2 = data;
     return;
   }
@@ -685,6 +698,10 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
   //$FF0004: VBL and raster timer interrupt enables (System::IO::irqMask2)
   if((address & 0xfffffe) == 0xff0004) {
+#if defined(__ANDROID__)
+    static u32 masks = 0;
+    if(++masks <= 10) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "68k $FF0004 write %u: %04x", masks, (unsigned)data);
+#endif
     if(upper) system.io.irqMask2.byte(1) = data.byte(1);
     if(lower) system.io.irqMask2.byte(0) = data.byte(0);
     return;

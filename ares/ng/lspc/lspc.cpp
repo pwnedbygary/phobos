@@ -1,3 +1,7 @@
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 namespace ares::NeoGeo {
 
 LSPC lspc;
@@ -94,6 +98,10 @@ auto LSPC::main() -> void {
     if(io.cddCounter += 1, io.cddCounter >= cdd.tickPeriod()) {
       io.cddCounter = 0;
       cdd.tick();
+#if defined(__ANDROID__)
+      static u32 ticks = 0;
+      if((++ticks & 255) == 0) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "cdd tick %u period=%u t1=%d t2=%d t3=%d", ticks, (unsigned)cdd.tickPeriod(), (int)cdd.type1Pending, (int)cdd.type2Pending, (int)cdd.type3Pending);
+#endif
     }
   }
   if(++io.hcounter == 384) {
@@ -104,9 +112,18 @@ auto LSPC::main() -> void {
         animation.counter = animation.speed;
         animation.frame++;
       }
+#if defined(__ANDROID__)
+      if(NeoGeo::Model::NeoGeoCD() && irq.vblankAcknowledge && (system.io.irqMask2 & 0x030) != 0x030) {
+        static u32 blocked = 0;
+        if(++blocked <= 5) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "vblank blocked %u mask2=%04x ack=%d", blocked, (unsigned)system.io.irqMask2, (int)irq.vblankAcknowledge);
+      }
+#endif
       if(irq.vblankAcknowledge && (!NeoGeo::Model::NeoGeoCD() || (system.io.irqMask2 & 0x030) == 0x030)) {
         irq.vblankAcknowledge = 0;
         cpu.raise(CPU::Interrupt::Vblank);
+#if defined(__ANDROID__)
+        static u32 vb = 0; if((++vb & 127) == 0) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "vblank raise %u mask2=%04x", vb, (unsigned)system.io.irqMask2);
+#endif
       }
       if(timer.reloadOnVblank) {
         timer.counter = timer.reload;
@@ -122,6 +139,11 @@ auto LSPC::main() -> void {
 }
 
 auto LSPC::frame() -> void {
+#if defined(__ANDROID__)
+  static u32 frames = 0;
+  if((++frames & 63) == 0) __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "lspc f%u: vram0=%04x vram1000=%04x pram0=%04x pramBank=%u shadow=%u", frames,
+    (unsigned)vram[0], (unsigned)vram[0x1000], (unsigned)pram[0], (unsigned)io.pramBank, (unsigned)io.shadow);
+#endif
   //the picture is lines 16-239 (see main()); the lines above and below it are border
   if(screen->overscan()) screen->setViewport(0, 0, 320, 256);
   else screen->setViewport(0, 16, 320, 224);

@@ -120,6 +120,16 @@ auto NeoGeo::load(string location) -> LoadResult {
   pak->append("static.rom",    staticROM);
   pak->append("voice-a.rom",   voiceAROM);
   pak->append("voice-b.rom",   voiceBROM);
+#if defined(__ANDROID__)
+  __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "medium: p=%u m=%u c=%u s=%u vA=%u vB=%u board=%s",
+    (unsigned)programROM.size(), (unsigned)musicROM.size(), (unsigned)characterROM.size(),
+    (unsigned)staticROM.size(), (unsigned)voiceAROM.size(), (unsigned)voiceBROM.size(),
+    (const char*)document["game/board"].string());
+  __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "medium bytes: p0=%02x%02x%02x%02x c0=%02x%02x%02x%02x s0=%02x%02x%02x%02x",
+    programROM.size()>3?programROM[0]:0, programROM.size()>3?programROM[1]:0, programROM.size()>3?programROM[2]:0, programROM.size()>3?programROM[3]:0,
+    characterROM.size()>3?characterROM[0]:0, characterROM.size()>3?characterROM[1]:0, characterROM.size()>3?characterROM[2]:0, characterROM.size()>3?characterROM[3]:0,
+    staticROM.size()>3?staticROM[0]:0, staticROM.size()>3?staticROM[1]:0, staticROM.size()>3?staticROM[2]:0, staticROM.size()>3?staticROM[3]:0);
+#endif
   return successful;
 }
 
