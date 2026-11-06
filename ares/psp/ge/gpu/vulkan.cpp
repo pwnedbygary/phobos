@@ -82,6 +82,13 @@ template<typename T> static auto made(VkStructureType type) -> T {
   return value;
 }
 
+//(a slow operation, for a device's log: the app routes stderr to logcat when debug.phobos.psp.slowlog is set; the
+//threshold keeps it to what a frame would feel)
+static auto slowOp(const char* what, s64 microseconds) -> void {
+  if(microseconds < 5000) return;
+  std::fprintf(stderr, "PSP GPU slow: %s %lld us\n", what, (long long)microseconds);
+}
+
 struct VulkanBackend : GPU::Backend {
   struct Buffer {
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -983,9 +990,11 @@ struct VulkanBackend : GPU::Backend {
       if(vk.vkCreateGraphicsPipelines(device, pipelineCache, 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
         pipeline = VK_NULL_HANDLE;
       }
-      pipelineMaking += std::chrono::duration_cast<std::chrono::nanoseconds>(
+      auto madeNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start).count();
+      pipelineMaking += madeNanos;
       pipelines++;
+      slowOp("pipeline", (s64)(madeNanos / 1000));
     }
     std::lock_guard lock{pipelineMutex_};
     pipelineCache_[k] = pipeline;
@@ -1922,6 +1931,7 @@ struct VulkanBackend : GPU::Backend {
     began = Clock::now();
     if(!waitAll()) return false;
     waiting += nanoseconds(began);
+    slowOp("GPU wait", (s64)(nanoseconds(began) / 1000));
     if(!readback.coherent && readAt) {
       auto range = made<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
       range.memory = readback.memory, range.offset = 0, range.size = VK_WHOLE_SIZE;
@@ -2311,8 +2321,11 @@ struct VulkanBackend : GPU::Backend {
         if(outcome < 0) return giveUp();
         if(outcome == 0) return dropSwapchain(), false;
       }
+      auto acquiredAt = std::chrono::steady_clock::now();
       VkResult result = vk.vkAcquireNextImageKHR(device, swapchain, AcquireTimeout, slot.acquired, VK_NULL_HANDLE,
                                                  &image);
+      slowOp("swapchain acquire", (s64)std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - acquiredAt).count());
       if(result == VK_SUCCESS) return true;
       //(acquired: shown; made again only where the surface has really changed, or once in a while for one that keeps
       //saying so — stale() above says why its transform alone is not a change)
@@ -2431,6 +2444,7 @@ struct VulkanBackend : GPU::Backend {
   }
   auto pipelineData() -> std::vector<u8> override {
     //(the worker may be making one: the VkPipelineCache is the driver's to use by one thread at a time)
+    auto dataBegan = std::chrono::steady_clock::now();
     std::lock_guard creating{pipelineCreateMutex_};
     size_t size = 0;
     if(lost || timedOut || !pipelineCache) return {};
@@ -2440,6 +2454,8 @@ struct VulkanBackend : GPU::Backend {
     data.resize(sizeof(Kept) + size);
     Kept header = kept({data.data() + sizeof(Kept), size});
     std::memcpy(data.data(), &header, sizeof(header));
+    slowOp("pipeline cache snapshot", std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - dataBegan).count());
     return data;
   }
   auto submit(const GPU::Recorded& recorded) -> bool override { return run(recorded, false); }

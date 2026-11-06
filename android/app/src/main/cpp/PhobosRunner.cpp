@@ -1317,6 +1317,43 @@ namespace ares {
   static u32 stallSameCount = 0;
   static bool stallLogged = false;
 
+  // (the core's stdout and stderr to logcat, once: the slow-operation lines that explain a device's frame times; asked
+  // for with debug.phobos.psp.slowlog over adb, as a game starts)
+  static auto redirectCoreStderr() -> void {
+    #if defined(__ANDROID__)
+    static bool redirected = false;
+    if(redirected) return;
+    redirected = true;
+    int fds[2];
+    if(pipe(fds) != 0) return;
+    dup2(fds[1], STDERR_FILENO);
+    dup2(fds[1], STDOUT_FILENO);
+    close(fds[1]);
+    static std::thread reader([readFd = fds[0]] {
+      std::string line;
+      char buffer[1024];
+      for(;;) {
+        ssize_t got = read(readFd, buffer, sizeof(buffer));
+        if(got <= 0) break;
+        for(ssize_t n = 0; n < got; n++) {
+          char c = buffer[n];
+          if(c == '\n') {
+            __android_log_print(ANDROID_LOG_INFO, "PhobosCoreLog", "%s", line.c_str());
+            line.clear();
+          } else {
+            line += c;
+            if(line.size() > 900) {
+              __android_log_print(ANDROID_LOG_INFO, "PhobosCoreLog", "%s", line.c_str());
+              line.clear();
+            }
+          }
+        }
+      }
+    });
+    reader.detach();
+    #endif
+  }
+
   auto addLog(LogLevel level, string message) -> void {
     std::lock_guard<std::mutex> lock(logMutex);
     logBuffer.push_back({level, message});
@@ -3704,6 +3741,10 @@ else if (port->type() == "Keyboard") {
       if(__system_property_get("debug.phobos.psp.gpustats", setting) > 0 && setting[0] && setting[0] != '0') {
         setenv("PHOBOS_GPU_STATS", "1", 1);
         LOGI("PSP: the GPU's statistics counters on (debug.phobos.psp.gpustats)");
+      }
+      if(__system_property_get("debug.phobos.psp.slowlog", setting) > 0 && setting[0] && setting[0] != '0') {
+        redirectCoreStderr();
+        LOGI("PSP: the core's stderr in logcat (debug.phobos.psp.slowlog)");
       }
       #endif
       // How many threads draw the GE's pictures: the setting's count, or 0 for all the cores but one (the core's own).
