@@ -17,8 +17,6 @@ import com.google.android.filament.Viewport
 import com.google.android.filament.utils.KTX1Loader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * The single live cart view: one SurfaceView, one Filament view, the focused game's shell turning slowly with the
@@ -45,6 +43,14 @@ class CartRenderer(
     private var sun = 0
     private var running = false
     private var startNanos = 0L
+    /** Camera framing of the shown shell, from its world bounds (see [CartFraming]). */
+    private var fitDistance = 420.0
+    /** The shown shell's world half-extents; the fit distance depends on the surface's aspect, so it is recomputed. */
+    private var fitHalf = floatArrayOf(60f, 60f, 20f)
+    private var centerX = 0.0
+    private var centerY = 0.0
+    private var centerZ = 0.0
+    private var aspect = 1.0
 
     /** Starts the lifecycle; the surface itself drives creation and teardown. */
     fun attach() {
@@ -85,6 +91,14 @@ class CartRenderer(
             // no longer sampled and can go now instead of accumulating one set per focused cart.
             previous.forEach { runCatching { owner.engine.destroyTexture(it) } }
             shown = cart
+            CartFraming.bounds(owner.engine, cart.entities)?.let { b ->
+                fitHalf = floatArrayOf(b[3], b[4], b[5])
+                fitDistance = CartFraming.distance(fitHalf, aspect)
+                centerX = b[0].toDouble()
+                centerY = b[1].toDouble()
+                centerZ = b[2].toDouble()
+                applyProjection()
+            }
         }
     }
 
@@ -106,7 +120,8 @@ class CartRenderer(
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (!CartsEngine.isRunning() || CartsEngine.currentEngineId() != engineId) return
-        camera?.setProjection(45.0, width.toDouble() / height.coerceAtLeast(1), 10.0, 5000.0, Camera.Fov.VERTICAL)
+        aspect = width.toDouble() / height.coerceAtLeast(1)
+        applyProjection()
         // Filament renders nothing (not even the clear) when the view's viewport is empty; it is not derived from the
         // swap chain, so the viewport is stated with every surface size.
         view?.viewport = Viewport(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
@@ -147,11 +162,32 @@ class CartRenderer(
         Choreographer.getInstance().postFrameCallback(this)
     }
 
-    /** The slow turn: the camera orbits the shell so its front and sides both read. */
+    /** The camera projection for the current surface aspect and the shown shell's framed distance. */
+    private fun applyProjection() {
+        fitDistance = CartFraming.distance(fitHalf, aspect)
+        camera?.setProjection(
+            CartFraming.FOV_DEGREES,
+            aspect,
+            CartFraming.near(fitDistance),
+            CartFraming.far(fitDistance),
+        )
+    }
+
+    /** The slow turn: the camera orbits the shell about the glTF up axis (Y) so its front and sides both read. */
     private fun spin(t: Double) {
-        val radius = 420.0
-        val angle = t * 0.5
-        camera?.lookAt(sin(angle) * radius, radius * 0.18, cos(angle) * radius, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+        // Shared with the thumbnailer: one orbit definition, no second copy of the elevation/angle formula.
+        val eye = CartFraming.orbitEye(floatArrayOf(centerX.toFloat(), centerY.toFloat(), centerZ.toFloat()), fitDistance, t * 0.5)
+        camera?.lookAt(
+            eye[0],
+            eye[1],
+            eye[2],
+            centerX,
+            centerY,
+            centerZ,
+            0.0,
+            1.0,
+            0.0,
+        )
     }
 
     private fun setupEnvironment(engine: com.google.android.filament.Engine) {
