@@ -96,3 +96,21 @@ timestamps, and the pinned cmgen/matc produce stable bytes, so two runs produce 
   6,225,340 B = 6.23 MB); PR 4b needs an APK-size decision before
   moving these into `assets/` - whether the IBL ships at `--size=256`, whether one shared disc mesh is used, and
   whether quantisation is worth it.
+
+## The Spectrum tape shell (authored, not generated)
+
+`android/app/src/main/assets/carts/carts/tape.glb` is Phobos's own model, not a `bake-carts.mjs` output: Cartridge's
+pipeline has cart and disc geometry only, and the ZX Spectrum's games are tapes. It is a standard 109 x 70 x 17 mm
+compact-cassette case with a printed inlay card, width on X, height on Z, thickness on Y and the printed face toward
+-Y, matching the baked carts' convention; its materials are `shell` (takes the per-game colour and finish), `dark`
+(the tray and seam) and `label` (the printed card, UV 0..1). `tools/carts/tape/make_tape.py` rebuilds it with
+Blender 5.2 (bpy/bmesh only):
+
+```sh
+blender --background --python tools/carts/tape/make_tape.py -- \
+    --output android/app/src/main/assets/carts/carts/tape.glb
+```
+
+The same Blender build produces byte-identical output (sha256 `3cf8bd96c515928750038207e2a843554b740f1bed7de40b73a6bef73c82d59d`);
+`--preview out.png` renders a front three-quarter check with a test inlay. `bake-carts.mjs --check` covers its own 25
+outputs and does not include this file.

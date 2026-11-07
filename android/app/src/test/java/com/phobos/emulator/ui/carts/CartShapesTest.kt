@@ -44,9 +44,9 @@ class CartShapesTest {
         assertEquals("cd", CartShapes.cartShape("PC Engine LD"))
         assertEquals("small", CartShapes.cartShape("MSX"))
         assertEquals("small", CartShapes.cartShape("MSX2"))
-        // The ZX Spectrum's games are tapes, which no baked shell represents.
-        assertNull(CartShapes.cartShape("ZX Spectrum"))
-        assertNull(CartShapes.cartShape("ZX Spectrum 128"))
+        // The Spectrum's tape games use Phobos's own cassette-case shell.
+        assertEquals("tape", CartShapes.cartShape("ZX Spectrum"))
+        assertEquals("tape", CartShapes.cartShape("ZX Spectrum 128"))
     }
 
     @Test
@@ -58,19 +58,21 @@ class CartShapesTest {
         // The LaserActive systems ride on the CD disc output, so isDisc has to say so for their cards.
         assertTrue(CartShapes.isDisc("Mega LD"))
         assertTrue(CartShapes.isDisc("PC Engine LD"))
+        assertTrue(!CartShapes.isDisc("ZX Spectrum"))
         assertTrue(!CartShapes.isDisc("Famicom"))
         assertTrue(!CartShapes.isDisc("Arcade"))
     }
 
     @Test
     fun everyShapeExistsInTheGeneratedAssets() {
-        val names = setOf("famicom", "sfc", "n64", "gb", "gbc", "gba", "sms", "md", "small", "aes", "hucard", "a26", "pcb", "cd", "psx", "minidisc")
+        val names = setOf("famicom", "sfc", "n64", "gb", "gbc", "gba", "sms", "md", "small", "aes", "hucard", "a26", "pcb", "cd", "psx", "minidisc", "tape")
         for (system in listOf(
             "Famicom", "Super Famicom", "Super Game Boy", "Game Boy", "Game Boy Color", "Game Boy Advance",
             "Nintendo 64", "Master System", "SG-1000", "Mega Drive", "Mega 32X", "Game Gear", "Mega CD",
             "Mega CD 32X", "PlayStation", "PlayStation Portable", "Neo Geo", "Neo Geo CD", "Neo Geo Pocket",
             "Neo Geo Pocket Color", "PC Engine", "PC Engine CD", "SuperGrafx", "WonderSwan", "WonderSwan Color",
-            "Pocket Challenge V2", "Atari 2600", "ColecoVision", "Mega LD", "PC Engine LD", "MSX", "MSX2", "Arcade",
+            "Pocket Challenge V2", "Atari 2600", "ColecoVision", "Mega LD", "PC Engine LD", "MSX", "MSX2",
+            "ZX Spectrum", "ZX Spectrum 128", "Arcade",
         )) {
             val shape = CartShapes.cartShape(system)
             assertTrue("$system has a generated shape", shape in names)

@@ -27,6 +27,33 @@ deferred.
   use the format Phobos already shipped (`v136`).
 
 
+## Carts: the ZX Spectrum cassettes, modeled in Blender — 2026-11-06
+
+Branch `carts-tape`, from master `3dec6f9da`.
+- **Why**: the cart view is the default for every system with a baked shell; the ZX Spectrum and ZX Spectrum 128
+  were the last Library-visible systems without one, because Cartridge's pipeline bakes carts and discs only. Their
+  games are tapes.
+- **What**: Phobos's own cassette-case shell, `android/app/src/main/assets/carts/carts/tape.glb`: a standard
+  109 x 70 x 17 mm compact-cassette case with a printed inlay card, the seam of the two halves, and the same
+  width-X / height-Z / thickness-Y, face-toward--Y convention and `shell`/`dark`/`label` material names the baked
+  carts use. Modeled in Blender 5.2.3 through the Blender MCP add-on's socket bridge (the model and the inlay
+  preview were built and rendered from this session), and kept reproducible by `tools/carts/tape/make_tape.py`
+  (bpy/bmesh only). `CartShapes` maps both Spectrum systems to `tape`; there is no Cartridge entry, so no label
+  scans are downloaded and the generated label painter fills the inlay (its 512 x 320 canvas is the inlay's 1.6
+  aspect).
+- **Evidence**: the script rebuilds the committed GLB byte for byte (sha256
+  `3cf8bd96c515928750038207e2a843554b740f1bed7de40b73a6bef73c82d59d`); a Cycles preview with a test inlay shows the
+  printed card upright inside the case; `CartShapesTest` and `CartShapeAssetsTest` cover the new shape and its asset;
+  688 unit tests per flavour pass.
+- **Limits**: the shell is a closed case with the inlay, not a transparent case showing the cassette itself; the
+  inlay is the generated label (or box art is not used for it, as for the other entry-less systems). On the RP6 the
+  ZX Spectrum folder was added to show the grid (`/ROMs/zxs`, three zips), and the grid stayed black: the carts
+  renderer never starts on the device - `CartsEngine` calls no `Filament.init()`/`Utils.init()`, so every
+  `Engine.Builder` fails with "No implementation found for long com.google.android.filament.Engine.nCreateBuilder()",
+  and `LiveCartView`'s SurfaceView says `fillMaxSize()` after the caller's 180.dp height, covering the grid. Both are
+  pre-existing cart-renderer faults, not the tape model; they are the next cart task.
+
+
 ## Carts: a shell for the LaserActive discs and the MSX carts — 2026-11-06
 
 Branch `carts-coverage`, from master `d5c6d54e9`.
