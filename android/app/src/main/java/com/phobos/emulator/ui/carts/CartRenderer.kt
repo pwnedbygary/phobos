@@ -47,6 +47,8 @@ class CartRenderer(
     private var startNanos = 0L
     /** Camera framing of the shown shell, from its world bounds (see [CartFraming]). */
     private var fitDistance = 420.0
+    /** The shown shell's world half-extents; the fit distance depends on the surface's aspect, so it is recomputed. */
+    private var fitHalf = floatArrayOf(60f, 60f, 20f)
     private var centerX = 0.0
     private var centerY = 0.0
     private var centerZ = 0.0
@@ -92,7 +94,8 @@ class CartRenderer(
             previous.forEach { runCatching { owner.engine.destroyTexture(it) } }
             shown = cart
             CartFraming.bounds(owner.engine, cart.entities)?.let { b ->
-                fitDistance = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]))
+                fitHalf = floatArrayOf(b[3], b[4], b[5])
+                fitDistance = CartFraming.distance(fitHalf, aspect)
                 centerX = b[0].toDouble()
                 centerY = b[1].toDouble()
                 centerZ = b[2].toDouble()
@@ -163,6 +166,7 @@ class CartRenderer(
 
     /** The camera projection for the current surface aspect and the shown shell's framed distance. */
     private fun applyProjection() {
+        fitDistance = CartFraming.distance(fitHalf, aspect)
         camera?.setProjection(
             CartFraming.FOV_DEGREES,
             aspect,

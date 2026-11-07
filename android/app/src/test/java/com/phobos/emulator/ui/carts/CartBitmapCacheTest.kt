@@ -1,6 +1,7 @@
 package com.phobos.emulator.ui.carts
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -24,6 +25,17 @@ class CartBitmapCacheTest {
         gameId = 42, kind = "grid", theme = theme, face = "mplus1", finish = "solid", color = "#6f4fb0",
         special = false, wear = 1, width = 520, height = 693,
     )
+
+    @Test
+    fun theRendererRevisionIsPartOfTheKey() {
+        // A renderer change must not serve a picture an older renderer drew: the revision is in the id (and so in the
+        // cache file name), so bumping it is a clean miss rather than a stale card.
+        val current = key()
+        val older = current.copy(renderer = "1")
+        assertNotEquals("a renderer revision change is a new cache entry", current.id(), older.id())
+        assertEquals("the same revision keeps one entry", current.id(), key().id())
+        assertEquals(CartBitmapCache.RENDERER_VERSION, current.renderer)
+    }
 
     @Test
     fun aReRenderFetchesNothingAndCropsNothing() {

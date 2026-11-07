@@ -204,20 +204,23 @@ class CartThumbnailer(
         ) return null
         val ents = entities(shape, disc) ?: return null
         val t = target(width, height)
-        // Frame the shell from its own bounds: the baked models range from 48 to 190 units tall, so a fixed camera
-        // distance either makes a speck of the small ones or crops the big ones.
+        // Frame the shell from its own world bounds: the baked models range from 48 to 190 units tall, so a fixed
+        // camera distance either makes a speck of the small ones or crops the big ones. Both axes are fitted, so a
+        // square card and a portrait surface both frame the shell.
         val b = CartFraming.bounds(engine, ents) ?: floatArrayOf(0f, 0f, 0f, 60f, 60f, 20f)
-        val d = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]))
+        val aspect = width.toDouble() / height.toDouble()
+        val d = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]), aspect)
         camera.setProjection(
             CartFraming.FOV_DEGREES,
-            width.toDouble() / height.toDouble(),
+            aspect,
             CartFraming.near(d),
             CartFraming.far(d),
         )
+        val eye = CartFraming.orbitEye(b, d, 0.0)
         camera.lookAt(
-            b[0].toDouble(),
-            (b[1] + d * CartFraming.ELEVATION).toDouble(),
-            (b[2] + d).toDouble(),
+            eye[0],
+            eye[1],
+            eye[2],
             b[0].toDouble(),
             b[1].toDouble(),
             b[2].toDouble(),

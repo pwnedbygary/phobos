@@ -81,10 +81,12 @@ class CartsEngine private constructor(private val context: Context) {
      */
     @Synchronized
     internal fun createAsset(buffer: ByteBuffer): FilamentAsset? = runCatching {
-        assets.createAsset(buffer)?.also { resources.loadResources(it) }
-    }
-        .getOrNull()
-        ?.also { createdAssets.add(it) }
+        assets.createAsset(buffer)?.also { asset ->
+            // Register before the (fallible) resource load: a load that throws must not leak the asset.
+            createdAssets.add(asset)
+            resources.loadResources(asset)
+        }
+    }.getOrNull()
 
     /** Drops everything this engine owns. Callers must have detached (see the class note). */
     fun release() {

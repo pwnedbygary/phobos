@@ -36,6 +36,67 @@ class CartFramingTest {
     }
 
     @Test
+    fun portraitSurfacesBackOffFurther() {
+        // The same shell on a square card and on a tall (portrait) surface: the portrait frame is tighter across, so
+        // the camera must be further away than the vertical-only fit would put it.
+        val half = floatArrayOf(60f, 30f, 10f)
+        val square = CartFraming.distance(half, aspect = 1.0)
+        val portrait = CartFraming.distance(half, aspect = 0.5)
+        val wide = CartFraming.distance(half, aspect = 4.0)
+        assertTrue("portrait needs more distance than square", portrait > square)
+        assertTrue("a wide live surface is not looser than square", wide <= square)
+    }
+
+    @Test
+    fun theOrbitPivotsOnTheBoundsCentre() {
+        val centre = floatArrayOf(0f, 22f, 14f)
+        val d = 200.0
+        // At angle 0 the eye sits straight in front of the centre (plus the elevation), i.e. behind the +Z label face.
+        val front = CartFraming.orbitEye(centre, d, 0.0)
+        assertEquals("front eye x follows the centre", centre[0].toDouble(), front[0], 1e-6)
+        assertEquals("front eye y is the centre plus the elevation", centre[1] + d * CartFraming.ELEVATION, front[1], 1e-6)
+        assertEquals("front eye z is the centre plus the distance", centre[2] + d, front[2], 1e-6)
+        // A half turn looks at the back face from the other side, still centred on the same point.
+        val back = CartFraming.orbitEye(centre, d, Math.PI)
+        assertEquals(centre[0].toDouble(), back[0], 1e-6)
+        assertEquals(centre[2] - d, back[2], 1e-6)
+        // The orbit's radius about the centre is the fitted distance (in the XZ plane).
+        val side = CartFraming.orbitEye(centre, d, Math.PI / 2)
+        assertEquals(centre[0] + d, side[0], 1e-6)
+    }
+
+    @Test
+    fun nodeTransformsMoveTheWorldBox() {
+        // tape.glb's "dark.001" node carries a (0, 0, 8.2) translation while its primitive box is centred on the
+        // origin. Unioning the raw object-space boxes (the bug) would report half z 1.1; carrying each box by its
+        // entity's world matrix reports the label at z 9.1 and the translated part at 9.2 - half z 5.15.
+        val identity = floatArrayOf(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f)
+        val translated = identity.copyOf().also { it[14] = 8.2f }
+        val shell = CartFraming.Part(floatArrayOf(0f, 0f, 0f), floatArrayOf(54.8f, 35.3f, 1.1f), identity)
+        val dark = CartFraming.Part(floatArrayOf(0f, 0f, 0f), floatArrayOf(54.8f, 35.3f, 1.1f), translated)
+        val label = CartFraming.Part(floatArrayOf(0f, 0f, 9.1f), floatArrayOf(52f, 32.5f, 0.05f), identity)
+        // What the old code did: ignore the world matrices.
+        val raw = CartFraming.Part(floatArrayOf(0f, 0f, 0f), floatArrayOf(54.8f, 35.3f, 1.1f), identity)
+        val rawBox = CartFraming.bounds(listOf(raw, raw, raw))!!
+        assertEquals("raw object-space union is thin (the bug)", 1.1f, rawBox[5], 0.01f)
+        val world = CartFraming.bounds(listOf(shell, dark, label))!!
+        assertEquals("the translated part moves the world box centre", 4.1f, world[2], 0.01f)
+        assertEquals("the world box spans the shell and the translated node", 5.2f, world[5], 0.01f)
+    }
+
+    @Test
+    fun aPureTranslationCarriesTheBoxExactly() {
+        val m = floatArrayOf(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 10f, -20f, 30f, 1f)
+        val box = CartFraming.transformAabb(floatArrayOf(1f, 2f, 3f), floatArrayOf(4f, 5f, 6f), m)
+        assertEquals(11f, box[0], 1e-4f)
+        assertEquals(-18f, box[1], 1e-4f)
+        assertEquals(33f, box[2], 1e-4f)
+        assertEquals(4f, box[3], 1e-4f)
+        assertEquals(5f, box[4], 1e-4f)
+        assertEquals(6f, box[5], 1e-4f)
+    }
+
+    @Test
     fun degenerateBoundsStillFrame() {
         // A zero-size box (an asset whose renderables report no extent) must not produce a zero or NaN distance.
         val d = CartFraming.distance(floatArrayOf(0f, 0f, 0f))
