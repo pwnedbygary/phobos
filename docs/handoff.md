@@ -13,29 +13,34 @@ Branch `feature/system-dioramas`, from master `7a6e26f1f`.
   shoulder buttons and a cable plugged into port 2; and a 14-inch 4:3 CRT TV with a rounded dark bezel, inset
   bulged glass face, two knurled knobs, speaker grille, power button, LED, badge, feet, rear vents and screws.
   `tools/carts/console/make_console.py --system snes` generates it from bpy/bmesh primitives into
-  `android/app/src/main/assets/carts/consoles/snes.glb`: one `snes_diorama` root, 160 named parts,
-  59,365 vertices, 111,920 triangles, 2,949,664 B.
+  `android/app/src/main/assets/carts/consoles/snes.glb`: one `snes_diorama` root, 160 named parts; the Blender
+  mesh has 59,365 vertices and 111,920 triangles, and the GLB is 2,659,776 B with 82,935 POSITION entries after
+  the exporter's normal splits.
 - **Presentation**: 580.6 x 688.0 x 352.1 mm at real-world scale (mm; width X, up Z, front -Y), footprint
   centred on X=Y=0 with the base on Z=0, so it spins in place about its vertical axis (+Z in Blender, +Y in the
-  exported GLB); `export_yup=True` gives glTF up +Y, the screen toward +Z and the footprint centred on X=Z=0. The TV's 290 x 217 mm CRT face is a 64 x 48 grid
-  with clean 0..1 UVs and the plain, slightly emissive `screen` material, so the app stamps the running game
-  onto it. Materials are `shell` (tintable), `dark`, `accent`, `accent_light` (the lavender X/Y buttons), `metal`,
-  `glass` (the LED lenses) and `screen`. The preview renders wire a generated 16-bit test frame into `screen`
-  only after the GLB has been written, so no artwork is baked into the asset.
+  exported GLB); `export_yup=True` gives glTF up +Y, the screen toward +Z and the footprint centred on X=Z=0.
+  The TV's 290 x 217 mm CRT face is a 64 x 48 grid with clean 0..1 UVs; in the GLB `u` increases with +X and `v`
+  is 0 at the top of the screen (the exporter flips Blender's bottom-up v), so a top-left-origin image lands
+  upright. Materials (seven): `shell` (tintable), `dark`, `accent`, `metal`, `glass` (the LED lenses), `screen`
+  and `accent_light` (the lavender X/Y buttons); all are single-sided (backface culling). The preview renders
+  wire a generated 16-bit test frame into `screen` only after the GLB has been written, so no artwork is baked
+  into the asset.
 - **Evidence**: `blender --background --python tools/carts/console/make_console.py -- --system snes --output
   android/app/src/main/assets/carts/consoles/snes.glb` rebuilds the committed file byte for byte (sha256
-  `9339d430417ff06ea67da80e850c8da629c73fbbc37c9c5f859ba335a0fdd018`; two runs and the committed file compare
-  equal). Cycles previews in `tools/carts/console/previews/` (front, three-quarter, 120 degrees round) show it
-  reads as a SNES beside a CRT and holds up while rotating. `bake-carts.mjs --check` covers its own outputs and
-  does not include this file.
+  `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`; two runs and the committed file compare
+  equal). The three tracked previews in `tools/carts/console/previews/` (front, three-quarter, 120 degrees round)
+  are illustrative Cycles renders, not assets, and re-running `--previews` regenerates them in place.
+  `bake-carts.mjs --check` regenerates and compares the whole `assets/carts` tree, so it reports this authored
+  file (and the pre-existing `carts/tape.glb`) as missing from its regeneration; no CI runs it, and the asset is
+  verified by its own byte-identical rebuild instead.
 - **Limits**: only the SNES is implemented (`--system` accepts `snes`). The model is a recognisable stylised
   approximation, not a measured replica: the SNES footprint follows the SNS-001's approximate 200 x 190 mm at
-  74 mm high including feet, and the TV is generic. Only the screen is UVed and there are no baked textures. The
-  160 parts stay separate so the screen remains a clean target and `shell` stays tintable; merging is a
-  consumer-side optimisation. The seven-material palette adds `accent_light` to the six CartMaterials names for
-  the lavender buttons. Byte-for-byte determinism is proven only on Blender 5.2.3 built 2026-10-22, the build
-  used here.
-
+  74 mm high including feet, and the TV is generic. The GLB's only TEXCOORD_0 is the screen (the text meshes' font
+  UV layer is stripped) and there are no baked textures. The 160 parts stay separate so the screen remains a
+  clean target and `shell` stays tintable; merging is a consumer-side optimisation. The seven-material palette is
+  `shell`, `dark`, `accent`, `metal`, `glass`, `screen` and `accent_light`; `accent`, `screen` and `accent_light`
+  are new to Cartridge's material names. The lettering is Blender's bundled Bfont converted to meshes.
+  Byte-for-byte determinism is proven only on Blender 5.2.3 built 2026-10-22, the build used here.
 
 ## Neo Geo CD ported onto upstream's Neo Geo refactor — 2026-11-06
 

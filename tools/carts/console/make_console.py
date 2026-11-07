@@ -83,6 +83,9 @@ def make_material(name, color, roughness, metallic=0.0, emission=None,
         bsdf.inputs["Emission Color"].default_value = emission
         bsdf.inputs["Emission Strength"].default_value = emission_strength
     mat.diffuse_color = color
+    # Every part is a closed solid except the screen sheet, so backface culling is
+    # safe and the glTF export can mark the materials single-sided.
+    mat.use_backface_culling = True
     return mat
 
 
@@ -410,6 +413,11 @@ def text_mesh(name, body, size, extrude, bevel, mat, resolution_u=6,
     ob.data.materials.append(mat)
     for f in ob.data.polygons:
         f.use_smooth = smooth
+    # Blender's text conversion adds a font UV layer.  The diorama's only UV
+    # target is the TV screen, so strip it here: the GLB then carries TEXCOORD_0
+    # on tv_screen alone and the text meshes stop paying for unused UV seams.
+    while ob.data.uv_layers:
+        ob.data.uv_layers.remove(ob.data.uv_layers[0])
     ob.select_set(False)
     return ob
 
@@ -700,10 +708,13 @@ def build_tv(mats, location):
     ], samples=46, seg=36, mat=dark, bottom_z=20.0))
 
     # feet: rounded pads, not blobs
+    # The housing tapers in plan toward the rear, so the rear pair sits inboard of
+    # the front pair: at y=+90 the bottom's half-width is about 139 mm, and a
+    # 42 mm pad at x=105 spans 84..126 mm, clear of the taper.
     for sx in (-1, 1):
-        for sy in (-1, 1):
+        for fy, fx in ((-148.0, 132.0), (90.0, 105.0)):
             objs.append(rounded_box("tv_foot", 42.0, 34.0, 20.0, 6.0, 5, dark,
-                                    center=(sx * 132.0, -23.0 + sy * 130.0, 10.0)))
+                                    center=(sx * fx, fy, 10.0)))
 
     # front bezel: a rounded picture frame, 24 mm deep, outer 360 x 334
     bez = ring_solid(
