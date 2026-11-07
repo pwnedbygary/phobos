@@ -177,6 +177,7 @@ fun pillShape(): CornerBasedShape = LocalPhobosTheme.current.style.pill
 /** The look of these effects. */
 val UiEffects.style: UiStyle
     get() = when (this) {
+        UiEffects.CARTRIDGE -> CartridgeUi
         UiEffects.NONE, UiEffects.RETROWAVE -> GlassUi
         UiEffects.PIXEL_ART -> PixelUi
         UiEffects.CRT -> CrtUi

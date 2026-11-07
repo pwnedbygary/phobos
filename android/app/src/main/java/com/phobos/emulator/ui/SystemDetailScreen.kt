@@ -42,6 +42,10 @@ fun SystemDetailScreen(
     onBack: () -> Unit,
     onRomClick: (String, String) -> Unit
 ) {
+    if (LocalPhobosTheme.current.effects == com.phobos.emulator.data.UiEffects.CARTRIDGE) {
+        com.phobos.emulator.ui.cartridge.CartridgeSystemScreen(encodedSystemName, viewModel, onBack, onRomClick)
+        return
+    }
     val systemName = remember(encodedSystemName) { Uri.decode(encodedSystemName) }
     val settings by viewModel.settings.collectAsState()
     val gameLoaded by viewModel.gameLoaded.collectAsState()

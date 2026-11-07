@@ -1,6 +1,6 @@
 package com.phobos.emulator.ui.carts
 
-import android.util.Base64
+import java.util.Base64
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -19,10 +19,9 @@ internal object CartGlbLabelPatch {
     private const val CHUNK_JSON = 0x4E4F534A
     private const val CHUNK_BIN = 0x004E4942
 
-    /** 1x1 opaque white PNG. */
-    private val WHITE_PNG: ByteArray = Base64.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-        Base64.DEFAULT,
+    /** 1x1 opaque white RGBA PNG, generated with no ancillary chunks (70 bytes). */
+    private val WHITE_PNG: ByteArray = Base64.getDecoder().decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4////fwAJ+wP99djxmgAAAABJRU5ErkJggg==",
     )
 
     fun patch(glb: ByteArray): ByteArray {
@@ -57,8 +56,20 @@ internal object CartGlbLabelPatch {
             }
             if (pbr.has("baseColorTexture")) continue
             val imageIndex = addImage(json, binBytes ?: return glb)
+            if (imageIndex < 0) return glb
             val textureIndex = addTexture(json, imageIndex)
             pbr.put("baseColorTexture", JSONObject().put("index", textureIndex))
+            // The label is a printed picture, not a lit plastic part: KHR_materials_unlit makes gltfio compile it
+            // against the unlit ubershader, so the paper reads at its own colours instead of being washed out by
+            // the studio light and the IBL.
+            val extensions = mat.optJSONObject("extensions") ?: JSONObject().also { mat.put("extensions", it) }
+            if (!extensions.has("KHR_materials_unlit")) {
+                extensions.put("KHR_materials_unlit", JSONObject())
+            }
+            val used = json.optJSONArray("extensionsUsed") ?: org.json.JSONArray().also { json.put("extensionsUsed", it) }
+            var listed = false
+            for (u in 0 until used.length()) if (used.optString(u) == "KHR_materials_unlit") listed = true
+            if (!listed) used.put("KHR_materials_unlit")
             changed = true
         }
         if (!changed) return glb
@@ -70,8 +81,11 @@ internal object CartGlbLabelPatch {
         val pngOffset = padded.size
         val newBin = padded + WHITE_PNG
         val newBinPadded = newBin.copyOf((newBin.size + 3) and 3.inv())
-        json.getJSONArray("buffers").getJSONObject(0).put("byteLength", newBinPadded.size)
-        val bv = json.getJSONArray("bufferViews").getJSONObject(json.getJSONArray("bufferViews").length() - 1)
+        val buffers = json.optJSONArray("buffers") ?: return glb
+        val views = json.optJSONArray("bufferViews") ?: return glb
+        if (buffers.length() == 0 || views.length() == 0) return glb
+        buffers.getJSONObject(0).put("byteLength", newBinPadded.size)
+        val bv = views.getJSONObject(views.length() - 1)
         bv.put("buffer", 0).put("byteOffset", pngOffset).put("byteLength", WHITE_PNG.size)
 
         val jsonOut = json.toString().toByteArray(StandardCharsets.UTF_8)
@@ -86,7 +100,7 @@ internal object CartGlbLabelPatch {
     }
 
     private fun addImage(json: JSONObject, bin: ByteArray): Int {
-        val views = json.getJSONArray("bufferViews")
+        val views = json.optJSONArray("bufferViews") ?: return -1
         val viewIndex = views.length()
         val oldSize = bin.size
         val aligned = (oldSize + 3) and 3.inv()

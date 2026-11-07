@@ -25,7 +25,7 @@ class CartBitmapCache(
 
     companion object {
         /** Bumped whenever the cart renderer's output changes: pictures an older renderer drew must not be served. */
-        const val RENDERER_VERSION = "9"
+        const val RENDERER_VERSION = "15"
     }
 
     data class Key(

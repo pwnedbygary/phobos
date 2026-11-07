@@ -86,7 +86,7 @@ class CartRenderer(
             owner.scene.addEntities(cart.entities)
             val previous = lookTextures.toList()
             lookTextures.clear()
-            lookTextures += CartMaterials.apply(owner.engine, cart.entities, look, wear, label)
+            lookTextures += CartMaterials.apply(owner.engine, cart.entities, look, wear, label, CartShellPalette.forShape(shape))
             // The new apply has set every map (the placeholder when there is no label), so the old textures are
             // no longer sampled and can go now instead of accumulating one set per focused cart.
             previous.forEach { runCatching { owner.engine.destroyTexture(it) } }
@@ -208,13 +208,14 @@ class CartRenderer(
             bundle.skybox
         }.getOrNull()
         owner.scene.indirectLight = ibl
-        // No skybox in the live view either: the Library background must stay visible behind the shell.
-        owner.scene.skybox = null
+        // The live cart is an opaque surface, so the studio skybox fills it. The offscreen cards use a transparent
+        // clear and no skybox, and composite over the Library.
+        owner.scene.skybox = skybox
 
         sun = EntityManager.get().create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .color(1.0f, 0.98f, 0.94f)
-            .intensity(60_000f)
+            .intensity(30_000f)
             .direction(-0.4f, -0.8f, -0.45f)
             .castShadows(false)
             .build(engine, sun)

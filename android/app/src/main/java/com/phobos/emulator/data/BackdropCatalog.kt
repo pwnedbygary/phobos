@@ -64,7 +64,7 @@ enum class CatalogBackdrop(
             UiEffects.RETROWAVE -> settings.retrowaveBackdrop.toCatalog()
             UiEffects.CRT -> settings.crtBackdrop.toCatalog()
             UiEffects.XMB -> settings.xmbBackdrop.toCatalog()
-            UiEffects.NONE -> settings.glassBackdrop.toCatalog()
+            UiEffects.NONE, UiEffects.CARTRIDGE -> settings.glassBackdrop.toCatalog()
         }
     }
 }
