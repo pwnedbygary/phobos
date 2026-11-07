@@ -214,9 +214,9 @@ Add `--previews tools/carts/console/previews` to render the three Cycles checks 
 `nes-three-quarter.png` and `nes-angle-120.png` (880 x 660, 40 samples); they are illustrative renders, not
 assets, and re-running the command regenerates them in place. The same `--system snes` path still rebuilds the
 committed `snes.glb` byte for byte (sha256
-`63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`, 2,659,776 B), and both systems are entries
-in the `SYSTEMS` table in `phobos_console/systems/__init__.py` (palette, console/controller builders, placement,
-root name, preview prefix), so the remaining systems should be table entries rather than new scripts.
+`63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`, 2,659,776 B), and both systems are
+discovered modules under `phobos_console/systems/` (see "The diorama generator's layout" below), so the remaining
+systems are one new `systems/<name>.py` each rather than edits to a shared script.
 
 Two no-preview NES rebuilds and the committed file compare equal (sha256
 `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7`; determinism is proven only on Blender 5.2.3

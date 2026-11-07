@@ -44,8 +44,9 @@ Branch `feature/diorama-generator-modules`, from master `dd8ea116a` (the NES mer
 Branch `feature/system-dioramas-nes`, from master `ec07590b8`; extends the merged SNES generator (PR #350).
 - **Why**: the owner's request is a 3DS Virtual-Console-style diorama per system: the real console beside a CRT
   showing the game, a controller in front, floating and rotating in place. The SNES was the first; this adds the
-  NES in the same family and makes the generator data-driven (a `SYSTEMS` table) so the remaining systems are
-  table entries rather than new scripts.
+  NES in the same family and makes the generator data-driven (a `SYSTEMS` table) so the remaining systems would be
+  table entries rather than new scripts (superseded by the entry above: the registry now discovers one module per
+  system, so a system is one new `systems/<name>.py` and no shared file is edited).
 - **What**: the NES-001 front loader as a low two-tone slab - rounded light-grey upper shell over a darker
   warm-grey lower chassis, closed front-loading flap with the red Nintendo wordmark, black front-right band with
   two stacked 7-pin controller ports and red "1"/"2" numerals, ribbed top vent, POWER/RESET in the lower front
