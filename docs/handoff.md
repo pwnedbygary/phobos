@@ -1,5 +1,42 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Carts: the SNES + CRT system diorama, modeled in Blender — 2026-11-07
+
+Branch `feature/system-dioramas`, from master `7a6e26f1f`.
+- **Why**: the Library already shows a game as its cart or disc; the next presentation the owner asked for is the
+  3DS Virtual Console's: the real console next to a CRT TV showing the game, a controller in front, floating and
+  rotating in place. Phobos had no system model at all, so this adds the first one with the generator that keeps
+  it reproducible; the app-side loading/rotation is another change.
+- **What**: the SNES SNS-001 with its two controller ports and pins, the cartridge slot with a raised rim, closed
+  flap and EJECT button, purple POWER/RESET switches, the embossed SUPER NINTENDO wordmark, side vents and rubber
+  feet; the SNS-005 controller with D-pad, two convex purple A/B and two lavender X/Y face buttons, Start/Select,
+  shoulder buttons and a cable plugged into port 2; and a 14-inch 4:3 CRT TV with a rounded dark bezel, inset
+  bulged glass face, two knurled knobs, speaker grille, power button, LED, badge, feet, rear vents and screws.
+  `tools/carts/console/make_console.py --system snes` generates it from bpy/bmesh primitives into
+  `android/app/src/main/assets/carts/consoles/snes.glb`: one `snes_diorama` root, 160 named parts,
+  59,365 vertices, 111,920 triangles, 2,949,664 B.
+- **Presentation**: 580.6 x 688.0 x 352.1 mm at real-world scale (mm; width X, up Z, front -Y), footprint
+  centred on X=Y=0 with the base on Z=0, so it spins in place about its vertical axis (+Z in Blender, +Y in the
+  exported GLB); `export_yup=True` gives glTF up +Y, the screen toward +Z and the footprint centred on X=Z=0. The TV's 290 x 217 mm CRT face is a 64 x 48 grid
+  with clean 0..1 UVs and the plain, slightly emissive `screen` material, so the app stamps the running game
+  onto it. Materials are `shell` (tintable), `dark`, `accent`, `accent_light` (the lavender X/Y buttons), `metal`,
+  `glass` (the LED lenses) and `screen`. The preview renders wire a generated 16-bit test frame into `screen`
+  only after the GLB has been written, so no artwork is baked into the asset.
+- **Evidence**: `blender --background --python tools/carts/console/make_console.py -- --system snes --output
+  android/app/src/main/assets/carts/consoles/snes.glb` rebuilds the committed file byte for byte (sha256
+  `9339d430417ff06ea67da80e850c8da629c73fbbc37c9c5f859ba335a0fdd018`; two runs and the committed file compare
+  equal). Cycles previews in `tools/carts/console/previews/` (front, three-quarter, 120 degrees round) show it
+  reads as a SNES beside a CRT and holds up while rotating. `bake-carts.mjs --check` covers its own outputs and
+  does not include this file.
+- **Limits**: only the SNES is implemented (`--system` accepts `snes`). The model is a recognisable stylised
+  approximation, not a measured replica: the SNES footprint follows the SNS-001's approximate 200 x 190 mm at
+  74 mm high including feet, and the TV is generic. Only the screen is UVed and there are no baked textures. The
+  160 parts stay separate so the screen remains a clean target and `shell` stays tintable; merging is a
+  consumer-side optimisation. The seven-material palette adds `accent_light` to the six CartMaterials names for
+  the lavender buttons. Byte-for-byte determinism is proven only on Blender 5.2.3 built 2026-10-22, the build
+  used here.
+
+
 ## Neo Geo CD ported onto upstream's Neo Geo refactor — 2026-11-06
 
 Branch `ng/upstream-refactor-2026-11` from master; finishes the Neo Geo half of the ares merge that PR #344 left
