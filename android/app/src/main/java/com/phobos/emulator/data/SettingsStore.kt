@@ -241,6 +241,10 @@ data class EmulatorSettings(
     val cartsEngraving: String = "badge",
     /** Stored cart looks as JSON: "s:<system>"/"g:<id>" -> "finish|#rrggbb" (see CartLooks). */
     val cartsLooks: String = "",
+    /** The Library's 3D console diorama stage, for the systems with a baked model. */
+    val dioramas: Boolean = true,
+    /** Selected diorama variant per system (system -> variant id); empty means each system's default variant. */
+    val dioramaVariant: Map<String, String> = emptyMap(),
     val ps1AnalogMode: Boolean = true,
     val n64ExpansionPak: Boolean = true,
     val n64DisableVIProcessing: Boolean = false,
@@ -412,6 +416,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val CARTS_WEAR = booleanPreferencesKey("carts_wear")
         val CARTS_ENGRAVING = stringPreferencesKey("carts_engraving")
         val CARTS_LOOKS = stringPreferencesKey("carts_looks")
+        val DIORAMAS = booleanPreferencesKey("dioramas")
+        val DIORAMA_VARIANT_PREFIX = "diorama_variant_"
         val PS1_ANALOG_MODE = booleanPreferencesKey("ps1_analog_mode")
         val N64_EXPANSION_PAK = booleanPreferencesKey("n64_expansion_pak")
         val N64_DISABLE_VI_PROCESSING = booleanPreferencesKey("n64_disable_vi_processing")
@@ -478,6 +484,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val zxReverses = mutableMapOf<String, Boolean>()
         val lastDiscs = mutableMapOf<String, Int>()
         val touchLayouts = mutableMapOf<String, String>()
+        val dioramaVariants = mutableMapOf<String, String>()
         val scopedMappings = mutableMapOf<String, MutableMap<Int, String>>()
         val scopedHotkeys = mutableMapOf<String, MutableMap<String, List<List<Int>>>>()
 
@@ -491,6 +498,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
                 scopedHotkeys.getOrPut(scopedHotkey.first) { mutableMapOf() }[scopedHotkey.second] = HotkeyBindings.parse(value as String)
             } else if (name.startsWith(TOUCH_LAYOUT_PREFIX) && value is String) {
                 touchLayouts[name.removePrefix(TOUCH_LAYOUT_PREFIX)] = value
+            } else if (name.startsWith(DIORAMA_VARIANT_PREFIX) && value is String) {
+                dioramaVariants[name.removePrefix(DIORAMA_VARIANT_PREFIX)] = value
             } else if (name.startsWith("rom_path_") && value is String) {
                 val system = name.removePrefix("rom_path_")
                 romPaths.getOrPut(system) { mutableSetOf() }.add(value)
@@ -645,6 +654,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             cartsWear = safeGet(CARTS_WEAR, true),
             cartsEngraving = safeGet(CARTS_ENGRAVING, "badge"),
             cartsLooks = safeGet(CARTS_LOOKS, ""),
+            dioramas = safeGet(DIORAMAS, true),
+            dioramaVariant = dioramaVariants,
             ps1AnalogMode = safeGet(PS1_ANALOG_MODE, true),
             n64ExpansionPak = safeGet(N64_EXPANSION_PAK, true),
             n64DisableVIProcessing = safeGet(N64_DISABLE_VI_PROCESSING, false),
@@ -908,6 +919,12 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setCartsWear(enabled: Boolean) = dataStore.edit { it[CARTS_WEAR] = enabled }
     suspend fun setCartsEngraving(value: String) = dataStore.edit { it[CARTS_ENGRAVING] = value }
     suspend fun setCartsLooks(value: String) = dataStore.edit { it[CARTS_LOOKS] = value }
+    suspend fun setDioramas(enabled: Boolean) = dataStore.edit { it[DIORAMAS] = enabled }
+
+    /** Stores the chosen diorama variant id for [system]; the model table keeps only ids it knows. */
+    suspend fun setDioramaVariant(system: String, variantId: String) = dataStore.edit { prefs ->
+        prefs[stringPreferencesKey(DIORAMA_VARIANT_PREFIX + system)] = variantId
+    }
     suspend fun setPs1AnalogMode(enabled: Boolean) = dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
     suspend fun setOrientationMode(vertical: Boolean) = dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
     suspend fun setN64ExpansionPak(enabled: Boolean) = dataStore.edit { it[N64_EXPANSION_PAK] = enabled }
