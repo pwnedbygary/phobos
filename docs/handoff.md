@@ -1,5 +1,47 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Carts: the NES + CRT system diorama, modeled in Blender — 2026-11-07
+
+Branch `feature/system-dioramas-nes`, from master `ec07590b8`; extends the merged SNES generator (PR #350).
+- **Why**: the owner's request is a 3DS Virtual-Console-style diorama per system: the real console beside a CRT
+  showing the game, a controller in front, floating and rotating in place. The SNES was the first; this adds the
+  NES in the same family and makes the generator data-driven (a `SYSTEMS` table) so the remaining systems are
+  table entries rather than new scripts.
+- **What**: the NES-001 front loader as a low two-tone slab - rounded light-grey upper shell over a darker
+  warm-grey lower chassis, closed front-loading flap with the red Nintendo wordmark, black front-right band with
+  two stacked 7-pin controller ports and red "1"/"2" numerals, ribbed top vent, POWER/RESET in the lower front
+  panel, red power LED, side AV jacks and channel switch, rear vents and four rubber feet. The NES controller has
+  the black inset face plate, D-pad, two red A/B buttons, Start/Select, grey grip slots, red Nintendo wordmark
+  and a cable whose tall plug sits in port 2. The CRT TV, screen target, lighting and preview rig are the shared
+  SNES ones. `tools/carts/console/make_console.py --system nes` generates it from bpy/bmesh primitives into
+  `android/app/src/main/assets/carts/consoles/nes.glb`: one `nes_diorama` root, 188 named parts; the Blender mesh
+  has 77,243 vertices and 146,556 triangles, and the GLB is 3,414,076 B with 105,858 POSITION entries after the
+  exporter's normal splits.
+- **Presentation**: 638.2 x 665.7 x 352.0 mm at real-world scale (mm; width X, depth Y, up Z, front -Y),
+  footprint centred on X=Y=0 with the base on Z=0, so it spins in place about +Z (Blender) / +Y (glTF);
+  `export_yup=True` gives glTF up +Y, the screen toward +Z and the footprint centred on X=Z=0. Materials (seven,
+  authored colours, not tintable): `shell` (light warm grey), `dark` (black trim), `accent` (Nintendo red:
+  wordmark, POWER, A/B, port numerals), `accent_light` (the darker warm-grey lower chassis; on the SNES this name
+  is the lavender X/Y buttons), `metal`, `glass` (the red LED lens) and `screen`. All are single-sided. The TV's
+  290 x 217 mm CRT face is the same 64 x 48 grid with clean 0..1 UVs and the only TEXCOORD_0 in the GLB; the
+  preview test frame is wired into `screen` only after the GLB is written, so no artwork is baked in.
+- **Evidence**: two no-preview rebuilds and the committed file compare equal (sha256
+  `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7`, 3,414,076 B; determinism is proven only on
+  Blender 5.2.3 built 2026-10-22). The SNES path is unchanged: rebuilding it still reproduces the committed
+  `snes.glb` byte for byte (sha256
+  `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`, 2,659,776 B). The GLB was inspected: seven
+  materials, no textures/images, one `nes_diorama` root, 188 named parts, and only `tv_screen` carries TEXCOORD_0
+  with u/v 0..1. The three previews in `tools/carts/console/previews/` (`nes-front.png`,
+  `nes-three-quarter.png`, `nes-angle-120.png`; 880 x 660, 40 samples) are illustrative Cycles renders, not
+  assets, and re-running `--previews` regenerates them in place.
+- **Limits**: recognisable stylised approximation, not a measured replica - the NES-001 body is about
+  256 x 202 x 64 mm and the TV is generic. The front-loading flap is closed (no tray or cartridge) and the
+  wordmarks are embossed text. No baked textures; the 188 parts stay separate so the screen remains a clean
+  target. The CRT rig is shared with the SNES, so changing it changes both assets. `bake-carts.mjs --check`
+  reports this authored file (like `snes.glb`) as missing from its regeneration; no CI runs it, and the asset is
+  verified by its own byte-identical rebuild. The 120-degree preview is a rear view where the controller is
+  mostly hidden behind the console and TV.
+
 ## Carts: the SNES + CRT system diorama, modeled in Blender — 2026-11-07
 
 Branch `feature/system-dioramas`, from master `7a6e26f1f`.
