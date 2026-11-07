@@ -7,9 +7,10 @@ import com.phobos.emulator.art.LabelCrop
  * (its system id keys the bundled label index, and its media decides the crop shape exactly as scraper.js does)
  * and the 4a-baked 3D shell each system shows.
  *
- * Systems Cartridge does not have keep console art (no [cartShape]) and take no label scans (no [entry]); the
- * owner's nearest-shape choices for existing shapes are the scope's (SG-1000 -> Master System, Neo Geo CD -> CD,
- * SuperGrafx -> HuCard, Pocket Challenge V2 -> WonderSwan Color, ColecoVision -> Atari 2600).
+ * Systems Cartridge does not have take no label scans (no [entry]) but still show a nearest baked shell where one
+ * fits; the owner's nearest-shape choices (SG-1000 -> Master System, Neo Geo CD -> CD, SuperGrafx -> HuCard,
+ * Pocket Challenge V2 -> WonderSwan Color, ColecoVision -> Atari 2600, Mega LD and PC Engine LD -> CD, MSX and
+ * MSX2 -> the small cart). The ZX Spectrum's games are tapes and no baked shell fits: it keeps the list.
  */
 object CartShapes {
 
@@ -75,6 +76,10 @@ object CartShapes {
         "Pocket Challenge V2" to "small",
         "Atari 2600" to "a26",
         "ColecoVision" to "a26",
+        "Mega LD" to "cd",
+        "PC Engine LD" to "cd",
+        "MSX" to "small",
+        "MSX2" to "small",
         "Arcade" to "pcb",
     )
 

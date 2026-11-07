@@ -37,8 +37,14 @@ class CartShapesTest {
         assertEquals("a26", CartShapes.cartShape("ColecoVision"))
         assertEquals("minidisc", CartShapes.cartShape("PlayStation Portable"))
         assertEquals("small", CartShapes.cartShape("Pocket Challenge V2"))
+        // LaserActive discs and MSX carts take the nearest baked shell.
+        assertEquals("cd", CartShapes.cartShape("Mega LD"))
+        assertEquals("cd", CartShapes.cartShape("PC Engine LD"))
+        assertEquals("small", CartShapes.cartShape("MSX"))
+        assertEquals("small", CartShapes.cartShape("MSX2"))
+        // The ZX Spectrum's games are tapes, which no baked shell represents.
         assertNull(CartShapes.cartShape("ZX Spectrum"))
-        assertNull(CartShapes.cartShape("Mega LD"))
+        assertNull(CartShapes.cartShape("ZX Spectrum 128"))
     }
 
     @Test
@@ -59,7 +65,7 @@ class CartShapesTest {
             "Nintendo 64", "Master System", "SG-1000", "Mega Drive", "Mega 32X", "Game Gear", "Mega CD",
             "Mega CD 32X", "PlayStation", "PlayStation Portable", "Neo Geo", "Neo Geo CD", "Neo Geo Pocket",
             "Neo Geo Pocket Color", "PC Engine", "PC Engine CD", "SuperGrafx", "WonderSwan", "WonderSwan Color",
-            "Pocket Challenge V2", "Atari 2600", "ColecoVision", "Arcade",
+            "Pocket Challenge V2", "Atari 2600", "ColecoVision", "Mega LD", "PC Engine LD", "MSX", "MSX2", "Arcade",
         )) {
             val shape = CartShapes.cartShape(system)
             assertTrue("$system has a generated shape", shape in names)
