@@ -3,8 +3,9 @@
 ## Sega Mega Drive / Genesis Model 1 diorama — 2026-11-07
 
 Branch `feature/system-dioramas-md`, from master `a6260752e` (the PR #355 split/registry/screen merge); reviewer
-PASS on that merge, independent review of this change pending. Clean room: our code; no copied model, texture,
-photo, font file or logo asset. Save states: unchanged.
+PASS on that merge. The independent review of this change returned two docs-only points; both are fixed in the
+revision commit. Clean room: our code; no copied model, texture, photo, font file or logo asset. Save states:
+unchanged.
 - **Why**: the console-diorama family needs a Sega Mega Drive/Genesis Model 1. The owner's quality bar is
   reference-accurate, not invented; the previous NES "looks clearly made up" line is the standard to beat.
 - **What**: one new auto-discovered module, `tools/carts/console/phobos_console/systems/megadrive.py` (own palette,
@@ -29,18 +30,22 @@ photo, font file or logo asset. Save states: unchanged.
   byte-identical; the three previews are `megadrive-front.png` (`bcc2925f…`), `megadrive-three-quarter.png`
   (`0e1f8ff5…`) and `megadrive-angle-120.png` (`7f404b36…`), 1000 x 765.
 - **Preview screen**: `--screen refs/screens/megadrive.png` is preview-only (wired after the GLB; the asset is
-  identical with and without it) and centre-crops a real 4:3 capture. The committed `megadrive-*` previews show a
-  real frame from a Phobos desktop *Golden Axe Plus* run; the capture is documentation only, stays outside git,
-  and no game art is in the GLB. The source capture is a desktop Phobos frame, not the RP6 (the RP6 lock was held
-  for another agent's device pass); the device can be swapped later without touching the asset.
+  identical with and without it) and centre-crops a real 4:3 capture. The committed `megadrive-*` previews are
+  documentation only: they show one real frame from a Phobos desktop *Golden Axe Plus* run and therefore contain
+  that frame, while the source capture file stays outside git and no game art is in the GLB. The capture is a
+  desktop Phobos frame, not the RP6 (the RP6 lock was held for another agent's device pass); the device can be
+  swapped later without touching the asset.
 - **Reference/limits**: photos from Wikimedia Commons (Evan-Amos public-domain Model 1 and 3-button controller;
   Sintegrity CC BY-SA top/side views) were inspected in scratch and are not committed. Dimensions are the
   documented 280 x 212 x 79 mm cross-checked against photo ratios; no calipers, and no dedicated rear close-up
-  was retained (rear layout from front/side/top and public Model 1 layout). One game frame; stylised diorama, not
-  manufacturing CAD; determinism only on Blender 5.2.3 built 2026-10-22.
+  was retained (rear layout from front/side/top and public Model 1 layout). The three-button controller is a
+  simplified, slightly oversized interpretation of the Sega pad, not a per-part reconstruction. One game frame;
+  stylised diorama, not manufacturing CAD; determinism only on Blender 5.2.3 built 2026-10-22.
 - **Checks**: exact build command recorded in the README; two-run byte comparison; GLB contract parse; SNES/NES
   hashes verified; previews rendered and read against the reference photos; no Android/UI/emulator files touched.
-- **Review**: independent review of this exact snapshot pending; commit/PR follows PASS.
+- **Review**: independent review of the snapshot: asset, pipeline and previews PASS; two documentation points
+  raised (an explicit simplified-controller limit and the preview-capture wording) and both fixed in the revision
+  commit before merge.
 
 ## Carts: the diorama generator split into per-system modules — 2026-11-07
 

@@ -295,10 +295,10 @@ blender --background --python tools/carts/console/make_console.py -- --system sn
 This is a preview-render feature only, and it is deliberately outside the asset: the art is wired into the
 `screen` material **after** the GLB has been written, so the exported GLB is byte-identical with and without
 `--screen` (checked: `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c` either way) and still carries
-no texture, image or baked screen art. Keep the capture outside the repository: preview images that show real
-gameplay are documentation, not a shipped asset, and a committed capture would be someone else's copyright. The
-SNES/NES committed `tools/carts/console/previews/*.png` continue to use the facsimile frame; the Mega Drive set
-shows a real frame as documentation only, as noted in its section.
+no texture, image or baked screen art. Keep the source capture file outside the repository: preview images that
+show real gameplay are documentation, not a shipped asset, and a committed source capture would be someone
+else's copyright. The SNES/NES committed `tools/carts/console/previews/*.png` continue to use the facsimile
+frame; the Mega Drive set shows a real frame as documentation only, as noted in its section.
 
 ## The system dioramas: Sega Mega Drive / Genesis Model 1
 
@@ -354,10 +354,11 @@ blender --background --python tools/carts/console/make_console.py -- --system me
 
 `--screen` centre-crops the capture to the screen's 4:3 through the image lookup's mapping nodes, and runs only
 after the GLB is written, so the asset is byte-identical with and without it and carries no image/texture. Keep
-the capture outside the repository. The `megadrive-*` previews in this snapshot show a real frame from a Phobos
-desktop run of *Golden Axe Plus*; they are documentation, not app assets, and the game capture is not committed.
-The default/facsimile screen is still available when no `--screen` is passed. (The SNES/NES committed previews
-continue to use their facsimile frame.)
+the source capture file outside the repository. The `megadrive-*` previews in this snapshot are documentation
+only: they show a real frame from a Phobos desktop run of *Golden Axe Plus* and therefore contain that frame,
+while the source capture file is not committed and no game art is in the shipped assets. The default/facsimile
+screen is still available when no `--screen` is passed. (The SNES/NES committed previews continue to use their
+facsimile frame.)
 
 The GLB contract is verified: one root `megadrive_diorama`; exactly seven single-sided materials; only
 `tv_screen` has `TEXCOORD_0`; no images, textures, cameras, lights or baked screen art. Two no-preview builds from
@@ -366,6 +367,7 @@ the same Blender 5.2.3 build are byte-identical; the committed GLB matches both.
 
 Limits: the photos were inspected at scratch resolution and the documented 280 x 212 x 79 mm box was cross-checked
 against their ratios; no physical console was measured, and the rear layout is based on the visible front/side/top
-views because a dedicated rear close-up was not retained. One game state supplies the screen capture. The model is
-a recognisable stylised diorama, not a manufacturing CAD replica, and determinism is proven only on Blender 5.2.3
-built 2026-10-22.
+views because a dedicated rear close-up was not retained. The three-button controller is a simplified, slightly
+oversized interpretation of the Sega pad, not a per-part reconstruction. One game state supplies the screen
+capture. The model is a recognisable stylised diorama, not a manufacturing CAD replica, and determinism is proven
+only on Blender 5.2.3 built 2026-10-22.

@@ -56,7 +56,7 @@ CRT at its usual place, and the controller in front at x=-68.
 | front control panel | 154 × 44 mm at x=-83 | POWER / RESET / VOLUME side |
 | reset button | 16 × 10 mm, blue | Japanese front reference |
 | controller port pitch | 46 mm between centres | front-right recess |
-| controller body | 154 × 96 mm, ~27 mm thick | controller photos, slightly wider than the Sega pad to read at this scale |
+| controller body | 154 × 96 mm, ~27 mm thick | controller photos; slightly wider than the photo-derived pad to read at this scale (simplified body, see Limits) |
 | D-pad | 33 mm cross | controller photo |
 | A/B/C | 7.4 mm domes on ~21 mm diagonal pitch | controller photo; red |
 | Start | 20 × 7 mm blue pill | controller photo |
@@ -100,9 +100,11 @@ materials the app can tint, no textures or images.
 
 The shared preview rig takes `--screen <png>` and centre-crops a real 4:3
 gameplay capture to the CRT's 0..1 UVs. That is a preview/documentation input
-only: it is wired into the `screen` material after the GLB is written, never
-exported, and the capture is never committed. The Mega Drive committed previews show one such real frame (documentation only); the owner
-may direct a return to the facsimile frame.
+only: it is wired into the `screen` material after the GLB is written and is
+never exported into the asset. The source capture file stays outside the
+repository; the committed Mega Drive preview PNGs are documentation only and do
+contain that frame (that is the only place it appears - the GLB and the shipped
+assets do not). The owner may direct a return to the facsimile frame.
 
 ## Limits
 
@@ -112,6 +114,12 @@ may direct a return to the facsimile frame.
 - The rear-panel layout is modelled from the visible front/side/top views and
   common Model 1 layout knowledge; a dedicated rear close-up was not retained
   (Wikimedia was rate-limiting the download).
+- The controller is a simplified, slightly oversized interpretation of the Sega
+  three-button pad: the body is one smooth rounded solid with an inset face, and
+  the grip/underside moulding, bezel detail and cable are simplified rather than
+  per-part reconstructions. At 154 × 96 mm it is slightly wider than the
+  photo-derived proportion so the controls read at diorama scale; it is a
+  readable stand-in, not an accurate pad model.
 - One game/state will be used for the preview capture, so the screen artwork does
   not expand the evidence beyond that frame.
 - This is a stylised diorama model, not a manufacturing CAD reproduction; the
