@@ -27,6 +27,23 @@ deferred.
   use the format Phobos already shipped (`v136`).
 
 
+## Carts: a shell for the LaserActive discs and the MSX carts — 2026-11-06
+
+Branch `carts-coverage`, from master `d5c6d54e9`.
+- **Why**: the cart view is already the default (`Settings.carts = true`): a system's games show as their cartridges
+  or discs whenever a baked shell exists. Cartridge has no LaserActive or MSX entry, so those four systems fell back
+  to the plain list and looked like exceptions.
+- **What**: the LaserActive's Mega LD and PC Engine LD (LD-ROM) now show the CD disc shell, and MSX and MSX2 show the
+  small cart shell. They have no Cartridge entry, so no label scans are downloaded: their labels are the generated
+  ones (or box art) as for the Neo Geo CD. The ZX Spectrum and ZX Spectrum 128 stay on the list: their games are
+  tapes and no baked shell represents a cassette; a tape shell is the next cart task.
+- **Evidence**: `CartShapesTest` and `CartShapeAssetsTest` updated (the nearest-shape table, the null cases that
+  remain, and asset existence); both flavours' 688 unit tests pass. The APK installed on the RP6; the Library lists
+  MSX, MSX2, Mega LD and PC Engine LD, and Continue Playing already draws the baked shells for its Neo Geo cards.
+- **Limits**: a system's own page was not opened on the RP6 (this test install has no ROM directories configured for
+  those systems); the `small` and `cd` shells are the same baked assets other systems already use.
+
+
 ## PSP core: the device's slow operations, logged — 2026-11-06
 
 Branch `cursor/psp-slowops-present-2b67` from master (0f1b14f09, part 136 merged); docs/psp-core.md, part 137, has the
