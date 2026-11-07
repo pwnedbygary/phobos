@@ -297,4 +297,75 @@ This is a preview-render feature only, and it is deliberately outside the asset:
 `--screen` (checked: `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c` either way) and still carries
 no texture, image or baked screen art. Keep the capture outside the repository: preview images that show real
 gameplay are documentation, not a shipped asset, and a committed capture would be someone else's copyright. The
-committed `tools/carts/console/previews/*.png` continue to use the facsimile frame.
+SNES/NES committed `tools/carts/console/previews/*.png` continue to use the facsimile frame; the Mega Drive set
+shows a real frame as documentation only, as noted in its section.
+
+## The system dioramas: Sega Mega Drive / Genesis Model 1
+
+`android/app/src/main/assets/carts/consoles/megadrive.glb` is Phobos's own model and GPL-3.0-or-later: a
+3DS-Virtual-Console-style scene of the black Model 1 Mega Drive beside the shared 14-inch CRT, with its
+rear-top cartridge and the three-button controller and cable in front. It is not a `bake-carts.mjs` output and
+not a cart shell; the CRT cabinet, screen target, material contract, studio lighting and preview rig are the
+shared pieces, so the family matches.
+
+It is one new module, `tools/carts/console/phobos_console/systems/megadrive.py`, and nothing else: the
+auto-discovered registry finds it as `--system megadrive`, with its own `PALETTE` (charcoal ABS, black trim,
+red A/B/C/POWER, blue START/RESET, satin metal, red LED and the shared `SCREEN`/`SCREEN_GLOW`). There is no
+registry row, import line or shared-palette edit.
+
+Units are millimetres: width on X, depth on Y, up on Z, console and TV facing -Y, base on Z=0, footprint centred
+on X=Y=0. The 665.0 x 680.5 x 352.2 mm bounding box is centred on X=Y=0; `export_yup=True` gives the glTF
+convention (up +Y, screen toward +Z, base on Y=0). The Blender mesh is 100,949 vertices and 184,484 triangles;
+the GLB is 5,445,984 bytes with sha256
+`663b0b97bc0488e1023720d10fbf9f87b788b306e96b40713efea634ec1f67a6`.
+
+The console is the 280 x 212 x 79 mm Model 1: a charcoal wedge with a low front, high rear and sloping crown; the
+large oval cartridge door and raised oval SEGA/16-BIT badge; a rear-top slot with a separate ridged cartridge and
+its own label; the front POWER slider, blue RESET, VOLUME and headphone jack, red LED and the recessed front-right
+pair of DB9 controller ports; top/side/rear vents; rear AV/RF jacks and channel switch; and four inset feet. The
+three-button controller has the rounded black body, recessed face, ringed cross D-pad, blue START, the red A/B/C
+diagonal row with TRIGGER lettering, SEGA and "COMPUTER VIDEO GAME CONTROL PAD" type, and the ribbed cable plug into
+port 1. The lettering is our own extruded type modelled from the reference photographs, not a copied image or font
+file; no photographs, scans, box art or logo images are embedded. `tools/carts/console/reference/megadrive.md`
+records the sources, photo-derived proportions and the feature checklist.
+
+Seven materials, all single-sided (backface culling): `shell` (charcoal console/controller plastic), `dark`
+(black trim, recesses and cartridge), `accent` (red POWER and A/B/C), `accent_light` (blue RESET/START), `metal`
+(satin badge, pins, jacks), `glass` (the LED lens) and `screen` (the CRT face). The plastic roughness is varied by
+part rather than one grey default: shell 0.46, dark 0.42, red/blue buttons 0.32/0.34, metal 0.30 at 0.35 metallic,
+glass and screen low. The screen is the only mesh with `TEXCOORD_0` (clean 0..1 UVs); it has a plain, slightly
+emissive material the app stamps.
+
+Rebuild:
+
+```sh
+blender --background --python tools/carts/console/make_console.py -- \
+    --system megadrive --output android/app/src/main/assets/carts/consoles/megadrive.glb
+```
+
+Add `--previews tools/carts/console/previews` for the three `megadrive-front.png`,
+`megadrive-three-quarter.png` and `megadrive-angle-120.png` renders (1000 x 765). A real gameplay capture can be
+put on the CRT for the preview only:
+
+```sh
+blender --background --python tools/carts/console/make_console.py -- --system megadrive \
+    --output /tmp/megadrive.glb --previews /tmp/previews --screen refs/screens/megadrive.png
+```
+
+`--screen` centre-crops the capture to the screen's 4:3 through the image lookup's mapping nodes, and runs only
+after the GLB is written, so the asset is byte-identical with and without it and carries no image/texture. Keep
+the capture outside the repository. The `megadrive-*` previews in this snapshot show a real frame from a Phobos
+desktop run of *Golden Axe Plus*; they are documentation, not app assets, and the game capture is not committed.
+The default/facsimile screen is still available when no `--screen` is passed. (The SNES/NES committed previews
+continue to use their facsimile frame.)
+
+The GLB contract is verified: one root `megadrive_diorama`; exactly seven single-sided materials; only
+`tv_screen` has `TEXCOORD_0`; no images, textures, cameras, lights or baked screen art. Two no-preview builds from
+the same Blender 5.2.3 build are byte-identical; the committed GLB matches both. The reference record is
+`tools/carts/console/reference/megadrive.md`.
+
+Limits: the photos were inspected at scratch resolution and the documented 280 x 212 x 79 mm box was cross-checked
+against their ratios; no physical console was measured, and the rear layout is based on the visible front/side/top
+views because a dedicated rear close-up was not retained. One game state supplies the screen capture. The model is
+a recognisable stylised diorama, not a manufacturing CAD replica, and determinism is proven only on Blender 5.2.3
+built 2026-10-22.
