@@ -156,6 +156,11 @@ class CartRenderer(
         val t = (frameTimeNanos - startNanos) / 1_000_000_000.0
         spin(t)
         if (r.beginFrame(sc, frameTimeNanos)) {
+            // The SurfaceView is opaque, so clear to the app's dark backdrop rather than a photo studio.
+            r.clearOptions = Renderer.ClearOptions().apply {
+                clear = true
+                clearColor = doubleArrayOf(0.045, 0.04, 0.055, 1.0)
+            }
             r.render(v)
             r.endFrame()
         }
@@ -203,7 +208,8 @@ class CartRenderer(
             bundle.skybox
         }.getOrNull()
         owner.scene.indirectLight = ibl
-        owner.scene.skybox = skybox
+        // No skybox in the live view either: the Library background must stay visible behind the shell.
+        owner.scene.skybox = null
 
         sun = EntityManager.get().create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
