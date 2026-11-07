@@ -33,6 +33,10 @@ fun LiveCartView(
     wearOn: Boolean,
     engraving: String,
     playtimeSeconds: (RomFile) -> Long,
+    title: String? = null,
+    zoom: Float = 1f,
+    studio: Boolean = true,
+    autoSpin: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -44,11 +48,13 @@ fun LiveCartView(
     val wear = if (wearOn && rom != null) LookResolver.wearLevel(playtimeSeconds(rom), "on") else 0
     val label = key?.let { labels[it] }
     val box = key?.let { boxes[it] }
-    val title = rom?.let { com.phobos.emulator.util.displayTitle(it.name, it.title) } ?: ""
+    val shownTitle = title ?: rom?.let { com.phobos.emulator.util.displayTitle(it.name, it.title) } ?: ""
 
     var renderer by remember { mutableStateOf<CartRenderer?>(null) }
     DisposableEffect(Unit) {
+        CartStick.attach()
         onDispose {
+            CartStick.detach()
             renderer?.detach()
             renderer = null
         }
@@ -56,16 +62,16 @@ fun LiveCartView(
     AndroidView(
         factory = { ctx ->
             SurfaceView(ctx).also { surface ->
-                renderer = CartRenderer(ctx, surface).also { it.attach() }
+                renderer = CartRenderer(ctx, surface, zoom, studio, autoSpin).also { it.attach() }
             }
         },
         // Keep the caller's size (the grid gives 180.dp): fillMaxSize overrode it and the surface covered the grid.
         modifier = modifier,
     )
-    LaunchedEffect(renderShape, disc, look, wear, label?.lastModified(), label?.length(), box?.lastModified(), box?.length(), title, themeKey, renderer) {
+    LaunchedEffect(renderShape, disc, look, wear, label?.lastModified(), label?.length(), box?.lastModified(), box?.length(), shownTitle, themeKey, renderer) {
         val r = renderer ?: return@LaunchedEffect
         val bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            CartLabelSource.label(context, system, title, box, label, themeKey)
+            CartLabelSource.label(context, system, shownTitle, box, label, themeKey)
         }
         r.show(renderShape, disc, look, wear, bitmap)
         // The material keeps the texture, not the bitmap; CartMaterials copied it into GPU memory.

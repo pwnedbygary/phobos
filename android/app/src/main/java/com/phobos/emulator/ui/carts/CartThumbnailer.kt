@@ -18,9 +18,13 @@ import com.google.android.filament.Viewport
 import com.google.android.filament.utils.KTX1Loader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+
+/** Tighter than the default margin, so the cards read as objects rather than stamps. */
+private const val CARD_ZOOM = 0.9
 
 /**
  * Offscreen cart thumbnails for the grid and the Library cards: the focused cart keeps the live surface, every other
@@ -207,7 +211,7 @@ class CartThumbnailer(
         // square card and a portrait surface both frame the shell.
         val b = CartFraming.bounds(engine, ents) ?: floatArrayOf(0f, 0f, 0f, 60f, 60f, 20f)
         val aspect = width.toDouble() / height.toDouble()
-        val d = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]), aspect)
+        val d = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]), aspect) * CARD_ZOOM
         camera.setProjection(
             CartFraming.FOV_DEGREES,
             aspect,

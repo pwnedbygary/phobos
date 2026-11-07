@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -58,6 +59,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import com.phobos.emulator.ui.carts.LiveCartView
+import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -368,6 +371,7 @@ fun CartridgeSystemPlate(
     selected: Boolean,
     size: Dp,
     modifier: Modifier = Modifier,
+    live: Boolean = false,
     onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -390,7 +394,28 @@ fun CartridgeSystemPlate(
                 .clip(MaterialTheme.shapes.large),
             contentAlignment = Alignment.Center,
         ) {
-            if (picture != null) {
+            if (live) {
+                val themeKey = LocalPhobosTheme.current.theme.name
+                LiveCartView(
+                    system = system,
+                    rom = null,
+                    labels = emptyMap(),
+                    boxes = emptyMap(),
+                    themeKey = themeKey,
+                    looks = emptyMap(),
+                    specialEditions = false,
+                    wearOn = false,
+                    engraving = "none",
+                    playtimeSeconds = { 0L },
+                    title = facts.short,
+                    zoom = 0.9f,
+                    studio = false,
+                    autoSpin = false,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // The surface does not consume touches; the overlay makes the whole plate a target.
+                Box(Modifier.fillMaxSize().clickable(onClick = onClick))
+            } else if (picture != null) {
                 AsyncImage(
                     model = picture,
                     contentDescription = system,

@@ -383,6 +383,7 @@ fun CartridgeLibraryScreen(
                                         picture = picture,
                                         selected = index == systemIndex,
                                         size = plate,
+                                        live = index == systemIndex && cartsOn && engine != null,
                                         onClick = {
                                             row = 1
                                             if (index == systemIndex) onSystemClick(Uri.encode(system)) else systemIndex = index
@@ -420,6 +421,7 @@ fun CartridgeLibraryScreen(
                     add("Y" to "Switcher")
                     add("/" to "Search")
                     add("≡" to "Settings")
+                    add("R" to "Stick · Rotate")
                 },
             )
         }

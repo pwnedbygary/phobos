@@ -76,8 +76,10 @@ import com.phobos.emulator.ui.MainViewModel
 import com.phobos.emulator.ui.PhobosAlertDialog
 import com.phobos.emulator.ui.RomFile
 import com.phobos.emulator.ui.carts.CartBitmapCache
+import com.phobos.emulator.ui.carts.CartLooks
 import com.phobos.emulator.ui.carts.CartShapes
 import com.phobos.emulator.ui.carts.CartThumbnailer
+import com.phobos.emulator.ui.carts.LookResolver
 import com.phobos.emulator.ui.carts.CartsEngine
 import com.phobos.emulator.ui.carts.rememberCartCardFile
 import com.phobos.emulator.ui.gameMenuItems
@@ -118,8 +120,9 @@ fun CartridgeSystemScreen(
     val themeKey = theme.theme.name
     val facts = factsFor(systemName)
     val shape = CartShapes.cartShape(systemName)
-    val live = settings.carts && !gameLoaded && shape != null
-    val engine = remember(live) { if (live) CartsEngine.get(context) else null }
+    val canLive = settings.carts && !gameLoaded && shape != null
+    val engine = remember(canLive) { if (canLive) CartsEngine.get(context) else null }
+    val live = canLive && engine != null
     val thumbnailer = remember(engine) { engine?.let { CartThumbnailer(context, it) } }
     val cache = remember { CartBitmapCache(File(context.cacheDir, "cart-render"), 64L * 1024 * 1024) }
     DisposableEffect(thumbnailer) { onDispose { thumbnailer?.release() } }
@@ -262,6 +265,19 @@ fun CartridgeSystemScreen(
                 val record = focusedRom?.let { recorded[it.name] }
                 val box = focusedRom?.let { boxes[GameKey(systemName, it.name)] }
                 val label = if (settings.realLabels) focusedRom?.let { labels[GameKey(systemName, it.name)] } else null
+                val focusedLook = remember(settings.cartsLooks, systemName, focusedRom, settings.cartsSpecialEditions) {
+                    focusedRom?.let {
+                        LookResolver.resolve(
+                            LookResolver.GameInput(CartLooks.gameId(systemName, it.name), it.name),
+                            systemName,
+                            CartLooks.parse(settings.cartsLooks),
+                            settings.cartsSpecialEditions,
+                        )
+                    }
+                }
+                val focusedLooks = remember(focusedLook, focusedRom) {
+                    if (focusedRom != null && focusedLook != null) mapOf(GameKey(systemName, focusedRom.name) to focusedLook) else emptyMap()
+                }
                 val cartPicture = if (settings.carts) {
                     focusedRom?.let {
                         rememberCartCardFile(
@@ -292,6 +308,8 @@ fun CartridgeSystemScreen(
                             focused = focused,
                             labels = if (settings.realLabels) labels else emptyMap(),
                             boxes = boxes,
+                            looks = focusedLooks,
+                            liveCart = live,
                             looksJson = settings.cartsLooks,
                             cartsEnabled = settings.carts,
                             specialEditions = settings.cartsSpecialEditions,
@@ -343,6 +361,15 @@ fun CartridgeSystemScreen(
                             focusedRom = focusedRom,
                             cartPicture = cartPicture,
                             box = box,
+                            labels = if (settings.realLabels) labels else emptyMap(),
+                            boxes = boxes,
+                            looks = focusedLooks,
+                            liveCart = live,
+                            specialEditions = settings.cartsSpecialEditions,
+                            wearOn = settings.cartsWear,
+                            engraving = settings.cartsEngraving,
+                            themeKey = themeKey,
+                            playtimeSeconds = { rom -> (recorded[rom.name]?.playTimeMs ?: 0L) / 1000 },
                             onFocus = { focused = it },
                             onStart = start,
                             onMenu = { menuFor = it to false },
@@ -364,6 +391,7 @@ fun CartridgeSystemScreen(
                     "X" to "Favorite",
                     "Y" to "Options",
                     "L/R" to "View",
+                    "R" to "Stick · Rotate",
                     "Q" to "A–Z",
                 ),
             )

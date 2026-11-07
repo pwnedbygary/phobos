@@ -58,6 +58,7 @@ import com.phobos.emulator.data.GameRecord
 import com.phobos.emulator.ui.RomFile
 import com.phobos.emulator.ui.carts.CartBitmapCache
 import com.phobos.emulator.ui.carts.CartThumbnailer
+import com.phobos.emulator.ui.carts.LiveCartView
 import com.phobos.emulator.ui.carts.LookResolver
 import com.phobos.emulator.ui.carts.rememberCartCardFile
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
@@ -149,6 +150,7 @@ fun CartridgeMediaTile(
 }
 
 /** Cartridge's carousel: the focused cart large and centred, the rest of the row scrolling beside it. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CarouselView(
     system: String,
@@ -156,6 +158,8 @@ fun CarouselView(
     focused: Int,
     labels: Map<GameKey, File>,
     boxes: Map<GameKey, File>,
+    looks: Map<GameKey, LookResolver.Look>,
+    liveCart: Boolean,
     looksJson: String,
     cartsEnabled: Boolean,
     specialEditions: Boolean,
@@ -178,12 +182,12 @@ fun CarouselView(
             contentAlignment = Alignment.Center,
         ) {
             val rowWidth = maxWidth
-            val thumb = 152.dp
+            val thumb = 210.dp
             val state = rememberLazyListState()
             LaunchedEffect(focused) { runCatching { state.animateScrollToItem(focused) } }
             LazyRow(
                 state = state,
-                contentPadding = PaddingValues(horizontal = ((rowWidth - thumb * 1.18f) / 2).coerceAtLeast(0.dp)),
+                contentPadding = PaddingValues(horizontal = ((rowWidth - thumb * 1.06f) / 2).coerceAtLeast(0.dp)),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
@@ -208,24 +212,57 @@ fun CarouselView(
                         enabled = cartsEnabled,
                         size = 384,
                     )
-                    CartridgeMediaTile(
-                        system = system,
-                        title = cartTitle(rom.name, rom.title),
-                        picture = picture,
-                        box = boxes[key],
-                        width = thumb,
-                        selected = index == focused,
-                        showTitle = false,
-                        bare = true,
-                        onClick = { if (index == focused) onStart(rom) else onFocus(index) },
-                        onLongClick = { onMenu(rom) },
-                        modifier = Modifier.graphicsLayer {
-                            if (index == focused) {
-                                scaleX = 1.18f
-                                scaleY = 1.18f
-                            }
-                        },
-                    )
+                    if (index == focused && liveCart) {
+                        val facts = factsFor(system)
+                        Box(
+                            Modifier
+                                .width(thumb)
+                                .height(thumb)
+                                .graphicsLayer { scaleX = 1.06f; scaleY = 1.06f }
+                                .clip(MaterialTheme.shapes.medium)
+                                .border(1.dp, facts.color.copy(alpha = 0.8f), MaterialTheme.shapes.medium)
+                                .combinedClickable(
+                                    onClick = { onStart(rom) },
+                                    onLongClick = { onMenu(rom) },
+                                ),
+                        ) {
+                            LiveCartView(
+                                system = system,
+                                rom = rom,
+                                labels = labels,
+                                boxes = boxes,
+                                themeKey = themeKey,
+                                looks = looks,
+                                specialEditions = specialEditions,
+                                wearOn = wearOn,
+                                engraving = engraving,
+                                playtimeSeconds = { playtimeSeconds(rom) },
+                                title = cartTitle(rom.name, rom.title),
+                                zoom = 0.9f,
+                                studio = false,
+                                autoSpin = false,
+                                modifier = Modifier.matchParentSize(),
+                            )
+                            // Keep the plate tappable over the surface.
+                            Box(Modifier.matchParentSize().combinedClickable(
+                                onClick = { onStart(rom) },
+                                onLongClick = { onMenu(rom) },
+                            ))
+                        }
+                    } else {
+                        CartridgeMediaTile(
+                            system = system,
+                            title = cartTitle(rom.name, rom.title),
+                            picture = picture,
+                            box = boxes[key],
+                            width = thumb,
+                            selected = index == focused,
+                            showTitle = false,
+                            bare = index != focused,
+                            onClick = { if (index == focused) onStart(rom) else onFocus(index) },
+                            onLongClick = { onMenu(rom) },
+                        )
+                    }
                 }
             }
         }
@@ -385,6 +422,15 @@ fun CartridgeTower(
     focusedRom: RomFile?,
     cartPicture: File?,
     box: File?,
+    labels: Map<GameKey, File>,
+    boxes: Map<GameKey, File>,
+    looks: Map<GameKey, LookResolver.Look>,
+    liveCart: Boolean,
+    specialEditions: Boolean,
+    wearOn: Boolean,
+    engraving: String,
+    themeKey: String,
+    playtimeSeconds: (RomFile) -> Long,
     onFocus: (Int) -> Unit,
     onStart: (RomFile) -> Unit,
     onMenu: (RomFile) -> Unit,
@@ -451,17 +497,49 @@ fun CartridgeTower(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            CartridgeMediaTile(
-                system = system,
-                title = cartTitle(focusedRom?.name ?: "", focusedRom?.title),
-                picture = cartPicture,
-                box = box,
-                width = null,
-                modifier = Modifier.fillMaxWidth(0.92f),
-                selected = true,
-                onClick = { focusedRom?.let(onStart) },
-                onLongClick = { focusedRom?.let(onMenu) },
-            )
+            val rom = focusedRom
+            if (rom != null && liveCart) {
+                Box(
+                    Modifier
+                        .fillMaxHeight(0.82f)
+                        .aspectRatio(1f)
+                        .clip(MaterialTheme.shapes.medium)
+                        .border(1.dp, scheme.onBackground.copy(alpha = 0.16f), MaterialTheme.shapes.medium),
+                ) {
+                    LiveCartView(
+                        system = system,
+                        rom = rom,
+                        labels = labels,
+                        boxes = boxes,
+                        themeKey = themeKey,
+                        looks = looks,
+                        specialEditions = specialEditions,
+                        wearOn = wearOn,
+                        engraving = engraving,
+                        playtimeSeconds = { playtimeSeconds(rom) },
+                        title = cartTitle(rom.name, rom.title),
+                        zoom = 0.9f,
+                        studio = false,
+                        autoSpin = false,
+                        modifier = Modifier.matchParentSize(),
+                    )
+                    Box(Modifier.matchParentSize().combinedClickable(
+                        onClick = { onStart(rom) },
+                        onLongClick = { onMenu(rom) },
+                    ))
+                }
+            } else {
+                CartridgeMediaTile(
+                    system = system,
+                    title = cartTitle(focusedRom?.name ?: "", focusedRom?.title),
+                    picture = cartPicture,
+                    box = box,
+                    width = 220.dp,
+                    selected = true,
+                    onClick = { focusedRom?.let(onStart) },
+                    onLongClick = { focusedRom?.let(onMenu) },
+                )
+            }
         }
     }
 }

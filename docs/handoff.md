@@ -21,14 +21,22 @@ commit follows it.
   baked v), unlit (`KHR_materials_unlit` in the label patch) and uploaded as sRGB; the fallback PNG is a real 1×1
   white RGBA; the shell shapes, including the GBA badge/line engravings, have their own plastic colour
   (`CartShellPalette`); the studio light is 30k/15k so the labels read; the live view keeps its studio skybox for
-  the old styles; the card cache version is 15.
+  the old styles; the card cache version is 16; the offscreen cards frame 10% tighter (`CARD_ZOOM 0.9`).
 - **Evidence**: `:app:testLegacyDebugUnitTest :app:testModernDebugUnitTest` — 712 tests, 0 failures, both flavours;
   `:app:assembleModernRelease` passes. The side-by-side `com.phobos.emulator.gst` on the RP6 opened the room, the
   four system views, the settings hub and started Chrono Trigger (SNES) from the folder grant; the Continue strip
   then showed the game and its resume chip. Screenshots in `/home/garyb/Mounts/NVME/OpenChamber/phobos/tmp/`
   (`ui-home-rebased.png`, `ui-home-continue-fixed.png`, `ui-system-carousel5.png`, `ui-view-grid-final.png`,
   `ui-view-shelf-final.png`, `ui-view-tower-final.png`, `ui-settings-final2.png`, `ui-system-q.png`,
-  `ui-system-r1.png`, `ui-system-l1.png`, `ui-overlay-switcher.png`).
+  `ui-system-r1.png`, `ui-system-l1.png`, `ui-overlay-switcher.png`, `ui-home-live3.png`, `ui-system-live3.png`,
+  `ui-tower-live2.png`).
+- **Live carts (owner follow-up)**: the home's selected system plate, the system page's Carousel and its Tower show
+  the focused cart live, at 150 dp on the home, 210 dp in the Carousel and 0.82 of the Tower's height. The right
+  stick (AXIS_Z/AXIS_RZ on the RP6, AXIS_RX/AXIS_RY fallback) turns it; the first turn starts from the angle on
+  screen and stops the idle spin, a new cart starts front-facing (`autoSpin = false` in the room). The Cartridge
+  live views clear to the room's dark purple without the studio skybox; the old styles keep the studio and also
+  respond to the stick. Grid and Shelf stay static. The live framing is 0.9 (closer than the old 1.12 margin) and
+  the offscreen cards are 10% tighter; the cache is 16.
 - **Review**: the independent review found three blocking UI defects: the expanded Continue strip let the
   system carousel overflow over the heading and pills; Grid/Shelf/Tower did not scroll with the D-pad; and the
   home overlays were not modal, so a covered tile could take A. Fixed: the strip hides the system stage while it
@@ -42,11 +50,11 @@ commit follows it.
   and the expanded Continue strip never scrolled to its selected card. Cartridge pages now leave L1/R1 to the page:
   the system page switches views, the other Cartridge pages have no shoulder action. The Continue row scrolls to
   `recentIndex`, the overlay holds the screensaver while open, and the strip closes if the Continue list empties.
-- **Limits**: the in-game pause menu and HUD are still the old UI; the system page's carousel uses the static 3D
-  cart render (a live `LiveCartView` there showed a grey surface and was removed); the carousel's titles are in
-  the info line, not on the cards; the expanded Continue strip deliberately hides the system stage; Cartridge pages
-  do not shoulder-step the old dock tabs (the system page uses L1/R1 for its views); `ConsoleTreatment.CARTRIDGE`
-  reuses the XMB finish. PR #354's original head still lacks the renderer fixes;
+- **Limits**: the in-game pause menu and HUD are still the old UI; the carousel's titles are in the info line, not
+  on the cards; the expanded Continue strip deliberately hides the system stage; Cartridge pages
+  do not shoulder-step the old dock tabs (the system page uses L1/R1 for its views); Grid and Shelf use static
+  cards (the Carousel, Tower and the home's selected plate are live); the live cart is an opaque surface on the
+  room's dark clear, not a transparent composite; `ConsoleTreatment.CARTRIDGE` reuses the XMB finish. PR #354's original head still lacks the renderer fixes;
   this branch carries them, so #354 should be closed or updated.
 - **Build**: the wrapper `scripts/build-replit.sh` still wants `.local/android-sdk`; the checks used
   `ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk ./gradlew ... --offline`. The RP6 side-by-side

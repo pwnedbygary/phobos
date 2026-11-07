@@ -9,6 +9,7 @@ import com.google.android.filament.EntityManager
 import com.google.android.filament.IndirectLight
 import com.google.android.filament.LightManager
 import com.google.android.filament.Renderer
+import com.google.android.filament.Scene
 import com.google.android.filament.Skybox
 import com.google.android.filament.SwapChain
 import com.google.android.filament.View
@@ -26,6 +27,9 @@ import java.nio.ByteOrder
 class CartRenderer(
     private val context: Context,
     private val surfaceView: SurfaceView,
+    private val zoom: Float = 1f,
+    private val studio: Boolean = true,
+    private val autoSpin: Boolean = true,
 ) : SurfaceHolder.Callback, Choreographer.FrameCallback {
 
     private var engineOwner: CartsEngine? = null
@@ -33,6 +37,7 @@ class CartRenderer(
     private var renderer: Renderer? = null
     private var view: View? = null
     private var camera: Camera? = null
+    private var scene: Scene? = null
     private var swapChain: SwapChain? = null
     private var shown: CartsEngine.LoadedCart? = null
     private val lookTextures = mutableListOf<Texture>()
@@ -51,6 +56,7 @@ class CartRenderer(
     private var centerY = 0.0
     private var centerZ = 0.0
     private var aspect = 1.0
+    private var manualBaseApplied = false
 
     /** Starts the lifecycle; the surface itself drives creation and teardown. */
     fun attach() {
@@ -78,12 +84,15 @@ class CartRenderer(
             dropReferences()
             return
         }
-        shown?.let { owner.scene.removeEntities(it.entities) }
+        val scene = scene ?: return
+        shown?.let { scene.removeEntities(it.entities) }
         shown = null
+        CartStick.reset()
+        manualBaseApplied = false
         if (shape == null) return
         val cart = if (disc) owner.disc(shape) else owner.cart(shape)
         if (cart != null) {
-            owner.scene.addEntities(cart.entities)
+            scene.addEntities(cart.entities)
             val previous = lookTextures.toList()
             lookTextures.clear()
             lookTextures += CartMaterials.apply(owner.engine, cart.entities, look, wear, label, CartShellPalette.forShape(shape))
@@ -93,7 +102,7 @@ class CartRenderer(
             shown = cart
             CartFraming.bounds(owner.engine, cart.entities)?.let { b ->
                 fitHalf = floatArrayOf(b[3], b[4], b[5])
-                fitDistance = CartFraming.distance(fitHalf, aspect)
+                fitDistance = CartFraming.distance(fitHalf, aspect) * zoom.coerceIn(0.5f, 2f)
                 centerX = b[0].toDouble()
                 centerY = b[1].toDouble()
                 centerZ = b[2].toDouble()
@@ -111,8 +120,9 @@ class CartRenderer(
         renderer = engine.createRenderer()
         view = engine.createView()
         camera = engine.createCamera(EntityManager.get().create())
+        scene = runCatching { engine.createScene() }.getOrNull()
         setupEnvironment(engine)
-        view?.scene = owner.scene
+        view?.scene = scene
         view?.camera = camera
         // The swap chain waits for surfaceChanged: a surface's size is only known there, and a chain built on the
         // zero-sized surface of surfaceCreated presents black frames.
@@ -156,10 +166,15 @@ class CartRenderer(
         val t = (frameTimeNanos - startNanos) / 1_000_000_000.0
         spin(t)
         if (r.beginFrame(sc, frameTimeNanos)) {
-            // The SurfaceView is opaque, so clear to the app's dark backdrop rather than a photo studio.
+            // The SurfaceView is opaque: with the studio skybox it fills the surface; in the room the clear is the
+            // dark purple the cards sit on, so the live cart reads as the same dark display.
             r.clearOptions = Renderer.ClearOptions().apply {
                 clear = true
-                clearColor = doubleArrayOf(0.045, 0.04, 0.055, 1.0)
+                clearColor = if (studio) {
+                    doubleArrayOf(0.045, 0.04, 0.055, 1.0)
+                } else {
+                    doubleArrayOf(0.07, 0.05, 0.11, 1.0)
+                }
             }
             r.render(v)
             r.endFrame()
@@ -169,7 +184,7 @@ class CartRenderer(
 
     /** The camera projection for the current surface aspect and the shown shell's framed distance. */
     private fun applyProjection() {
-        fitDistance = CartFraming.distance(fitHalf, aspect)
+        fitDistance = CartFraming.distance(fitHalf, aspect) * zoom.coerceIn(0.5f, 2f)
         camera?.setProjection(
             CartFraming.FOV_DEGREES,
             aspect,
@@ -178,25 +193,39 @@ class CartRenderer(
         )
     }
 
-    /** The slow turn: the camera orbits the shell about the glTF up axis (Y) so its front and sides both read. */
+    /**
+     * The slow turn, or the right stick's angle once [CartStick] has been moved. The manual turn starts from
+     * whatever angle the automatic one had reached, so taking the stick does not snap the shell to the front.
+     */
     private fun spin(t: Double) {
-        // Shared with the thumbnailer: one orbit definition, no second copy of the elevation/angle formula.
-        val eye = CartFraming.orbitEye(floatArrayOf(centerX.toFloat(), centerY.toFloat(), centerZ.toFloat()), fitDistance, t * 0.5)
-        camera?.lookAt(
-            eye[0],
-            eye[1],
-            eye[2],
-            centerX,
-            centerY,
-            centerZ,
-            0.0,
-            1.0,
-            0.0,
+        val stick = CartStick
+        val auto = t * 0.5
+        val angle: Double
+        val elevation: Double
+        if (stick.manual) {
+            if (!manualBaseApplied) {
+                stick.addYaw(if (autoSpin) auto else 0.0)
+                manualBaseApplied = true
+            }
+            angle = stick.yaw
+            elevation = (CartFraming.ELEVATION + stick.pitch).coerceIn(0.02, 0.85)
+        } else {
+            manualBaseApplied = false
+            angle = if (autoSpin) auto else 0.0
+            elevation = CartFraming.ELEVATION
+        }
+        val eye = CartFraming.orbitEye(
+            floatArrayOf(centerX.toFloat(), centerY.toFloat(), centerZ.toFloat()),
+            fitDistance,
+            angle,
+            elevation,
         )
+        camera?.lookAt(eye[0], eye[1], eye[2], centerX, centerY, centerZ, 0.0, 1.0, 0.0)
     }
 
     private fun setupEnvironment(engine: com.google.android.filament.Engine) {
         val owner = engineOwner ?: return
+        val scene = scene ?: return
         ibl = runCatching {
             val bundle = KTX1Loader.createIndirectLight(engine, readAsset("carts/ibl/ibl_ibl.ktx"))
             iblCubemap = bundle.cubemap
@@ -207,10 +236,10 @@ class CartRenderer(
             skyboxCubemap = bundle.cubemap
             bundle.skybox
         }.getOrNull()
-        owner.scene.indirectLight = ibl
+        scene.indirectLight = ibl
         // The live cart is an opaque surface, so the studio skybox fills it. The offscreen cards use a transparent
         // clear and no skybox, and composite over the Library.
-        owner.scene.skybox = skybox
+        scene.skybox = if (studio) skybox else null
 
         sun = EntityManager.get().create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
@@ -219,7 +248,7 @@ class CartRenderer(
             .direction(-0.4f, -0.8f, -0.45f)
             .castShadows(false)
             .build(engine, sun)
-        owner.scene.addEntity(sun)
+        scene.addEntity(sun)
     }
 
     private fun readAsset(path: String): ByteBuffer {
@@ -239,8 +268,10 @@ class CartRenderer(
         val owner = engineOwner
         val engine = owner?.engine
         if (owner != null && engine != null && CartsEngine.isRunning() && CartsEngine.currentEngineId() == engineId) {
-            shown?.let { owner.scene.removeEntities(it.entities) }
+            shown?.let { scene?.removeEntities(it.entities) }
             shown = null
+            runCatching { scene?.let { engine.destroyScene(it) } }
+            scene = null
             runCatching { swapChain?.let { engine.destroySwapChain(it) } }
             runCatching { renderer?.let { engine.destroyRenderer(it) } }
             runCatching { view?.let { engine.destroyView(it) } }
@@ -263,6 +294,7 @@ class CartRenderer(
         engineId = 0L
         shown = null
         lookTextures.clear()
+        scene = null
         swapChain = null
         renderer = null
         view = null
