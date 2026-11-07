@@ -172,36 +172,46 @@ used here).
 
 `android/app/src/main/assets/carts/consoles/nes.glb` is Phobos's own model and GPL-3.0-or-later: a 3DS
 Virtual-Console-style scene of the NES-001 front loader beside the same 14-inch 4:3 CRT TV as the SNES diorama,
-with the NES controller and its cable in front. Like `snes.glb` it is not a `bake-carts.mjs` output and not a
+with the NES-004 controller and its cable in front. Like `snes.glb` it is not a `bake-carts.mjs` output and not a
 cart shell. The console and controller are per-system; the CRT cabinet, screen target, material contract, studio
-lighting and preview rig are shared, so the family matches.
+lighting and preview rig are shared, so the family matches. The modelling inputs, feature checklist and the
+measured-vs-stylised notes are in `tools/carts/console/reference/nes.md` (text only; the reference photos are not
+committed).
 
 Units are millimetres: width on X, depth on Y, up on Z, with the console and TV facing -Y and the base on Z=0.
-The 638.2 x 665.7 x 352.0 mm bounding box is centred on X=Y=0, so a turntable about +Z spins the whole scene in
-place; `export_yup=True` turns that into the glTF convention (up +Y, the TV screen toward +Z, footprint centred on
-X=Z=0, base on Y=0). One root node `nes_diorama` carries 188 named parts: the Blender mesh has 77,243 vertices and
-146,556 triangles, and the GLB is 3,414,076 B with 105,858 POSITION entries after the exporter's normal splits.
+The 641.6 x 659.3 x 352.0 mm diorama bounding box is centred on X=Y=0, so a turntable about +Z spins the whole
+scene in place; `export_yup=True` turns that into the glTF convention (up +Y, the TV screen toward +Z, footprint
+centred on X=Z=0, base on Y=0). The console itself is 256 x 203 x 76 mm including its feet. One root node
+`nes_diorama` carries 204 named nodes / 203 meshes: the Blender mesh has 100,897 vertices and 191,772 triangles,
+and the GLB is 4,414,624 B with 136,479 POSITION entries after the exporter's normal splits.
 
-The NES-001 is modelled as the low two-tone slab it is: a rounded light-grey upper shell over a darker warm-grey
-lower chassis, with the front-loading flap (closed) carrying the red Nintendo wordmark, the black front-right band
-with two stacked 7-pin controller ports and their red "1"/"2" numerals, the ribbed top vent, POWER/RESET and the
-red power LED in the lower front panel, side AV jacks and channel switch, rear vents and four rubber feet. The
-controller has the black inset face plate with the D-pad, two red A/B buttons, Start/Select pills, the two grey
-grip slots and the red Nintendo wordmark, and a cable whose tall plug sits in port 2.
+The NES-001 follows the reference photos: a warm ivory upper housing over a warm taupe-grey lower chassis (sRGB
+about 0.53/0.50/0.48, a band-to-shell luminance step of 0.63 measured off the reference's coplanar front faces,
+against the reference's 0.46 - hue and value, not a black skirt), with a crisp seam at 27 mm, about 30% of the
+height. The whole upper front is the flip cartridge lid: a thin seam runs from the left body edge to the black port
+tower at Z=44.5, with a top hinge line and side seams on the top surface, a lower lip and thumb notch, and the red
+two-line "Nintendo / ENTERTAINMENT SYSTEM" printed straight onto the lid face (with the registered mark and a
+letter-spaced smaller second line). The top-right vent is 14 cream slats with flat black end caps. The front-right
+tower is a 43 mm flat black bezel flush with the front, carrying two tall oval 7-pin controller sockets with thin
+rims and red "1"/"2" numerals. The front-left lower panel is a recessed outline on the taupe chassis, with the
+square red LED to the left of two flat mid-grey POWER/RESET buttons and their red legends. The left side has the
+AUDIO/VIDEO RCA recess (red and warm-metal jacks) and both sides have the rear oval vent; the rear carries the
+moulded label recess, RF channel switch, antenna jack and power connector, and four recessed rubber feet sit under
+the corners. The controller is 120 x 56 x 20 mm: cream body, dark-grey cross D-pad, dark-grey Start/Select pills,
+dark-red A/B and a black cable from the centre top into port 2.
 
-Materials (seven, authored NES colours - not the carts' tintable look): `shell` is the warm light-grey upper
-shell, front flap, controller body, grille ribs and RESET button; `dark` is the black trim (port band, rims,
-flap recess, controller face plate, D-pad, Start/Select, cable and CRT cabinet); `accent` is Nintendo red (flap
-wordmark and sub-line, POWER, A/B, port numerals); `accent_light` is the darker warm-grey lower chassis and
-button panel (on the SNES the same name is the lavender X/Y buttons); `metal` covers the port pins, knob caps,
-badge and jacks; `glass` is the red LED lens (shared with the TV's LED); and `screen` is the CRT face. All seven
-are single-sided (backface culling): every part is a closed solid except the screen sheet. The TV's 290 x 217 mm
-CRT face is the same 64 x 48 grid with a 6.5 mm bulge and clean 0..1 UVs; it is the only mesh the GLB carries
-TEXCOORD_0 for (the converted text meshes have their font UV layer stripped). In the GLB `u` increases with +X and
-`v` is 0 at the top of the screen, so a conventional top-left-origin image lands upright. The preview test frame
-is generated inside the script and wired into `screen` only after the GLB has been written, so no artwork or
-textures are baked into the asset. The lettering is Blender's bundled Bfont converted to meshes: no font files
-ship.
+Materials (seven, authored NES colours - not the carts' tintable look): `shell` is the warm ivory upper housing,
+lid and controller body; `dark` is the black trim (port tower, lid seams, D-pad, Start/Select, cable and CRT
+cabinet); `accent` is Nintendo red (wordmark, POWER/RESET legends, A/B, port numerals); `accent_light` is the warm
+taupe lower chassis and button faces; `metal` covers the pins, badge, knobs and the AUDIO/VIDEO jacks (the VIDEO
+jack is warm-metal rather than a separate yellow material, keeping the seven-material contract); `glass` is the
+red LED lens; and `screen` is the CRT face. All seven are single-sided (backface culling): every part is a closed
+solid except the screen sheet. The TV's 290 x 217 mm CRT face is the same 64 x 48 grid with a 6.5 mm bulge and
+clean 0..1 UVs; it is the only mesh the GLB carries TEXCOORD_0 for (the converted text meshes have their font UV
+layer stripped). In the GLB `u` increases with +X and `v` is 0 at the top of the screen, so a conventional
+top-left-origin image lands upright. The preview test frame is generated inside the script and wired into `screen`
+only after the GLB has been written, so no artwork or textures are baked into the asset. The lettering is
+Blender's bundled Bfont converted to meshes: no font files ship.
 
 `tools/carts/console/make_console.py` rebuilds it with Blender 5.2.3 (bpy/bmesh only, no external assets):
 
@@ -212,25 +222,31 @@ blender --background --python tools/carts/console/make_console.py -- \
 
 Add `--previews tools/carts/console/previews` to render the three Cycles checks as `nes-front.png`,
 `nes-three-quarter.png` and `nes-angle-120.png` (880 x 660, 40 samples); they are illustrative renders, not
-assets, and re-running the command regenerates them in place. The same `--system snes` path still rebuilds the
-committed `snes.glb` byte for byte (sha256
+assets, and re-running the command regenerates them in place. The committed `nes-*` previews are documentation
+only and currently show the generated facsimile frame, as the owner's real NES capture is not in hand; when it
+lands, the source capture file stays outside the repository and no game art is in the shipped asset (`--screen
+refs/screens/nes.png` puts a capture on the CRT in a scratch render without changing the GLB). The same
+`--system snes` path still rebuilds the committed `snes.glb` byte for byte (sha256
 `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`, 2,659,776 B), and both systems are
 discovered modules under `phobos_console/systems/` (see "The diorama generator's layout" below), so the remaining
 systems are one new `systems/<name>.py` each rather than edits to a shared script.
 
 Two no-preview NES rebuilds and the committed file compare equal (sha256
-`3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7`; determinism is proven only on Blender 5.2.3
+`ef71cfc1bb00ed612cbfb8ac7b375cb9619ed18533ba5322e76846bbb058766c`; determinism is proven only on Blender 5.2.3
 built 2026-10-22, the build used here). `bake-carts.mjs --check` regenerates and compares the whole `assets/carts`
 tree, so it reports this authored file (like `snes.glb` and `carts/tape.glb`) as missing from its regeneration; no
 CI runs it, and this asset is verified by its own byte-identical rebuild instead.
 
-Limits and caveats: the model is a recognisable stylised approximation, not a measured replica. The NES-001 body
-is about 256 x 202 x 64 mm and the TV is generic; nothing here is measured against a source. The front-loading
-flap is modelled closed (no tray or cartridge) and the wordmarks are embossed text, not decals. There are no baked
-textures. The 188 parts stay separate so the screen remains a clean target and the parts remain editable;
-merging by material would be a consumer-side optimisation. The CRT rig is shared with `snes.glb`, so changing it
-changes both assets. The 120-degree preview is a rear view: the controller is mostly hidden behind the console and
-TV there.
+Limits and caveats: the model is a recognisable stylised approximation, not a measured replica. The 76 mm height
+is the revision brief's working figure; dimensions.com lists 88.9 mm overall, and the photos are not a calibrated
+orthographic source, so no photo-derived height correction was applied. The gallery is ambiguous about which side
+carries the RCA outputs (its caption calls the plain side the left one); the generator puts them on the left, per
+the brief and to keep them visible in the 120-degree rear-left preview. The wordmark uses Bfont rather than
+Nintendo's licensed logo, the POWER/RESET legends are solid red rather than outlined, and the flap is closed (no
+tray or cartridge). There are no baked textures. The 203 parts stay separate so the screen remains a clean target
+and the parts remain editable; merging by material would be a consumer-side optimisation. The CRT rig is shared
+with `snes.glb`, so changing it changes both assets. The 120-degree preview is a rear view: the controller is
+mostly hidden behind the console and TV there.
 
 ## The diorama generator's layout (and how to add a system)
 
@@ -275,7 +291,7 @@ sha256sum /tmp/snes.glb /tmp/nes.glb
 ```
 
 The SNES GLB must be `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c` (2,659,776 B) and the
-NES GLB `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7` (3,414,076 B); both are checked
+NES GLB `ef71cfc1bb00ed612cbfb8ac7b375cb9619ed18533ba5322e76846bbb058766c` (4,414,624 B); both are checked
 against the committed files by hash. `--previews` writes the same three renders per system with the row's prefix
 and resolution (`front.png`/`three-quarter.png`/`angle-120.png`, `1000 x 765` for the SNES;
 `nes-front.png`/`nes-three-quarter.png`/`nes-angle-120.png`, `880 x 660` for the NES) into the directory you pass,

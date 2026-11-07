@@ -1,5 +1,48 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Carts: the NES-001 diorama revised against the reference photos — 2026-11-07
+
+Branch `feature/system-dioramas-nes-rev`, from master `c2d853087` (the Mega Drive #356 merge; the work started
+from `a6260752e`, the generator split of PR #355).
+- **Why**: the owner's bar for the diorama family rose after the first NES; he called the old one "clearly made up".
+  Eight eXretro photos of a real NES-001 (`refs/nes/nes-01..08.jpg`, scratch, not committed) were read for the
+  second pass. The old shell was too shallow/wedge-shaped, one pale colour, had no real lid, a floating wordmark,
+  vague vents and a red D-pad controller.
+- **What**: the NES module is rebuilt as a 256 x 203 x 76 mm slab (not 256 x 202 x 64), with a warm ivory upper
+  housing and a warm taupe-grey lower chassis (sRGB ~0.53/0.50/0.48) split by a crisp seam at 27 mm; the whole
+  upper front is the flip lid, with a thin seam from the left body edge to the port tower, a top hinge line, side
+  seams, a lower lip and thumb notch, and the red "Nintendo / ENTERTAINMENT SYSTEM" printed straight onto the lid
+  (with ® and a letter-spaced smaller second line) rather than on a raised plaque. The top-right vent has 14 cream
+  slats between flat black end caps; the flush black front-right tower has two tall oval 7-pin sockets and red
+  "1"/"2"; the lower front panel is a recessed taupe outline with a square red LED left of flat mid-grey
+  POWER/RESET; the left side has the AUDIO/VIDEO RCA recess; the rear has the label recess, RF switch, antenna and
+  power connector; there are four recessed feet and a 120 x 56 x 20 mm NES-004 controller with a dark-grey D-pad
+  and Start/Select, dark-red A/B and a black centre-top cable.
+  Two values were then measured rather than eye-matched: the taupe lower chassis sits 0.63 luminance below the
+  shell in the front render (the reference's coplanar faces read 75/165 = 0.46; it was 0.70), and the port tower
+  is 43 mm wide with its left edge pinned at X 54, from 330 px = 42.6 mm at 7.75 px/mm in nes-03 (the sockets
+  came in with it: 22 mm centres, 19.6 x 28.4 mm rims).
+- **Evidence**: `nes.glb` sha256 `ef71cfc1bb00ed612cbfb8ac7b375cb9619ed18533ba5322e76846bbb058766c`,
+  4,414,624 B, 191,772 triangles, 100,897 Blender mesh vertices, 136,479 GLB POSITION entries; one `nes_diorama`
+  root, 204 nodes / 203 meshes, seven single-sided materials (`shell`, `dark`, `accent`, `accent_light`, `metal`,
+  `glass`, `screen`), no textures/images/cameras/lights, and TEXCOORD_0 only on `tv_screen` with u/v 0..1. Two
+  no-preview rebuilds and the committed file compare equal. The SNES path is untouched:
+  `snes.glb` still rebuilds to `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`
+  (2,659,776 B). The three `nes-*.png` previews are 880 x 660 at 40 samples. `tools/carts/console/reference/nes.md`
+  is the text-only reference note (sources, dimensions, feature checklist, measured-vs-stylised); no photo is
+  committed.
+- **Preview screen**: `--screen <png>` is preview-only (the shared flag from the generator split; the screen art is
+  wired in after the GLB, so the asset is byte-identical with and without it) and centre-crops a real 4:3 capture.
+  The committed `nes-*` previews are documentation only: they show the generated facsimile frame while the owner's
+  real NES capture is not in hand, the source capture file stays outside git when it lands, and no game art is in
+  the GLB.
+- **Limits**: the 76 mm height is the brief's working figure while dimensions.com lists 88.9 mm overall; the
+  gallery is ambiguous about which side carries the RCA outputs (the brief says left, the gallery's caption calls
+  the plain side the left one); Bfont is not the licensed Nintendo logo; the POWER/RESET legends are solid red,
+  not outlined; the flap is closed (no tray/cartridge); the VIDEO jack is warm metal rather than a separate yellow
+  material, keeping the seven-material contract. Determinism is still proven only on Blender 5.2.3 built
+  2026-10-22. The model remains a recognisable stylised recreation, not a measured replica.
+
 ## Sega Mega Drive / Genesis Model 1 diorama — 2026-11-07
 
 Branch `feature/system-dioramas-md`, from master `a6260752e` (the PR #355 split/registry/screen merge); reviewer
@@ -46,7 +89,6 @@ unchanged.
 - **Review**: independent review of the snapshot: asset, pipeline and previews PASS; two documentation points
   raised (an explicit simplified-controller limit and the preview-capture wording) and both fixed in the revision
   commit before merge.
-
 ## Carts: the diorama generator split into per-system modules — 2026-11-07
 
 Branch `feature/diorama-generator-modules`, from master `dd8ea116a` (the NES merge).
