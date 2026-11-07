@@ -26,6 +26,13 @@ Branch `feature/diorama-generator-modules`, from master `dd8ea116a` (the NES mer
   previews, `android/` and the emulator code are untouched. The one-file claim was proven by dropping a throwaway
   `systems/probe.py` into a copy of the tree: it registered on import with `STAGE = "handheld"` (no CRT) and no
   other file changed. Pyflakes is clean on the generator (the re-exports are declared in `make_console.__all__`).
+- **Preview screens**: `--screen <png>` puts a real gameplay capture on the CRT in the preview renders, centre-
+  cropped to 4:3 by the image lookup's mapping nodes (wider sources lose the sides, taller ones lose the top and
+  bottom; nothing is stretched). It is wired into the `screen` material after the GLB is written, so the asset is
+  byte-identical with and without the flag (SNES still `63a34016…f0640c`) and gains no texture, image or baked art;
+  captures stay outside the repository. The crops were proven with test sources whose outer 12.5% bands are magenta
+  (left/top) and cyan (right/bottom): a 1920x1080 source rendered with `--screen` has 90,525 neutral picture pixels
+  on the screen face and 0 magenta / 0 cyan, and a 1080x1080 source (the vertical crop branch) 61,037 and 0 / 0.
 - **Limits**: a generator refactor - no model, preview composition or performance change. Determinism is still
   proven only on Blender 5.2.3 built 2026-10-22. The preview camera target is still the shared diorama framing; a
   future handheld with a very different silhouette may need its own target, though `stage = handheld` already omits

@@ -280,3 +280,21 @@ against the committed files by hash. `--previews` writes the same three renders 
 and resolution (`front.png`/`three-quarter.png`/`angle-120.png`, `1000 x 765` for the SNES;
 `nes-front.png`/`nes-three-quarter.png`/`nes-angle-120.png`, `880 x 660` for the NES) into the directory you pass,
 so point it at a scratch directory when you do not intend to replace the tracked previews.
+
+### Showing a real game on the previews' CRT
+
+`--previews` draws a generic facsimile frame on the screen by default. `--screen <png>` puts a real capture there
+instead, centre-cropped to the screen's 4:3 (a wider source loses the sides, a taller one loses the top and bottom;
+the mapping nodes do the crop, so nothing is stretched):
+
+```sh
+blender --background --python tools/carts/console/make_console.py -- --system snes \
+    --output /tmp/snes.glb --previews /tmp/previews --screen refs/screens/snes.png
+```
+
+This is a preview-render feature only, and it is deliberately outside the asset: the art is wired into the
+`screen` material **after** the GLB has been written, so the exported GLB is byte-identical with and without
+`--screen` (checked: `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c` either way) and still carries
+no texture, image or baked screen art. Keep the capture outside the repository: preview images that show real
+gameplay are documentation, not a shipped asset, and a committed capture would be someone else's copyright. The
+committed `tools/carts/console/previews/*.png` continue to use the facsimile frame.

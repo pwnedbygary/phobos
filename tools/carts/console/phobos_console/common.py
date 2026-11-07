@@ -636,8 +636,19 @@ def screen_image(w=512, h=384):
     return img
 
 
-def wire_screen_art(mats):
-    img = screen_image()
+def wire_screen_art(mats, screen=None):
+    """Put artwork on the CRT screen for the preview renders only.
+
+    ``screen`` is an image file to show instead of the drawn facsimile - a real
+    gameplay capture, centre-cropped to the screen's 4:3 by the mapping nodes so
+    it is not stretched.  This runs after the GLB has been written: the asset
+    keeps a plain ``screen`` material and no texture, and the file is never
+    copied into the repository.
+    """
+    img = bpy.data.images.load(os.path.abspath(screen), check_existing=True) \
+        if screen else screen_image()
+    if screen:
+        img.colorspace_settings.name = 'sRGB'
     mat = mats["screen"]
     nt = mat.node_tree
     bsdf = nt.nodes["Principled BSDF"]
@@ -647,7 +658,29 @@ def wire_screen_art(mats):
     nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     nt.links.new(tex.outputs["Color"], bsdf.inputs["Emission Color"])
     bsdf.inputs["Emission Strength"].default_value = 1.4
+    if screen:
+        _crop_to_screen(nt, tex, img)
     return img
+
+
+def _crop_to_screen(nt, tex, img):
+    """Centre-crop ``img`` to the CRT's 4:3 through the image lookup's mapping."""
+    w, h = img.size
+    if not (w and h):
+        return
+    want = 4.0 / 3.0
+    aspect = w / float(h)
+    sx, sy = (want / aspect, 1.0) if aspect > want else (1.0, aspect / want)
+    if sx >= 1.0 and sy >= 1.0:
+        return
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    mapping = nt.nodes.new("ShaderNodeMapping")
+    # Mapping applies scale first, then the offset: a centred window of the
+    # picture lands on the 0..1 UVs.
+    mapping.inputs["Scale"].default_value = (sx, sy, 1.0)
+    mapping.inputs["Location"].default_value = ((1.0 - sx) * 0.5, (1.0 - sy) * 0.5, 0.0)
+    nt.links.new(coord.outputs["UV"], mapping.inputs["Vector"])
+    nt.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
 
 
 def render_previews(directory, samples=48, res=(1000, 765), prefix="",

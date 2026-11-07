@@ -28,7 +28,10 @@ Run it with Blender 5.2 (it needs only bpy/bmesh):
 Add `--previews tools/carts/console/previews` to also render the three Cycles
 checks (front, three-quarter, 120 degrees round).  The screen artwork exists only
 in those previews: it is wired into the `screen` material after the GLB has been
-written, so the committed asset stays a plain material the app stamps.
+written, so the committed asset stays a plain material the app stamps.  By
+default the previews draw a generic facsimile frame; `--screen <png>` puts a real
+gameplay capture there instead, centre-cropped to the screen's 4:3 (previews
+only - the capture is never written into the GLB and never committed).
 
 Units are millimetres: width on X, up on Z, the TV/console faces toward -Y, the
 base on Z=0 and the footprint centred on X=Y=0, so a turntable about the Z axis
@@ -95,6 +98,10 @@ def main():
     ap.add_argument("--previews", default=None,
                     help="directory for the front / three-quarter / 120 degree renders")
     ap.add_argument("--samples", type=int, default=48)
+    ap.add_argument("--screen", default=None,
+                    help="PNG/JPG gameplay capture to show on the CRT in the "
+                         "previews, centre-cropped to 4:3 (previews only: it is "
+                         "never written into the GLB and never committed)")
     args = ap.parse_args(argv)
     cfg = SYSTEMS[args.system]
 
@@ -123,7 +130,7 @@ def main():
     digest, size = export_glb(args.output or cfg["output"], root)
 
     if args.previews:
-        wire_screen_art(mats)
+        wire_screen_art(mats, screen=args.screen)
         render_previews(args.previews, samples=args.samples,
                         prefix=cfg["preview_prefix"], res=cfg["preview_res"])
     print(f"DONE sha256={digest} bytes={size} verts={verts} tris={tris}")
