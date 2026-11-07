@@ -17,8 +17,6 @@ import com.google.android.filament.Viewport
 import com.google.android.filament.utils.KTX1Loader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * The single live cart view: one SurfaceView, one Filament view, the focused game's shell turning slowly with the
@@ -177,12 +175,12 @@ class CartRenderer(
 
     /** The slow turn: the camera orbits the shell about the glTF up axis (Y) so its front and sides both read. */
     private fun spin(t: Double) {
-        val angle = t * 0.5
-        val d = fitDistance
+        // Shared with the thumbnailer: one orbit definition, no second copy of the elevation/angle formula.
+        val eye = CartFraming.orbitEye(floatArrayOf(centerX.toFloat(), centerY.toFloat(), centerZ.toFloat()), fitDistance, t * 0.5)
         camera?.lookAt(
-            centerX + sin(angle) * d,
-            centerY + d * CartFraming.ELEVATION,
-            centerZ + cos(angle) * d,
+            eye[0],
+            eye[1],
+            eye[2],
             centerX,
             centerY,
             centerZ,

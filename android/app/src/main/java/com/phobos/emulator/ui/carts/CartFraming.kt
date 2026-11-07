@@ -94,21 +94,37 @@ internal object CartFraming {
         )
     }
 
+    /**
+     * Supplies one object-space AABB plus the world matrix that carries it for an entity, or null when the entity has
+     * no renderable. The engine-backed implementation lives in [engineWorldBoxes]; tests use a fake so the seam that
+     * applies the world transform cannot regress back to unioning raw object-space boxes.
+     */
+    internal fun interface WorldBoxSource {
+        fun worldBox(entity: Int): Part?
+    }
+
     /** The world bounds of the renderables in [entities], each box carried by its entity's world transform. */
-    fun bounds(engine: Engine, entities: IntArray): FloatArray? {
-        val rm = engine.renderableManager
-        val tm = engine.transformManager
+    internal fun bounds(source: WorldBoxSource, entities: IntArray): FloatArray? {
         val parts = mutableListOf<Part>()
-        for (e in entities) {
-            if (!rm.hasComponent(e)) continue
-            val box = runCatching { rm.getAxisAlignedBoundingBox(rm.getInstance(e)) }.getOrNull() ?: continue
-            val world = runCatching {
-                FloatArray(16).also { tm.getWorldTransform(tm.getInstance(e), it) }
-            }.getOrNull() ?: continue
-            parts += Part(box.center, box.halfExtent, world)
-        }
+        for (e in entities) parts += source.worldBox(e) ?: continue
         return bounds(parts)
     }
+
+    /** The engine-backed [WorldBoxSource]: the renderable's object-space box carried by its node's world matrix. */
+    internal fun engineWorldBoxes(engine: Engine): WorldBoxSource = WorldBoxSource { e ->
+        val rm = engine.renderableManager
+        val tm = engine.transformManager
+        if (!rm.hasComponent(e)) return@WorldBoxSource null
+        val box = runCatching { rm.getAxisAlignedBoundingBox(rm.getInstance(e)) }.getOrNull()
+            ?: return@WorldBoxSource null
+        val world = runCatching {
+            FloatArray(16).also { tm.getWorldTransform(tm.getInstance(e), it) }
+        }.getOrNull() ?: return@WorldBoxSource null
+        Part(box.center, box.halfExtent, world)
+    }
+
+    /** Convenience for the renderers: the engine's world bounds over [entities]. */
+    fun bounds(engine: Engine, entities: IntArray): FloatArray? = bounds(engineWorldBoxes(engine), entities)
 
     /**
      * Distance that fits a bounding sphere of [halfExtents] into the view at [aspect] (width / height). Both the

@@ -85,6 +85,38 @@ class CartFramingTest {
     }
 
     @Test
+    fun theEngineFacingPathAppliesEachEntitysWorldTransform() {
+        // This pins the seam that regressed before: the old code unioned the renderables' raw object-space boxes.
+        // Entity 1 is the same box translated by (0, 0, 8.2) exactly like tape.glb's dark.001 node. A fake source is
+        // enough because the world transform is applied inside bounds(source, entities), not by the caller.
+        val identity = floatArrayOf(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f)
+        val translated = identity.copyOf().also { it[14] = 8.2f }
+        val box = floatArrayOf(0f, 0f, 0f, 54.8f, 35.3f, 1.1f)
+        val source = CartFraming.WorldBoxSource { e ->
+            when (e) {
+                7 -> CartFraming.Part(box.copyOf(), floatArrayOf(54.8f, 35.3f, 1.1f), identity)
+                9 -> CartFraming.Part(box.copyOf(), floatArrayOf(54.8f, 35.3f, 1.1f), translated)
+                else -> null
+            }
+        }
+        val b = CartFraming.bounds(source, intArrayOf(7, 9, 12))!!
+        assertEquals("raw object-space union would stop at 1.1", 4.1f, b[2], 0.01f)
+        assertEquals("translated node widens the span to 8.2 + 2.2", 5.2f, b[5], 0.01f)
+    }
+
+    @Test
+    fun aRotationGrowsTheAxisAlignedBox() {
+        // A 90-degree turn about Y maps the x half-extent onto z (and z onto x): [1,2,3] -> [3,2,1].
+        val c = Math.cos(Math.PI / 2).toFloat()
+        val s = Math.sin(Math.PI / 2).toFloat()
+        val rotY = floatArrayOf(c, 0f, -s, 0f, 0f, 1f, 0f, 0f, s, 0f, c, 0f, 0f, 0f, 0f, 1f)
+        val box = CartFraming.transformAabb(floatArrayOf(0f, 0f, 0f), floatArrayOf(1f, 2f, 3f), rotY)
+        assertEquals(3f, box[3], 1e-3f)
+        assertEquals(2f, box[4], 1e-3f)
+        assertEquals(1f, box[5], 1e-3f)
+    }
+
+    @Test
     fun aPureTranslationCarriesTheBoxExactly() {
         val m = floatArrayOf(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 10f, -20f, 30f, 1f)
         val box = CartFraming.transformAabb(floatArrayOf(1f, 2f, 3f), floatArrayOf(4f, 5f, 6f), m)
