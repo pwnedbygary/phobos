@@ -215,8 +215,8 @@ Add `--previews tools/carts/console/previews` to render the three Cycles checks 
 assets, and re-running the command regenerates them in place. The same `--system snes` path still rebuilds the
 committed `snes.glb` byte for byte (sha256
 `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`, 2,659,776 B), and both systems are entries
-in the `SYSTEMS` table in `make_console.py` (palette, console/controller builders, placement, root name, preview
-prefix), so the remaining systems should be table entries rather than new scripts.
+in the `SYSTEMS` table in `phobos_console/systems/__init__.py` (palette, console/controller builders, placement,
+root name, preview prefix), so the remaining systems should be table entries rather than new scripts.
 
 Two no-preview NES rebuilds and the committed file compare equal (sha256
 `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7`; determinism is proven only on Blender 5.2.3
@@ -231,3 +231,50 @@ textures. The 188 parts stay separate so the screen remains a clean target and t
 merging by material would be a consumer-side optimisation. The CRT rig is shared with `snes.glb`, so changing it
 changes both assets. The 120-degree preview is a rear view: the controller is mostly hidden behind the console and
 TV there.
+
+## The diorama generator's layout (and how to add a system)
+
+`tools/carts/console/make_console.py` is the CLI entry point and keeps the same `--system`, `--output`,
+`--previews` and `--samples` flags. The modelling code is the `phobos_console` package beside it:
+
+| Path | Contents |
+|---|---|
+| `tools/carts/console/make_console.py` | CLI, argument parsing, system selection and the build/export/preview sequence |
+| `tools/carts/console/phobos_console/common.py` | shared helpers: scene and material construction, the bmesh primitives, recentre/parent, glTF export and the preview rig |
+| `tools/carts/console/phobos_console/crt.py` | the shared 14-inch 4:3 CRT TV (`build_tv`, `TV_AT`, `add_crt`) |
+| `tools/carts/console/phobos_console/palette.py` | the authored linear-RGB palettes (`SNES_PALETTE`, `NES_PALETTE`) |
+| `tools/carts/console/phobos_console/systems/__init__.py` | the `SYSTEMS` table and the `STAGES` kinds |
+| `tools/carts/console/phobos_console/systems/<name>.py` | one module per system: its constants, console, controller, cable and `build(mats, stage)` |
+
+The `SYSTEMS` row is the whole registration: `root` (the exported root node), `output` (the committed GLB path),
+`palette`, `builder`, `preview_prefix`, `preview_res` and `stage`. The stage kind selects a shared set piece:
+`diorama` places the CRT TV between the console and the controller, and `handheld` is `None`, so a handheld system
+can later omit the CRT. The system module's `build(mats, stage)` places the console, calls `stage(mats)` (if any),
+then places the controller and cable, and returns its `ROOT` name; `make_console.py` checks that name against the
+table.
+
+To add a system, add only two things:
+
+1. `tools/carts/console/phobos_console/systems/<name>.py`, exposing `ROOT`, `OUTPUT`, `PALETTE`,
+   `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE` and `build(mats, stage)`, and using `common.py`/`crt.py` for shared
+   geometry. Authored colours live on the module's `PALETTE`; shared colours can be imported from `palette.py`.
+2. one row in `SYSTEMS` in `systems/__init__.py`.
+
+No change to `make_console.py` or the shared modules is needed for a normal console.
+
+Rebuild both committed assets (the determinism check; run each twice if you are changing the generator):
+
+```sh
+blender --background --python tools/carts/console/make_console.py -- \
+    --system snes --output /tmp/snes.glb
+blender --background --python tools/carts/console/make_console.py -- \
+    --system nes --output /tmp/nes.glb
+sha256sum /tmp/snes.glb /tmp/nes.glb
+```
+
+The SNES GLB must be `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c` (2,659,776 B) and the
+NES GLB `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7` (3,414,076 B); both are checked
+against the committed files by hash. `--previews` writes the same three renders per system with the row's prefix
+and resolution (`front.png`/`three-quarter.png`/`angle-120.png`, `1000 x 765` for the SNES;
+`nes-front.png`/`nes-three-quarter.png`/`nes-angle-120.png`, `880 x 660` for the NES) into the directory you pass,
+so point it at a scratch directory when you do not intend to replace the tracked previews.
