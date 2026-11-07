@@ -10,7 +10,8 @@ import com.phobos.emulator.art.LabelCrop
  * Systems Cartridge does not have take no label scans (no [entry]) but still show a nearest baked shell where one
  * fits; the owner's nearest-shape choices (SG-1000 -> Master System, Neo Geo CD -> CD, SuperGrafx -> HuCard,
  * Pocket Challenge V2 -> WonderSwan Color, ColecoVision -> Atari 2600, Mega LD and PC Engine LD -> CD, MSX and
- * MSX2 -> the small cart). The ZX Spectrum's games are tapes and no baked shell fits: it keeps the list.
+ * MSX2 -> the small cart). The ZX Spectrum and ZX Spectrum 128's games are tapes and no baked shell fits: they keep
+ * the list.
  */
 object CartShapes {
 

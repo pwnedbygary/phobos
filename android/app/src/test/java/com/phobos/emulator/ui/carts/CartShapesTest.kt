@@ -25,8 +25,10 @@ class CartShapesTest {
         // Systems Cartridge does not have take no scans.
         assertNull(CartShapes.labelShape("Neo Geo CD"))
         assertNull(CartShapes.labelShape("ZX Spectrum"))
+        assertNull(CartShapes.labelShape("MSX"))
         assertNull(CartShapes.labelShape("MSX2"))
         assertNull(CartShapes.labelShape("Mega LD"))
+        assertNull(CartShapes.labelShape("PC Engine LD"))
     }
 
     @Test
@@ -53,6 +55,9 @@ class CartShapesTest {
         assertTrue(CartShapes.isDisc("Mega CD"))
         assertTrue(CartShapes.isDisc("PlayStation Portable"))
         assertTrue(CartShapes.isDisc("Neo Geo CD"))
+        // The LaserActive systems ride on the CD disc output, so isDisc has to say so for their cards.
+        assertTrue(CartShapes.isDisc("Mega LD"))
+        assertTrue(CartShapes.isDisc("PC Engine LD"))
         assertTrue(!CartShapes.isDisc("Famicom"))
         assertTrue(!CartShapes.isDisc("Arcade"))
     }
