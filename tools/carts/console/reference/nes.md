@@ -39,9 +39,9 @@ All values are millimetres in the generator's Blender space: X width, Y depth,
 | Cartridge lid | the whole upper front panel: seam from X -126 (body edge) to +55 (tower), lower seam at Z 44.5 |
 | Lid top hinge | thin line at Y = -76.5 with side seams down the top to the front edge |
 | Wordmark | printed on the lid, left at X -112, baseline Z 67.0/55.2; Nintendo 15 mm + ® 4 mm, letter-spaced caps 4.6 mm |
-| Controller tower | 46 mm wide, 45 mm deep, full height, front face flush at Y -101.5 |
-| Controller sockets | two 26 mm tall ovals, centres X +64.5/+88.5, Z 23; 7 pins each |
-| Vent grille | 14 cream slats on the top right, 40 mm wide, black end caps front/rear |
+| Controller tower | 43 mm wide (X 54..97), 45 mm deep, full height, front face flush at Y -101.5 |
+| Controller sockets | two 24.6 mm tall oval plates in 28.4 mm rims, centres X +64.5/+86.5, Z 23; 7 pins each |
+| Vent grille | 14 cream slats on the top right, 37 mm wide, black end caps front/rear |
 | Lower front panel | 121 x 20 mm recessed outline; flat taupe buttons and LED, LED left of POWER |
 | Side RCA panel | left side, 60 x 24 mm, AUDIO (red) and VIDEO (warm metal) |
 | Rear | label recess, RF channel switch, antenna jack, power connector |
@@ -78,7 +78,14 @@ the export, so the turntable spins in place.
   left body edge to the tower; the tower is full-height and flush; the two
   sockets are tall ovals side by side with the numerals above them; the grille
   is a narrow top-right strip with black ends; the lower panel sits toward the
-  left of the taupe chassis and the LED is left of POWER.
+  left of the taupe chassis and the LED is left of POWER. Two of those were
+  then taken to millimetres against nes-03's front face, 1985 px = 256 mm
+  (7.75 px/mm): the black tower measures 330 px, about 42.6 mm, so the model
+  uses 43 mm (43 x 7.75 = 333 px, 0.9% over the photo); the two socket plates
+  measure 132 px, about 17.0 mm, with 2.4 mm between them and 1.8/4.3 mm to
+  the tower's edges. The lower band's value came the same way, as a ratio of
+  the two coplanar front faces rather than a colour picked by eye: the reference
+  reads 75/165 = 0.46, the committed render 0.63 after the palette nudge.
 - **Stylised / approximated**:
   - The wordmark uses Blender's bundled Bfont and a separate ® glyph, not
     Nintendo's licensed logo artwork; the letter-spaced second line is built by
@@ -104,9 +111,10 @@ the export, so the turntable spins in place.
 
 - Asset: `android/app/src/main/assets/carts/consoles/nes.glb`, Phobos's own
   model, GPL-3.0-or-later.
-- sha256 `77f8ad4a4e112a4488a5b92fdb72e795d0d744fd6f7724f2e858424caff6aa57`,
-  4,414,856 B, 191,772 triangles, 100,897 Blender mesh vertices, 136,488 GLB
-  POSITION entries.
+- sha256 `ef71cfc1bb00ed612cbfb8ac7b375cb9619ed18533ba5322e76846bbb058766c`,
+  4,414,624 B, 191,772 triangles, 100,897 Blender mesh vertices, 136,479 GLB
+  POSITION entries (the mesh is the same 204/203-node topology with values
+  changed; the exporter welds nine duplicates fewer than at 46 mm).
 - One `nes_diorama` root; 204 nodes / 203 meshes, all named. Seven single-sided
   materials `shell`, `dark`, `accent`, `accent_light`, `metal`, `glass`,
   `screen`. No textures, images, cameras or lights. Only `tv_screen` carries

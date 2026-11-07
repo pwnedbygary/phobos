@@ -36,7 +36,7 @@ STAGE = "diorama"
 NES_SHELL = (0.540, 0.505, 0.425, 1.0)
 NES_DARK = (0.012, 0.012, 0.014, 1.0)
 NES_ACCENT = (0.330, 0.010, 0.008, 1.0)
-NES_ACCENT_LIGHT = (0.295, 0.260, 0.212, 1.0)
+NES_ACCENT_LIGHT = (0.240, 0.216, 0.192, 1.0)
 NES_METAL = (0.450, 0.410, 0.300, 1.0)
 NES_GLASS = (0.360, 0.012, 0.012, 1.0)
 
@@ -70,8 +70,8 @@ NES_CTRL_ROT = -8.0
 # front-face details
 FRONT_Y = -NES_D * 0.5
 LID_X, LID_W = -35.5, 181.0
-TOWER_X, TOWER_W = 77.0, 46.0
-PORT_X = (64.5, 88.5)
+TOWER_X, TOWER_W = 75.5, 43.0
+PORT_X = (64.5, 86.5)
 PORT_Z = 23.0
 
 
@@ -157,26 +157,26 @@ def _port(mats, x, z, label):
     # around x=0, so move it under its port
     socket = loft_xz(
         "nes_port_socket",
-        [(-101.55, 17.6, 26.0, z, 8.4), (-101.15, 17.6, 26.0, z, 8.4)], dark)
+        [(-101.55, 16.6, 24.6, z, 7.9), (-101.15, 16.6, 24.6, z, 7.9)], dark)
     bake_matrix(socket, Matrix.Translation(Vector((x, 0.0, 0.0))))
     objs.append(socket)
     # flat oval rim, only 0.35 mm off the tower face: the bezel is the flat
     # black tower, not a cylinder around each socket
     rim = ring_solid(
         "nes_port_rim",
-        rr_loop(20.8, 30.0, 9.0, 30),
-        rr_loop(19.0, 28.2, 8.2, 30),
+        rr_loop(19.6, 28.4, 8.4, 30),
+        rr_loop(17.9, 26.7, 7.7, 30),
         0.0, 0.35, lower, bevel=0.15, bevel_seg=2)
     bake_place(rim, (x, -101.5, z), rot_x=math.radians(90.0))
     objs.append(rim)
-    for dz, dxs in ((6.0, (-4.6, 0.0, 4.6)),
-                    (-3.0, (-5.2, -1.7, 1.7, 5.2))):
+    for dz, dxs in ((5.6, (-4.3, 0.0, 4.3)),
+                    (-2.8, (-4.9, -1.6, 1.6, 4.9))):
         for dx in dxs:
             objs.append(cylinder("nes_port_pin", 0.85, 0.5, 14, metal,
                                  center=(x + dx, -101.55, z + dz), axis='Y'))
-    num = text_mesh("nes_port_number_" + label, label, 4.7, 0.2, 0.03,
+    num = text_mesh("nes_port_number_" + label, label, 4.4, 0.2, 0.03,
                     accent, resolution_u=4, bevel_resolution=1)
-    bake_place(num, (x, -103.5, z + 19.0), rot_x=math.radians(90.0))
+    bake_place(num, (x, -103.5, z + 17.8), rot_x=math.radians(90.0))
     objs.append(num)
     return objs
 
