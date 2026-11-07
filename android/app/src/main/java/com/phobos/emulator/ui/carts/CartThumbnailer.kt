@@ -103,15 +103,9 @@ class CartThumbnailer(
             }
             indirectTexture = bundle.cubemap
         }
-        runCatching {
-            val bytes = context.assets.open("carts/ibl/ibl_skybox.ktx").use { it.readBytes() }
-            val buffer = ByteBuffer.allocateDirect(bytes.size).apply { put(bytes) }
-            buffer.rewind()
-            val bundle = KTX1Loader.createSkybox(engine, buffer)
-            scene.skybox = bundle.skybox
-            skybox = bundle.skybox
-            skyboxTexture = bundle.cubemap
-        }
+        // No skybox: the Library tile supplies the background. The indirect light still shades the shell, and the
+        // clear below is transparent, so the card composites onto the tile instead of a photo-studio room.
+        scene.skybox = null
     }
 
     private fun entities(shape: String, disc: Boolean): IntArray? {
@@ -235,6 +229,11 @@ class CartThumbnailer(
 
         for (e in ents) runCatching { scene.addEntity(e) }
         val lookTextures = CartMaterials.apply(engine, ents, look, wear, label)
+        // Transparent clear: the card is composited by Compose over the Library tile, so no studio backdrop leaks in.
+        renderer.clearOptions = Renderer.ClearOptions().apply {
+            clear = true
+            clearColor = doubleArrayOf(0.0, 0.0, 0.0, 0.0)
+        }
         // Offscreen: this is the beginFrame/endFrame-less entry point that flushes the driver, so the readback below
         // is actually submitted (render() expects an open beginFrame and would drop it).
         renderer.renderStandaloneView(view)
