@@ -35,10 +35,12 @@ Branch `carts-coverage`, from master `d5c6d54e9`.
   to the plain list and looked like exceptions.
 - **What**: the LaserActive's Mega LD and PC Engine LD (LD-ROM) now show the CD disc shell, and MSX and MSX2 show the
   small cart shell. They have no Cartridge entry, so no label scans are downloaded: their labels are the generated
-  ones (or box art) as for the Neo Geo CD. The ZX Spectrum and ZX Spectrum 128 stay on the list: their games are
-  tapes and no baked shell represents a cassette; a tape shell is the next cart task.
-- **Evidence**: `CartShapesTest` and `CartShapeAssetsTest` updated (the nearest-shape table, the null cases that
-  remain, and asset existence); both flavours' 688 unit tests pass. The APK installed on the RP6; the Library lists
+  ones, as for the Neo Geo CD (box art is only the Library card's fallback, and the LaserActive pair has none). The
+  ZX Spectrum and ZX Spectrum 128 stay on the list: their games are tapes and no baked shell represents a cassette;
+  a tape shell is the next cart task.
+- **Evidence**: `CartShapesTest` updated (the nearest-shape table, the new disc systems and the null cases that
+  remain); `CartShapeAssetsTest` already covers every mapped shape and needed no change; both flavours' 688 unit
+  tests pass. The APK installed on the RP6; the Library lists
   MSX, MSX2, Mega LD and PC Engine LD, and Continue Playing already draws the baked shells for its Neo Geo cards.
 - **Limits**: a system's own page was not opened on the RP6 (this test install has no ROM directories configured for
   those systems); the `small` and `cd` shells are the same baked assets other systems already use.
