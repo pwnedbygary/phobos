@@ -65,3 +65,7 @@ thirdparty/libchdr/deps/zlib-*/zconf.h.included
 
 # exclude gradle home
 android/.gradle-home/
+
+# Exclude Python bytecode (the diorama generator under tools/carts/console)
+__pycache__/
+*.pyc

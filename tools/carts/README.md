@@ -214,9 +214,9 @@ Add `--previews tools/carts/console/previews` to render the three Cycles checks 
 `nes-three-quarter.png` and `nes-angle-120.png` (880 x 660, 40 samples); they are illustrative renders, not
 assets, and re-running the command regenerates them in place. The same `--system snes` path still rebuilds the
 committed `snes.glb` byte for byte (sha256
-`63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`, 2,659,776 B), and both systems are entries
-in the `SYSTEMS` table in `make_console.py` (palette, console/controller builders, placement, root name, preview
-prefix), so the remaining systems should be table entries rather than new scripts.
+`63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`, 2,659,776 B), and both systems are
+discovered modules under `phobos_console/systems/` (see "The diorama generator's layout" below), so the remaining
+systems are one new `systems/<name>.py` each rather than edits to a shared script.
 
 Two no-preview NES rebuilds and the committed file compare equal (sha256
 `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7`; determinism is proven only on Blender 5.2.3
@@ -231,3 +231,70 @@ textures. The 188 parts stay separate so the screen remains a clean target and t
 merging by material would be a consumer-side optimisation. The CRT rig is shared with `snes.glb`, so changing it
 changes both assets. The 120-degree preview is a rear view: the controller is mostly hidden behind the console and
 TV there.
+
+## The diorama generator's layout (and how to add a system)
+
+`tools/carts/console/make_console.py` is the CLI entry point and keeps the same `--system`, `--output`,
+`--previews` and `--samples` flags. The modelling code is the `phobos_console` package beside it:
+
+| Path | Contents |
+|---|---|
+| `tools/carts/console/make_console.py` | CLI, argument parsing, system selection and the build/export/preview sequence |
+| `tools/carts/console/phobos_console/common.py` | shared helpers: scene and material construction, the bmesh primitives, recentre/parent, glTF export and the preview rig |
+| `tools/carts/console/phobos_console/crt.py` | the shared 14-inch 4:3 CRT TV (`build_tv`, `TV_AT`, `add_crt`) |
+| `tools/carts/console/phobos_console/palette.py` | only the colours every stage draws the same (`SCREEN`, `SCREEN_GLOW`); each system owns its own palette |
+| `tools/carts/console/phobos_console/systems/__init__.py` | the registry: it discovers the modules beside it, validates them and builds `SYSTEMS`, plus the `STAGES` kinds |
+| `tools/carts/console/phobos_console/systems/<name>.py` | one module per system and its whole registration: `ROOT`, `OUTPUT`, `PALETTE`, `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE`, `build(mats, stage)`, plus the console, controller and cable |
+
+`systems/__init__.py` imports every non-underscore module in `systems/`, checks that it has the metadata above,
+that it has a `build(mats, stage)` callable and that its `STAGE` is a known kind, then builds the `SYSTEMS` row
+from it - keyed by the module name, so `--system n64` means `systems/n64.py`. Each row is `root` (the exported root
+node), `output` (the committed GLB path), `palette`, `builder`, `preview_prefix`, `preview_res` and `stage`. The
+stage kind selects a shared set piece: `diorama` places the CRT TV between the console and the controller, and
+`handheld` is `None`, so a handheld system can omit the CRT. The system module's `build(mats, stage)` places the
+console, calls `stage(mats)` (if any), then places the controller and cable, and returns its `ROOT` name;
+`make_console.py` checks that name against the row.
+
+To add a system, add exactly one thing: `tools/carts/console/phobos_console/systems/<name>.py`, exposing `ROOT`,
+`OUTPUT`, `PALETTE`, `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE` and `build(mats, stage)`, and using
+`common.py`/`crt.py` for the shared geometry. The registry finds it at import time, so there is no table row, no
+import line and no palette edit in any shared file: two authors adding two consoles write two different files and
+never conflict. The module's own `PALETTE` is the whole colour choice for that console (tuning it never touches
+another system); `palette.py` keeps only what the shared stage has to draw identically everywhere. The old
+single-file generator's builder names (`build_snes`, `build_nes`, `snes_top`, ...) are still importable from
+`make_console.py`, but a new system does not extend that list - its builders live in its own module.
+
+Rebuild both committed assets (the determinism check; run each twice if you are changing the generator):
+
+```sh
+blender --background --python tools/carts/console/make_console.py -- \
+    --system snes --output /tmp/snes.glb
+blender --background --python tools/carts/console/make_console.py -- \
+    --system nes --output /tmp/nes.glb
+sha256sum /tmp/snes.glb /tmp/nes.glb
+```
+
+The SNES GLB must be `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c` (2,659,776 B) and the
+NES GLB `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7` (3,414,076 B); both are checked
+against the committed files by hash. `--previews` writes the same three renders per system with the row's prefix
+and resolution (`front.png`/`three-quarter.png`/`angle-120.png`, `1000 x 765` for the SNES;
+`nes-front.png`/`nes-three-quarter.png`/`nes-angle-120.png`, `880 x 660` for the NES) into the directory you pass,
+so point it at a scratch directory when you do not intend to replace the tracked previews.
+
+### Showing a real game on the previews' CRT
+
+`--previews` draws a generic facsimile frame on the screen by default. `--screen <png>` puts a real capture there
+instead, centre-cropped to the screen's 4:3 (a wider source loses the sides, a taller one loses the top and bottom;
+the mapping nodes do the crop, so nothing is stretched):
+
+```sh
+blender --background --python tools/carts/console/make_console.py -- --system snes \
+    --output /tmp/snes.glb --previews /tmp/previews --screen refs/screens/snes.png
+```
+
+This is a preview-render feature only, and it is deliberately outside the asset: the art is wired into the
+`screen` material **after** the GLB has been written, so the exported GLB is byte-identical with and without
+`--screen` (checked: `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c` either way) and still carries
+no texture, image or baked screen art. Keep the capture outside the repository: preview images that show real
+gameplay are documentation, not a shipped asset, and a committed capture would be someone else's copyright. The
+committed `tools/carts/console/previews/*.png` continue to use the facsimile frame.

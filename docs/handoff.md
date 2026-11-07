@@ -1,12 +1,52 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Carts: the diorama generator split into per-system modules — 2026-11-07
+
+Branch `feature/diorama-generator-modules`, from master `dd8ea116a` (the NES merge).
+- **Why**: the SNES and NES generators were one 1,438-line script. The next systems (N64, Mega Drive, ...) would all
+  edit that file and conflict; the owner is about to author several dioramas in parallel. This splits it so each
+  system is one module and two authors never touch the same file.
+- **What**: `tools/carts/console/make_console.py` stays the CLI entry point with the same
+  `--system/--output/--previews/--samples` flags. The modelling code moves to
+  `tools/carts/console/phobos_console/`: `common.py` (scene/material helpers, bmesh primitives, recentre/parent,
+  glTF export and preview rig), `crt.py` (the shared 14-inch TV with `TV_AT` and `add_crt`), `palette.py` (only the
+  colours every stage draws the same: `SCREEN`, `SCREEN_GLOW`), and `systems/<name>.py` - one module per system,
+  holding its own palette, console, controller, cable and `build(mats, stage)` that returns the root node name.
+  `systems/__init__.py` is the registry: it discovers every non-underscore module in `systems/`, validates the
+  metadata (`ROOT`, `OUTPUT`, `PALETTE`, `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE`, `build`), and builds `SYSTEMS`
+  from it, keyed by module name (`--system nes` is `systems/nes.py`). `STAGES` holds the stage kinds (`diorama` ->
+  the shared CRT, `handheld` -> no set piece), and the stage callable is invoked between the console and the
+  controller so the exported node order is unchanged. **Adding a system is one new file and nothing else**: no
+  registry row, no import line, no shared palette edit.
+- **Evidence**: no output change. Two no-preview rebuilds per system plus the committed files are all
+  byte-identical: `snes.glb` sha256 `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`
+  (2,659,776 B) and `nes.glb` sha256 `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7`
+  (3,414,076 B); stats still 59,365 mesh verts / 111,920 tris and 77,243 / 146,556. `--previews` still writes the
+  same sets with the same prefixes and resolutions (checked at one sample into `/tmp`). The committed GLBs and
+  previews, `android/` and the emulator code are untouched. The one-file claim was proven by dropping a throwaway
+  `systems/probe.py` into a copy of the tree: it registered on import with `STAGE = "handheld"` (no CRT) and no
+  other file changed. Pyflakes is clean on the generator (the re-exports are declared in `make_console.__all__`).
+- **Preview screens**: `--screen <png>` puts a real gameplay capture on the CRT in the preview renders, centre-
+  cropped to 4:3 by the image lookup's mapping nodes (wider sources lose the sides, taller ones lose the top and
+  bottom; nothing is stretched). It is wired into the `screen` material after the GLB is written, so the asset is
+  byte-identical with and without the flag (SNES still `63a34016…f0640c`) and gains no texture, image or baked art;
+  captures stay outside the repository. The crops were proven with test sources whose outer 12.5% bands are magenta
+  (left/top) and cyan (right/bottom): a 1920x1080 source rendered with `--screen` has 90,525 neutral picture pixels
+  on the screen face and 0 magenta / 0 cyan, and a 1080x1080 source (the vertical crop branch) 61,037 and 0 / 0.
+- **Limits**: a generator refactor - no model, preview composition or performance change. Determinism is still
+  proven only on Blender 5.2.3 built 2026-10-22. The preview camera target is still the shared diorama framing; a
+  future handheld with a very different silhouette may need its own target, though `stage = handheld` already omits
+  the CRT. `make_console.py` keeps exporting the old single-file generator's SNES/NES builder names, but that list is
+  frozen: a new system's builders live only in its own module.
+
 ## Carts: the NES + CRT system diorama, modeled in Blender — 2026-11-07
 
 Branch `feature/system-dioramas-nes`, from master `ec07590b8`; extends the merged SNES generator (PR #350).
 - **Why**: the owner's request is a 3DS Virtual-Console-style diorama per system: the real console beside a CRT
   showing the game, a controller in front, floating and rotating in place. The SNES was the first; this adds the
-  NES in the same family and makes the generator data-driven (a `SYSTEMS` table) so the remaining systems are
-  table entries rather than new scripts.
+  NES in the same family and makes the generator data-driven (a `SYSTEMS` table) so the remaining systems would be
+  table entries rather than new scripts (superseded by the entry above: the registry now discovers one module per
+  system, so a system is one new `systems/<name>.py` and no shared file is edited).
 - **What**: the NES-001 front loader as a low two-tone slab - rounded light-grey upper shell over a darker
   warm-grey lower chassis, closed front-loading flap with the red Nintendo wordmark, black front-right band with
   two stacked 7-pin controller ports and red "1"/"2" numerals, ribbed top vent, POWER/RESET in the lower front
