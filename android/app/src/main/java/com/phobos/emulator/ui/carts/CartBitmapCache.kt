@@ -23,6 +23,11 @@ class CartBitmapCache(
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
+    companion object {
+        /** Bumped whenever the cart renderer's output changes: pictures an older renderer drew must not be served. */
+        const val RENDERER_VERSION = "2"
+    }
+
     data class Key(
         val gameId: Long,
         val kind: String,
@@ -36,11 +41,14 @@ class CartBitmapCache(
         val height: Int,
         /** Identity of the label image when one is stamped (absent, mtime), so a late label replaces a blank render. */
         val label: String = "",
+        /** The renderer that drew the picture; covered by the id so a renderer change invalidates old pictures. */
+        val renderer: String = RENDERER_VERSION,
     ) {
         /** Stable id over every pixel-affecting field (sha256 of the joined fields). */
         fun id(): String {
             val md = MessageDigest.getInstance("SHA-256")
-            val joined = listOf(gameId, kind, theme, face, finish, color, special, wear, width, height, label).joinToString("\u0000")
+            val joined = listOf(gameId, kind, theme, face, finish, color, special, wear, width, height, label, renderer)
+                .joinToString("\u0000")
             return md.digest(joined.toByteArray()).joinToString("") { "%02x".format(it) }
         }
     }

@@ -37,7 +37,9 @@ object CartMaterials {
             val instance = rm.getInstance(e)
             for (primitive in 0 until rm.getPrimitiveCount(instance)) {
                 val mi = rm.getMaterialInstanceAt(instance, primitive)
-                when (mi.material.name) {
+                // Filament's Java getMaterialInstanceAt() wraps the native instance without a Material reference, so
+                // getMaterial() is null for gltfio assets; the instance's name is the glTF material's (shell, label).
+                when (mi.name) {
                     "shell" -> {
                         applyColour(mi, look)
                         applyFinish(mi, look?.finish ?: "solid")
@@ -108,7 +110,8 @@ object CartMaterials {
             "translucent" -> 0.45f
             else -> 1f
         }
-        mi.setParameter("baseColorFactor", floatArrayOf(c[0], c[1], c[2], alpha))
+        // The four-float overload: setParameter(String, float[]) is Filament's mat4f one (it asserts 16 values).
+        mi.setParameter("baseColorFactor", c[0], c[1], c[2], alpha)
     }
 
     private fun applyFinish(mi: MaterialInstance, finish: String) {
@@ -133,7 +136,8 @@ object CartMaterials {
                 mi.setParameter("metallicFactor", 0.0f)
                 mi.setParameter("roughnessFactor", 0.6f)
                 // A soft self-lit edge: the lit material's emissive term.
-                runCatching { mi.setParameter("emissiveFactor", floatArrayOf(0.25f, 0.45f, 0.2f)) }
+                // The three-float overload, not the mat4f one.
+                runCatching { mi.setParameter("emissiveFactor", 0.25f, 0.45f, 0.2f) }
             }
             else -> {
                 mi.setParameter("metallicFactor", 0.0f)

@@ -18,11 +18,19 @@ import java.nio.ByteBuffer
  *
  * OpenGL ES backend only: Phobos has no other EGL user, and Vulkan would share the process with the emulator's
  * adrenotools driver.
+ *
+ * Threading: Filament's JobSystem adopts exactly the thread that builds the engine (FEngine's constructor calls
+ * JobSystem::adopt(), and the JobSystem has a single adoptable slot) and aborts in getState() with "This thread has
+ * not been adopted." on any other thread that renders. [engineLooper] is that thread, and the offscreen thumbnailer
+ * marshals its engine calls back to it.
  */
 class CartsEngine private constructor(private val context: Context) {
 
     val engine: Engine = Engine.Builder().backend(Engine.Backend.OPENGL).build()
     val scene: Scene = engine.createScene()
+
+    /** The Looper of the thread that built [engine]: the only thread Filament lets us render on ([get] runs on main). */
+    internal val engineLooper: android.os.Looper? = android.os.Looper.myLooper()
 
     /** Every offscreen render runs under this gate; [release] closes it and waits for the in-flight draw. */
     internal val renderGate = RenderGate()
@@ -40,8 +48,13 @@ class CartsEngine private constructor(private val context: Context) {
 
     class LoadedCart(val key: String, val asset: FilamentAsset, val entities: IntArray)
 
-    /** `carts/<shape>.glb` (or `discs/<shape>.glb`) from the app's assets; null when it cannot be loaded. */
-    fun cart(key: String): LoadedCart? {
+    /** `carts/carts/<shape>.glb` for a cart, `carts/discs/<shape>.glb` for a disc; null when it cannot be loaded. */
+    fun cart(shape: String): LoadedCart? = load("carts/$shape")
+
+    /** The disc shell used for disc systems (minidisc carries PSP, as Cartridge has no UMD spec). */
+    fun disc(shape: String): LoadedCart? = load("discs/$shape")
+
+    private fun load(key: String): LoadedCart? {
         loaded[key]?.let { return it }
         val asset = try {
             val bytes = context.assets.open("carts/$key.glb").use { it.readBytes() }
@@ -63,9 +76,6 @@ class CartsEngine private constructor(private val context: Context) {
         .getOrNull()
         ?.also { createdAssets.add(it) }
 
-    /** The disc shell used for disc systems (minidisc carries PSP, as Cartridge has no UMD spec). */
-    fun disc(shape: String): LoadedCart? = cart("discs/$shape")
-
     /** Drops everything this engine owns. Callers must have detached (see the class note). */
     fun release() {
         // Close the gate and wait for the in-flight draw; never destroy with a render still inside the engine.
@@ -82,6 +92,13 @@ class CartsEngine private constructor(private val context: Context) {
     }
 
     companion object {
+        /**
+         * Filament before the first Engine: `Utils.init()` loads filament-jni, gltfio-jni and the utils JNI library
+         * (utils depends on both), which the Java classes otherwise never load. Without it every Engine.Builder call
+         * fails with "No implementation found" and the carts silently render nothing.
+         */
+        init { runCatching { com.google.android.filament.utils.Utils.init() } }
+
         @Volatile private var instance: CartsEngine? = null
         private val idSource = java.util.concurrent.atomic.AtomicLong(1)
 

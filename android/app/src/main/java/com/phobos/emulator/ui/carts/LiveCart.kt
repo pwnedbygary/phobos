@@ -2,7 +2,6 @@ package com.phobos.emulator.ui.carts
 
 import android.graphics.BitmapFactory
 import android.view.SurfaceView
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -60,7 +59,8 @@ fun LiveCartView(
                 renderer = CartRenderer(ctx, surface).also { it.attach() }
             }
         },
-        modifier = modifier.fillMaxSize(),
+        // Keep the caller's size (the grid gives 180.dp): fillMaxSize overrode it and the surface covered the grid.
+        modifier = modifier,
     )
     LaunchedEffect(renderShape, disc, look, wear, label?.lastModified(), label?.length(), box?.lastModified(), box?.length(), title, themeKey, renderer) {
         val r = renderer ?: return@LaunchedEffect

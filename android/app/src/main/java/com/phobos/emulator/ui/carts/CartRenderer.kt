@@ -13,6 +13,7 @@ import com.google.android.filament.Skybox
 import com.google.android.filament.SwapChain
 import com.google.android.filament.View
 import com.google.android.filament.Texture
+import com.google.android.filament.Viewport
 import com.google.android.filament.utils.KTX1Loader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -99,15 +100,25 @@ class CartRenderer(
         setupEnvironment(engine)
         view?.scene = owner.scene
         view?.camera = camera
-        swapChain = engine.createSwapChain(holder.surface)
-        running = true
-        startNanos = System.nanoTime()
-        Choreographer.getInstance().postFrameCallback(this)
+        // The swap chain waits for surfaceChanged: a surface's size is only known there, and a chain built on the
+        // zero-sized surface of surfaceCreated presents black frames.
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (!CartsEngine.isRunning() || CartsEngine.currentEngineId() != engineId) return
         camera?.setProjection(45.0, width.toDouble() / height.coerceAtLeast(1), 10.0, 5000.0, Camera.Fov.VERTICAL)
+        // Filament renders nothing (not even the clear) when the view's viewport is empty; it is not derived from the
+        // swap chain, so the viewport is stated with every surface size.
+        view?.viewport = Viewport(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
+        val engine = engineOwner?.engine ?: return
+        if (width <= 0 || height <= 0) return
+        swapChain?.let { runCatching { engine.destroySwapChain(it) } }
+        swapChain = runCatching { engine.createSwapChain(holder.surface) }.getOrNull()
+        if (!running) {
+            running = true
+            startNanos = System.nanoTime()
+            Choreographer.getInstance().postFrameCallback(this)
+        }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
