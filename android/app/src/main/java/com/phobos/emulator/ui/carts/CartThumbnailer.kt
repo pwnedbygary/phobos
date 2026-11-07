@@ -204,8 +204,27 @@ class CartThumbnailer(
         ) return null
         val ents = entities(shape, disc) ?: return null
         val t = target(width, height)
-        camera.setProjection(45.0, width.toDouble() / height.toDouble(), 0.1, 1000.0, Camera.Fov.VERTICAL)
-        camera.lookAt(0.0, 60.0, 420.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+        // Frame the shell from its own bounds: the baked models range from 48 to 190 units tall, so a fixed camera
+        // distance either makes a speck of the small ones or crops the big ones.
+        val b = CartFraming.bounds(engine, ents) ?: floatArrayOf(0f, 0f, 0f, 60f, 60f, 20f)
+        val d = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]))
+        camera.setProjection(
+            CartFraming.FOV_DEGREES,
+            width.toDouble() / height.toDouble(),
+            CartFraming.near(d),
+            CartFraming.far(d),
+        )
+        camera.lookAt(
+            b[0].toDouble(),
+            (b[1] + d * CartFraming.ELEVATION).toDouble(),
+            (b[2] + d).toDouble(),
+            b[0].toDouble(),
+            b[1].toDouble(),
+            b[2].toDouble(),
+            0.0,
+            1.0,
+            0.0,
+        )
         view.setRenderTarget(t.target)
         // Filament renders nothing (not even the clear) when the view's viewport is empty; it is not derived from the
         // render target, so every draw states it.

@@ -41,6 +41,14 @@ class CartsEngine private constructor(private val context: Context) {
     private val materials = UbershaderProvider(engine)
     val assets: AssetLoader = AssetLoader(engine, materials, com.google.android.filament.EntityManager.get())
 
+    /**
+     * gltfio defers the vertex data that needs the whole primitive to the resource loader: the glTF normals are
+     * stored as unpopulated "tangent quats" and only [ResourceLoader.loadResources] fills that buffer (and any
+     * textures). Without it every primitive is submitted with an unbound vertex buffer and draws nothing - the scene
+     * and camera look right, the renderables are "visible", and no shader error is logged.
+     */
+    private val resources = com.google.android.filament.gltfio.ResourceLoader(engine)
+
     private val loaded = HashMap<String, LoadedCart>()
 
     /** Every asset created here, so release() destroys all of them (the loader alone does not). */
@@ -72,7 +80,9 @@ class CartsEngine private constructor(private val context: Context) {
      * (background thread) and the live view (main thread) both load shells. Every asset is registered for release.
      */
     @Synchronized
-    internal fun createAsset(buffer: ByteBuffer): FilamentAsset? = runCatching { assets.createAsset(buffer) }
+    internal fun createAsset(buffer: ByteBuffer): FilamentAsset? = runCatching {
+        assets.createAsset(buffer)?.also { resources.loadResources(it) }
+    }
         .getOrNull()
         ?.also { createdAssets.add(it) }
 
@@ -85,6 +95,7 @@ class CartsEngine private constructor(private val context: Context) {
         }
         createdAssets.clear()
         loaded.clear()
+        runCatching { resources.destroy() }
         runCatching { assets.destroy() }
         runCatching { materials.destroy() }
         runCatching { engine.destroyScene(scene) }
