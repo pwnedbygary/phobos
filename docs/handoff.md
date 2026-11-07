@@ -1,5 +1,52 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Sega Mega Drive / Genesis Model 1 diorama — 2026-11-07
+
+Branch `feature/system-dioramas-md`, from master `a6260752e` (the PR #355 split/registry/screen merge); reviewer
+PASS on that merge. The independent review of this change returned two docs-only points; both are fixed in the
+revision commit. Clean room: our code; no copied model, texture, photo, font file or logo asset. Save states:
+unchanged.
+- **Why**: the console-diorama family needs a Sega Mega Drive/Genesis Model 1. The owner's quality bar is
+  reference-accurate, not invented; the previous NES "looks clearly made up" line is the standard to beat.
+- **What**: one new auto-discovered module, `tools/carts/console/phobos_console/systems/megadrive.py` (own palette,
+  console, cartridge, three-button controller, cable and `build(mats, stage)`); one emitted asset
+  `android/app/src/main/assets/carts/consoles/megadrive.glb`; the three `megadrive-*` preview renders; a reference
+  record `tools/carts/console/reference/megadrive.md`; this handoff and the README section. No shared module,
+  registry row, `systems/__init__.py` or `palette.py` edit; SNES `63a34016…f0640c` and NES `3b3bd5e6…d905cee7`
+  are byte-identical.
+- **Model**: 280 x 212 x 79 mm Model 1 wedge, charcoal ABS with a low front/high rear sloping crown; large oval
+  cartridge door and raised SEGA/16-BIT badge; rear-top ridged cartridge; front POWER/RESET/VOLUME/headphone
+  panel and two recessed DB9 ports; top/side/rear vents, rear AV/RF/channel switch and four feet; the actual
+  SEGA / MEGA DRIVE / 16-BIT / POWER / RESET / VOLUME / START / TRIGGER / A-B-C / CONTROLLER lettering is our own
+  extruded type modelled from the reference photos (not a downloaded image or font). Controller: rounded black
+  three-button body, D-pad, blue START, red A/B/C diagonal row, ribbed cable plug into port 1.
+- **Palette/materials**: module-local palette; seven single-sided materials - `shell`, `dark`, `accent` (red),
+  `accent_light` (blue), `metal`, `glass`, `screen` - with varied roughness, not one default-grey plastic. No
+  baked texture or image.
+- **Contract/evidence**: one root `megadrive_diorama`; exactly 7 single-sided materials; only `tv_screen` has
+  `TEXCOORD_0`; 0 images/textures/cameras/lights; 100,949 mesh vertices and 184,484 triangles; GLB 5,445,984 B,
+  sha256 `663b0b97bc0488e1023720d10fbf9f87b788b306e96b40713efea634ec1f67a6`; bounds 665.0 x 680.5 x 352.2 mm,
+  base Z=0, centred X=Y=0. Two no-preview runs from Blender 5.2.3 (2026-10-22 build) and the committed file are
+  byte-identical; the three previews are `megadrive-front.png` (`bcc2925f…`), `megadrive-three-quarter.png`
+  (`0e1f8ff5…`) and `megadrive-angle-120.png` (`7f404b36…`), 1000 x 765.
+- **Preview screen**: `--screen refs/screens/megadrive.png` is preview-only (wired after the GLB; the asset is
+  identical with and without it) and centre-crops a real 4:3 capture. The committed `megadrive-*` previews are
+  documentation only: they show one real frame from a Phobos desktop *Golden Axe Plus* run and therefore contain
+  that frame, while the source capture file stays outside git and no game art is in the GLB. The capture is a
+  desktop Phobos frame, not the RP6 (the RP6 lock was held for another agent's device pass); the device can be
+  swapped later without touching the asset.
+- **Reference/limits**: photos from Wikimedia Commons (Evan-Amos public-domain Model 1 and 3-button controller;
+  Sintegrity CC BY-SA top/side views) were inspected in scratch and are not committed. Dimensions are the
+  documented 280 x 212 x 79 mm cross-checked against photo ratios; no calipers, and no dedicated rear close-up
+  was retained (rear layout from front/side/top and public Model 1 layout). The three-button controller is a
+  simplified, slightly oversized interpretation of the Sega pad, not a per-part reconstruction. One game frame;
+  stylised diorama, not manufacturing CAD; determinism only on Blender 5.2.3 built 2026-10-22.
+- **Checks**: exact build command recorded in the README; two-run byte comparison; GLB contract parse; SNES/NES
+  hashes verified; previews rendered and read against the reference photos; no Android/UI/emulator files touched.
+- **Review**: independent review of the snapshot: asset, pipeline and previews PASS; two documentation points
+  raised (an explicit simplified-controller limit and the preview-capture wording) and both fixed in the revision
+  commit before merge.
+
 ## Carts: the diorama generator split into per-system modules — 2026-11-07
 
 Branch `feature/diorama-generator-modules`, from master `dd8ea116a` (the NES merge).
