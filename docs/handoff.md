@@ -4,29 +4,33 @@
 
 Branch `feature/diorama-generator-modules`, from master `dd8ea116a` (the NES merge).
 - **Why**: the SNES and NES generators were one 1,438-line script. The next systems (N64, Mega Drive, ...) would all
-  edit that file and conflict; the owner is about to author several dioramas in parallel. This is a mechanical
-  split that fixes the CLI, the shared helpers, the CRT stage and the palettes, and leaves each system one module.
+  edit that file and conflict; the owner is about to author several dioramas in parallel. This splits it so each
+  system is one module and two authors never touch the same file.
 - **What**: `tools/carts/console/make_console.py` stays the CLI entry point with the same
-  `--system/--output/--previews/--samples` flags (and re-exports the public helpers). The modelling code moves to
+  `--system/--output/--previews/--samples` flags. The modelling code moves to
   `tools/carts/console/phobos_console/`: `common.py` (scene/material helpers, bmesh primitives, recentre/parent,
-  glTF export and preview rig), `crt.py` (the shared 14-inch TV with `TV_AT` and `add_crt`), `palette.py` (the
-  authored SNES and NES palettes), and `systems/{snes,nes}.py` (each system's constants, console, controller, cable
-  and `build(mats, stage)`, which returns the root node name). `systems/__init__.py` holds the `SYSTEMS` table
-  (root, output, palette, builder, preview prefix/resolution, stage kind) and `STAGES` (`diorama` -> the shared
-  CRT, `handheld` -> no set piece). The stage callable is invoked between the console and the controller so the
-  exported node order is unchanged.
+  glTF export and preview rig), `crt.py` (the shared 14-inch TV with `TV_AT` and `add_crt`), `palette.py` (only the
+  colours every stage draws the same: `SCREEN`, `SCREEN_GLOW`), and `systems/<name>.py` - one module per system,
+  holding its own palette, console, controller, cable and `build(mats, stage)` that returns the root node name.
+  `systems/__init__.py` is the registry: it discovers every non-underscore module in `systems/`, validates the
+  metadata (`ROOT`, `OUTPUT`, `PALETTE`, `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE`, `build`), and builds `SYSTEMS`
+  from it, keyed by module name (`--system nes` is `systems/nes.py`). `STAGES` holds the stage kinds (`diorama` ->
+  the shared CRT, `handheld` -> no set piece), and the stage callable is invoked between the console and the
+  controller so the exported node order is unchanged. **Adding a system is one new file and nothing else**: no
+  registry row, no import line, no shared palette edit.
 - **Evidence**: no output change. Two no-preview rebuilds per system plus the committed files are all
   byte-identical: `snes.glb` sha256 `63a34016613490bb877ae57696e504f38b7d93eb4766d4072d07afcb99f0640c`
   (2,659,776 B) and `nes.glb` sha256 `3b3bd5e65982aa263d6615488068f8fd2701b53b32e9cc1256b3d9ddf905cee7`
-  (3,414,076 B). `--previews` still writes the same sets with the same prefixes and resolutions
-  (`front.png`/`three-quarter.png`/`angle-120.png`, 1000 x 765 for the SNES;
-  `nes-front.png`/`nes-three-quarter.png`/`nes-angle-120.png`, 880 x 660 for the NES), checked by rendering both
-  systems at one sample into `/tmp`. The committed GLBs and previews, `android/` and the emulator code are
-  untouched. A new system now needs one `systems/<name>.py` plus one `SYSTEMS` row; `tools/carts/README.md`
-  documents the layout, the row fields and the determinism check.
-- **Limits**: a pure refactor - no model, preview composition or performance change. Determinism is still proven
-  only on Blender 5.2.3 built 2026-10-22. The preview camera target is still the shared diorama framing; a future
-  handheld with a very different silhouette may need its own target, but `stage = handheld` already omits the CRT.
+  (3,414,076 B); stats still 59,365 mesh verts / 111,920 tris and 77,243 / 146,556. `--previews` still writes the
+  same sets with the same prefixes and resolutions (checked at one sample into `/tmp`). The committed GLBs and
+  previews, `android/` and the emulator code are untouched. The one-file claim was proven by dropping a throwaway
+  `systems/probe.py` into a copy of the tree: it registered on import with `STAGE = "handheld"` (no CRT) and no
+  other file changed. Pyflakes is clean on the generator (the re-exports are declared in `make_console.__all__`).
+- **Limits**: a generator refactor - no model, preview composition or performance change. Determinism is still
+  proven only on Blender 5.2.3 built 2026-10-22. The preview camera target is still the shared diorama framing; a
+  future handheld with a very different silhouette may need its own target, though `stage = handheld` already omits
+  the CRT. `make_console.py` keeps exporting the old single-file generator's SNES/NES builder names, but that list is
+  frozen: a new system's builders live only in its own module.
 
 ## Carts: the NES + CRT system diorama, modeled in Blender — 2026-11-07
 

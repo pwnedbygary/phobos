@@ -3,7 +3,9 @@
 """The NES (NES-001 front loader) diorama: console, controller and cable.
 
 The shared CRT TV is placed by the stage callable passed to :func:`build`, so
-the console is authored here and nowhere else.
+the console is authored here and nowhere else.  This module is the whole
+registration: the registry in ``systems/__init__.py`` discovers it, so adding or
+retuning a system never edits a shared file.
 """
 import math
 
@@ -12,14 +14,39 @@ from mathutils import Matrix, Vector
 from ..common import (bake_place, cylinder, dome, place, ring_solid,
                       rounded_box, rounded_solid, rr_loop, spline, text_mesh,
                       tube)
-from ..palette import NES_PALETTE
+from ..palette import SCREEN, SCREEN_GLOW
 
 ROOT = "nes_diorama"
 OUTPUT = "android/app/src/main/assets/carts/consoles/nes.glb"
 PREVIEW_PREFIX = "nes-"
 PREVIEW_RES = (880, 660)
 STAGE = "diorama"
-PALETTE = NES_PALETTE
+
+# ---------------------------------------------------------------------------
+# palette (linear RGB; the renders go through AgX) — the NES is its own authored
+# one: warm light-grey upper shell, a darker warm-grey lower chassis, black trim,
+# Nintendo red for the wordmark, POWER and the A/B buttons, a red LED lens
+# ---------------------------------------------------------------------------
+NES_SHELL = (0.560, 0.552, 0.522, 1.0)
+NES_DARK = (0.014, 0.014, 0.017, 1.0)
+NES_ACCENT = (0.430, 0.022, 0.018, 1.0)
+NES_ACCENT_LIGHT = (0.240, 0.232, 0.216, 1.0)
+NES_METAL = (0.42, 0.42, 0.43, 1.0)
+NES_GLASS = (0.36, 0.012, 0.012, 1.0)
+
+PALETTE = {
+    "shell": (NES_SHELL, 0.44, 0.0, None, 0.0),
+    "dark": (NES_DARK, 0.42, 0.0, None, 0.0),
+    "accent": (NES_ACCENT, 0.36, 0.0, None, 0.0),
+    "accent_light": (NES_ACCENT_LIGHT, 0.48, 0.0, None, 0.0),
+    "metal": (NES_METAL, 0.30, 1.0, None, 0.0),
+    "glass": (NES_GLASS, 0.06, 0.0, (0.55, 0.015, 0.012, 1.0), 2.2),
+    "screen": (SCREEN, 0.06, 0.0, SCREEN_GLOW, 1.0),
+}
+
+#: The public builders of the old single-file generator, re-exported by
+#: ``make_console`` so ``make_console.build_nes`` and friends keep working.
+__all__ = ["build_nes", "build_nes_controller", "build_nes_cable", "nes_top"]
 
 # ---------------------------------------------------------------------------
 # NES (NES-001 front loader) + controller + cable
@@ -220,7 +247,7 @@ def build_nes_controller(mats, location, rot_z):
 
 
 def build_nes_cable(mats, start, end):
-    dark, metal = mats["dark"], mats["metal"]
+    dark = mats["dark"]
     pts = [
         start,
         Vector((-126.0, -326.0, 14.0)),

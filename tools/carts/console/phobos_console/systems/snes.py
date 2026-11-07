@@ -3,7 +3,9 @@
 """The SNES (SNS-001) diorama: console, controller and cable.
 
 The shared CRT TV is placed by the stage callable passed to :func:`build`, so
-the console is authored here and nowhere else.
+the console is authored here and nowhere else.  This module is the whole
+registration: the registry in ``systems/__init__.py`` discovers it, so adding or
+retuning a system never edits a shared file.
 """
 import math
 
@@ -12,14 +14,38 @@ from mathutils import Matrix, Vector
 from ..common import (bake_place, cylinder, dome, place, ring_solid,
                       rounded_box, rounded_solid, rr_loop, spline, text_mesh,
                       tube)
-from ..palette import SNES_PALETTE
+from ..palette import SCREEN, SCREEN_GLOW
 
 ROOT = "snes_diorama"
 OUTPUT = "android/app/src/main/assets/carts/consoles/snes.glb"
 PREVIEW_PREFIX = ""
 PREVIEW_RES = (1000, 765)
 STAGE = "diorama"
-PALETTE = SNES_PALETTE
+
+# ---------------------------------------------------------------------------
+# palette (linear RGB; the renders go through AgX) — this console's own
+# ---------------------------------------------------------------------------
+SHELL = (0.50, 0.49, 0.455, 1.0)       # warm light grey SNES plastic
+DARK = (0.022, 0.022, 0.026, 1.0)      # charcoal CRT cabinet and dark plastic
+ACCENT = (0.16, 0.10, 0.44, 1.0)       # SNES purple (switches, A/B)
+ACCENT_LIGHT = (0.34, 0.31, 0.47, 1.0)  # SNES lavender X/Y buttons
+METAL = (0.44, 0.44, 0.45, 1.0)        # satin metal (pins, knob caps, badge)
+GLASS = (0.02, 0.10, 0.05, 1.0)        # green LED lens
+
+PALETTE = {
+    "shell": (SHELL, 0.42, 0.0, None, 0.0),
+    "dark": (DARK, 0.44, 0.0, None, 0.0),
+    "accent": (ACCENT, 0.34, 0.0, None, 0.0),
+    "accent_light": (ACCENT_LIGHT, 0.38, 0.0, None, 0.0),
+    "metal": (METAL, 0.28, 1.0, None, 0.0),
+    "glass": (GLASS, 0.06, 0.0, (0.02, 0.35, 0.08, 1.0), 2.0),
+    "screen": (SCREEN, 0.06, 0.0, SCREEN_GLOW, 1.0),
+}
+
+#: The public builders of the old single-file generator, re-exported by
+#: ``make_console`` so ``make_console.build_snes`` and friends keep working.
+__all__ = ["build_snes", "build_snes_controller", "build_cable",
+           "snes_top", "snes_slope"]
 
 SNES_CTRL_AT = (-80.0, -345.0, 0.0)
 SNES_CTRL_ROT = -8.0

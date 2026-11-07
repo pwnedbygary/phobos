@@ -21,7 +21,7 @@ TV_AT = (105.0, 30.0, 0.0)
 
 def build_tv(mats, location):
     objs = []
-    dark, shell, metal = mats["dark"], mats["shell"], mats["metal"]
+    dark, metal = mats["dark"], mats["metal"]
     glass, screen = mats["glass"], mats["screen"]
 
     # One lofted housing instead of a box plus a separate rear tube: the bottom

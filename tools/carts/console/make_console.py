@@ -12,11 +12,12 @@ preview rig are shared so the family matches.
 
 The CLI lives here; the modelling code is the ``phobos_console`` package beside
 this file: ``common.py`` has the shared helpers and preview rig, ``crt.py`` the
-shared 14-inch TV stage, ``palette.py`` the authored colours, and
-``systems/<name>.py`` one module per system (console, controller and cable).
-Adding a system is one ``systems/<name>.py`` plus one row in the ``SYSTEMS``
-table in ``systems/__init__.py``; the layout and the determinism check are
-documented in ``tools/carts/README.md``.
+shared 14-inch TV stage, ``palette.py`` the colours every stage draws the same,
+and ``systems/<name>.py`` one module per system (its own palette, console,
+controller and cable).  ``systems/__init__.py`` discovers those modules, so
+adding a system is a new file and nothing else: there is no shared table, import
+or palette to edit and two authors never touch the same file.  The layout and
+the determinism check are documented in ``tools/carts/README.md``.
 
 Run it with Blender 5.2 (it needs only bpy/bmesh):
 
@@ -53,7 +54,8 @@ import bpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Re-exported so the public names of the old single-file generator stay
-# importable from the entry point; the CLI uses the ones main() calls.
+# importable from the entry point; the CLI uses the ones main() calls.  The
+# __all__ at the end of this block is what marks every re-export as public.
 from phobos_console.common import (  # noqa: E402
     bake_matrix, bake_place, clear_scene, cylinder, dome, export_glb,
     loft_smooth, loft_xz, make_material, make_materials, model_bounds,
@@ -62,6 +64,26 @@ from phobos_console.common import (  # noqa: E402
     spline, srgb_to_linear, text_mesh, tube, wire_screen_art)
 from phobos_console.crt import TV_AT, add_crt, build_tv  # noqa: E402
 from phobos_console.systems import STAGES, SYSTEMS  # noqa: E402
+from phobos_console.systems.snes import (  # noqa: E402
+    build_cable, build_snes, build_snes_controller, snes_slope, snes_top)
+from phobos_console.systems.nes import (  # noqa: E402
+    build_nes, build_nes_cable, build_nes_controller, nes_top)
+
+#: The public surface: the shared helpers, the CRT stage, the registry, and the
+#: SNES/NES builders the pre-split generator exposed from this module.  A new
+#: system needs no entry here - it lives only in its own
+#: ``phobos_console/systems/<name>.py`` and its CLI row is discovered.
+__all__ = [
+    "SYSTEMS", "STAGES", "TV_AT", "add_crt", "bake_matrix", "bake_place",
+    "build_cable", "build_nes", "build_nes_cable", "build_nes_controller",
+    "build_snes", "build_snes_controller", "build_tv", "clear_scene",
+    "cylinder", "dome", "export_glb", "loft_smooth", "loft_xz", "main",
+    "make_material", "make_materials", "model_bounds", "model_stats",
+    "nes_top", "new_obj", "parent_to_root", "place", "recenter",
+    "render_previews", "ring_solid", "round_drop", "rounded_box",
+    "rounded_solid", "rr_loop", "screen_image", "snes_slope", "snes_top",
+    "spline", "srgb_to_linear", "text_mesh", "tube", "wire_screen_art",
+]
 
 
 def main():

@@ -242,25 +242,27 @@ TV there.
 | `tools/carts/console/make_console.py` | CLI, argument parsing, system selection and the build/export/preview sequence |
 | `tools/carts/console/phobos_console/common.py` | shared helpers: scene and material construction, the bmesh primitives, recentre/parent, glTF export and the preview rig |
 | `tools/carts/console/phobos_console/crt.py` | the shared 14-inch 4:3 CRT TV (`build_tv`, `TV_AT`, `add_crt`) |
-| `tools/carts/console/phobos_console/palette.py` | the authored linear-RGB palettes (`SNES_PALETTE`, `NES_PALETTE`) |
-| `tools/carts/console/phobos_console/systems/__init__.py` | the `SYSTEMS` table and the `STAGES` kinds |
-| `tools/carts/console/phobos_console/systems/<name>.py` | one module per system: its constants, console, controller, cable and `build(mats, stage)` |
+| `tools/carts/console/phobos_console/palette.py` | only the colours every stage draws the same (`SCREEN`, `SCREEN_GLOW`); each system owns its own palette |
+| `tools/carts/console/phobos_console/systems/__init__.py` | the registry: it discovers the modules beside it, validates them and builds `SYSTEMS`, plus the `STAGES` kinds |
+| `tools/carts/console/phobos_console/systems/<name>.py` | one module per system and its whole registration: `ROOT`, `OUTPUT`, `PALETTE`, `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE`, `build(mats, stage)`, plus the console, controller and cable |
 
-The `SYSTEMS` row is the whole registration: `root` (the exported root node), `output` (the committed GLB path),
-`palette`, `builder`, `preview_prefix`, `preview_res` and `stage`. The stage kind selects a shared set piece:
-`diorama` places the CRT TV between the console and the controller, and `handheld` is `None`, so a handheld system
-can later omit the CRT. The system module's `build(mats, stage)` places the console, calls `stage(mats)` (if any),
-then places the controller and cable, and returns its `ROOT` name; `make_console.py` checks that name against the
-table.
+`systems/__init__.py` imports every non-underscore module in `systems/`, checks that it has the metadata above,
+that it has a `build(mats, stage)` callable and that its `STAGE` is a known kind, then builds the `SYSTEMS` row
+from it - keyed by the module name, so `--system n64` means `systems/n64.py`. Each row is `root` (the exported root
+node), `output` (the committed GLB path), `palette`, `builder`, `preview_prefix`, `preview_res` and `stage`. The
+stage kind selects a shared set piece: `diorama` places the CRT TV between the console and the controller, and
+`handheld` is `None`, so a handheld system can omit the CRT. The system module's `build(mats, stage)` places the
+console, calls `stage(mats)` (if any), then places the controller and cable, and returns its `ROOT` name;
+`make_console.py` checks that name against the row.
 
-To add a system, add only two things:
-
-1. `tools/carts/console/phobos_console/systems/<name>.py`, exposing `ROOT`, `OUTPUT`, `PALETTE`,
-   `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE` and `build(mats, stage)`, and using `common.py`/`crt.py` for shared
-   geometry. Authored colours live on the module's `PALETTE`; shared colours can be imported from `palette.py`.
-2. one row in `SYSTEMS` in `systems/__init__.py`.
-
-No change to `make_console.py` or the shared modules is needed for a normal console.
+To add a system, add exactly one thing: `tools/carts/console/phobos_console/systems/<name>.py`, exposing `ROOT`,
+`OUTPUT`, `PALETTE`, `PREVIEW_PREFIX`, `PREVIEW_RES`, `STAGE` and `build(mats, stage)`, and using
+`common.py`/`crt.py` for the shared geometry. The registry finds it at import time, so there is no table row, no
+import line and no palette edit in any shared file: two authors adding two consoles write two different files and
+never conflict. The module's own `PALETTE` is the whole colour choice for that console (tuning it never touches
+another system); `palette.py` keeps only what the shared stage has to draw identically everywhere. The old
+single-file generator's builder names (`build_snes`, `build_nes`, `snes_top`, ...) are still importable from
+`make_console.py`, but a new system does not extend that list - its builders live in its own module.
 
 Rebuild both committed assets (the determinism check; run each twice if you are changing the generator):
 
