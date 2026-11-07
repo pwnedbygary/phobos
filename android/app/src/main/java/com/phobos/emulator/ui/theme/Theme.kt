@@ -68,7 +68,7 @@ val LocalPhobosTheme = compositionLocalOf {
     val fallback = ThemeRegistry.find(ThemeRegistry.DEFAULT_ID)
     val colors = fallback.colors
     PhobosThemeInfo(
-        fallback, fallback.isDark, UiEffects.NONE, colors.success, colors.warning, colors.scheme,
+        fallback, fallback.isDark, UiEffects.CARTRIDGE, colors.success, colors.warning, colors.scheme,
         GlassStyle.of(colors.scheme, colors.success, colors.warning, fallback.isDark, GlassScene.GLOWS),
     )
 }
@@ -76,7 +76,7 @@ val LocalPhobosTheme = compositionLocalOf {
 @Composable
 fun PhobosTheme(
     themeId: String = ThemeRegistry.DEFAULT_ID,
-    effects: UiEffects = UiEffects.NONE,
+    effects: UiEffects = UiEffects.CARTRIDGE,
     glassEffects: GlassEffects = GlassEffects.FULL,
     pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
     mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,

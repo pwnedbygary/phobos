@@ -36,6 +36,7 @@ enum class GlassEffects(val label: String, val description: String) {
 
 /** A style layered over the chosen theme's colors, with its own backdrop, panels, type and shapes. */
 enum class UiEffects(val label: String, val description: String) {
+    CARTRIDGE("Cartridge", "Cartridge's room: blurred art, floating shelves, 3D system media and carts, controller hints"),
     NONE("None", "The theme on its own, with the glass effects below"),
     RETROWAVE("Retrowave", "Synthwave sunset backdrop, neon glow on cards and selections, and glowing bars. Best with Synthwave '84"),
     PIXEL_ART("Pixel art", "Pixel fonts, stepped corners, solid pixel panels and an animated pixel backdrop, like the app icon"),
@@ -153,7 +154,7 @@ enum class AspectRatioMode(val label: String) {
 
 data class EmulatorSettings(
     val themeId: String = ThemeRegistry.DEFAULT_ID,
-    val uiEffects: UiEffects = UiEffects.NONE,
+    val uiEffects: UiEffects = UiEffects.CARTRIDGE,
     val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
     val mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
     val rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
@@ -570,7 +571,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             themeId = ThemeRegistry.find(safeGetString(UI_THEME, ThemeRegistry.DEFAULT_ID)).id,
             uiEffects = enumOrDefault(
                 safeGetString(UI_EFFECTS, ""),
-                if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
+                if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.CARTRIDGE,
             ),
             pixelBackdrop = pixelBackdropNamed(safeGetString(PIXEL_BACKDROP, "")),
             mangaBackdrop = mangaBackdropNamed(safeGetString(MANGA_BACKDROP, "")),

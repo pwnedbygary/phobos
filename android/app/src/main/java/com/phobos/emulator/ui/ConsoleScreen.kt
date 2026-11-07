@@ -26,7 +26,7 @@ import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import kotlinx.coroutines.launch
 
 @Composable
-fun ConsoleScreen(viewModel: MainViewModel) {
+fun ConsoleScreen(viewModel: MainViewModel, onBack: (() -> Unit)? = null) {
     val logs by viewModel.logs.collectAsState()
     val listState = rememberLazyListState()
     // Follows new lines until the user scrolls up; scrolling back to the end, or the button, resumes it.
@@ -48,6 +48,7 @@ fun ConsoleScreen(viewModel: MainViewModel) {
 
     PhobosScaffold(
         title = "Log Console",
+        onBack = onBack,
         actions = {
             IconToggleButton(
                 checked = follow,

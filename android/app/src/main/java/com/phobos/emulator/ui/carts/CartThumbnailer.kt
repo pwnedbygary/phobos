@@ -18,9 +18,13 @@ import com.google.android.filament.Viewport
 import com.google.android.filament.utils.KTX1Loader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+
+/** Tighter than the default margin, so the cards read as objects rather than stamps. */
+private const val CARD_ZOOM = 0.9
 
 /**
  * Offscreen cart thumbnails for the grid and the Library cards: the focused cart keeps the live surface, every other
@@ -84,10 +88,14 @@ class CartThumbnailer(
         view.camera = camera
         view.antiAliasing = View.AntiAliasing.NONE
         view.setShadowingEnabled(false)
+        // The cards are transparent: the Library tile must show through. Filament's default OPAQUE blend mode makes
+        // the post-processing pass write alpha 255 even when the clear's alpha is 0; TRANSLUCENT selects the
+        // alpha-preserving grading variant and keeps the clear's transparency.
+        view.blendMode = View.BlendMode.TRANSLUCENT
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .direction(-0.35f, -0.6f, -0.5f)
             .color(1f, 1f, 1f)
-            .intensity(60_000f)
+            .intensity(30_000f)
             .castShadows(false)
             .build(engine, lightEntity)
         runCatching { scene.addEntity(lightEntity) }
@@ -97,21 +105,15 @@ class CartThumbnailer(
             buffer.rewind()
             val bundle = KTX1Loader.createIndirectLight(engine, buffer)
             bundle.indirectLight?.let {
-                it.intensity = 30_000f
+                it.intensity = 15_000f
                 scene.indirectLight = it
                 indirectLight = it
             }
             indirectTexture = bundle.cubemap
         }
-        runCatching {
-            val bytes = context.assets.open("carts/ibl/ibl_skybox.ktx").use { it.readBytes() }
-            val buffer = ByteBuffer.allocateDirect(bytes.size).apply { put(bytes) }
-            buffer.rewind()
-            val bundle = KTX1Loader.createSkybox(engine, buffer)
-            scene.skybox = bundle.skybox
-            skybox = bundle.skybox
-            skyboxTexture = bundle.cubemap
-        }
+        // No skybox: the Library tile supplies the background. The indirect light still shades the shell, and the
+        // clear below is transparent, so the card composites onto the tile instead of a photo-studio room.
+        scene.skybox = null
     }
 
     private fun entities(shape: String, disc: Boolean): IntArray? {
@@ -209,7 +211,7 @@ class CartThumbnailer(
         // square card and a portrait surface both frame the shell.
         val b = CartFraming.bounds(engine, ents) ?: floatArrayOf(0f, 0f, 0f, 60f, 60f, 20f)
         val aspect = width.toDouble() / height.toDouble()
-        val d = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]), aspect)
+        val d = CartFraming.distance(floatArrayOf(b[3], b[4], b[5]), aspect) * CARD_ZOOM
         camera.setProjection(
             CartFraming.FOV_DEGREES,
             aspect,
@@ -234,7 +236,12 @@ class CartThumbnailer(
         view.viewport = Viewport(0, 0, width, height)
 
         for (e in ents) runCatching { scene.addEntity(e) }
-        val lookTextures = CartMaterials.apply(engine, ents, look, wear, label)
+        val lookTextures = CartMaterials.apply(engine, ents, look, wear, label, CartShellPalette.forShape(shape))
+        // Transparent clear: the card is composited by Compose over the Library tile, so no studio backdrop leaks in.
+        renderer.clearOptions = Renderer.ClearOptions().apply {
+            clear = true
+            clearColor = doubleArrayOf(0.0, 0.0, 0.0, 0.0)
+        }
         // Offscreen: this is the beginFrame/endFrame-less entry point that flushes the driver, so the readback below
         // is actually submitted (render() expects an open beginFrame and would drop it).
         renderer.renderStandaloneView(view)
