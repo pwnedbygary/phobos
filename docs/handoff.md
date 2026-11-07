@@ -1,5 +1,39 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Carts: the Nintendo 64 + cartridge + three-prong controller diorama — 2026-11-07
+
+Branch `feature/system-dioramas-n64`, from master `a6260752e` (the merged diorama generator).
+- **Why**: after the SNES and NES, the owner's 3D-console reference set needs the N64, held to the new
+  reference-accurate bar: the real hardware's shape, labels and button colours, not a made-up box. This is the
+  first system authored on the merged one-file-per-system generator.
+- **What**: `tools/carts/console/phobos_console/systems/n64.py` (one discovered module, no shared edits) builds
+  the NUS-001 beside the shared 14-inch CRT: bulbous charcoal shell with a low front deck and domed rear hump,
+  the front black panel with the NINTENDO 64 wordmark and four-colour N logo (our own typed/extruded
+  reproduction), four oval ports with pins and numerals, the top cartridge slot with a light-grey flap and the
+  inserted 116 x 76.6 mm cartridge with its label panel, the top vent grille, POWER/RESET, red POWER LED, memory
+  expansion cover, side/rear vents and feet; the grey three-prong controller with D-pad, analog stick, red Start,
+  blue A, green B, yellow C cluster, L/R, Z and a cable to port 1. `reference/n64.md` holds the sources,
+  documented dimensions and checklist.
+- **Evidence**: `blender --background --python tools/carts/console/make_console.py -- --system n64` reproduces
+  the committed `android/app/src/main/assets/carts/consoles/n64.glb` byte for byte from two no-preview runs
+  (sha256 `11f04276381fd49ebc44df5f333f885dcdc1b47e101d9becf369c0659516990e`, 2,966,960 B); 125,928 triangles,
+  66,757 mesh vertices, 91,488 GLB POSITION entries, one `n64_diorama` root, seven single-sided materials, only
+  `tv_screen` carrying TEXCOORD_0, no images/lights/cameras. The three committed previews are
+  `tools/carts/console/previews/n64-{front,three-quarter,angle-120}.png` (1000 x 765, Cycles, 48 samples).
+  `--system snes` and `--system nes` still rebuild their committed files byte for byte (`63a34016...`,
+  `3b3bd5e6...`).
+- **Screen**: the preview rig supports `--screen <png>` (landed on master); the owner's real N64 capture at
+  `refs/screens/n64.png` did not exist while the geometry was authored, so the committed previews show the
+  shared facsimile frame. Adding the flag puts a real capture on the CRT for previews only; it is never written
+  into the GLB and never committed.
+- **Limits**: the 7-material contract cannot carry the console's two dark greys or the controller's four button
+  colours separately - the body/front panel share `dark`, the C cluster is the satin-yellow `metal`, and Start
+  the red `glass` (documented in the reference notes). The model is a stylised approximation of the documented
+  dimensions, not a photogrammetric replica; the cartridge sits inserted with the flap retracted; there are no
+  baked textures or images. The 258 parts stay separate (consumer-side merging is possible). The shared CRT rig
+  is used unchanged except that its trim material is given `shell` for this palette so the TV stays silver and
+  `metal` stays the N64's yellow C-button plastic.
+
 ## Carts: the diorama generator split into per-system modules — 2026-11-07
 
 Branch `feature/diorama-generator-modules`, from master `dd8ea116a` (the NES merge).
