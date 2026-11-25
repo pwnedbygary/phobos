@@ -744,6 +744,11 @@ class MainViewModel(
     val tabSteps: SharedFlow<Int> = _tabSteps.asSharedFlow()
     fun stepTab(step: Int) { _tabSteps.tryEmit(step) }
 
+    /** False while a page owns L1/R1 itself (the Cartridge system page's view switcher). */
+    private val _pageTabStepping = MutableStateFlow(true)
+    val pageTabStepping: StateFlow<Boolean> = _pageTabStepping.asStateFlow()
+    fun setPageTabStepping(enabled: Boolean) { _pageTabStepping.value = enabled }
+
     fun addSystemRomPath(system: String, path: String) = viewModelScope.launch {
         settingsStore.addSystemRomPath(system, path)
     }

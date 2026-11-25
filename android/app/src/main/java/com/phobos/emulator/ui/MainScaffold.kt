@@ -211,7 +211,15 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
 
     val route = currentDestination?.route
     val theme = LocalPhobosTheme.current
+    val cartridge = theme.effects == com.phobos.emulator.data.UiEffects.CARTRIDGE
     val retrowave = theme.retrowave
+    // Cartridge's room owns the status bar: its pages are immersive; every other style keeps the old state.
+    val cartridgeImmersive = cartridge && route !in NO_SCREENSAVER_ROUTES
+    // Cartridge has no dock to step through; its system page uses L1/R1 for the view switcher, and its other
+    // pages have no shoulder action. The old styles keep the tab stepping.
+    LaunchedEffect(cartridge) {
+        viewModel.setPageTabStepping(!cartridge)
+    }
     val style = theme.style
     val settings by viewModel.settings.collectAsState()
     val capturing by viewModel.controlCapture.target.collectAsState()
@@ -297,11 +305,12 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
     val fullScreen by remember { viewModel.settings.map { it.fullScreenMode }.distinctUntilChanged() }
         .collectAsState(initial = viewModel.settings.value.fullScreenMode)
     val view = LocalView.current
-    DisposableEffect(fullScreen) {
+    DisposableEffect(fullScreen, cartridgeImmersive) {
         (view.context as? Activity)?.window?.let { window ->
             val controller = WindowCompat.getInsetsController(window, view)
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            if (fullScreen) controller.hide(WindowInsetsCompat.Type.statusBars()) else controller.show(WindowInsetsCompat.Type.statusBars())
+            if (fullScreen || cartridgeImmersive) controller.hide(WindowInsetsCompat.Type.statusBars())
+            else controller.show(WindowInsetsCompat.Type.statusBars())
         }
         onDispose {}
     }
@@ -365,7 +374,7 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
                 containerColor = Color.Transparent,
                 contentColor = MaterialTheme.colorScheme.onBackground,
                 bottomBar = {
-                    if (route !in FULL_SCREEN_ROUTES) {
+                    if (route !in FULL_SCREEN_ROUTES && !cartridge) {
                         PhobosDock(route, retrowave) { target ->
                             noteIdleActivity()
                             navController.navigate(target) {
@@ -378,7 +387,7 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
             ) { innerPadding ->
                 // Pages with the dock run under it to the bottom of the screen; LocalDockInset tells
                 // them how far to pad their ends instead.
-                val docked = route !in FULL_SCREEN_ROUTES
+                val docked = route !in FULL_SCREEN_ROUTES && !cartridge
                 val direction = LocalLayoutDirection.current
                 val pagePadding = if (!docked) innerPadding else PaddingValues(
                     start = innerPadding.calculateStartPadding(direction),
@@ -405,23 +414,9 @@ fun MainScaffold(viewModel: MainViewModel, introPlaying: () -> Boolean = { false
                                 navController.navigate("system/$name")
                             })
                         }
-                        composable("console") { ConsoleScreen(viewModel) }
+                        composable("console") { ConsoleScreen(viewModel, onBack = if (cartridge) ({ navController.popBackStack() }) else null) }
                         composable("settings") {
-                            SettingsScreen(
-                                viewModel = viewModel,
-                                onNavigateToAppearance = { navController.navigate("settings/appearance") },
-                                onNavigateToEmulation = { navController.navigate("settings/emulation") },
-                                onNavigateToVideo = { navController.navigate("settings/video") },
-                                onNavigateToN64Experimental = { navController.navigate("settings/n64-experimental") },
-                                onNavigateToAudio = { navController.navigate("settings/audio") },
-                                onNavigateToPerformance = { navController.navigate("settings/performance") },
-                                onNavigateToInputs = { navController.navigate("settings/inputs") },
-                                onNavigateToPaths = { navController.navigate("settings/paths") },
-                                onNavigateToVisibility = { navController.navigate("settings/visibility") },
-                                onNavigateToArtwork = { navController.navigate("settings/artwork") },
-                                onNavigateToCarts = { navController.navigate("settings/carts") },
-                                onNavigateToAbout = { navController.navigate("settings/about") }
-                            )
+                            SettingsDestination(cartridge, viewModel, navController)
                         }
                         composable("settings/appearance") {
                             AppearanceSettingsScreen(viewModel, onBack = { navController.popBackStack() })
@@ -630,6 +625,49 @@ private fun AnimatedContentTransitionScope<NavBackStackEntry>.involvesEmulator()
 
 private fun AnimatedContentTransitionScope<NavBackStackEntry>.betweenTabs() =
     initialState.destination.route in TOP_LEVEL_ROUTES && targetState.destination.route in TOP_LEVEL_ROUTES
+
+@Composable
+private fun SettingsDestination(
+    cartridge: Boolean,
+    viewModel: MainViewModel,
+    navController: androidx.navigation.NavHostController,
+) {
+    if (cartridge) {
+        com.phobos.emulator.ui.cartridge.CartridgeSettingsScreen(
+            viewModel = viewModel,
+            onBack = { navController.popBackStack() },
+            onNavigateToAppearance = { navController.navigate("settings/appearance") },
+            onNavigateToEmulation = { navController.navigate("settings/emulation") },
+            onNavigateToVideo = { navController.navigate("settings/video") },
+            onNavigateToN64Experimental = { navController.navigate("settings/n64-experimental") },
+            onNavigateToAudio = { navController.navigate("settings/audio") },
+            onNavigateToPerformance = { navController.navigate("settings/performance") },
+            onNavigateToConsole = { navController.navigate("console") },
+            onNavigateToInputs = { navController.navigate("settings/inputs") },
+            onNavigateToPaths = { navController.navigate("settings/paths") },
+            onNavigateToVisibility = { navController.navigate("settings/visibility") },
+            onNavigateToArtwork = { navController.navigate("settings/artwork") },
+            onNavigateToCarts = { navController.navigate("settings/carts") },
+            onNavigateToAbout = { navController.navigate("settings/about") },
+        )
+    } else {
+        SettingsScreen(
+            viewModel = viewModel,
+            onNavigateToAppearance = { navController.navigate("settings/appearance") },
+            onNavigateToEmulation = { navController.navigate("settings/emulation") },
+            onNavigateToVideo = { navController.navigate("settings/video") },
+            onNavigateToN64Experimental = { navController.navigate("settings/n64-experimental") },
+            onNavigateToAudio = { navController.navigate("settings/audio") },
+            onNavigateToPerformance = { navController.navigate("settings/performance") },
+            onNavigateToInputs = { navController.navigate("settings/inputs") },
+            onNavigateToPaths = { navController.navigate("settings/paths") },
+            onNavigateToVisibility = { navController.navigate("settings/visibility") },
+            onNavigateToArtwork = { navController.navigate("settings/artwork") },
+            onNavigateToCarts = { navController.navigate("settings/carts") },
+            onNavigateToAbout = { navController.navigate("settings/about") },
+        )
+    }
+}
 
 private class NavTab(val route: String, val label: String, val selectedIcon: ImageVector, val icon: ImageVector)
 

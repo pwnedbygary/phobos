@@ -1,5 +1,65 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Cartridge's room: the Library, a system's pages and settings — 2026-11-07
+
+Branch `feature/cartridge-ui`, from master `8efe6952e`. Its first commit is PR #354's cart work (`61378a04e`,
+cherry-picked from `d5b511924`); the rest is the room. This entry describes the working tree under review; the
+commit follows it.
+
+- **Why**: the owner asked for Cartridge's UI to become Phobos's UI, with its 3D system media and game carts.
+  Phobos had the cart renderer and the pipeline, but no Cartridge home, system pages or settings hub.
+- **What**: `UiEffects.CARTRIDGE`, now the default style, is a dark room with the selected system's blurred art,
+  the wordmark, artwork count, clock and battery, a collapsible Continue Playing strip, a 3D system-media
+  carousel with the selected system's name, maker, year and chips, the action pills and controller hints. A
+  system page has Carousel, Grid, Shelf and Tower views, the A–Z/recent index chip, a folder picker, the game
+  title, metadata, resume chip and the same game menu. Settings is a sidebar hub with Library, System, Controls
+  and About groups, including the emulator's Console log. The old style effects remain selectable. Q toggles the
+  A–Z/recent sort. L1/R1 switch the system page's four views; the Cartridge pages do not use the dock's shoulder
+  tab stepping.
+- **Renderer**: the offscreen cards were opaque black because Filament's OPAQUE post-processing writes alpha 255;
+  `CartThumbnailer` now sets `View.BlendMode.TRANSLUCENT`. Labels are upright (the bitmap rows are flipped for the
+  baked v), unlit (`KHR_materials_unlit` in the label patch) and uploaded as sRGB; the fallback PNG is a real 1×1
+  white RGBA; the shell shapes, including the GBA badge/line engravings, have their own plastic colour
+  (`CartShellPalette`); the studio light is 30k/15k so the labels read; the live view keeps its studio skybox for
+  the old styles; the card cache version is 16; the offscreen cards frame 10% tighter (`CARD_ZOOM 0.9`).
+- **Evidence**: `:app:testLegacyDebugUnitTest :app:testModernDebugUnitTest` — 712 tests, 0 failures, both flavours;
+  `:app:assembleModernRelease` passes. The side-by-side `com.phobos.emulator.gst` on the RP6 opened the room, the
+  four system views, the settings hub and started Chrono Trigger (SNES) from the folder grant; the Continue strip
+  then showed the game and its resume chip. Screenshots in `/home/garyb/Mounts/NVME/OpenChamber/phobos/tmp/`
+  (`ui-home-rebased.png`, `ui-home-continue-fixed.png`, `ui-system-carousel5.png`, `ui-view-grid-final.png`,
+  `ui-view-shelf-final.png`, `ui-view-tower-final.png`, `ui-settings-final2.png`, `ui-system-q.png`,
+  `ui-system-r1.png`, `ui-system-l1.png`, `ui-overlay-switcher.png`, `ui-home-live3.png`, `ui-system-live3.png`,
+  `ui-tower-live2.png`).
+- **Live carts (owner follow-up)**: the home's selected system plate, the system page's Carousel and its Tower show
+  the focused cart live, at 150 dp on the home, 210 dp in the Carousel and 0.82 of the Tower's height. The right
+  stick (AXIS_Z/AXIS_RZ on the RP6, AXIS_RX/AXIS_RY fallback) turns it; the first turn starts from the angle on
+  screen and stops the idle spin, a new cart starts front-facing (`autoSpin = false` in the room). The Cartridge
+  live views clear to the room's dark purple without the studio skybox; the old styles keep the studio and also
+  respond to the stick. Grid and Shelf stay static. The live framing is 0.9 (closer than the old 1.12 margin) and
+  the offscreen cards are 10% tighter; the cache is 16.
+- **Review**: the independent review found three blocking UI defects: the expanded Continue strip let the
+  system carousel overflow over the heading and pills; Grid/Shelf/Tower did not scroll with the D-pad; and the
+  home overlays were not modal, so a covered tile could take A. Fixed: the strip hides the system stage while it
+  is open and Down closes it; each view owns its lazy state and the system page steps one item; the overlays are
+  full-screen dialogs with their own focus, and Search focuses its field. Also fixed from the review: the
+  carousel respects the stored cart looks and the Carts switch; the home respects Real labels; Q really toggles
+  the sort; the shelf rule draws; the GBA engravings have the indigo shell; the live studio skybox is restored
+  for the old styles; Console is reachable from the settings hub; a malformed GLB is returned unchanged.
+- **Delta review**: a second review found two controller defects in the fixed snapshot: L1/R1 on the system page
+  were consumed by the activity's dock tab stepper (so the advertised L/R view switch opened Settings/Console),
+  and the expanded Continue strip never scrolled to its selected card. Cartridge pages now leave L1/R1 to the page:
+  the system page switches views, the other Cartridge pages have no shoulder action. The Continue row scrolls to
+  `recentIndex`, the overlay holds the screensaver while open, and the strip closes if the Continue list empties.
+- **Limits**: the in-game pause menu and HUD are still the old UI; the carousel's titles are in the info line, not
+  on the cards; the expanded Continue strip deliberately hides the system stage; Cartridge pages
+  do not shoulder-step the old dock tabs (the system page uses L1/R1 for its views); Grid and Shelf use static
+  cards (the Carousel, Tower and the home's selected plate are live); the live cart is an opaque surface on the
+  room's dark clear, not a transparent composite; `ConsoleTreatment.CARTRIDGE` reuses the XMB finish. PR #354's original head still lacks the renderer fixes;
+  this branch carries them, so #354 should be closed or updated.
+- **Build**: the wrapper `scripts/build-replit.sh` still wants `.local/android-sdk`; the checks used
+  `ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk ./gradlew ... --offline`. The RP6 side-by-side
+  build `com.phobos.emulator.gst` is temporary (`tmp/build-gst.sh`); the installed `com.phobos.emulator` was not
+  touched.
 ## Carts: the NES-001 diorama revised against the reference photos — 2026-11-07
 
 Branch `feature/system-dioramas-nes-rev`, from master `c2d853087` (the Mega Drive #356 merge; the work started

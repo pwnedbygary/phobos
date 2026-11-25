@@ -27,6 +27,7 @@ object CartMaterials {
         look: LookResolver.Look?,
         wear: Int,
         label: Bitmap?,
+        defaultShell: String? = null,
     ): List<Texture> {
         val created = mutableListOf<Texture>()
         val rm = engine.renderableManager
@@ -41,7 +42,7 @@ object CartMaterials {
                 // getMaterial() is null for gltfio assets; the instance's name is the glTF material's (shell, label).
                 when (mi.name) {
                     "shell" -> {
-                        applyColour(mi, look)
+                        applyColour(mi, look, defaultShell)
                         applyFinish(mi, look?.finish ?: "solid")
                         applyWear(mi, wear)
                     }
@@ -103,8 +104,12 @@ object CartMaterials {
         )
     }
 
-    private fun applyColour(mi: MaterialInstance, look: LookResolver.Look?) {
-        val c = parse(look?.color ?: LookResolver.defaultShellColors.getValue(look?.finish ?: "solid"))
+    private fun applyColour(mi: MaterialInstance, look: LookResolver.Look?, defaultShell: String?) {
+        val c = parse(
+            look?.color
+                ?: defaultShell
+                ?: LookResolver.defaultShellColors.getValue(look?.finish ?: "solid")
+        )
         val alpha = when (look?.finish) {
             "clear" -> 0.15f
             "translucent" -> 0.45f
@@ -159,13 +164,15 @@ object CartMaterials {
             .height(bitmap.height)
             .levels(1)
             .sampler(Texture.Sampler.SAMPLER_2D)
-            .format(Texture.InternalFormat.RGBA8)
+            .format(Texture.InternalFormat.SRGB8_A8)
             .usage(Texture.Usage.SAMPLEABLE or Texture.Usage.UPLOADABLE)
             .build(engine)
         val buffer = ByteBuffer.allocateDirect(bitmap.width * bitmap.height * 4).order(ByteOrder.nativeOrder())
         val row = IntArray(bitmap.width)
+        // The baked label primitive's v runs the other way from an Android bitmap's rows: without this flip the
+        // title is printed upside down on the cart. The real scans and the generated label both need it.
         for (y in 0 until bitmap.height) {
-            bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+            bitmap.getPixels(row, 0, bitmap.width, 0, bitmap.height - 1 - y, bitmap.width, 1)
             for (x in row.indices) {
                 val p = row[x]
                 buffer.put(((p ushr 16) and 0xFF).toByte())

@@ -36,6 +36,7 @@ fun rememberCartCardFile(
     thumbnailer: CartThumbnailer?,
     cache: CartBitmapCache?,
     enabled: Boolean,
+    size: Int = 256,
 ): File? {
     val context: Context = LocalContext.current
     val shape = CartShapes.cartShape(system) ?: return null
@@ -62,8 +63,8 @@ fun rememberCartCardFile(
             color = look?.color ?: "",
             special = look?.special ?: false,
             wear = wear,
-            width = 256,
-            height = 256,
+            width = size,
+            height = size,
             label = labelDesc,
         )
     }
@@ -78,7 +79,7 @@ fun rememberCartCardFile(
             runCatching {
                 cache.get(key) { target ->
                     val label = CartLabelSource.label(context, system, title ?: name, box, labelFile, themeKey)
-                    val bmp = thumb.render(renderShape, disc, 256, 256, look, wear, label)
+                    val bmp = thumb.render(renderShape, disc, size, size, look, wear, label)
                     label?.recycle()
                     if (bmp == null) throw IllegalStateException("cart render failed")
                     try {

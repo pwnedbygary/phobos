@@ -81,7 +81,10 @@ class CartsEngine private constructor(private val context: Context) {
      */
     @Synchronized
     internal fun createAsset(buffer: ByteBuffer): FilamentAsset? = runCatching {
-        assets.createAsset(buffer)?.also { asset ->
+        // Direct buffers (assets are loaded into allocateDirect) have no array: copy, then patch in memory.
+        val bytes = ByteArray(buffer.remaining()).also { buffer.duplicate().get(it) }
+        val patched = CartGlbLabelPatch.patch(bytes)
+        assets.createAsset(ByteBuffer.wrap(patched).order(java.nio.ByteOrder.nativeOrder()))?.also { asset ->
             // Register before the (fallible) resource load: a load that throws must not leak the asset.
             createdAssets.add(asset)
             resources.loadResources(asset)

@@ -74,6 +74,11 @@ import java.io.File
 
 @Composable
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
+    // Cartridge's room is a different page, not a reskin of this one; the styled Library stays for the other effects.
+    if (LocalPhobosTheme.current.effects == com.phobos.emulator.data.UiEffects.CARTRIDGE) {
+        com.phobos.emulator.ui.cartridge.CartridgeLibraryScreen(viewModel, onSystemClick)
+        return
+    }
     val cartContext = androidx.compose.ui.platform.LocalContext.current
     val gameLoaded by viewModel.gameLoaded.collectAsState()
     val cartLabels by viewModel.artLabels.collectAsState()

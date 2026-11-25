@@ -189,7 +189,7 @@ private fun BackdropDropdown(settings: EmulatorSettings, viewModel: MainViewMode
             label = { it.label },
             onSelect = { viewModel.setXmbBackdrop(it) },
         )
-        UiEffects.NONE -> SettingsDropdownItem(
+        UiEffects.NONE, UiEffects.CARTRIDGE -> SettingsDropdownItem(
             title = "Backdrop",
             description = settings.glassBackdrop.description,
             current = settings.glassBackdrop,

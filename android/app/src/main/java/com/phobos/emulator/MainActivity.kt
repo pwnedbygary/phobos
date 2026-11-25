@@ -57,6 +57,7 @@ import com.phobos.emulator.ui.IntroSplash
 import com.phobos.emulator.ui.introPlays
 import com.phobos.emulator.ui.MainScaffold
 import com.phobos.emulator.ui.MainViewModel
+import com.phobos.emulator.ui.carts.CartStick
 import com.phobos.emulator.ui.RomFile
 import com.phobos.emulator.ui.theme.PhobosTheme
 import kotlinx.coroutines.CoroutineScope
@@ -289,7 +290,7 @@ class MainActivity : ComponentActivity() {
             private fun toPages(event: KeyEvent): Boolean {
                 val libraryKeys = viewModel.activeControls.value.hotkeys[HotkeyAction.LIBRARY].orEmpty().flatten()
                 val shoulder = event.keyCode == KeyEvent.KEYCODE_BUTTON_L1 || event.keyCode == KeyEvent.KEYCODE_BUTTON_R1
-                if (!viewModel.emulatorScreenVisible.value && shoulder && event.keyCode !in libraryKeys) {
+                if (!viewModel.emulatorScreenVisible.value && viewModel.pageTabStepping.value && shoulder && event.keyCode !in libraryKeys) {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         viewModel.stepTab(if (event.keyCode == KeyEvent.KEYCODE_BUTTON_L1) -1 else 1)
                     }
@@ -396,6 +397,9 @@ class MainActivity : ComponentActivity() {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK && event.action == MotionEvent.ACTION_MOVE &&
             viewModel.controlCapture.onJoystickMove(event::getAxisValue)
         ) return true
+
+        // A live cart on the room's stage uses the right stick to turn; only while one is composed.
+        if (CartStick.attached && CartStick.onMotion(event)) return true
 
         // Do not wake the screensaver or bump idle from stick ACTION_MOVE: analog drift would
         // either keep the timer from arming or dismiss the overlay instantly. Hats that become

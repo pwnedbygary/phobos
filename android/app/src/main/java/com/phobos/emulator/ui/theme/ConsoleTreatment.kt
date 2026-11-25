@@ -56,6 +56,9 @@ enum class ConsoleTreatment {
 
     /** Phosphor: the art's light and its outline in the CRT style's phosphor, scanlines and a bloom; a dark ink on light themes. */
     CRT,
+
+    /** Cartridge's clean room: the art's own shape in a soft gloss, without neon, ink or scanlines. */
+    CARTRIDGE,
     ;
 
     /** Drawn from [ConsolePixels]' cells rather than from the SVG. */
@@ -66,6 +69,7 @@ enum class ConsoleTreatment {
 val UiEffects.consoleTreatment: ConsoleTreatment
     get() = when (this) {
         UiEffects.NONE -> ConsoleTreatment.GLASS
+        UiEffects.CARTRIDGE -> ConsoleTreatment.CARTRIDGE
         UiEffects.RETROWAVE -> ConsoleTreatment.NEON
         UiEffects.PIXEL_ART -> ConsoleTreatment.PIXEL
         UiEffects.RPG -> ConsoleTreatment.RPG
@@ -269,6 +273,7 @@ internal object ConsoleFinish {
             ConsoleTreatment.XMB -> art.xmb()
             ConsoleTreatment.MANGA -> art.manga()
             ConsoleTreatment.CRT -> art.crt()
+            ConsoleTreatment.CARTRIDGE -> art.xmb()
             else -> error("$treatment isn't drawn from the SVG")
         }
         return Sprite(art.w, art.h, out.toArgb())
